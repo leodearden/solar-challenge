@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""components/macros.html's card draws every dashboard card, one element in the card
-classes plus the classes its page gives it. The card classes are written once, in card,
-so no other template or script draws a card itself. A card call that gives its header band
-a subtitle, colours or an aside also gives the title that opens the band.
+"""components/macros.html draws every card look of the dashboard: the card, and beside it
+the panel, the flat card and the split card. Each element drawn in a look carries the
+look's classes plus the classes its page gives it. Each look's classes are written once,
+in its macro, so no other template or script draws that look itself. A card call that
+gives a header band argument, a subtitle, colours or an aside, also gives the title that
+opens the band.
 """
 
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
 
@@ -32,7 +35,28 @@ _HEADER_BAND_PARAMETERS = frozenset({"subtitle", "header_classes", "dot_classes"
 _JINJA = Environment()
 _SCRIPT_STRING_LITERAL = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`""")
 
-_Card = tuple[str, frozenset[str]]
+
+@dataclass(frozen=True)
+class _Look:
+    """A card look: the components/macros.html macro that draws it, the classes every element
+    drawn in it carries, and the classes none of them carries."""
+
+    macro: str
+    classes: frozenset[str]
+    lacks: frozenset[str] = frozenset()
+
+    def draws(self, classes: frozenset[str]) -> bool:
+        """Whether an element that carries *classes* is drawn in this look."""
+        return self.classes <= classes and not self.lacks & classes
+
+
+_CARD_LOOK = _Look("card", _CARD_CLASSES)
+_PANEL_LOOK = _Look(
+    "panel",
+    frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm".split()),
+)
+
+_Drawn = tuple[str, frozenset[str]]
 
 
 def _classes(attributes: Mapping[str, str | None]) -> frozenset[str]:
@@ -40,23 +64,23 @@ def _classes(attributes: Mapping[str, str | None]) -> frozenset[str]:
     return frozenset((attributes.get("class") or "").split())
 
 
-def _cards(page: str) -> list[_Card]:
-    """The tag, and the classes beyond the card classes, of each link and then each div of *page* that carries every card class, each in page order."""
+def _drawn(page: str, look: _Look) -> list[_Drawn]:
+    """The tag, and the classes beyond *look*'s, of each link and then each div of *page* drawn in *look*, each in page order."""
     return [
-        (tag, classes - _CARD_CLASSES)
+        (tag, classes - look.classes)
         for tag in ("a", "div")
         for classes in map(_classes, element_attributes(page, tag))
-        if _CARD_CLASSES <= classes
+        if look.draws(classes)
     ]
 
 
-def _div(*classes: str) -> _Card:
-    """A div card that carries *classes* beyond the card classes."""
+def _div(*classes: str) -> _Drawn:
+    """A div drawn in a look that carries *classes* beyond the look's classes."""
     return ("div", frozenset(classes))
 
 
-def _quick_start_link(palette: str) -> _Card:
-    """A dashboard quick-start link card, whose shadow grows and whose border takes *palette*'s colour on hover."""
+def _quick_start_link(palette: str) -> _Drawn:
+    """A dashboard quick-start link drawn in a look, whose shadow grows and whose border takes *palette*'s colour on hover."""
     return (
         "a",
         frozenset(
@@ -82,10 +106,11 @@ def _page(client: FlaskClient, path: str) -> str:
 
 
 @pytest.mark.parametrize(
-    ("path", "expected"),
+    ("path", "look", "expected"),
     [
         pytest.param(
             "/",
+            _CARD_LOOK,
             [
                 _quick_start_link("primary"),
                 _quick_start_link("sky"),
@@ -95,10 +120,11 @@ def _page(client: FlaskClient, path: str) -> str:
                 _div("p-5"),
                 _div(),
             ],
-            id="dashboard",
+            id="dashboard-cards",
         ),
         pytest.param(
             "/simulate/fleet",
+            _CARD_LOOK,
             [
                 _div("p-6", "mb-6"),
                 _div("p-6", "mb-6"),
@@ -109,16 +135,31 @@ def _page(client: FlaskClient, path: str) -> str:
                 _div("p-6", "mb-6"),
                 _div("p-6"),
             ],
-            id="fleet-form",
+            id="fleet-form-cards",
         ),
-        pytest.param("/simulate/home", [_div("p-6")], id="home-form"),
-        pytest.param("/history/compare", [_div("p-12", "text-center")], id="compare-without-runs"),
+        pytest.param("/simulate/home", _CARD_LOOK, [_div("p-6")], id="home-form-cards"),
+        pytest.param("/history/compare", _CARD_LOOK, [_div("p-12", "text-center")], id="compare-without-runs-cards"),
+        pytest.param(
+            "/scenarios/builder",
+            _PANEL_LOOK,
+            [
+                _div("overflow-hidden"),
+                _div("overflow-hidden"),
+                _div("overflow-hidden"),
+                _div("overflow-hidden"),
+                _div("overflow-hidden"),
+                _div("sticky", "top-24"),
+            ],
+            id="builder-panels",
+        ),
+        pytest.param("/scenarios/sweep", _PANEL_LOOK, [_div(), _div(), _div()], id="sweep-panels"),
+        pytest.param("/assistant/", _PANEL_LOOK, [_div("flex", "flex-col", "h-[600px]")], id="assistant-panel"),
     ],
 )
-def test_each_card_of_a_page_that_needs_no_stored_run_carries_the_card_classes_and_its_own(
-    client: FlaskClient, path: str, expected: list[_Card]
+def test_each_element_a_page_that_needs_no_stored_run_draws_in_a_card_look_carries_the_looks_classes_and_its_own(
+    client: FlaskClient, path: str, look: _Look, expected: list[_Drawn]
 ) -> None:
-    assert _cards(_page(client, path)) == expected
+    assert _drawn(_page(client, path), look) == expected
 
 
 def _home_results_page(client: FlaskClient, storage: RunStorage) -> str:
@@ -146,21 +187,26 @@ _ACTIONS_CARD = _div("p-6")
 
 
 @pytest.mark.parametrize(
-    ("open_page", "expected"),
+    ("open_page", "look", "expected"),
     [
-        pytest.param(_home_results_page, {_STAT_CARD, _CHART_PANEL, _ACTIONS_CARD}, id="home-results"),
-        pytest.param(_fleet_results_page, {_STAT_CARD, _CHART_PANEL, _ACTIONS_CARD}, id="fleet-results"),
-        pytest.param(_compare_page, {_CHART_PANEL}, id="compare-two-home-runs"),
+        pytest.param(
+            _home_results_page, _CARD_LOOK, {_STAT_CARD, _CHART_PANEL, _ACTIONS_CARD}, id="home-results-cards"
+        ),
+        pytest.param(
+            _fleet_results_page, _CARD_LOOK, {_STAT_CARD, _CHART_PANEL, _ACTIONS_CARD}, id="fleet-results-cards"
+        ),
+        pytest.param(_compare_page, _CARD_LOOK, {_CHART_PANEL}, id="compare-two-home-runs-cards"),
     ],
 )
-def test_each_card_of_a_page_of_stored_runs_carries_the_card_classes_and_its_own(
+def test_each_element_a_page_of_stored_runs_draws_in_a_card_look_carries_the_looks_classes_and_its_own(
     client: FlaskClient,
     storage: RunStorage,
     open_page: Callable[[FlaskClient, RunStorage], str],
-    expected: set[_Card],
+    look: _Look,
+    expected: set[_Drawn],
 ) -> None:
-    """How many stat cards and chart panels a page draws follows its runs, so only the kinds of card are pinned."""
-    assert set(_cards(open_page(client, storage))) == expected
+    """How many elements a page of runs draws in a look follows its runs, so only their kinds are pinned."""
+    assert set(_drawn(open_page(client, storage), look)) == expected
 
 
 def _div_classes(drawn: str) -> list[frozenset[str]]:
@@ -210,6 +256,13 @@ def test_a_card_given_an_href_is_one_link_to_it_in_the_card_classes_and_its_own(
         ("/simulate/home", _CARD_CLASSES | {"group", "block", "p-6"})
     ]
     assert element_attributes(drawn, "div") == []
+
+
+def test_a_panel_is_one_div_in_the_panel_classes_and_its_own_that_holds_its_content(macros: Any) -> None:
+    drawn = str(macros.panel(classes="sticky top-24", caller=lambda: "Body"))
+
+    assert _div_classes(drawn) == [_PANEL_LOOK.classes | {"sticky", "top-24"}]
+    assert texts(drawn) == ["Body"]
 
 
 def _card_calls(source: str) -> list[nodes.Call]:
@@ -274,26 +327,32 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
     return [frozenset(literal[1:-1].split()) for literal in _SCRIPT_STRING_LITERAL.findall(source)]
 
 
-def test_the_card_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html() -> None:
+@pytest.mark.parametrize(
+    "look",
+    [
+        pytest.param(_CARD_LOOK, id="card"),
+        pytest.param(_PANEL_LOOK, id="panel"),
+    ],
+)
+def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html(
+    look: _Look,
+) -> None:
     """One class list holds them all, in whatever order, so neither another template or script nor a
-    macro built on card writes them again."""
+    macro built on the look's macro writes them again."""
     class_lists = {
         **{path: _template_class_lists(source) for path, source in dashboard_template_sources().items()},
         **{path: _script_class_lists(source) for path, source in dashboard_script_sources().items()},
     }
 
     written = {
-        path: count
-        for path, lists in class_lists.items()
-        if (count := sum(_CARD_CLASSES <= classes for classes in lists))
+        path: count for path, lists in class_lists.items() if (count := sum(map(look.draws, lists)))
     }
 
     listing = "".join(f"\n  {path}: {count}" for path, count in written.items())
+    lacking = f", and none of '{' '.join(sorted(look.lacks))}'," if look.lacks else ""
     assert written == {_CARD_MACROS_KEY: 1}, (
-        f"These dashboard sources write every card class, '{_CARD_TRIPLE}' in any order, in this many"
-        f" class lists:{listing}\n"
-        f"The card classes are written once, in {_CARD_MACROS_KEY}'s card, so a page draws a card with "
-        "{% call card(...) %}: classes for the card's own padding, margin and hover; title, subtitle, "
-        "header_classes, dot_classes and header_aside for a header band; body_classes for a padded "
-        "body; and href for a link."
+        f"These dashboard sources write every class of the {look.macro} look, "
+        f"'{' '.join(sorted(look.classes))}' in any order{lacking} in this many class lists:{listing}\n"
+        f"Those classes are written once, in {_CARD_MACROS_KEY}'s {look.macro}, so a page draws "
+        f"that look by calling {look.macro}."
     )

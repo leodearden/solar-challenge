@@ -430,27 +430,20 @@ class TestChatPageWiring:
             "Expected assistant.js script include when ANTHROPIC_API_KEY is set"
         )
 
-    def test_page_exposes_chat_url_data_attribute(
+    def test_the_one_assistant_chat_div_carries_the_chat_and_history_urls_assistant_js_reads(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """chat.html exposes the chat endpoint URL via a data-* attribute."""
+        """static/js/assistant.js finds the chat by the id assistant-chat, then reads the URL it
+        posts each message to from its data-chat-url and the URL it loads the history from from
+        its data-history-url."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
-        resp = client.get("/assistant")
-        html = resp.data.decode()
-        assert "data-chat-url" in html, (
-            "Expected data-chat-url attribute for JS to POST to"
-        )
+        page = client.get("/assistant").get_data(as_text=True)
 
-    def test_page_exposes_history_url_data_attribute(
-        self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """chat.html exposes the history endpoint URL via a data-* attribute."""
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-dummy")
-        resp = client.get("/assistant")
-        html = resp.data.decode()
-        assert "data-history-url" in html, (
-            "Expected data-history-url attribute for JS to load history from"
-        )
+        chat_roots = [div for div in element_attributes(page, "div") if div.get("id") == "assistant-chat"]
+
+        assert [(root.get("data-chat-url"), root.get("data-history-url")) for root in chat_roots] == [
+            ("/assistant/chat", "/assistant/history")
+        ]
 
     def test_no_configure_notice_when_key_set(
         self, client: FlaskClient, monkeypatch: pytest.MonkeyPatch
