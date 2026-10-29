@@ -14,6 +14,7 @@ from functools import cached_property
 import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 
@@ -71,12 +72,8 @@ class TariffPeriod:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Refuse a rate that is negative or not finite, and parse the times once, refusing any that is not HH:MM."""
-        if not 0 <= self.rate_per_kwh < math.inf:
-            raise ConfigurationError(
-                "Tariff period rate_per_kwh must be finite and not negative, "
-                f"got {self.rate_per_kwh} £/kWh"
-            )
+        """Read rate_per_kwh through number_fields, holding the float read, then parse the times once, refusing any that is not HH:MM."""
+        read_field(self, "rate_per_kwh", as_finite_float, NON_NEGATIVE)
         self.get_start_time()
         self.get_end_time()
 
@@ -261,16 +258,13 @@ class TariffConfig:
             TariffConfig with a single full-24h midnight-crossing period
             ("00:00"–"00:00") covering every minute of the day.
         """
-        if not name:
-            name = f"Flat rate {rate_per_kwh:.2f} £/kWh"
-
         period = TariffPeriod(
             start_time="00:00",
             end_time="00:00",
             rate_per_kwh=rate_per_kwh,
             name="All day"
         )
-        return cls(periods=(period,), name=name)
+        return cls(periods=(period,), name=name or f"Flat rate {period.rate_per_kwh:.2f} £/kWh")
 
     @classmethod
     def economy_7(
