@@ -17,13 +17,14 @@ link of an earlier run in place, and that the period selector offers presets
 and a custom date range.
 """
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
+
+from tests.e2e._job_requests import a_job_state, job_state_frame
 
 
 # -- Slider-input sync -----------------------------------------------------
@@ -722,13 +723,10 @@ def fleet_runs_complete_at_once(page: Page) -> None:
             },
         ),
     )
-    completion = {"status": "completed", "run_id": COMPLETED_RUN_ID}
+    completion = job_state_frame(a_job_state("job-1", COMPLETED_RUN_ID, "completed"), version=5)
     page.route(
         "**/api/jobs/job-1/progress",
-        lambda route: route.fulfill(
-            content_type="text/event-stream",
-            body=f"event: complete\ndata: {json.dumps(completion)}\n\n",
-        ),
+        lambda route: route.fulfill(content_type="text/event-stream", body=completion),
     )
 
 

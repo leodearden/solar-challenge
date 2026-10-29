@@ -6,7 +6,6 @@ through job_progress_frames, the stream the endpoint serves, read poll by poll w
 sleeping between polls.
 """
 
-import functools
 import itertools
 import threading
 from collections.abc import Callable, Iterator
@@ -26,11 +25,17 @@ from solar_challenge.web.jobs import HomeSimulator, JobManager, JobState
 from solar_challenge.web.sse import HEARTBEAT, JobStreamPolicy, job_progress_frames
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
+from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
-from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST, client_using
+from tests.unit.web_jobs._app_client import (
+    A_HOME_JOB_DAYS,
+    A_HOME_JOB_REQUEST,
+    client_using,
+    serve_job_streams_under,
+)
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
@@ -149,6 +154,9 @@ def _version_of(manager: JobManager, job_id: str) -> int:
 
 _JOB_STATE_KEYS = [field.name for field in fields(JobState)]
 
+_SERVED_RETRY_MS = JobStreamPolicy().retry_ms
+"""The retry every frame of a progress stream carries: the retry of the policy create_app serves the streams under, the default JobStreamPolicy."""
+
 
 @contextmanager
 def _progress_stream(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> Iterator[Iterator[str]]:
@@ -178,7 +186,8 @@ class _LiveStream:
 
     def __init__(self, manager: JobManager, job_id: str) -> None:
         self._chunks = job_progress_frames(
-            functools.partial(manager.job_snapshot, job_id),
+            manager.job_snapshot,
+            job_id,
             last_event_id=None,
             policy=JobStreamPolicy(sleep=lambda _seconds: None),
         )
@@ -438,7 +447,12 @@ class TestDeletingARunCancelsItsJob:
             "message": "Cancelled: its run was deleted",
         }
         assert parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True)) == [
-            SseFrame("error", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))
+            SseFrame(
+                "cancelled",
+                client.get("/api/jobs/id-1").get_json(),
+                id=_version_of(manager, "id-1"),
+                retry=_SERVED_RETRY_MS,
+            )
         ]
 
     def test_a_run_deleted_while_its_job_waits_in_the_queue_is_never_simulated(
@@ -455,7 +469,7 @@ class TestDeletingARunCancelsItsJob:
         cancelled = client.get(f"/api/jobs/{queued['job_id']}").get_json()
         assert cancelled["status"] == "cancelled"
         assert parse_sse_events(client.get(f"/api/jobs/{queued['job_id']}/progress").get_data(as_text=True)) == [
-            SseFrame("error", cancelled, id=_version_of(manager, queued["job_id"]))
+            SseFrame("cancelled", cancelled, id=_version_of(manager, queued["job_id"]), retry=_SERVED_RETRY_MS)
         ]
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
@@ -529,18 +543,18 @@ _FINISHED_JOBS = [
         RecordingSimulation(),
         "/api/simulate/home",
         A_HOME_JOB_REQUEST,
-        "complete",
+        "completed",
         "Simulation completed successfully",
         id="home-completed",
     ),
     pytest.param(
-        a_failing_simulation, "/api/simulate/home", A_HOME_JOB_REQUEST, "error", "the simulation failed", id="home-failed"
+        a_failing_simulation, "/api/simulate/home", A_HOME_JOB_REQUEST, "failed", "the simulation failed", id="home-failed"
     ),
     pytest.param(
         RecordingSimulation(),
         "/api/simulate/fleet",
         {"homes": [A_HOME_JOB_REQUEST]},
-        "complete",
+        "completed",
         "Fleet simulation completed successfully",
         id="fleet-completed",
     ),
@@ -552,7 +566,7 @@ class TestJobProgressEndpoint:
     """Tests for GET /api/jobs/<id>/progress (SSE): each stream reads its job's snapshot and keeps its own cursor."""
 
     @pytest.mark.parametrize(("simulation", "endpoint", "request_body", "event", "message"), _FINISHED_JOBS)
-    def test_a_finished_jobs_stream_sends_only_its_final_state_named_by_its_status_with_its_version_as_id(
+    def test_a_finished_jobs_stream_sends_only_its_final_state_named_by_its_status_with_its_version_as_id_and_the_retry(
         self,
         app: Flask,
         simulation: HomeSimulator,
@@ -565,7 +579,11 @@ class TestJobProgressEndpoint:
 
         frames = parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True))
 
-        assert frames == [SseFrame(event, client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))]
+        assert frames == [
+            SseFrame(
+                event, client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"), retry=_SERVED_RETRY_MS
+            )
+        ]
         assert frames[0].data["message"] == message
         assert list(frames[0].data) == _JOB_STATE_KEYS
 
@@ -577,7 +595,9 @@ class TestJobProgressEndpoint:
         with _progress_stream(client, "id-1") as first, _progress_stream(client, "id-1") as second:
             first_chunks = [next(first), next(second)]
 
-        current = SseFrame("progress", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"))
+        current = SseFrame(
+            "progress", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"), retry=_SERVED_RETRY_MS
+        )
         assert [parse_sse_events(chunk) for chunk in first_chunks] == [[current], [current]]
         assert first_chunks[0] == first_chunks[1]
 
@@ -606,7 +626,7 @@ class TestJobProgressEndpoint:
         assert [(frame.event, frame.data["current_step"]) for frame in frames] == [
             ("progress", "Simulating"),
             ("progress", "Saving"),
-            ("complete", "Done"),
+            ("completed", "Done"),
         ]
         assert all(earlier.id < later.id for earlier, later in itertools.pairwise(frames))
         assert [list(frame.data) for frame in frames] == [_JOB_STATE_KEYS] * 3
@@ -620,7 +640,7 @@ class TestJobProgressEndpoint:
         blocking_simulation.release()
         assert manager.wait_until_idle(timeout=30)
         live.read_to_its_end()
-        assert [frame.event for frame in parse_sse_events("".join(live.sent))] == ["progress", "complete"]
+        assert [frame.event for frame in parse_sse_events("".join(live.sent))] == ["progress", "completed"]
 
         assert client.get("/api/jobs/id-1/progress").get_data(as_text=True) == live.sent[-1]
 
@@ -647,7 +667,9 @@ class TestJobProgressEndpoint:
 
         first = _first_chunk(client, "id-1", last_event_id=last_event_id_at(version))
 
-        assert parse_sse_events(first) == [SseFrame("progress", client.get("/api/jobs/id-1").get_json(), id=version)]
+        assert parse_sse_events(first) == [
+            SseFrame("progress", client.get("/api/jobs/id-1").get_json(), id=version, retry=_SERVED_RETRY_MS)
+        ]
 
     def test_a_finished_jobs_stream_reopened_at_its_final_version_sends_the_same_single_final_frame(
         self, app: Flask
@@ -660,7 +682,39 @@ class TestJobProgressEndpoint:
         ).get_data(as_text=True)
 
         assert reopened == opened
-        assert [frame.event for frame in parse_sse_events(reopened)] == ["complete"]
+        assert [frame.event for frame in parse_sse_events(reopened)] == ["completed"]
+
+    def test_a_running_jobs_stream_open_past_its_policys_limit_ends_with_the_timeout_naming_the_limit_and_the_job_runs_on(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        """Task 564's ten-minute test, with no real waiting: the stream's first sleep moves its clock past the limit.
+
+        Only the chunks the test asserts are read, one by one, since a stream that heartbeats
+        until its job ends never ends while the job is held.
+        """
+        manager, client = _a_held_job(app, blocking_simulation)
+        running = client.get("/api/jobs/id-1").get_json()
+        clock = ManualClock()
+        serve_job_streams_under(
+            app,
+            JobStreamPolicy(
+                limit_seconds=30.0, retry_ms=1500, clock=clock, sleep=lambda _seconds: clock.advance(31.0)
+            ),
+        )
+
+        with _progress_stream(client, "id-1") as chunks:
+            assert parse_sse_events(next(chunks)) == [
+                SseFrame("progress", running, id=_version_of(manager, "id-1"), retry=1500)
+            ]
+            assert next(chunks) == HEARTBEAT
+            assert parse_sse_events(next(chunks)) == [
+                SseFrame("timeout", {"limit_seconds": 30.0}, id=None, retry=1500)
+            ]
+            assert next(chunks, None) is None
+
+        after = client.get("/api/jobs/id-1").get_json()
+        assert after["status"] == "running"
+        assert after == running
 
     def test_a_stream_on_a_job_queued_behind_a_running_one_sends_its_queued_state_at_once(
         self, app: Flask, blocking_simulation: BlockingSimulation
@@ -672,7 +726,9 @@ class TestJobProgressEndpoint:
 
         state = client.get(f"/api/jobs/{queued}").get_json()
         assert state["status"] == "queued"
-        assert parse_sse_events(first) == [SseFrame("progress", state, id=_version_of(manager, queued))]
+        assert parse_sse_events(first) == [
+            SseFrame("progress", state, id=_version_of(manager, queued), retry=_SERVED_RETRY_MS)
+        ]
 
 
 class TestJobResultsEndpoint:

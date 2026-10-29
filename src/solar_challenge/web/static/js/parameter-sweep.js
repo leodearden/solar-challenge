@@ -142,47 +142,33 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        // Follow one sweep point's job via SSE, writing its status and results into that point's row;
+        // Follow one sweep point's job with followJobProgress, writing its status and results into that point's row;
         // resolves once the job ends, the page loses its stream, or signal aborts
         _followPoint(row, signal) {
             return new Promise(resolve => {
-                const es = new EventSource('/api/jobs/' + row.job_id + '/progress');
                 const end = () => {
-                    es.close();
+                    stopFollowing();
                     signal.removeEventListener('abort', end);
                     resolve();
                 };
-                signal.addEventListener('abort', end);
-
-                es.addEventListener('progress', (e) => {
-                    try {
-                        const data = JSON.parse(e.data);
-                        row.status = data.status || 'running';
-                    } catch(err) {}
-                });
-
-                es.addEventListener('complete', (e) => {
-                    try {
-                        const data = JSON.parse(e.data);
-                        row.status = 'completed';
-                        if (data.run_id) {
+                const stopFollowing = followJobProgress(row.job_id, {
+                    onState: (state) => { row.status = state.status; },
+                    // The final state, or null if the server no longer tracks the job
+                    onEnd: (state) => {
+                        row.status = state ? state.status : 'untracked';
+                        if (state?.status === 'completed') {
                             // The sweep's charts are drawn from each finished point's run
-                            row.run_id = data.run_id;
+                            row.run_id = state.run_id;
                             this._fetchResult(row, signal);
                         }
-                    } catch(err) {}
-                    end();
+                        end();
+                    },
+                    onLost: () => {
+                        row.status = 'failed';
+                        end();
+                    },
                 });
-
-                const endWith = (status) => {
-                    row.status = status;
-                    end();
-                };
-                onJobProgressStreamErrors(es, {
-                    failed: () => endWith('failed'),
-                    cancelled: () => endWith('cancelled'),
-                    lost: () => endWith('failed'),
-                });
+                signal.addEventListener('abort', end);
             });
         },
 

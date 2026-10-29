@@ -17,7 +17,9 @@ live server's database.
 Also stubs the Run History page's runs-list API for tests that need it
 empty, unanswered or listing a run of each badge, and collects the
 errors a page reports. release_held_simulations holds the live server's
-jobs inside their simulations until the test releases them.
+jobs inside their simulations until the test releases them, and
+job_streams_time_out_after_a_second ends each of the live server's job
+progress streams about a second after it opens.
 
 Every browser context a test opens refuses each request to another origin
 than the live server's, as if the network were down, and the test errors at
@@ -57,7 +59,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import LOCATION_PRESETS
-from solar_challenge.web.shared import get_job_manager
+from solar_challenge.web.shared import get_job_manager, get_job_stream_policy
 from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset
@@ -192,6 +194,20 @@ def release_held_simulations(_e2e_app: Flask, _e2e_storage: RunStorage) -> Itera
             f"jobs held by release_held_simulations were still running on the live server "
             f"{_JOBS_FINISH_TIMEOUT_S} s after it released them"
         )
+
+
+@pytest.fixture
+def job_streams_time_out_after_a_second(_e2e_app: Flask) -> Iterator[None]:
+    """Serve the live server's job progress streams under the session's policy with a one-second limit, polled every quarter second.
+
+    A stream checks its limit as it polls, so each stream of a running job ends with its timeout 1 to 1.25 s after it opens.
+    Teardown puts the session's policy back.
+    """
+    with _e2e_app.app_context():
+        session_policy = get_job_stream_policy()
+    _e2e_app.extensions["job_stream_policy"] = replace(session_policy, limit_seconds=1.0, heartbeat_seconds=0.25)
+    yield
+    _e2e_app.extensions["job_stream_policy"] = session_policy
 
 
 @pytest.fixture(scope="session")

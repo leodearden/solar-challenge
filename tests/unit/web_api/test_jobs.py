@@ -13,6 +13,7 @@ from flask.testing import FlaskClient
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import calculate_summary
 from solar_challenge.web.jobs import JobSnapshot, JobState
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._sse import SseFrame, parse_sse_events
@@ -28,6 +29,9 @@ _A_RUNNING_JOB = JobState(
     created_at="2024-06-01T12:00:00+00:00",
 )
 _A_CANCELLED_JOB = replace(_A_RUNNING_JOB, status="cancelled", message="Cancelled: its run was deleted")
+
+_SERVED_RETRY_MS = JobStreamPolicy().retry_ms
+"""The retry every frame of a progress stream carries: the retry of the policy create_app serves the streams under, the default JobStreamPolicy."""
 
 
 class TestGetJobStatus:
@@ -79,14 +83,16 @@ class TestGetJobProgress:
         try:
             assert response.status_code == 200
             chunks = iter(response.response)
-            assert parse_sse_events(next(chunks).decode()) == [SseFrame("progress", asdict(_A_RUNNING_JOB), id=4)]
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("progress", asdict(_A_RUNNING_JOB), id=4, retry=_SERVED_RETRY_MS)
+            ]
         finally:
             response.close()
 
-    def test_unknown_job_sends_error_event(
+    def test_a_job_the_manager_does_not_track_gets_one_untracked_frame_naming_it_and_the_stream_ends(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """Unknown job sends an SSE error event, and nothing after it."""
+        """The frame carries the served retry and no id, so a browser's last id stands."""
         mock_job_manager.job_snapshot.return_value = None
 
         response = client.get("/api/jobs/unknown-id/progress", buffered=False)
@@ -94,21 +100,26 @@ class TestGetJobProgress:
             assert response.status_code == 200
             assert "text/event-stream" in response.content_type
             chunks = iter(response.response)
-            assert next(chunks).decode() == 'event: error\ndata: {"error": "Job not found"}\n\n'
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("untracked", {"job_id": "unknown-id"}, retry=_SERVED_RETRY_MS)
+            ]
             assert next(chunks, None) is None
         finally:
             response.close()
+        mock_job_manager.job_snapshot.assert_called_with("unknown-id")
 
-    def test_a_finished_jobs_snapshot_is_its_one_frame_named_by_its_status_carrying_its_state_with_its_version_as_id(
+    def test_a_finished_jobs_snapshot_is_its_one_frame_named_by_its_status_carrying_its_state_with_its_version_as_id_and_the_retry(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A cancelled job's frame is the error event, as a failed one's is."""
+        """A cancelled job's frame is its own event, cancelled."""
         mock_job_manager.job_snapshot.return_value = JobSnapshot(4, _A_CANCELLED_JOB)
 
         response = client.get("/api/jobs/job-running/progress", buffered=False)
         try:
             chunks = iter(response.response)
-            assert parse_sse_events(next(chunks).decode()) == [SseFrame("error", asdict(_A_CANCELLED_JOB), id=4)]
+            assert parse_sse_events(next(chunks).decode()) == [
+                SseFrame("cancelled", asdict(_A_CANCELLED_JOB), id=4, retry=_SERVED_RETRY_MS)
+            ]
             assert next(chunks, None) is None
         finally:
             response.close()

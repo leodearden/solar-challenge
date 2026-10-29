@@ -14,11 +14,16 @@ table's header names the parameter the sweep ran, not one selected since, that
 running a sweep drops the requests the sweep before it still has in flight and
 opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
-and that the page says why when it loses track of a sweep. A point whose
-progress stream disconnects keeps its status, and the page follows it alone
-while the browser reopens the stream; its job's completion on the reopened
-stream fills its row, and a reopened stream the server refuses fails it, as
-does a stream that stays broken past the page's reconnect limit.
+and that the page says why when it loses track of a sweep. A point whose job
+is cancelled, or which the server no longer tracks, shows that in its row, and
+the page goes on to follow the next point. A point whose progress stream
+disconnects keeps its status, and the page follows it alone while the browser
+reopens the stream; its job's completion on the reopened stream fills its row,
+and a reopened stream the server refuses fails it, as does a stream that stays
+broken past the page's reconnect limit. A point whose progress stream times
+out while its job runs keeps showing running while the browser reopens the
+stream, and the page follows it alone until its job ends; once the sweep's
+other point fails and it completes, the page draws the charts of its run.
 
 Once every point of a sweep has ended, the page posts the finished points to
 POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
@@ -29,6 +34,9 @@ region.
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results, and that
 a real three-point sweep draws one chart per metric from its points' runs.
+
+Each faked progress stream is answered with frames the server's own encoder
+builds from its catalogue (tests/e2e/_job_requests.py).
 """
 
 import itertools
@@ -44,9 +52,12 @@ from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
+    a_job_state,
     fast_forward_by_the_reconnect_limit,
     is_job_request,
-    sse_event,
+    job_state_frame,
+    timeout_frame,
+    untracked_frame,
 )
 from tests.e2e._run_badges import classes_of_each
 
@@ -258,8 +269,13 @@ def sweep_jobs(page: Page) -> Iterator[_SweepJobs]:
 
 
 def _completion(job_id: str) -> str:
-    """The progress event that completes job_id with the run run-of-<job_id>."""
-    return sse_event("complete", {"status": "completed", "run_id": f"run-of-{job_id}"})
+    """The frame that ends job_id's progress stream with its completed state, of the run run-of-<job_id>."""
+    return job_state_frame(a_job_state(job_id, f"run-of-{job_id}", "completed"), version=5)
+
+
+def _failure(job_id: str, message: str) -> str:
+    """The frame that ends job_id's progress stream with its failed state, of the run run-of-<job_id>, naming message."""
+    return job_state_frame(a_job_state(job_id, f"run-of-{job_id}", "failed", message=message), version=4)
 
 
 def _results(
@@ -286,10 +302,7 @@ def test_a_sweep_point_whose_job_fails_shows_failed_in_its_own_row(
     page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
 ) -> None:
     """Run a sweep whose first point's job fails while its second still runs: the first row shows failed, the second still pending."""
-    sweep_jobs.progress.answer(
-        "sweep-1-point-1",
-        sse_event("error", {"status": "failed", "message": "Point 1 failed"}),
-    )
+    sweep_jobs.progress.answer("sweep-1-point-1", _failure("sweep-1-point-1", "Point 1 failed"))
     page.goto(live_server + "/scenarios/sweep")
     page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
 
@@ -297,6 +310,37 @@ def test_a_sweep_point_whose_job_fails_shows_failed_in_its_own_row(
     expect(rows.nth(0).get_by_role("cell")).to_have_text(["1", "-", "-", "-", "failed"])
     expect(rows.nth(1).get_by_role("cell")).to_have_text(
         ["11", "-", "-", "-", "pending"]
+    )
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+@pytest.mark.parametrize(
+    ("ending", "status"),
+    [
+        pytest.param(
+            job_state_frame(a_job_state("sweep-1-point-1", "run-of-sweep-1-point-1", "cancelled"), version=4),
+            "cancelled",
+            id="cancelled",
+        ),
+        pytest.param(untracked_frame("sweep-1-point-1"), "untracked", id="untracked"),
+    ],
+)
+def test_a_sweep_point_whose_job_is_cancelled_or_no_longer_tracked_shows_it_in_its_own_row(
+    page: Page,
+    live_server: str,
+    sweep_jobs: _SweepJobs,
+    page_errors: list[str],
+    ending: str,
+    status: str,
+) -> None:
+    """Run a sweep whose first point's progress stream ends with its job cancelled, or with the server no longer tracking the job: the first row shows that ending as its status, and the page goes on to follow the second point."""
+    sweep_jobs.progress.answer("sweep-1-point-1", ending)
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    expect(_result_rows(page).nth(0).get_by_role("cell")).to_have_text(
+        ["1", "-", "-", "-", status]
     )
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
@@ -324,10 +368,7 @@ def test_each_sweep_rows_status_badge_takes_the_classes_the_server_draws_for_its
             server_drawn_classes(dashboard_macros.run_status_badge(status))
         ], status
 
-    sweep_jobs.progress.answer(
-        "sweep-1-point-2",
-        sse_event("error", {"status": "failed", "message": "Point 2 failed"}),
-    )
+    sweep_jobs.progress.answer("sweep-1-point-2", _failure("sweep-1-point-2", "Point 2 failed"))
 
     expect(_status_badge(rows.nth(1))).to_have_text("failed")
     assert classes_of_each(_status_badge(rows.nth(1))) == [
@@ -355,10 +396,7 @@ def test_an_earlier_sweeps_late_results_fill_no_row_of_the_sweep_run_after_it(
 ) -> None:
     """Run, then Run again while sweep-1's completed first point's results still load: those results, answered once sweep-2's rows show, fill no row of sweep-2's, neither its failed first point's nor its completed second point's, which shows its own."""
     sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
-    sweep_jobs.progress.answer(
-        "sweep-2-point-1",
-        sse_event("error", {"status": "failed", "message": "Point 1 failed"}),
-    )
+    sweep_jobs.progress.answer("sweep-2-point-1", _failure("sweep-2-point-1", "Point 1 failed"))
     page.goto(live_server + "/scenarios/sweep")
     run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
     with page.expect_request("**/api/jobs/sweep-1-point-1/results"):
@@ -539,9 +577,7 @@ def test_once_every_point_has_ended_the_page_posts_the_finished_points_labelled_
     page.get_by_role("combobox", name="Parameter to Sweep", exact=True).select_option(label="Battery Capacity (kWh)")
 
     with page.expect_request(_SWEEP_CHARTS_URL) as charts_request:
-        sweep_jobs.progress.answer(
-            "sweep-1-point-2", sse_event("error", {"status": "failed", "message": "Point 2 failed"})
-        )
+        sweep_jobs.progress.answer("sweep-1-point-2", _failure("sweep-1-point-2", "Point 2 failed"))
 
     assert charts_request.value.post_data_json == {
         "parameter_label": "PV Capacity (kW)",
@@ -617,6 +653,57 @@ def test_the_page_says_why_it_could_not_draw_the_sweep_charts(
     page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
 
     expect(page.get_by_text(f"Could not draw the sweep charts: {why}", exact=True)).to_be_visible()
+
+
+def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_job_completes_and_the_sweep_draws_its_run(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run a two-point sweep, then end its first point's progress stream with the job's running state and a timeout, as the server ends a stream open past its limit while the job goes on: while the stream the browser reopens is held, the first row still shows running and the page has opened no stream for the second point. Once the second point's job fails and the first's completes on the reopened stream, the first row shows its results, the second failed, and the charts region shows the panel the page is answered with for the first point's run alone."""
+    page.route(
+        _SWEEP_CHARTS_URL,
+        lambda route: route.fulfill(status=200, content_type="text/html", body="<p>The sweep's charts</p>"),
+    )
+    requests_made: list[Request] = []
+    page.on("request", lambda request: requests_made.append(request))
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    # The browser reopens the stream that timed out
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        sweep_jobs.progress.answer_once(
+            "sweep-1-point-1",
+            job_state_frame(a_job_state("sweep-1-point-1", "run-of-sweep-1-point-1", "running"), version=3)
+            + timeout_frame(),
+        )
+    rows = _result_rows(page)
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(
+        ["1", "-", "-", "-", "running"]
+    )
+    opens_sweep_1_point_2 = is_job_request("sweep-1-point-2", "progress")
+    assert [
+        request.url for request in requests_made if opens_sweep_1_point_2(request)
+    ] == []
+
+    sweep_jobs.progress.answer("sweep-1-point-2", _failure("sweep-1-point-2", "Point 2 failed"))
+    sweep_jobs.results.answer("sweep-1-point-1", _results(111.1, 0.25, 11.1))
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(
+        ["1", "111.1", "25.0%", "11.1", "completed"]
+    )
+    expect(rows.nth(1).get_by_role("cell")).to_have_text(
+        ["11", "-", "-", "-", "failed"]
+    )
+    expect(_sweep_charts(page).get_by_text("The sweep's charts", exact=True)).to_be_visible()
+    assert [
+        request.post_data_json for request in requests_made if _is_the_sweep_charts_request(request)
+    ] == [
+        {
+            "parameter_label": "PV Capacity (kW)",
+            "points": [{"value": 1, "run_id": "run-of-sweep-1-point-1"}],
+        }
+    ]
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
 # -- Other requests still load while a large sweep runs --------------------
