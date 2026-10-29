@@ -12,6 +12,8 @@
 {% set _card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm' %}
 {# The classes every panel is drawn in, which only panel writes: the card's surface in a larger radius #}
 {% set _panel_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm' %}
+{# The classes of the header band a titled panel draws above its content, which only panel writes #}
+{% set _panel_title_band_classes = 'px-5 py-4 border-b border-slate-200 dark:border-slate-700' %}
 {# The classes every flat card is drawn in, which only flat_card writes: the card's surface with no shadow #}
 {% set _flat_card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg' %}
 {# The classes of a split card's top and bottom parts, which only split_card writes: the bottom has no top border, so the top's bottom border divides them #}
@@ -53,7 +55,7 @@
 {% macro panel(title='', subtitle_expression='', classes='') %}
 <div class="{{ _panel_classes }} {{ classes }}">
     {% if title %}
-    <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+    <div class="{{ _panel_title_band_classes }}">
         <h3 class="font-semibold text-slate-800 dark:text-white">{{ title }}</h3>
         {% if subtitle_expression %}
         <p class="text-xs text-slate-400 mt-1" x-text="{{ subtitle_expression }}"></p>
