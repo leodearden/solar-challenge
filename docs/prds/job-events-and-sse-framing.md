@@ -220,6 +220,8 @@ memory, and `mark_run_failed` refuses it in the row.
   onEnd, onReconnecting, onLost})`.
   - It opens the `EventSource`, parses each frame once, and hands the full `JobState` to `onState`.
   - On a terminal state or `untracked` it closes the stream and calls `onEnd` with the ending.
+  - A terminal frame whose state it cannot read ends in `onLost`, as a stream the browser gives up
+    does, and its parse error is rethrown for the console.
   - On `timeout` it marks the next break as expected. That break shows no reconnecting indicator,
     but task 648's give-up timer is still armed, so a server gone during the reopen still ends in
     `onLost`.
@@ -458,7 +460,7 @@ transitions, run rows) and the consumers (the two pages and the assistant page, 
 | B12 | Untracked | an id no manager tracks | one frame, `untracked` `{job_id}`, and the response ends | producer | δ |
 | B13 | Failed and cancelled | a failing fake; a run deleted while its job runs (θ) | `failed` and `cancelled` frames carry the full `JobState` with `id` and `retry` | producer | δ |
 | B14 | Timeout in the browser | e2e live server, policy `limit_seconds=1`, held job | the tracker follows the job through at least two timeouts, never shows "Simulation Failed", shows no "Reconnecting to server..." once each reopen lands, and shows the results link once the job is released | both | δ |
-| B15 | Endings in the browser | e2e fakes built with `sse_frame` | `failed` shows the job's message; `cancelled` shows "Cancelled"; `untracked` shows its own text; a dropped connection still shows reconnecting, then the outcome (task 648's tests stay green) | consumer | δ |
+| B15 | Endings in the browser | e2e fakes built with `sse_frame` | `failed` shows the job's message; `cancelled` shows "Cancelled"; `untracked` shows its own text; a final state the page cannot read shows the run lost, not running; a dropped connection still shows reconnecting, then the outcome (task 648's tests stay green) | consumer | δ |
 | B16 | Sweep | e2e, two points; point 1's stream times out once, point 2 fails | row 1 keeps `running` through the timeout and fetches its results on `completed`; row 2 shows `failed`; the page then draws its chart | consumer | δ |
 
 The tests go through public seams only: HTTP routes, `JobManager`'s public methods,
