@@ -260,7 +260,9 @@ class TestScenarioAPI:
                 id="battery weights all zero",
             ),
             pytest.param((), {"seg_rate_pence_per_kwh": -1}, "seg", id="negative SEG rate"),
-            pytest.param((), {"import_rate": -0.1}, "negative", id="negative import rate"),
+            pytest.param(
+                (), {"import_rate": -0.1}, "rate_per_kwh must be at least 0", id="negative import rate"
+            ),
             pytest.param((), {"end_date": ""}, "end_date", id="cleared end date"),
             pytest.param(
                 (),
