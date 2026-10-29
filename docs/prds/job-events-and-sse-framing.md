@@ -127,7 +127,7 @@ line, because `json.dumps` escapes newlines inside strings (probed).
 | job | `failed` | `JobState` | version | policy | show the message, close |
 | job | `cancelled` | `JobState` | version | policy | show "Cancelled", close |
 | job | `timeout` | `StreamTimedOut(limit_seconds)` | none: the last id stands | policy | let the browser reopen quietly |
-| job | `untracked` | `JobUntracked(job_id)` | none | none | show "no longer tracked", close |
+| job | `untracked` | `JobUntracked(job_id)` | none | policy | show "no longer tracked", close |
 | chat | `delta` | `ChatDelta(text)` | none | none | append |
 | chat | `tool` | `ChatToolCall(name)` | none | none | — |
 | chat | `done` | `ChatDone()` | none | none | — |
@@ -277,8 +277,9 @@ class JobStreamPolicy:
     retry_ms: int = 1000                                   # §13 Q1
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
-def job_progress_frames(snapshot: Callable[[], JobSnapshot | None], *, last_event_id: int | None,
-                        policy: JobStreamPolicy) -> Iterator[str]: ...
+def job_progress_frames(job_snapshot: Callable[[str], JobSnapshot | None], job_id: str, *,
+                        last_event_id: int | None, policy: JobStreamPolicy) -> Iterator[str]: ...
+    # polls job_snapshot(job_id); job_id is the id JOB_UNTRACKED's JobUntracked names
 
 # web/jobs.py — after S19 β (806) and θ (819)
 JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]       # θ
