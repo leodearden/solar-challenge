@@ -132,31 +132,40 @@ def _over_self_consumption(*windows: ChargeWindow) -> ScheduledChargeStrategy:
     return ScheduledChargeStrategy(SelfConsumptionStrategy(), windows, _LONDON)
 
 
+_UNSCHEDULABLE_FIELD_VALUES = [
+    pytest.param("days", frozenset(), id="no-days"),
+    pytest.param("days", frozenset({7}), id="day-7"),
+    pytest.param("days", frozenset({-1}), id="day-minus-1"),
+    pytest.param("days", frozenset({True}), id="a-bool-is-not-a-weekday"),
+    pytest.param("days", "weekdays", id="a-string-other-than-daily"),
+    pytest.param("start", time(0, 30, tzinfo=timezone.utc), id="a-start-on-a-zone-of-its-own"),
+    pytest.param("duration", timedelta(0), id="no-duration"),
+    pytest.param("duration", timedelta(minutes=-1), id="a-negative-duration"),
+    pytest.param("duration", timedelta(days=1, minutes=1), id="longer-than-a-day"),
+]
+"""A value of each ChargeWindow field but its target that the window cannot schedule."""
+
+_WINDOW_REQUIREMENTS = {
+    "days": "'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6",
+    "start": "a wall-clock time on its strategy's zone, with no tzinfo",
+    "duration": "more than 0 and at most a day",
+}
+"""What a ChargeWindow's days, start and duration must be, as its refusal of each says."""
+
+
 class TestChargeWindow:
     """A ChargeWindow refuses a field it cannot schedule, and covers the wall-clock minutes from its start for its duration on each day it opens."""
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            pytest.param("days", frozenset(), id="no-days"),
-            pytest.param("days", frozenset({7}), id="day-7"),
-            pytest.param("days", frozenset({-1}), id="day-minus-1"),
-            pytest.param("days", frozenset({True}), id="a-bool-is-not-a-weekday"),
-            pytest.param("days", "weekdays", id="a-string-other-than-daily"),
-            pytest.param("start", time(0, 30, tzinfo=timezone.utc), id="a-start-on-a-zone-of-its-own"),
-            pytest.param("duration", timedelta(0), id="no-duration"),
-            pytest.param("duration", timedelta(minutes=-1), id="a-negative-duration"),
-            pytest.param("duration", timedelta(days=1, minutes=1), id="longer-than-a-day"),
-        ],
-    )
-    def test_it_refuses_a_field_naming_the_field_and_its_value(self, field: str, value: object) -> None:
-        """A window's clock is its strategy's zone, so its start has none; only 'daily' stands for every day."""
+    @pytest.mark.parametrize(("field", "value"), _UNSCHEDULABLE_FIELD_VALUES)
+    def test_it_refuses_a_field_saying_what_it_must_be_and_what_it_got(self, field: str, value: object) -> None:
+        """A window's clock is its strategy's zone, so its start has none; only 'daily' stands for every day.
+
+        The refusal takes the form its target's takes: <field> must be <requirement>, got <value!r>.
+        """
         with pytest.raises(ConfigurationError) as refusal:
             dataclasses.replace(_NIGHTLY, **{field: value})
 
-        message = str(refusal.value)
-        assert field in message
-        assert repr(value) in message
+        assert str(refusal.value) == f"{field} must be {_WINDOW_REQUIREMENTS[field]}, got {value!r}"
 
     @pytest.mark.parametrize(
         ("field", "value"),
@@ -176,6 +185,16 @@ class TestChargeWindow:
             dataclasses.replace(_NIGHTLY, target_soc_fraction=value)
         with pytest.raises(ConfigurationError) as config_refusal:
             GridChargeConfig(target_soc_fraction=value)
+
+        assert str(window_refusal.value) == str(config_refusal.value)
+
+    @pytest.mark.parametrize(("field", "value"), _UNSCHEDULABLE_FIELD_VALUES)
+    def test_it_reads_its_target_before_its_other_fields(self, field: str, value: object) -> None:
+        """An input type reads its numbers first (docs/prds/finite-quantities.md §5.2), so a window refused for its target and another field is refused for its target."""
+        with pytest.raises(ConfigurationError) as window_refusal:
+            dataclasses.replace(_NIGHTLY, **{field: value, "target_soc_fraction": 1.5})
+        with pytest.raises(ConfigurationError) as config_refusal:
+            GridChargeConfig(target_soc_fraction=1.5)
 
         assert str(window_refusal.value) == str(config_refusal.value)
 
