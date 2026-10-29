@@ -918,6 +918,53 @@ def test_a_new_is_read_as_getattr_gives_it_not_bound_to_the_class_again_so_names
 @pytest.mark.parametrize(
     "name",
     [
+        pytest.param("Reinitialised", id="init"),
+        pytest.param("Renewed", id="new"),
+        pytest.param("Recalled", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "skipping",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Created:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Initialised:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    reskipping = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reskipping",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from skipping import Created, Initialised\n"
+        "\n"
+        "class Skipping(type):\n"
+        "    __call__ = staticmethod(None)\n"
+        "\n"
+        "class Reinitialised(Created):\n"
+        "    __init__ = None\n"
+        "\n"
+        "class Renewed(Initialised):\n"
+        "    __new__ = None\n"
+        "\n"
+        "class Recalled(Initialised, metaclass=Skipping):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(getattr(reskipping, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         pytest.param("Assigned", id="assigned"),
         pytest.param("Wrapping", id="functools-wraps-wrapper"),
     ],
