@@ -58,6 +58,21 @@ class GetterCall:
     __call__ = CallableGetter()
 
 
+class CallableWrapper:
+    """A callable object, whose type defines no __get__, that records the object it is made with as __wrapped__, as functools.wraps records what it wraps."""
+
+    def __init__(self, wrapped: object) -> None:
+        self.__wrapped__ = wrapped
+
+    def __call__(self, rate: int) -> str: ...
+
+
+class ClassmethodWrapperCall:
+    """A class whose __call__ is a classmethod of a CallableWrapper of a CallableGetter, which every minor binds as a method of that wrapper and reads through to the CallableGetter."""
+
+    __call__ = classmethod(CallableWrapper(CallableGetter()))
+
+
 class TextedCall:
     """A class whose instances carry a __text_signature__ beside the __call__ it defines."""
 
@@ -392,6 +407,12 @@ def test_a_routine_that_wraps_a_descriptor_whose_type_defines_get_and_delete_but
             r" is a functools\.partial that wraps <.*\.CallableGetter object\b"
             r".*\bsurface_forms_helper\._fixtures\.CallableGetter\b",
             id="callable-getter",
+        ),
+        pytest.param(
+            ClassmethodWrapperCall(),
+            r" is a functools\.partial that wraps <.*\.CallableGetter object\b"
+            r".*\bsurface_forms_helper\._fixtures\.CallableGetter\b",
+            id="classmethod-of-a-wrapper-of-a-callable-getter",
         ),
     ],
 )
