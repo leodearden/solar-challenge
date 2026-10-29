@@ -43,7 +43,6 @@ builds from its catalogue (tests/e2e/_job_requests.py).
 
 import itertools
 import json
-import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -63,6 +62,7 @@ from tests.e2e._job_requests import (
     untracked_frame,
 )
 from tests.e2e._run_badges import classes_of_each
+from tests.e2e._unreadable_final_state import unreadable_final_state_frame
 
 
 # -- Page loading ----------------------------------------------------------
@@ -351,13 +351,10 @@ def test_a_sweep_point_whose_job_is_cancelled_or_no_longer_tracked_shows_it_in_i
 def test_a_sweep_point_whose_final_state_the_page_cannot_read_shows_failed(
     page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
 ) -> None:
-    """Run a sweep whose first point's progress stream ends with a completed state whose progress is NaN, which the server's encoder writes and JSON.parse refuses: the first row shows failed, the page goes on to follow the second point, and it reports the frame it could not read as an uncaught error."""
+    """Run a sweep whose first point's progress stream ends with a final state the page cannot read: the first row shows failed, the page goes on to follow the second point, and it reports the frame it could not read as an uncaught error."""
     sweep_jobs.progress.answer(
         "sweep-1-point-1",
-        job_state_frame(
-            a_job_state("sweep-1-point-1", "run-of-sweep-1-point-1", "completed", progress_pct=math.nan),
-            version=5,
-        ),
+        unreadable_final_state_frame("sweep-1-point-1", "run-of-sweep-1-point-1"),
     )
     page.goto(live_server + "/scenarios/sweep")
     with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
