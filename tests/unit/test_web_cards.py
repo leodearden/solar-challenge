@@ -64,6 +64,14 @@ _FLAT_CARD_LOOK = _Look(
 )
 """Its classes are a subset of the card's, which carries shadow-sm, and of scenarios/builder.html's
 preset dropdown's, which carries shadow-lg: having no shadow is what tells a flat card from both."""
+_SPLIT_CARD_TOP_LOOK = _Look(
+    "split_card",
+    frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg".split()),
+)
+_SPLIT_CARD_BOTTOM_LOOK = _Look(
+    "split_card",
+    frozenset("bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg".split()),
+)
 
 _Drawn = tuple[str, frozenset[str]]
 
@@ -147,6 +155,8 @@ def _page(client: FlaskClient, path: str) -> str:
             id="fleet-form-cards",
         ),
         pytest.param("/simulate/home", _CARD_LOOK, [_div("p-6")], id="home-form-cards"),
+        pytest.param("/simulate/home", _SPLIT_CARD_TOP_LOOK, [_div()], id="home-form-split-card-top"),
+        pytest.param("/simulate/home", _SPLIT_CARD_BOTTOM_LOOK, [_div("p-6")], id="home-form-split-card-bottom"),
         pytest.param("/history/compare", _CARD_LOOK, [_div("p-12", "text-center")], id="compare-without-runs-cards"),
         pytest.param(
             "/scenarios/builder",
@@ -294,6 +304,22 @@ def test_a_flat_card_is_one_div_in_the_flat_card_classes_and_its_own_that_holds_
     assert texts(drawn) == ["Body"]
 
 
+def test_a_split_card_draws_its_top_part_then_its_bottom_part_each_in_its_parts_classes(app: Flask) -> None:
+    """Each part is markup its page captures in a {% set %} block, as simulate/home.html captures its
+    configuration and its submission."""
+    page = app.jinja_env.from_string(
+        '{% from "components/macros.html" import split_card %}'
+        "{% set top %}<p>Tabs</p>{% endset %}"
+        "{% set bottom %}<p>Run</p>{% endset %}"
+        '{{ split_card(top, bottom, bottom_classes="p-6") }}'
+    )
+
+    drawn = page.render()
+
+    assert _div_classes(drawn) == [_SPLIT_CARD_TOP_LOOK.classes, _SPLIT_CARD_BOTTOM_LOOK.classes | {"p-6"}]
+    assert texts(drawn) == ["Tabs", "Run"]
+
+
 def _card_calls(source: str) -> list[nodes.Call]:
     """Each call of card in the Jinja template *source*, by {{ card(...) }} and {% call card(...) %} alike."""
     return [
@@ -362,6 +388,8 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
         pytest.param(_CARD_LOOK, id="card"),
         pytest.param(_PANEL_LOOK, id="panel"),
         pytest.param(_FLAT_CARD_LOOK, id="flat-card"),
+        pytest.param(_SPLIT_CARD_TOP_LOOK, id="split-card-top"),
+        pytest.param(_SPLIT_CARD_BOTTOM_LOOK, id="split-card-bottom"),
     ],
 )
 def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_components_macros_html(
