@@ -153,6 +153,14 @@ def _refusal(content: Any, cls: type) -> FieldTreeRefused:
     return refused.value
 
 
+def _nested_array(depth: int) -> list[Any]:
+    """An array holding an array, *depth* arrays deep, built in Python, so no JSON decoder's nesting limit applies."""
+    array: list[Any] = []
+    for _ in range(depth - 1):
+        array = [array]
+    return array
+
+
 def test_field_tree_writes_a_dataclass_as_the_json_tree_of_its_fields() -> None:
     """A dataclass becomes an object, its tag included; a tuple or a list an array; a dict keeps its keys; a pd.Timestamp becomes its ISO text; None stays None."""
     assert field_tree(_EVERY) == {
@@ -250,7 +258,7 @@ _REFUSALS = [
     pytest.param(
         _with_value(_TREE, ("rate", "kind"), "turbo"),
         "rate.kind",
-        "is 'turbo', not one of ['flat', 'stepped']",
+        "is the string 'turbo', not one of ['flat', 'stepped']",
         id="rate.kind-no-member-s",
     ),
     pytest.param(_with_value(_TREE, ("rate",), 5), "rate", "is the number 5, not an object", id="rate-a-number"),
@@ -335,6 +343,16 @@ def test_read_field_tree_refuses_a_value_naming_its_path_and_the_reason(
     refused = _refusal(content, _EveryShape)
 
     assert (refused.path, refused.reason) == (path, reason)
+
+
+def test_read_field_tree_refuses_a_tag_nested_deeper_than_repr_recurses_naming_it_an_array() -> None:
+    """repr of an array 100,000 deep exceeds what CPython's repr recurses through on every admitted minor, so the refusal names the tag by its JSON type.
+
+    _with_value copies the tree before it inserts the array, so the array is never copied.
+    """
+    refused = _refusal(_with_value(_TREE, ("rate", "kind"), _nested_array(100_000)), _EveryShape)
+
+    assert (refused.path, refused.reason) == ("rate.kind", "is an array, not one of ['flat', 'stepped']")
 
 
 def test_read_field_tree_refuses_a_string_that_is_no_timestamp_from_pandas_refusal() -> None:
