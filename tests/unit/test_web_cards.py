@@ -55,7 +55,9 @@ _PANEL_LOOK = _Look(
     "panel",
     frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm".split()),
 )
-_SHADOWS = frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
+_PANEL_TITLE_BAND_LOOK = _Look("panel", frozenset("px-5 py-4 border-b border-slate-200 dark:border-slate-700".split()))
+"""The header band a titled panel draws above its content."""
+_SHADOWS =frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
 """The Tailwind box-shadow utilities that draw a shadow."""
 _FLAT_CARD_LOOK = _Look(
     "flat_card",
@@ -290,11 +292,40 @@ def test_a_card_given_an_href_is_one_link_to_it_in_the_card_classes_and_its_own(
     assert element_attributes(drawn, "div") == []
 
 
-def test_a_panel_is_one_div_in_the_panel_classes_and_its_own_that_holds_its_content(macros: Any) -> None:
+def test_a_panel_given_no_title_is_one_div_in_the_panel_classes_and_its_own_that_holds_its_content(
+    macros: Any,
+) -> None:
     drawn = str(macros.panel(classes="sticky top-24", caller=lambda: "Body"))
 
     assert _div_classes(drawn) == [_PANEL_LOOK.classes | {"sticky", "top-24"}]
     assert texts(drawn) == ["Body"]
+
+
+_POINT_COUNT = "previewValues.length + ' values will be tested'"
+"""The Alpine expression the sweep page's preview counts its values with."""
+
+
+def test_a_titled_panel_draws_a_header_band_of_its_title_over_its_subtitle_above_its_content(macros: Any) -> None:
+    """html.parser decodes the &#39; that autoescape writes for each quote, so the expression reads back unchanged."""
+    drawn = str(macros.panel(title="Sweep Point Preview", subtitle_expression=_POINT_COUNT, caller=lambda: "Body"))
+
+    assert _div_classes(drawn) == [_PANEL_LOOK.classes, _PANEL_TITLE_BAND_LOOK.classes]
+    assert [_classes(heading) for heading in element_attributes(drawn, "h3")] == [
+        {"font-semibold", "text-slate-800", "dark:text-white"}
+    ]
+    assert [(_classes(p), p.get("x-text")) for p in element_attributes(drawn, "p")] == [
+        ({"text-xs", "text-slate-400", "mt-1"}, _POINT_COUNT)
+    ]
+    assert headings(drawn) == ["Sweep Point Preview"]
+    assert texts(drawn) == ["Sweep Point Preview", "Body"]
+
+
+def test_a_panel_titled_without_a_subtitle_expression_draws_its_title_alone_in_its_band(macros: Any) -> None:
+    drawn = str(macros.panel(title="Sweep Results", caller=lambda: "Body"))
+
+    assert _div_classes(drawn) == [_PANEL_LOOK.classes, _PANEL_TITLE_BAND_LOOK.classes]
+    assert element_attributes(drawn, "p") == []
+    assert texts(drawn) == ["Sweep Results", "Body"]
 
 
 def test_a_flat_card_is_one_div_in_the_flat_card_classes_and_its_own_that_holds_its_content(macros: Any) -> None:
