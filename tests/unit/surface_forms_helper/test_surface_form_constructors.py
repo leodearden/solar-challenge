@@ -1140,6 +1140,11 @@ def test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_rai
             r"\btypes\.SimpleNamespace\b",
             id="classmethod",
         ),
+        pytest.param(
+            lambda build: classmethod(None),
+            r"\bbuiltins\.NoneType\b",
+            id="classmethod-of-none",
+        ),
     ],
 )
 @pytest.mark.parametrize(
