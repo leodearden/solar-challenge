@@ -83,12 +83,12 @@ class Period(enum.Enum):
 
 
 class Giver:
-    """A descriptor whose __get__ gives the callable it was made with."""
+    """A descriptor whose __get__ gives the object it was made with."""
 
-    def __init__(self, given: Callable[..., object]) -> None:
+    def __init__(self, given: object) -> None:
         self.given = given
 
-    def __get__(self, instance: object, owner: type | None = None) -> Callable[..., object]:
+    def __get__(self, instance: object, owner: type | None = None) -> object:
         return self.given
 
 
@@ -1104,6 +1104,269 @@ def test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_rai
             named_classes(cls)
     with pytest.raises(TypeError, match=rf"\.Built\b.*\.Built\.__init__\b.*{kind}"):
         surface_form(functools.partial(Built))
+
+
+@pytest.mark.parametrize(
+    ("hold", "kind"),
+    [
+        pytest.param(lambda build: Giver(Giver(build)), r"\.Giver\b", id="get-only-descriptor"),
+        pytest.param(
+            lambda build: CallableGiver(Giver(build)),
+            r"\.Giver\b",
+            id="callable-descriptor-giving-one",
+        ),
+        pytest.param(
+            lambda build: Giver(DeletingGiver(build)),
+            r"\.DeletingGiver\b",
+            id="get-delete-descriptor",
+        ),
+        pytest.param(
+            lambda build: Giver(types.SimpleNamespace(__signature__="(receiver, rate)")),
+            r"\btypes\.SimpleNamespace\b",
+            id="object-carrying-a-string-signature",
+        ),
+        pytest.param(
+            lambda build: types.SimpleNamespace(),
+            r"\btypes\.SimpleNamespace\b",
+            id="object-defining-no-get",
+        ),
+        pytest.param(
+            lambda build: staticmethod(types.SimpleNamespace()),
+            r"\btypes\.SimpleNamespace\b",
+            id="staticmethod",
+        ),
+        pytest.param(
+            lambda build: classmethod(types.SimpleNamespace()),
+            r"\btypes\.SimpleNamespace\b",
+            id="classmethod",
+        ),
+        pytest.param(
+            lambda build: classmethod(None),
+            r"\bbuiltins\.NoneType\b",
+            id="classmethod-of-none",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_inspect_binds_to_an_object_that_is_not_callable_raises_a_type_error_naming_it_that_constructor_and_that_object_type(
+    construct: Callable[[object], type],
+    constructor: str,
+    hold: Callable[[Callable[..., object]], object],
+    kind: str,
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    cls = construct(hold(build))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*{kind}.*\bnot callable\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_new_is, "Made.__new__", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_wraps_a_descriptor_whose_type_defines_get_but_neither_set_nor_delete_and_that_is_not_callable_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type(
+    construct: Callable[[object], type], constructor: str
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    cls = construct(functools.wraps(Giver(build))(lambda receiver, rate: None))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*\.Giver\b"
+            r".*\bmethod descriptor\b.*\bevery admitted minor\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
+    ],
+)
+def test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_is_spelled_by_the_init_inspect_reads_in_its_place(
+    held: object,
+) -> None:
+    class Initialised:
+        __new__ = held
+
+        def __init__(self, rate: int) -> None: ...
+
+    class Reinitialised(class_whose_metaclass_call_is(held)):
+        def __init__(self, rate: int) -> None: ...
+
+    for cls in (Initialised, Reinitialised):
+        assert surface_form(cls) == "(rate: int) -> None"
+        assert named_classes(cls) == {int}
+
+
+@pytest.mark.parametrize(
+    ("hold", "refused"),
+    [
+        pytest.param(functools.partial, r"\bfunctools\.partial\b", id="partial"),
+        pytest.param(
+            _with_a_string_signature,
+            r"'\(receiver, rate\)', a builtins\.str\b",
+            id="string-signature",
+        ),
+        pytest.param(
+            functools.wraps(object.__init__),
+            r"\bobject\.__init__\b",
+            id="wrapper-of-a-callable-defined-in-c",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
+    ],
+)
+def test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_raises_the_type_error_naming_the_init_inspect_reads_in_its_place(
+    held: object, hold: Callable[[Callable[..., object]], object], refused: str
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    init = hold(build)
+
+    class Initialised:
+        __new__ = held
+        __init__ = init
+
+    class Reinitialised(class_whose_metaclass_call_is(held)):
+        __init__ = init
+
+    for cls in (Initialised, Reinitialised):
+
+        class Inheriting(cls):
+            pass
+
+        for subject in (cls, Inheriting):
+            naming_it = rf"\.{subject.__name__}\b.*\.{cls.__name__}\.__init__\b.*{refused}"
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                named_classes(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    ("hold", "refused"),
+    [
+        pytest.param(
+            _with_a_string_signature,
+            r"'\(receiver, rate\)', a builtins\.str\b",
+            id="string-signature",
+        ),
+        pytest.param(
+            functools.wraps(object.__new__),
+            r"\bobject\.__new__\b",
+            id="wrapper-of-a-callable-defined-in-c",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
+    ],
+)
+def test_a_class_whose_init_inspect_binds_to_none_raises_the_type_error_naming_the_new_inspect_reads_in_its_place(
+    held: object, hold: Callable[[Callable[..., object]], object], refused: str
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    class Created:
+        __new__ = hold(build)
+
+    class Reinitialised(Created):
+        __init__ = held
+
+    naming_it = rf"\.Reinitialised\b.*\.Created\.__new__\b.*{refused}"
+    with pytest.raises(TypeError, match=naming_it):
+        surface_form(Reinitialised)
+    with pytest.raises(TypeError, match=naming_it):
+        named_classes(Reinitialised)
+    with pytest.raises(TypeError, match=naming_it):
+        surface_form(functools.partial(Reinitialised))
+
+
+@pytest.mark.parametrize(
+    ("base", "naming_base"),
+    [
+        pytest.param(int, r"\bbuiltins\.int\b", id="int"),
+        pytest.param(frozenset, r"\bbuiltins\.frozenset\b", id="frozenset"),
+        pytest.param(property, r"\bbuiltins\.property\b", id="property"),
+    ],
+)
+@pytest.mark.parametrize(
+    "name",
+    [pytest.param("__new__", id="new"), pytest.param("__init__", id="init")],
+)
+@pytest.mark.parametrize(
+    "held",
+    [
+        pytest.param(None, id="none"),
+        pytest.param(Giver(None), id="descriptor-giving-none"),
+        pytest.param(staticmethod(None), id="staticmethod-of-none"),
+    ],
+)
+def test_a_class_whose_only_constructor_inspect_binds_to_none_over_a_class_defined_in_c_raises_the_type_error_naming_that_class(
+    held: object, name: str, base: type, naming_base: str
+) -> None:
+    skipping = type("Skipping", (base,), {name: held})
+
+    class Inheriting(skipping):
+        pass
+
+    for subject in (skipping, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*{naming_base}.*\bdefined in C\b.*\btext signature\b"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
 
 
 def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:

@@ -406,6 +406,11 @@ _PARTIAL_WITH_ITS_OWN_GET_BY_MINOR = (
     "defines no __get__, and as a functools.partial, through its func, from 3.13"
 )
 
+_NOT_CALLABLE_ON_ANY_MINOR = (
+    "which is not callable: inspect reads no signature for what is not callable, on any "
+    "admitted minor"
+)
+
 
 def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
     """Raise TypeError naming *obj*, *end* and *end*'s type if *end*, the end of the chain inspect follows from *obj*, is a descriptor _is_read_as_builtin_before_3_13 finds.
@@ -435,30 +440,29 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """Raise TypeError naming *cls* if inspect reads its constructor differently by minor, or cannot read it on any.
 
     The constructors it refuses, in the order it checks them; a constructor wraps a
-    callable defined in C here if _wrapped_c_callable gives one for it, and is read as
-    an Enum, carries a __signature__ inspect reads by minor, or is read as a builtin or
-    through an object its class makes callable, if _refuse_constructor_reading finds
-    it so:
+    callable defined in C here if _wrapped_c_callable gives one for it, and is not
+    callable once bound, is read as an Enum, carries a __signature__ inspect reads by
+    minor, or is read as a builtin or through an object its class makes callable, if
+    _refuse_constructor_reading finds it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
       refuses, checked before it is bound, or if it wraps a callable defined in C, is a
-      functools.partial, is read as an Enum, carries such a __signature__, or is read
-      as a builtin or through such an object. inspect reads any other __call__
-      _metaclass_call gives in their place, so none of the constructors below is then
-      checked;
+      functools.partial, is not callable once bound, is read as an Enum, carries such a
+      __signature__, or is read as a builtin or through such an object. inspect reads
+      any other __call__ _metaclass_call gives in their place, so none of the
+      constructors below is then checked;
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
-    - the constructor inspect reads first of those the holder's own namespace holds, if
-      it wraps a callable defined in C, as the __new__ warnings.deprecated writes for a
-      class wraps object.__new__;
-    - a functools.partial the holder's own namespace holds as __init__, unless that
-      namespace also holds a __new__ not defined in C, which inspect reads first;
-    - that first-read constructor, if it is read as an Enum, carries such a
-      __signature__, or is read as a builtin or through such an object;
-    - the constructor of a holder other than object that _constructed_in_c counts as
-      defined in C.
+    - the constructor _first_read_constructor gives for *cls*, if it wraps a callable
+      defined in C, as the __new__ warnings.deprecated writes for a class wraps
+      object.__new__;
+    - that first-read constructor, if it is an __init__ that is a functools.partial;
+    - that first-read constructor, if it is not callable once bound, is read as an Enum,
+      carries such a __signature__, or is read as a builtin or through such an object;
+    - the constructor of the class _refuse_class_constructed_in_c finds, if that
+      first-read constructor is of a kind in _C_CONSTRUCTOR_KINDS.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -474,16 +478,34 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         _refuse_classmethod_bound_by_minor(
             cls, "is constructed through", owner, name, vars(owner)[name]
         )
-    holder = _constructor_holder(cls)
-    name, constructor = _first_read_constructor(holder)
+    holder, name, constructor = _first_read_constructor(cls)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
         _refuse_partial_bound_as_method(cls, "is constructed through", holder, name, constructor)
-    _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, holder))
-    if holder is not object and _constructed_in_c(holder):
+    _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, name, constructor))
+    if isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+        _refuse_class_constructed_in_c(cls)
+
+
+def _refuse_class_constructed_in_c(cls: type) -> None:
+    """Raise TypeError naming *cls* and the first class in its MRO, object aside, that holds a __new__ or __init__ and that _constructed_in_c counts as defined in C, if one does; inspect reads no constructor of *cls*, so it reads the first text signature a class in that MRO gives.
+
+    That class is the one holding the constructor _first_read_constructor gives, unless
+    _skipped_as_none skips the name such a class holds, as a __new__ that gives None
+    over int skips int's.
+    """
+    constructing = next(
+        (
+            base
+            for base in namespace_holders(cls.__mro__[:-1], "__new__", "__init__")
+            if _constructed_in_c(base)
+        ),
+        None,
+    )
+    if constructing is not None:
         raise TypeError(
-            f"{label_of(cls)} is constructed by {label_of(holder)}, which is defined in C (a "
-            "builtin or extension type), so inspect reads its signature from a text "
+            f"{label_of(cls)} is constructed by {label_of(constructing)}, which is defined in C "
+            "(a builtin or extension type), so inspect reads its signature from a text "
             "signature, which a release of its package can add or rewrite, as CPython's "
             "minors do: make the name private, or give the class an __init__ or __new__ "
             "defined with def"
@@ -500,19 +522,42 @@ def _constructed_in_c(holder: type) -> bool:
     )
 
 
-def _first_read_constructor(holder: type) -> tuple[str, object]:
-    """The name and value of the constructor inspect reads first of those *holder*'s own namespace holds: its __new__, as getattr gives it (a staticmethod unwrapped), or as _classmethod_as_read gives it if it is a classmethod, unless that is defined in C beside an __init__; else its __init__."""
+def _first_read_constructor(cls: type) -> tuple[type, str, object]:
+    """The class in *cls*'s MRO that holds the constructor inspect reads first for *cls*, with that constructor's name and value.
+
+    Of __new__ and __init__, inspect reads a name only if _skipped_as_none does not find
+    the one *cls* resolves skipped. The class is the first in the MRO that holds a name
+    it reads, else object, whose constructors are defined in C. The constructor is that
+    class's __new__, as getattr gives it (a staticmethod unwrapped), or as
+    _classmethod_as_read gives it if it is a classmethod, unless it is defined in C
+    beside an __init__ inspect reads; else its __init__.
+    """
+    names = [
+        name
+        for name in ("__new__", "__init__")
+        if not _skipped_as_none(cls, name, inspect.getattr_static(cls, name))
+    ]
+    holder = next(namespace_holders(cls.__mro__, *names), object)
     namespace = vars(holder)
-    if "__new__" in namespace:
+    if "__new__" in names and "__new__" in namespace:
         held = namespace["__new__"]
         new = (
             _classmethod_as_read(held.__func__, holder)
             if isinstance(held, classmethod)
             else getattr(holder, "__new__")
         )
-        if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and "__init__" in namespace):
-            return "__new__", new
-    return "__init__", namespace["__init__"]
+        init_beside = "__init__" in names and "__init__" in namespace
+        if not (isinstance(new, _C_CONSTRUCTOR_KINDS) and init_beside):
+            return holder, "__new__", new
+    return holder, "__init__", namespace["__init__"]
+
+
+def _skipped_as_none(owner: type, name: str, held: object) -> bool:
+    """Whether inspect skips *held*, the constructor *owner* resolves as *name*, as inspect.getattr_static finds it, on every admitted minor, reading that name of no class in the MRO: it gives None as inspect looks it up, a __new__ through getattr and any other bound to *owner* as _bound_to binds it. Neither a classmethod, which inspect binds to a method even of None, nor a constructor of a kind in _C_CONSTRUCTOR_KINDS, which inspect never binds, gives None."""
+    if isinstance(held, (classmethod, *_C_CONSTRUCTOR_KINDS)):
+        return False
+    read = getattr(owner, name) if name == "__new__" else _bound_to(held, owner)
+    return read is None
 
 
 def _refuse_wrapper_of_c_callable(
@@ -628,12 +673,36 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 
 def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object) -> None:
-    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    _refuse_constructor_bound_to_uncallable(cls, owner, name, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(cls, owner, name, end)
     _refuse_constructor_signature(cls, owner, name, end)
     _refuse_constructor_read_as_builtin(cls, owner, name, read)
     _refuse_call_without_a_portable_form(cls, end)
+
+
+def _refuse_constructor_bound_to_uncallable(
+    cls: type, owner: type, name: str, read: object
+) -> None:
+    """Raise TypeError naming *cls*, *owner*'s *name*, and *read* with its type, if *read* is not callable; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
+
+    On every admitted minor, inspect checks that *read* is callable before it reads
+    anything of it, its __signature__ included.
+    """
+    if not callable(read):
+        raise _constructor_read_as_error(cls, owner, name, read, _NOT_CALLABLE_ON_ANY_MINOR)
+
+
+def _constructor_read_as_error(
+    cls: type, owner: type, name: str, link: object, reading: str
+) -> TypeError:
+    """The error naming *cls*, *owner*'s *name*, and *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    return TypeError(
+        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
+        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
+        f"define {name} with def"
+    )
 
 
 def _refuse_constructor_read_as_enum(cls: type, owner: type, name: str, end: object) -> None:
@@ -654,11 +723,7 @@ def _refuse_constructor_read_as_builtin(
     if found is None:
         return
     link, reading = found
-    raise TypeError(
-        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
-        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
-        f"define {name} with def"
-    )
+    raise _constructor_read_as_error(cls, owner, name, link, reading)
 
 
 def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None:
@@ -800,21 +865,21 @@ def _constructor_spelling_modules(
     An Enum's signature is spelled in no module known, as _EnumReadByMinor says. Any
     other class's constructor is the __call__ *cls*'s metaclass resolves, if
     _metaclass_call_as_read gives one, which inspect reads before any __new__ or
-    __init__; else the one _constructor_as_read gives for the nearest class in *cls*'s
-    MRO that holds one, which may be a base defined in another module. It is spelled
-    where _chain_spelling_modules spells the end of its chain, so a function the class
-    body assigns from another module, or that wraps one there as functools.wraps records
-    one, is spelled in that other module. If the function whose annotations that end
-    holds, as _annotations_author gives it, was compiled outside the class body and
-    renamed into it, as the dataclass decorator generates an __init__ and
-    collections.namedtuple a __new__, the constructor is spelled as
-    _generated_constructor_modules spells it; if that function was renamed into another
-    class and assigned here, TypeError names *cls* and the function. A constructor
-    defined in C, or one that wraps a callable defined in C, spells no annotation, so
-    the class's is that of the class _signature_holder gives if *cls* carries a
-    signature, else where _chain_spelling_modules finds the link given the signature a
-    link of that constructor's chain carries, if any does; _signature_holder checks
-    every other class that carries a signature before the constructor is read.
+    __init__; else the one _first_read_constructor gives, as _constructor_as_read reads
+    it, which a base defined in another module may hold. It is spelled where
+    _chain_spelling_modules spells the end of its chain, so a function the class body
+    assigns from another module, or that wraps one there as functools.wraps records one,
+    is spelled in that other module. If the function whose annotations that end holds,
+    as _annotations_author gives it, was compiled outside the class body and renamed
+    into it, as the dataclass decorator generates an __init__ and collections.namedtuple
+    a __new__, the constructor is spelled as _generated_constructor_modules spells it;
+    if that function was renamed into another class and assigned here, TypeError names
+    *cls* and the function. A constructor defined in C, or one that wraps a callable
+    defined in C, spells no annotation, so the class's is that of the class
+    _signature_holder gives if *cls* carries a signature, else where
+    _chain_spelling_modules finds the link given the signature a link of that
+    constructor's chain carries, if any does; _signature_holder checks every other class
+    that carries a signature before the constructor is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
@@ -822,8 +887,8 @@ def _constructor_spelling_modules(
     call = _metaclass_call_as_read(cls)
     if call is not None:
         return _chain_spelling_modules(call, names)
-    holder = _constructor_holder(cls)
-    constructor = _constructor_as_read(cls, holder)
+    holder, name, held = _first_read_constructor(cls)
+    constructor = _constructor_as_read(cls, name, held)
     end = _chain_end(constructor)
     if signature_holder is not None and isinstance(end, _C_CONSTRUCTOR_KINDS):
         return dict.fromkeys(names, defining_module(signature_holder))
@@ -857,18 +922,19 @@ def _refuse_constructor_generated_for_another_class(
         )
 
 
-def _constructor_as_read(cls: type, holder: type) -> object:
-    """The constructor inspect.signature reads for *cls* of those *holder*'s own namespace holds, as inspect reads it: a __new__ as _first_read_constructor gives it, and any other __init__ bound to *cls*, as _bound_to binds it."""
-    kind, constructor = _first_read_constructor(holder)
-    if kind == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
+def _constructor_as_read(cls: type, name: str, constructor: object) -> object:
+    """*constructor*, the one _first_read_constructor gives for *cls* as *name*, as inspect reads it: a __new__ as given, and any other __init__ bound to *cls*, as _bound_to binds it."""
+    if name == "__new__" or isinstance(constructor, _C_CONSTRUCTOR_KINDS):
         return constructor
     return _bound_to(constructor, cls)
 
 
 def _metaclass_call(cls: type) -> object | None:
-    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if it is defined in C, as type.__call__ is, which inspect skips on every minor."""
-    call = inspect.getattr_static(type(cls), "__call__")
-    return None if isinstance(call, _C_CONSTRUCTOR_KINDS) else call
+    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if inspect skips it on every minor: it is defined in C, as type.__call__ is, or _skipped_as_none finds it skipped."""
+    call: object = inspect.getattr_static(type(cls), "__call__")
+    if isinstance(call, _C_CONSTRUCTOR_KINDS) or _skipped_as_none(type(cls), "__call__", call):
+        return None
+    return call
 
 
 def _metaclass_call_as_read(cls: type) -> object | None:
@@ -916,11 +982,6 @@ def _generated_constructor_modules(
         )
         for name in names
     }
-
-
-def _constructor_holder(cls: type) -> type:
-    """The class in *cls*'s MRO whose own namespace holds __init__ or __new__, the constructor inspect.signature(*cls*) reads."""
-    return next(namespace_holders(cls.__mro__, "__init__", "__new__"))
 
 
 def _signature_holder(cls: type) -> type:

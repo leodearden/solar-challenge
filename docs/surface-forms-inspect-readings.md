@@ -31,8 +31,9 @@ class's constructor and 3.3's reading on those releases on 2026-10-27, and 4.4's
 of a class member that is a `functools.partial`, 4.1's reading of a constructor
 `inspect` binds as a `classmethod` or through a descriptor, and 4.7's readings on those
 releases on 2026-10-28. 4.5's reading of where `inspect`'s lookup of a constructor stops
-following `__wrapped__` was measured on those releases on 2026-10-29. A new refusal gets
-its rule test first, then its entry here.
+following `__wrapped__`, and its readings of a constructor whose binding gives an object
+that is not callable or whose lookup or binding gives `None`, were measured on those
+releases on 2026-10-29. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -107,8 +108,10 @@ with its type: on the routine or class itself, on the link of a routine's chain 
 `inspect` binds the constructor it reads for a class before it reads it, on every minor,
 as 4.5 says: a `__new__` as `getattr` gives it, and an `__init__` or a metaclass `__call__`
 with `inspect._descriptor_get`. So the `__signature__` it meets there is on what that
-binding gives: the function a `classmethod` holds, or what a descriptor's `__get__` gives;
-a `classmethod` that 4.7 refuses is refused before it is bound.
+binding gives: the function a `classmethod` holds, or what a descriptor's `__get__` gives.
+It reads that `__signature__` only if what the binding gives is callable; 4.5 says how
+every minor reads a constructor whose binding gives anything else. A `classmethod` that
+4.7 refuses is refused before it is bound.
 With `def build(cls, rate: int)` carrying `'(cls, rate)'`, `classmethod(build)` held as
 `__init__` or as a metaclass `__call__` reads as `(rate)` on 3.12 and 3.13, as does a
 descriptor held there whose `__get__` gives a function carrying `'(rate)'`, and 3.11 and
@@ -273,8 +276,44 @@ refused before any is bound. The other readings are:
   its type defines besides `__get__` and whatever it records as `__wrapped__`, and
   `surface_form` spells it.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
-  `__delete__`: every minor reads it as a method descriptor, finds no text signature and
-  raises `ValueError`.
+  `__delete__`, at the end of the chain from a constructor whose binding gives a
+  callable: the binding gives such a descriptor that is callable, or a wrapper that
+  records one as `__wrapped__`, callable or not. Every minor reads it as a method
+  descriptor, finds no text signature and raises `ValueError`.
+- A constructor whose binding gives an object that is not callable. Every minor raises
+  `TypeError`, as not a callable object, before it reads anything of that object, so it
+  reads that object neither as a method descriptor, nor as a data descriptor (4.3), nor
+  by a `__signature__` it carries (4.1). With `Giver`, whose `__get__` gives the object
+  it was made with, and `def build(receiver, rate: int) -> None`, `Giver(Giver(build))`
+  held as `__init__`, as `__new__` or as a metaclass `__call__` reads so, as do a
+  `staticmethod` and a `classmethod` of an object whose type defines no `__get__`,
+  `classmethod(None)` among them: every minor binds a `classmethod` to a method, even of
+  `None`, and raises as it reads what that method holds. `surface_form` raises
+  `TypeError` naming the class, that constructor, and the object with its type.
+- A constructor whose lookup or binding gives `None`, as `None`, `Giver(None)` and
+  `staticmethod(None)` give held as any constructor. Every minor skips it, reading that
+  name of no class in the MRO, and reads the constructor after it: in place of a
+  metaclass `__call__`, the class's `__new__` or `__init__`; in place of a `__new__`, the
+  `__init__` the class resolves; in place of an `__init__`, the `__new__` it resolves,
+  which a base may hold. `__new__ = None` beside `def __init__(self, rate: int) -> None`
+  reads as `(rate: int) -> None`, as does that `__init__` beside a metaclass `__call__`
+  that gives `None`. `surface_form` skips such a constructor too, and refuses the one
+  `inspect` reads in its place by the readings this section lists: beside
+  `__new__ = None`, `__init__ = functools.partial(init)`, with
+  `def init(self, rate: int) -> None`, reads as `(self, rate: int) -> None` on 3.11 to
+  3.13 and as `(rate: int) -> None` on 3.14, and is refused as 4.4's partial. Where a
+  skipped `__new__` or `__init__` leaves no constructor defined in Python to read, every
+  minor reads the first text signature a class in the MRO other than `object` gives, as
+  for a class constructed by a class defined in C, below, and raises `ValueError` if none
+  gives one, since the skipped constructor is not `object`'s: `__init__ = None` alone
+  raises it, where a class that holds no constructor reads as `()`. Over `property`,
+  `__new__ = None` or `__init__ = None` reads as `property`'s text signature,
+  `(fget=None, fset=None, fdel=None, doc=None)`; over `int`, which gives none, either
+  raises `ValueError`, as `int` does; and over `frozenset`, which gives one from 3.13,
+  either raises `ValueError` on 3.11 and 3.12 and reads as `(iterable=(), /)` on 3.13
+  and 3.14. `surface_form` refuses such a class as one constructed by a class defined in
+  C wherever its MRO holds one other than `object`, and otherwise leaves it to
+  `inspect`, so `__init__ = None` alone raises that `ValueError`.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
 - A constructor read through an object its class makes callable. `inspect` reads a
@@ -302,6 +341,13 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_is_a_descriptor_that_records_a_callable_defined_in_c_as_wrapped_is_spelled_by_what_getattr_binds_it_to_less_its_first_parameter_whatever_its_type_defines_besides_get`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_delete_a_partial_or_an_object_defining_no_get_that_records_a_callable_defined_in_c_as_wrapped_raises_a_type_error_naming_it_that_constructor_and_that_callable`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_inspect_reads_as_a_builtin_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_binds_to_an_object_that_is_not_callable_raises_a_type_error_naming_it_that_constructor_and_that_object_type`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_wraps_a_descriptor_whose_type_defines_get_but_neither_set_nor_delete_and_that_is_not_callable_raises_a_type_error_naming_it_that_constructor_and_the_descriptor_type`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_is_spelled_by_the_init_inspect_reads_in_its_place`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_raises_the_type_error_naming_the_init_inspect_reads_in_its_place`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_inspect_binds_to_none_raises_the_type_error_naming_the_new_inspect_reads_in_its_place`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_only_constructor_inspect_binds_to_none_over_a_class_defined_in_c_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
