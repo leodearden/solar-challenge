@@ -464,6 +464,15 @@ def _json_document(run_dir: Path, run_id: str, name: str) -> StoredDocument:
     return StoredDocument.decoded(run_id, name, text)
 
 
+def _check_window(results: SimulationResults) -> None:
+    """Check that SimulationResults.window reads a window from the index of *results*.
+
+    Raises:
+        ValueError: As SimulationResults.window does, for an index no window describes.
+    """
+    _ = results.window
+
+
 def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
     """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
 
@@ -479,7 +488,7 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
         raise StoredRunUnreadable(run_id, name, None, "is missing")
     try:
         results = SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
-        results.window
+        _check_window(results)
     except ValueError as refusal:
         raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
     except OSError as unreadable:
