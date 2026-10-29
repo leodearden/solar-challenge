@@ -536,19 +536,39 @@ def _refuse_wrapper_of_c_callable(
 def _wrapped_c_callable(
     constructor: object,
 ) -> types.BuiltinFunctionType | types.WrapperDescriptorType | None:
-    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also at a link whose __signature__ is not None, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
+    """The callable defined in C that *constructor* wraps, if _unwrapped, stopped also where _stops_constructor_lookup holds, ends at one; None if it ends elsewhere, or if *constructor* is itself defined in C or is not callable.
 
-    It stops at any __signature__, as inspect's own lookup of a constructor does from
-    Python 3.13, and leaves a constructor whose chain carries one to
-    _refuse_constructor_signature, which reads the chain from that constructor as
-    inspect binds it. Since it reads *constructor* as held, a constructor that wraps a
-    callable defined in C and whose binding gives a callable carrying a __signature__
-    meets both; _refuse_constructor_without_a_portable_form checks the wrapper first.
+    That walk is the one Python 3.13 and 3.14 take from a constructor as they look it
+    up, before binding it: where it ends at such a callable, they skip the constructor
+    as defined in C. 3.11 and 3.12 take no such walk. It stops at a __signature__,
+    leaving it to _refuse_constructor_signature, and at a method descriptor, which every
+    minor binds before following any __wrapped__ and reads as what that gives, as
+    _refuse_constructor_reading reads it. So it never follows __wrapped__ from what a
+    binding gives. Only a constructor this walk follows to a callable defined in C meets
+    both checks, such as a descriptor whose type defines __delete__ and whose __get__
+    gives a callable carrying a __signature__, and
+    _refuse_constructor_without_a_portable_form checks the wrapper first. A get-only
+    descriptor whose binding gives such a callable meets _refuse_constructor_signature
+    alone.
     """
     if isinstance(constructor, _C_CONSTRUCTOR_KINDS) or not callable(constructor):
         return None
-    wrapped = _unwrapped(constructor, _has_non_none_signature)
+    wrapped = _unwrapped(constructor, _stops_constructor_lookup)
     return wrapped if isinstance(wrapped, _C_CONSTRUCTOR_KINDS) else None
+
+
+def _stops_constructor_lookup(link: object) -> bool:
+    """Whether Python 3.13, looking a class's constructor up before binding it, stops following __wrapped__ at *link*: *link* carries a __signature__, a None one being _unwrapped's own stop, or is a method descriptor as 3.13's inspect.ismethoddescriptor counts one, no class, method, function or functools.partial, whose type defines __get__ but neither __set__ nor __delete__.
+
+    3.14 counts a partial too, and 3.11 and 3.12 a descriptor is_get_delete_descriptor
+    finds. 3.14 stops wherever 3.13 does, so this walk reaches the callable defined in C
+    of each constructor either of them skips.
+    """
+    return _has_non_none_signature(link) or (
+        inspect.ismethoddescriptor(link)
+        and not is_get_delete_descriptor(link)
+        and not isinstance(link, functools.partial)
+    )
 
 
 _BindingVerb: typing.TypeAlias = typing.Literal["is constructed through", "is read through"]
