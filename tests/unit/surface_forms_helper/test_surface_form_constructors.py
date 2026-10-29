@@ -127,6 +127,24 @@ def _recording_object_init(wrapper: object) -> object:
     return wrapper
 
 
+_INSPECT_SKIPS_AS_DEFINED_IN_C = (
+    pytest.param("__new__", object.__new__, id="builtin-as-new"),
+    pytest.param("__new__", staticmethod(object.__new__), id="staticmethod-of-a-builtin-as-new"),
+    pytest.param("__new__", object().__init__, id="method-wrapper-as-new"),
+    pytest.param(
+        "__new__", staticmethod(object().__init__), id="staticmethod-of-a-method-wrapper-as-new"
+    ),
+    pytest.param(
+        "__new__",
+        staticmethod(dict.__dict__["fromkeys"]),
+        id="staticmethod-of-a-classmethod-descriptor-as-new",
+    ),
+    pytest.param("__init__", object.__init__, id="slot-wrapper-as-init"),
+    pytest.param("__init__", object().__init__, id="method-wrapper-as-init"),
+    pytest.param("__init__", dict.__dict__["fromkeys"], id="classmethod-descriptor-as-init"),
+)
+
+
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
@@ -1510,6 +1528,63 @@ def test_a_class_whose_only_constructor_is_a_method_wrapper_or_a_classmethod_des
 
     for subject in (skipping, Inheriting):
         naming_it = rf"\.{subject.__name__}\b.*{naming_base}.*\bdefined in C\b.*\btext signature\b"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(("name", "held"), _INSPECT_SKIPS_AS_DEFINED_IN_C)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds(
+    name: str, held: object
+) -> None:
+    class Initialised:
+        def __init__(self, share: "fractions.Fraction") -> None: ...
+
+    class Created:
+        def __new__(cls, share: "fractions.Fraction") -> object: ...
+
+    base, form, classes = {
+        "__new__": (Initialised, "(share: fractions.Fraction) -> None", {fractions.Fraction}),
+        "__init__": (
+            Created,
+            "(share: fractions.Fraction) -> object",
+            {fractions.Fraction, object},
+        ),
+    }[name]
+    skipping = type("Skipping", (base,), {name: held})
+
+    assert surface_form(skipping) == form
+    assert named_classes(skipping) == classes
+
+
+@pytest.mark.parametrize(("name", "held"), _INSPECT_SKIPS_AS_DEFINED_IN_C)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds(
+    name: str, held: object
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    def make(receiver: object, rate: int) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build)
+
+    class Created:
+        __new__ = _with_a_string_signature(make)
+
+    base, refused = {
+        "__new__": (Built, r"\.Built\.__init__\b.*\bfunctools\.partial\b"),
+        "__init__": (Created, r"\.Created\.__new__\b.*'\(receiver, rate\)', a builtins\.str\b"),
+    }[name]
+    skipping = type("Skipping", (base,), {name: held})
+
+    class Inheriting(skipping):
+        pass
+
+    for subject in (skipping, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*{refused}"
         with pytest.raises(TypeError, match=naming_it):
             surface_form(subject)
         with pytest.raises(TypeError, match=naming_it):
