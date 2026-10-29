@@ -16,14 +16,16 @@ opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
 and that the page says why when it loses track of a sweep. A point whose job
 is cancelled, or which the server no longer tracks, shows that in its row, and
-the page goes on to follow the next point. A point whose progress stream
-disconnects keeps its status, and the page follows it alone while the browser
-reopens the stream; its job's completion on the reopened stream fills its row,
-and a reopened stream the server refuses fails it, as does a stream that stays
-broken past the page's reconnect limit. A point whose progress stream times
-out while its job runs keeps showing running while the browser reopens the
-stream, and the page follows it alone until its job ends; once the sweep's
-other point fails and it completes, the page draws the charts of its run.
+the page goes on to follow the next point. A point whose final state the page
+cannot read shows failed, and the page goes on to follow the next point. A
+point whose progress stream disconnects keeps its status, and the page follows
+it alone while the browser reopens the stream; its job's completion on the
+reopened stream fills its row, and a reopened stream the server refuses fails
+it, as does a stream that stays broken past the page's reconnect limit. A
+point whose progress stream times out while its job runs keeps showing running
+while the browser reopens the stream, and the page follows it alone until its
+job ends; once the sweep's other point fails and it completes, the page draws
+the charts of its run.
 
 Once every point of a sweep has ended, the page posts the finished points to
 POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
@@ -60,6 +62,7 @@ from tests.e2e._job_requests import (
     untracked_frame,
 )
 from tests.e2e._run_badges import classes_of_each
+from tests.e2e._unreadable_final_state import unreadable_final_state_frame
 
 
 # -- Page loading ----------------------------------------------------------
@@ -343,6 +346,26 @@ def test_a_sweep_point_whose_job_is_cancelled_or_no_longer_tracked_shows_it_in_i
         ["1", "-", "-", "-", status]
     )
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_a_sweep_point_whose_final_state_the_page_cannot_read_shows_failed(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
+) -> None:
+    """Run a sweep whose first point's progress stream ends with a final state the page cannot read: the first row shows failed, the page goes on to follow the second point, and it reports the frame it could not read as an uncaught error."""
+    sweep_jobs.progress.answer(
+        "sweep-1-point-1",
+        unreadable_final_state_frame("sweep-1-point-1", "run-of-sweep-1-point-1"),
+    )
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    expect(_result_rows(page).nth(0).get_by_role("cell")).to_have_text(
+        ["1", "-", "-", "-", "failed"]
+    )
+    assert len(page_errors) == 1 and "JSON" in page_errors[0], (
+        f"Errors on /scenarios/sweep: {page_errors}"
+    )
 
 
 def _status_badge(row: Locator) -> Locator:
