@@ -35,7 +35,7 @@ from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
-from tests._html_page import chart_figures, element_attributes, element_count, texts, texts_after
+from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -125,11 +125,16 @@ class TestSweepRoute:
         page = response.get_data(as_text=True)
         assert texts_after(page, "Sweep Mode", 2) == ["Linear", "Geometric"]
 
-    def test_sweep_page_contains_preview_section(self, client: FlaskClient) -> None:
-        """GET /scenarios/sweep has the Sweep Point Preview heading, once."""
-        response = client.get("/scenarios/sweep")
-        page = response.get_data(as_text=True)
-        assert texts(page).count("Sweep Point Preview") == 1
+    def test_sweep_page_heads_each_panel_with_its_title(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep heads each of its panels, the configuration, the point preview and the results, with its title, once."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        titles = ("Sweep Configuration", "Sweep Point Preview", "Sweep Results")
+        assert counts_of(headings(page), titles) == dict.fromkeys(titles, 1)
+
+    def test_sweep_point_preview_counts_the_values_the_sweep_will_test(self, client: FlaskClient) -> None:
+        """GET /scenarios/sweep has exactly one paragraph bound to the count of values the sweep will test."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        assert element_count(page, "p", {"x-text": "previewValues.length + ' values will be tested'"}) == 1
 
     def test_sweep_page_shows_no_sweep_id(self, client: FlaskClient) -> None:
         """GET /scenarios/sweep mentions no Sweep ID: a sweep answers none, only its points' job ids."""

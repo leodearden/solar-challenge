@@ -2,9 +2,10 @@
 """components/macros.html draws every card look of the dashboard: the card, and beside it
 the panel, the flat card and the split card. Each element drawn in a look carries the
 look's classes plus the classes its page gives it. Each look's classes are written once,
-in its macro, so no other template or script draws that look itself. A card call that
-gives a header band argument, a subtitle, colours or an aside, also gives the title that
-opens the band.
+in its macro, so no other template or script draws that look itself, and so are the
+classes of the header band a titled panel draws, in panel. A card or panel call that
+gives a header band argument (card's subtitle, colours or aside; panel's
+subtitle_expression) also gives the title that opens the band.
 """
 
 import re
@@ -30,7 +31,11 @@ from tests._web_runs import store_fleet_run, store_home_run
 _CARD_TRIPLE = "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm"
 _CARD_CLASSES = frozenset(_CARD_TRIPLE.split())
 _CARD_MACROS_KEY = "templates/components/macros.html"
-_HEADER_BAND_PARAMETERS = frozenset({"subtitle", "header_classes", "dot_classes", "header_aside"})
+_HEADER_BAND_PARAMETERS = {
+    "card": frozenset({"subtitle", "header_classes", "dot_classes", "header_aside"}),
+    "panel": frozenset({"subtitle_expression"}),
+}
+"""The arguments each macro, by name, draws only in the header band its title opens."""
 
 _JINJA = Environment()
 _SCRIPT_STRING_LITERAL = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`""")
@@ -174,6 +179,7 @@ def _page(client: FlaskClient, path: str) -> str:
             id="builder-panels",
         ),
         pytest.param("/scenarios/sweep", _PANEL_LOOK, [_div(), _div(), _div()], id="sweep-panels"),
+        pytest.param("/scenarios/sweep", _PANEL_TITLE_BAND_LOOK, [_div(), _div(), _div()], id="sweep-panel-title-bands"),
         pytest.param("/assistant/", _PANEL_LOOK, [_div("flex", "flex-col", "h-[600px]")], id="assistant-panel"),
         pytest.param(
             "/history/runs",
@@ -351,12 +357,13 @@ def test_a_split_card_draws_its_top_part_then_its_bottom_part_each_in_its_parts_
     assert texts(drawn) == ["Tabs", "Run"]
 
 
-def _card_calls(source: str) -> list[nodes.Call]:
-    """Each call of card in the Jinja template *source*, by {{ card(...) }} and {% call card(...) %} alike."""
+def _calls(source: str, macro: str) -> list[nodes.Call]:
+    """Each call of the macro named *macro* in the Jinja template *source*, by {{ macro(...) }} and
+    {% call macro(...) %} alike."""
     return [
         call
         for call in _JINJA.parse(source).find_all(nodes.Call)
-        if isinstance(call.node, nodes.Name) and call.node.name == "card"
+        if isinstance(call.node, nodes.Name) and call.node.name == macro
     ]
 
 
@@ -365,24 +372,29 @@ def _given_parameters(call: nodes.Call, parameters: Sequence[str]) -> set[str]:
     return {*parameters[: len(call.args)], *(keyword.key for keyword in call.kwargs)}
 
 
-def test_every_card_call_that_gives_a_header_band_argument_gives_a_title(macros: Any) -> None:
-    """card draws subtitle, header_classes, dot_classes and header_aside only in the header band its
-    title opens, so a call that gives them without a title loses them, and its page still answers 200."""
+@pytest.mark.parametrize("macro", list(_HEADER_BAND_PARAMETERS))
+def test_every_call_that_gives_a_header_band_argument_gives_a_title(macros: Any, macro: str) -> None:
+    """The macro draws its header band arguments only in the band its title opens, so a call that
+    gives one without a title loses it, and its page still answers 200."""
+    band_parameters = _HEADER_BAND_PARAMETERS[macro]
+    named = ", ".join(sorted(band_parameters))
     band_calls = [
         (f"{path}:{call.lineno}", given)
         for path, source in dashboard_template_sources().items()
-        for call in _card_calls(source)
-        if (given := _given_parameters(call, macros.card.arguments)) & _HEADER_BAND_PARAMETERS
+        for call in _calls(source, macro)
+        if (given := _given_parameters(call, getattr(macros, macro).arguments)) & band_parameters
     ]
-    assert band_calls, "read no card call that gives a header band argument, so this guard would pass vacuously"
+    assert band_calls, (
+        f"read no {macro} call that gives a header band argument ({named}), so this guard would pass vacuously"
+    )
 
-    untitled = {site: sorted(given & _HEADER_BAND_PARAMETERS) for site, given in band_calls if "title" not in given}
+    untitled = {site: sorted(given & band_parameters) for site, given in band_calls if "title" not in given}
 
     listing = "".join(f"\n  {site}: {', '.join(arguments)}" for site, arguments in untitled.items())
     assert untitled == {}, (
-        f"These card calls give header band arguments but no title:{listing}\n"
-        "card draws subtitle, header_classes, dot_classes and header_aside in the header band its title "
-        "opens, and drops them without one. Give the call a title, or drop those arguments."
+        f"These {macro} calls give header band arguments but no title:{listing}\n"
+        f"{macro} draws a header band argument ({named}) only in the band its title opens, and drops it "
+        "without one. Give each call a title, or drop its header band arguments."
     )
 
 
@@ -418,6 +430,7 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
     [
         pytest.param(_CARD_LOOK, id="card"),
         pytest.param(_PANEL_LOOK, id="panel"),
+        pytest.param(_PANEL_TITLE_BAND_LOOK, id="panel-title-band"),
         pytest.param(_FLAT_CARD_LOOK, id="flat-card"),
         pytest.param(_SPLIT_CARD_TOP_LOOK, id="split-card-top"),
         pytest.param(_SPLIT_CARD_BOTTOM_LOOK, id="split-card-bottom"),
