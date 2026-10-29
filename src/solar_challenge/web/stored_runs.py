@@ -13,9 +13,9 @@ finish. A run is read only after its format.json names RUN_FORMAT_VERSION.
 
 A document is read strictly, as StoredDocument.read reads it, by web/field_tree.py's
 read_field_tree, and a value it refuses becomes a StoredRunUnreadable naming the run, the
-document, the field's dotted path and the reason. Non-JSON text, a document that is missing or
-cannot be read, a time series that cannot be read, and one whose index SimulationResults.window
-refuses are refused the same way.
+document, the field's dotted path and the reason. Non-JSON text, JSON nested too deeply to
+decode, a document that is missing or cannot be read, a time series that cannot be read, and one
+whose index SimulationResults.window refuses are refused the same way.
 StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the boundary
 answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
@@ -114,12 +114,17 @@ class StoredDocument:
         """The document *name* of run *run_id* whose JSON text is *text*.
 
         Raises:
-            StoredRunUnreadable: *text* is not JSON; its field is None.
+            StoredRunUnreadable: *text* is not JSON, or is nested too deeply for json.loads to
+                decode; its field is None.
         """
         try:
             return cls(run_id, name, json.loads(text))
         except ValueError as refusal:
             raise StoredRunUnreadable(run_id, name, None, f"is not JSON: {refusal}") from refusal
+        except RecursionError as refusal:
+            raise StoredRunUnreadable(
+                run_id, name, None, f"is nested too deeply to decode as JSON: {refusal}"
+            ) from refusal
 
     def read(self, cls: type[T]) -> T:
         """The *cls*, a dataclass, whose field tree the document holds, read strictly by read_field_tree.
