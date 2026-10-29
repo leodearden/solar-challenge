@@ -250,10 +250,12 @@ refused before any is bound. The other readings are:
   `__new__`. The walk stops at a link that carries a `__signature__`, and at a descriptor
   whose type defines `__get__` but neither `__set__` nor `__delete__`, as a `staticmethod`
   and a `classmethod` are. 3.13 counts no `functools.partial` as one, so it follows a
-  partial that records `__wrapped__`; 3.14 counts one. Every minor binds a constructor at
-  which the walk stops and reads what that gives, whatever it records as `__wrapped__`.
-  With `def build(receiver: float, rate: int) -> None`, a descriptor of that kind,
-  callable or not, whose `__get__` gives `build` and that records `object.__init__` as
+  partial that records `__wrapped__`; 3.14 counts one. 3.14 thus stops wherever 3.13
+  does, so `surface_form`, which follows `__wrapped__` where 3.13 does, refuses each
+  constructor that either skips. Every minor binds a constructor at which the walk stops
+  and reads what that gives, whatever it records as `__wrapped__`. With
+  `def build(receiver: float, rate: int) -> None`, a descriptor of that kind, callable or
+  not, whose `__get__` gives `build` and that records `object.__init__` as
   `__wrapped__` reads as `(receiver: float, rate: int) -> None` held as `__init__` or as a
   metaclass `__call__`, and `staticmethod(functools.wraps(object.__init__)(build))` reads
   as `(self, /, *args, **kwargs)` there, on every minor; `surface_form` spells both. Where
