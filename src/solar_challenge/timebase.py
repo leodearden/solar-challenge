@@ -46,6 +46,29 @@ class LocalDay:
     date: date
     rows: pd.DatetimeIndex
 
+    def minute_of_day(self) -> np.ndarray:
+        """Each row's minute on the local wall clock, 0 to 1439: a day the clocks go back repeats the minutes of the hour they repeat, and a day they go forward lacks those of the hour they skip."""
+        minutes: np.ndarray = (self.rows.hour * MINUTES_PER_HOUR + self.rows.minute).to_numpy()
+        return minutes
+
+    def instant(self, minute_of_day: int) -> pd.Timestamp:
+        """The first row of this date whose local clock reads minute_of_day or later.
+
+        Raises:
+            ValueError: If minute_of_day is outside 0 to 1439, naming it; or if no row of this date reads it
+                or later, naming the date and the minute.
+        """
+        if not 0 <= minute_of_day < MINUTES_PER_DAY:
+            raise ValueError(
+                f"LocalDay.instant reads a minute of the day from 0 to {MINUTES_PER_DAY - 1}: got {minute_of_day}"
+            )
+        reaching = np.flatnonzero(self.minute_of_day() >= minute_of_day)
+        if reaching.size == 0:
+            raise ValueError(
+                f"No row of {self.date.isoformat()} reads minute {minute_of_day} of the day or later"
+            )
+        return self.rows[reaching[0]]
+
 
 @dataclass(frozen=True)
 class SimulationWindow:
