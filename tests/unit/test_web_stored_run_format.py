@@ -28,6 +28,7 @@ from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
+from tests._damaged_time_series import rewrite_time_series
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._every_field_shape import home_of_every_field_shape
@@ -69,11 +70,6 @@ def _edit_document(path: Path, edit: Edit) -> None:
     document = json.loads(path.read_text())
     edit(document)
     path.write_text(json.dumps(document, indent=2))
-
-
-def _rewrite_time_series(path: Path, damage: Callable[[pd.DataFrame], pd.DataFrame]) -> None:
-    """Rewrite the time series at *path* as *damage* of the frame it holds."""
-    damage(pd.read_parquet(path, engine="pyarrow")).to_parquet(path, engine="pyarrow")
 
 
 def _set(*keys: str | int, value: Any) -> Edit:
@@ -328,7 +324,7 @@ def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_re
     no freq, as parquet keeps none; no rows; and rows spaced at a negative cadence.
     """
     _store_home_run_of_every_shape(storage)
-    _rewrite_time_series(stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet", damage)
+    rewrite_time_series(stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet", damage)
 
     refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", None)
 
@@ -365,7 +361,7 @@ def test_a_fleet_home_summary_lacking_a_required_field_is_refused_naming_its_doc
 
 def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_file(storage: RunStorage) -> None:
     _store_fleet_run_of_two_homes(storage)
-    _rewrite_time_series(
+    rewrite_time_series(
         stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet", lambda frame: frame.reset_index(drop=True)
     )
 

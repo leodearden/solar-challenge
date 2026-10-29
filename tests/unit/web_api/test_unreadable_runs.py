@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import NonCallableMagicMock
 
-import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -29,6 +28,7 @@ from werkzeug.test import TestResponse
 
 from solar_challenge.web.jobs import JobState
 from solar_challenge.web.storage import RunStorage
+from tests._damaged_time_series import rewrite_time_series
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._html_page import texts
@@ -122,8 +122,7 @@ def _store_a_damaged_run(storage: RunStorage, damage: _Damage) -> None:
 def _store_a_run_whose_time_series_has_a_range_index(storage: RunStorage) -> None:
     """Save a day's home run under _RUN_ID, then rewrite its data.parquet with a RangeIndex in the place of its timestamps."""
     store_home_run(storage, _RUN_ID, make_home_config(), make_sim_results(days=1))
-    path = stored_run_dir(storage, _RUN_ID) / "data.parquet"
-    pd.read_parquet(path, engine="pyarrow").reset_index(drop=True).to_parquet(path, engine="pyarrow")
+    rewrite_time_series(stored_run_dir(storage, _RUN_ID) / "data.parquet", lambda frame: frame.reset_index(drop=True))
 
 
 def _named(document: str, field: str | None) -> tuple[str, ...]:
