@@ -26,10 +26,12 @@ from solar_challenge.community import (
     simulate_community,
     validate_community_balance,
 )
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
 
@@ -185,6 +187,26 @@ class TestCommunityConfig:
         billing = CommunityBillingConfig()
         with pytest.raises((dataclasses.FrozenInstanceError, AttributeError)):
             billing.seg_rate_pence_per_kwh = 5.0  # type: ignore[misc]
+
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_billing_seg_rate_that_is_not_a_finite_number_is_refused_naming_it(
+        self, value: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityBillingConfig(seg_rate_pence_per_kwh=value)
+        assert str(exc_info.value) == f"seg_rate_pence_per_kwh must be a finite number, got {value!r}"
+
+    def test_a_negative_billing_seg_rate_is_refused_naming_its_bound(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityBillingConfig(seg_rate_pence_per_kwh=-1.0)
+        assert str(exc_info.value) == "seg_rate_pence_per_kwh must be at least 0, got -1.0"
+
+    def test_a_whole_billing_seg_rate_is_held_as_the_float_it_reads(self) -> None:
+        """A zero SEG rate is valid, as SEGTariff's is."""
+        for whole, held in ((4, 4.0), (0, 0.0)):
+            rate = CommunityBillingConfig(seg_rate_pence_per_kwh=whole).seg_rate_pence_per_kwh
+            assert rate == held
+            assert type(rate) is float
 
 
 # ---------------------------------------------------------------------------
