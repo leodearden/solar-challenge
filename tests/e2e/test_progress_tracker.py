@@ -6,7 +6,8 @@ earlier run's progress stream, so the earlier run's end, completed or failed,
 does not show. A run started after a completed one starts its tracker afresh.
 A run whose job fails shows the job's message; one whose job is cancelled
 because its run was deleted shows the cancellation, not a failure; and one
-whose job the server no longer tracks says so, not that it failed.
+whose job the server no longer tracks says so, not that it failed. A run
+whose final state the page cannot read is shown lost, not left running.
 
 A run whose progress stream times out, as the server ends a stream open past
 its limit while the job goes on, follows the job on the stream the browser
@@ -23,6 +24,7 @@ its catalogue (tests/e2e/_job_requests.py).
 """
 
 import itertools
+import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -457,6 +459,29 @@ def test_a_run_whose_job_the_server_no_longer_tracks_says_so_not_that_it_failed(
     expect(page.get_by_text("Simulation Failed", exact=True)).to_have_count(0)
     expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
     assert page_errors == [], f"Errors on {simulate_page.path}: {page_errors}"
+
+
+def test_a_run_whose_final_state_the_page_cannot_read_is_shown_lost_not_left_running(
+    page: Page,
+    live_server: str,
+    simulate_page: _SimulatePage,
+    running_jobs: HeldJobRequests,
+    page_errors: list[str],
+) -> None:
+    """Run, then end job-1's progress stream with a completed state whose progress is NaN, which the server's encoder writes and JSON.parse refuses: the tracker shows 'Simulation Failed' with 'Lost connection to server' and no results link, and the page reports the frame it could not read as an uncaught error."""
+    running_jobs.answer(
+        "job-1",
+        job_state_frame(a_job_state("job-1", "run-1", "completed", progress_pct=math.nan), version=5),
+    )
+    page.goto(live_server + simulate_page.path)
+    page.get_by_role("button", name=simulate_page.run_button, exact=True).click()
+
+    expect(page.get_by_text("Simulation Failed", exact=True)).to_be_visible()
+    expect(page.get_by_text("Lost connection to server", exact=True)).to_be_visible()
+    expect(page.get_by_role("link", name="View Results", exact=True)).to_have_count(0)
+    assert len(page_errors) == 1 and "JSON" in page_errors[0], (
+        f"Errors on {simulate_page.path}: {page_errors}"
+    )
 
 
 def test_a_run_deleted_while_its_job_runs_on_the_server_shows_its_job_cancelled(

@@ -11,7 +11,8 @@ const JOB_PROGRESS_RECONNECT_LIMIT_MS = 60 * 1000;
 // Follow job jobId's progress stream: call onState(state) with each state the job reports while it is unfinished,
 // then onEnd(state) once with its final state, or with null if the server no longer tracks the job;
 // onReconnecting(true) when the stream breaks unexpectedly and onReconnecting(false) when it opens; and onLost() once
-// the browser, or the reconnect limit, has given the stream up. Returns the function that stops following the job.
+// the browser, or the reconnect limit, has given the stream up, or the job's final state cannot be read. Returns the
+// function that stops following the job.
 function followJobProgress(jobId, { onState, onEnd, onReconnecting = () => {}, onLost }) {
     const stream = new EventSource('/api/jobs/' + jobId + '/progress');
     let giveUpTimer = null;
@@ -29,10 +30,18 @@ function followJobProgress(jobId, { onState, onEnd, onReconnecting = () => {}, o
     const giveUpIfStillBroken = () => {
         if (stream.readyState === EventSource.CONNECTING) lose();
     };
-    // An ending stops first, so a frame it cannot read still ends the stream
+    // A final state that cannot be read loses the stream, so the page still learns it ended, and its error is rethrown
+    // for the console
     const endWith = (readFinalState) => (e) => {
         stop();
-        onEnd(readFinalState(e));
+        let finalState;
+        try {
+            finalState = readFinalState(e);
+        } catch (unreadable) {
+            onLost();
+            throw unreadable;
+        }
+        onEnd(finalState);
     };
     const readState = (e) => JSON.parse(e.data);
     stream.addEventListener('progress', (e) => onState(readState(e)));
