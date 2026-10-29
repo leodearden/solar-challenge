@@ -126,11 +126,12 @@ This also keeps invariant 4 true as written: all `runs` SQL, migrations included
 
 ### 3.2 Connection policy (α)
 
-`Database(path)` is a frozen value. `connect()` applies `journal_mode=WAL`, `row_factory=sqlite3.Row`
-and `foreign_keys=ON`. `transaction()` is today's `get_db` (commit, rollback, close). `create_app`
-builds one `Database` and stores it on `app.extensions` under `'database'`, read through a typed
-`shared.get_database()`. `RunStorage(database, data_dir)`, the preset functions and the chat
-functions take the `Database` in place of a path. `get_db` is deleted.
+`Database(path)` is a frozen value. `connect()` applies `row_factory=sqlite3.Row`, `foreign_keys=ON`
+and `temp_store=MEMORY` (D-S19-13); `journal_mode=WAL` is a property of the file, which
+`open_database` sets when it creates a store. `transaction()` is today's `get_db` (commit, rollback,
+close). `create_app` builds one `Database` and stores it on `app.extensions` under `'database'`,
+read through a typed `shared.get_database()`. `RunStorage(database, data_dir)`, the preset
+functions and the chat functions take the `Database` in place of a path. `get_db` is deleted.
 
 ### 3.3 One writer of `runs`; the `jobs` table retired (β)
 
@@ -343,7 +344,7 @@ implementer if every reference moves with them.
 @dataclass(frozen=True)
 class Database:
     path: Path
-    def connect(self) -> sqlite3.Connection: ...          # WAL, Row factory, foreign_keys=ON — the only sqlite3.connect in src
+    def connect(self) -> sqlite3.Connection: ...          # Row factory, foreign_keys=ON, temp_store=MEMORY — the only sqlite3.connect in src
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]: ...   # commit / rollback / close
 @dataclass(frozen=True)
@@ -492,6 +493,14 @@ class JobManager:
   a held connection (measured at `ede1d99`); `synchronous=NORMAL` alone gains nothing measurable.
   Nothing board-facing reads the store, so the gain does not justify giving up durability or
   adding app-lifetime connection state. α's `Database` keeps today's policy. Task 859 is cancelled.
+- **D-S19-13 Temporary storage: `connect()` applies `temp_store=MEMORY` (task 1199).** Otherwise
+  SQLite writes a temporary B-tree that outgrows its page cache (2,000 KiB by default), such as the
+  run list's whole-row sort, to the first of `SQLITE_TMPDIR`, `TMPDIR`, `/var/tmp`, `/usr/tmp` and
+  `/tmp` that `access()` admits. Where that directory refuses new files, as `/var/tmp` does in a
+  sandboxed agent session (Landlock leaves `access()` unrestricted), the statement fails with
+  "unable to open database file". The cost is memory in place of a temp file, bounded by the rows
+  a statement holds: about +84 MiB for the last name-sorted page of 1,000 runs of 77 KB (measured
+  2026-10-29, SQLite 3.45.1).
 
 ## 6. Pre-conditions and the tasks this stream subsumes
 
