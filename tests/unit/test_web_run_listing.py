@@ -25,9 +25,10 @@ import dataclasses
 import json
 import logging
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -42,6 +43,7 @@ from solar_challenge.web.storage import (
     RunPage,
     RunQuery,
     RunRecord,
+    RunSort,
     RunStorage,
     RunTotals,
     headline_figures,
@@ -299,6 +301,35 @@ def _ids(page: RunPage) -> list[str]:
     return [record.id for record in page.records]
 
 
+def _store_runs_each_sort_column_orders_differently(storage: RunStorage) -> None:
+    """Save five runs, none with a duration: created_at and name order them apart, type, status and n_homes order them with ties, and duration_seconds ties them all."""
+    _store_a_home_run(storage, "run-a", name="Echo", created_at="2026-10-05T09:00:00+00:00")
+    _store_a_fleet_run(storage, "run-b", name="Alpha", created_at="2026-10-03T09:00:00+00:00")
+    storage.create_run("run-c", run_type="fleet", name="Delta", n_homes=3, created_at="2026-10-01T09:00:00+00:00")
+    store_home_run(
+        storage,
+        "run-d",
+        make_home_config(),
+        make_sim_results(days=1),
+        name="Charlie",
+        status="failed",
+        created_at="2026-10-04T09:00:00+00:00",
+    )
+    storage.create_run("run-e", run_type="home", name="Bravo", n_homes=1, created_at="2026-10-02T09:00:00+00:00")
+
+
+_RUN_IDS_ASCENDING_BY: Mapping[RunSort, tuple[str, ...]] = MappingProxyType(
+    {
+        "created_at": ("run-c", "run-e", "run-b", "run-d", "run-a"),
+        "name": ("run-b", "run-e", "run-d", "run-c", "run-a"),
+        "type": ("run-b", "run-c", "run-a", "run-d", "run-e"),
+        "status": ("run-a", "run-b", "run-d", "run-c", "run-e"),
+        "duration_seconds": ("run-a", "run-b", "run-c", "run-d", "run-e"),
+        "n_homes": ("run-a", "run-d", "run-e", "run-b", "run-c"),
+    }
+)
+
+
 class TestRunQuery:
     """RunQuery, the filters, sort and page of a run list, which refuses a query no page answers."""
 
@@ -447,6 +478,20 @@ class TestPageRuns:
         pages = [storage.page_runs(RunQuery(page=page, per_page=2)) for page in (1, 2)]
 
         assert [_ids(page) for page in pages] == [["tie-c", "tie-b"], ["tie-a"]]
+
+    @pytest.mark.parametrize("descending", [False, True], ids=["ascending", "descending"])
+    @pytest.mark.parametrize("sort", RUN_SORTS)
+    def test_the_pages_of_a_query_sorted_by_any_column_list_every_run_once_in_the_order_of_that_column_then_id(
+        self, storage: RunStorage, sort: RunSort, descending: bool
+    ) -> None:
+        """Runs tying on the column straddle a page's edge, and a descending sort lists them in reverse."""
+        _store_runs_each_sort_column_orders_differently(storage)
+
+        pages = [storage.page_runs(RunQuery(sort=sort, descending=descending, page=page, per_page=2)) for page in (1, 2, 3)]
+
+        ascending = _RUN_IDS_ASCENDING_BY[sort]
+        assert tuple(run_id for page in pages for run_id in _ids(page)) == (ascending[::-1] if descending else ascending)
+        assert [page.total for page in pages] == [5, 5, 5]
 
 
 def _storage_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:

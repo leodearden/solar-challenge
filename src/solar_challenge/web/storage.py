@@ -1107,15 +1107,17 @@ class RunStorage:
     def page_runs(self, query: RunQuery) -> RunPage:
         """The records of the runs on *query*'s page of the run list, in its order, and the count of every run *query* keeps.
 
-        A page past the last lists no runs.
+        A page past the last lists no runs. Only the page's runs are read whole: the runs *query*
+        keeps are sorted by their sort column and id alone.
         """
         values = _run_query_values(query)
         direction = "DESC" if query.descending else "ASC"
         order = f"{one_of(query.sort, RUN_SORTS, 'sort')} {direction}, id {direction}"
+        page_ids = f"SELECT id FROM runs WHERE {_RUN_QUERY_CONDITION} ORDER BY {order} LIMIT :limit OFFSET :offset"
         with self.database.transaction() as conn:
             total = conn.execute(f"SELECT COUNT(*) FROM runs WHERE {_RUN_QUERY_CONDITION}", values).fetchone()[0]
             rows = conn.execute(
-                f"SELECT * FROM runs WHERE {_RUN_QUERY_CONDITION} ORDER BY {order} LIMIT :limit OFFSET :offset",
+                f"SELECT * FROM runs WHERE id IN ({page_ids}) ORDER BY {order}",
                 {**values, "limit": query.per_page, "offset": (query.page - 1) * query.per_page},
             ).fetchall()
         return RunPage(records=tuple(_record_of(row) for row in rows), total=total)
