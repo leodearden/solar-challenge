@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import card, chart_scripts, chart_tabs, run_type_badge %}
+{% from "components/macros.html" import card, chart_scripts, chart_tabs, flat_card, run_type_badge %}
 
 {% block title %}Compare Runs - Solar Challenge{% endblock %}
 
@@ -11,11 +11,11 @@
 {# Run header row with names and type badges #}
 <div class="grid gap-4 mb-6" style="grid-template-columns: repeat({{ runs|length }}, minmax(0, 1fr));">
     {% for run in runs %}
-    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4 text-center">
+    {% call flat_card(classes='p-4 text-center') %}
         <h3 class="text-lg font-bold text-slate-900 dark:text-white truncate">{{ run.name }}</h3>
         <div class="mt-1">{{ run_type_badge(run.type) }}</div>
         <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">{{ run.created_at[:19] if run.created_at else '-' }}</p>
-    </div>
+    {% endcall %}
     {% endfor %}
 </div>
 
