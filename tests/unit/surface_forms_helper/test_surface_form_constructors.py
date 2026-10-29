@@ -92,6 +92,29 @@ class Giver:
         return self.given
 
 
+class CallableGiver(Giver):
+    """A callable Giver, whose type defines __get__ and __call__ but neither __set__ nor __delete__."""
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class DeletingCallableGiver(CallableGiver):
+    """A CallableGiver whose type also defines __delete__."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
+class SettingCallableGiver(CallableGiver):
+    """A CallableGiver whose type also defines __set__."""
+
+    def __set__(self, instance: object, value: object) -> None: ...
+
+
+def _recording_object_init(wrapper: object) -> object:
+    wrapper.__wrapped__ = object.__init__
+    return wrapper
+
+
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
     def build(self: object, rate: int, scale: float = 1.0) -> None: ...
 
@@ -351,6 +374,107 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
         named_classes(Counted)
 
 
+@pytest.mark.parametrize(
+    ("hold", "form", "classes"),
+    [
+        pytest.param(
+            lambda build: _recording_object_init(CallableGiver(build)),
+            "(receiver: float, rate: int) -> None",
+            {float, int},
+            id="descriptor",
+        ),
+        pytest.param(
+            lambda build: staticmethod(functools.wraps(object.__init__)(build)),
+            "(self, /, *args, **kwargs)",
+            set(),
+            id="staticmethod",
+        ),
+        pytest.param(
+            lambda build: functools.wraps(_recording_object_init(CallableGiver(build)))(
+                lambda self, rate: None
+            ),
+            "(*args, **kwargs)",
+            set(),
+            id="wrapper-of-such-a-descriptor",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_get_but_neither_set_nor_delete_is_spelled_by_what_inspect_binds_it_to_whatever_the_descriptor_records_as_wrapped(
+    construct: Callable[[object], type],
+    hold: Callable[[Callable[..., object]], object],
+    form: str,
+    classes: set[type],
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    cls = construct(hold(build))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert surface_form(subject) == form
+        assert named_classes(subject) == classes
+        assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
+    "hold",
+    [
+        pytest.param(
+            lambda build: _recording_object_init(DeletingCallableGiver(build)),
+            id="get-delete-descriptor",
+        ),
+        pytest.param(
+            lambda build: _recording_object_init(SettingCallableGiver(build)),
+            id="get-set-descriptor",
+        ),
+        pytest.param(lambda build: _recording_object_init(DefCall()), id="object-defining-no-get"),
+        pytest.param(
+            lambda build: functools.update_wrapper(functools.partial(build), object.__init__),
+            id="partial",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("construct", "constructor"),
+    [
+        pytest.param(class_whose_init_is, "Built.__init__", id="init"),
+        pytest.param(class_whose_metaclass_call_is, "Calling.__call__", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_is_a_descriptor_whose_type_defines_set_or_delete_a_partial_or_an_object_defining_no_get_that_records_a_callable_defined_in_c_as_wrapped_raises_a_type_error_naming_it_that_constructor_and_that_callable(
+    construct: Callable[[object], type],
+    constructor: str,
+    hold: Callable[[Callable[..., object]], object],
+) -> None:
+    def build(receiver: float, rate: int) -> None: ...
+
+    cls = construct(hold(build))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(constructor)}\b.*"
+            r"\bobject\.__init__, defined in C\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
 def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
     def settle(cls: type, rate: int, scale: float = 1.0) -> None: ...
 
@@ -459,7 +583,14 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
 )
 @pytest.mark.parametrize(
     "hold",
-    [pytest.param(classmethod, id="classmethod"), pytest.param(Giver, id="descriptor")],
+    [
+        pytest.param(classmethod, id="classmethod"),
+        pytest.param(Giver, id="descriptor"),
+        pytest.param(
+            lambda build: _recording_object_init(CallableGiver(build)),
+            id="descriptor-recording-a-callable-defined-in-c",
+        ),
+    ],
 )
 @pytest.mark.parametrize(
     ("construct", "constructor"),
