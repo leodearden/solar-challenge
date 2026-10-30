@@ -8,11 +8,13 @@ Both index their hours from midnight of the day they are given, in Europe/London
 timezone of the simulated demand. ``weather_for`` gives such a frame to simulate_home as
 one home's weather. ``synthetic_tmy`` is a whole TMY year of clear June days, in the
 shape PvgisTmy fetches from PVGIS, for seeding a WeatherCache. Its days' irradiance can
-be scaled too, one scale for each of its ``TMY_DAYS`` days.
+be scaled too, one scale for each of its ``TMY_DAYS`` days. ``sunless_tmy`` is a whole
+TMY year with no sun at a constant air temperature, in that same shape, e.g. the year of
+weather simulate_home needs for a heat pump.
 
 Usage::
 
-    from tests._synthetic_weather import sunless_weather, synthetic_june_weather, synthetic_tmy, weather_for
+    from tests._synthetic_weather import sunless_tmy, sunless_weather, synthetic_june_weather, synthetic_tmy, weather_for
 
     sunny_then_sunless = synthetic_june_weather("2024-06-21", irradiance_scale_per_day=(1.0, 0.0))
     results = simulate_home(config, start, end, weather=weather_for(config, sunny_then_sunless))
@@ -20,6 +22,8 @@ Usage::
     no_pv_in_january = sunless_weather("2024-01-15", temp_air=8.0)
 
     WeatherCache(cache_dir=cache_dir).put(synthetic_tmy(), "tmy", location)
+
+    dark_year_for_a_heat_pump = sunless_tmy(temp_air=10.0)
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ if TYPE_CHECKING:
 _HOURS_PER_DAY = 24
 _TMY_YEAR_START = "1990-01-01"
 _TIMEZONE = "Europe/London"
+_SUNLESS_WIND_SPEED = 2.0
 _IRRADIANCE_COLUMNS = ["ghi", "dni", "dhi"]
 
 TMY_DAYS = TMY_HOURS // _HOURS_PER_DAY
@@ -97,17 +102,18 @@ def synthetic_tmy(*, irradiance_scale_per_day: Sequence[float] = (1.0,) * TMY_DA
         )
     return pd.DataFrame(
         _clear_june_days(irradiance_scale_per_day),
-        index=pd.date_range(_TMY_YEAR_START, periods=TMY_HOURS, freq="h", tz="UTC"),
+        index=_tmy_index(),
     )
 
 
 def sunless_weather(day: str | pd.Timestamp, *, temp_air: float) -> pd.DataFrame:
     """A day with no sun at a constant *temp_air* °C, for tests that need PV generation to be zero."""
-    return pd.DataFrame(
-        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": temp_air, "wind_speed": 2.0},
-        index=_hourly_index(day, days=1),
-        dtype=float,
-    )
+    return _sunless_hours(_hourly_index(day, days=1), temp_air=temp_air, wind_speed=_SUNLESS_WIND_SPEED)
+
+
+def sunless_tmy(*, temp_air: float, wind_speed: float = _SUNLESS_WIND_SPEED) -> pd.DataFrame:
+    """A TMY year with no sun at a constant *temp_air* °C, shaped as PVGIS's (TMY_HOURS hourly rows from 1990-01-01 00:00 UTC), at sunless_weather's 2 m/s of wind unless *wind_speed* is given."""
+    return _sunless_hours(_tmy_index(), temp_air=temp_air, wind_speed=wind_speed)
 
 
 def weather_for(home: HomeConfig, frame: pd.DataFrame) -> PrefetchedWeather:
@@ -127,6 +133,20 @@ def _clear_june_days(irradiance_scale_per_day: Sequence[float]) -> dict[str, np.
     return clear_days | scaled_irradiance
 
 
+def _sunless_hours(index: pd.DatetimeIndex, *, temp_air: float, wind_speed: float) -> pd.DataFrame:
+    """Weather with no sun at a constant *temp_air* °C and *wind_speed* m/s, every column float64, one row per hour of *index*."""
+    return pd.DataFrame(
+        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": temp_air, "wind_speed": wind_speed},
+        index=index,
+        dtype=float,
+    )
+
+
 def _hourly_index(first_day: str | pd.Timestamp, days: int) -> pd.DatetimeIndex:
     """The hours of *days* consecutive days from midnight of *first_day*, in London."""
     return pd.date_range(first_day, periods=_HOURS_PER_DAY * days, freq="h", tz=_TIMEZONE, normalize=True)
+
+
+def _tmy_index() -> pd.DatetimeIndex:
+    """The hours of PVGIS's TMY year, TMY_HOURS hourly rows from 1990-01-01 00:00 UTC."""
+    return pd.date_range(_TMY_YEAR_START, periods=TMY_HOURS, freq="h", tz="UTC")
