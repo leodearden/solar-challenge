@@ -19,7 +19,11 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("jinja2")
+pytest.importorskip(
+    "jinja2",
+    reason="the helper modules' type check needs jinja2, from the web extra: tests/_css_classes.py imports it, "
+    "and mypy reports a missing import as an error",
+)
 
 _ERROR_LINE = re.compile(r"(?P<path>[^:]+):(?P<line>\d+): error: (?P<message>.*?)(?:  \[(?P<code>[a-z0-9-]+)\])?")
 
