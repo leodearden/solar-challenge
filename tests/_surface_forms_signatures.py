@@ -505,7 +505,9 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - if inspect reads no constructor of *cls*, as _first_read_constructor then gives
       object's __init__: the constructor of the class _refuse_class_constructed_in_c
       finds, else the __new__ or __init__, one inspect skips, that
-      _refuse_class_with_no_constructor_inspect_reads names.
+      _refuse_class_with_no_constructor_inspect_reads names, else the class whose
+      docstring _refuse_class_read_by_a_docstring_text_signature finds opening with a
+      text signature.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -526,6 +528,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     if isinstance(constructor, _CCallableInspectSkips):
         _refuse_class_constructed_in_c(cls)
         _refuse_class_with_no_constructor_inspect_reads(cls)
+        _refuse_class_read_by_a_docstring_text_signature(cls)
 
 
 def _refuse_class_constructed_in_c(cls: type) -> None:
@@ -578,6 +581,54 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
                 f"__init__ to the class raises: make the name private, or define {name} "
                 "with def"
             )
+
+
+_TEXT_SIGNATURE_END = ")\n--\n\n"
+
+
+def _refuse_class_read_by_a_docstring_text_signature(cls: type) -> None:
+    """Raise TypeError naming *cls*, of which inspect reads no constructor, the first class in its MRO, object aside, for which _docstring_text_signature gives a text signature, and that text signature, if one does.
+
+    docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
+    """
+    for holder in cls.__mro__[:-1]:
+        text_signature = _docstring_text_signature(holder)
+        if text_signature is not None:
+            raise TypeError(
+                f"{label_of(cls)} is constructed by object, so inspect reads in place of a "
+                f"constructor the text signature the docstring of {label_of(holder)} opens "
+                f"with once dedented, {text_signature!r}: Python 3.13 and 3.14 dedent a "
+                "docstring as they compile it, so they read it however the source indents the "
+                "docstring, and 3.11 and 3.12 read it only where the source sets the docstring "
+                "flush-left, reading otherwise the next text signature a class in the MRO "
+                "gives, or object's (): make the name private, give the class an __init__ or "
+                "__new__ defined with def, or begin that docstring with anything but its "
+                "class's name and '('"
+            )
+
+
+def _docstring_text_signature(holder: type) -> str | None:
+    """The text signature CPython reads from the docstring *holder*'s own namespace holds, once _dedented_as_compiled_from_3_13 dedents it: what follows the last dotted part of *holder*'s __name__, from '(' to the first ')' that a line holding only '--' and an empty line follow, if no empty line comes before; None if that docstring is no str or does not open so."""
+    doc = vars(holder).get("__doc__")
+    if not isinstance(doc, str):
+        return None
+    dedented = _dedented_as_compiled_from_3_13(doc)
+    name = holder.__name__.rpartition(".")[2]
+    if not dedented.startswith(f"{name}("):
+        return None
+    end = dedented.find(_TEXT_SIGNATURE_END, len(name))
+    if end == -1 or "\n\n" in dedented[len(name) : end]:
+        return None
+    return dedented[len(name) : end + 1]
+
+
+def _dedented_as_compiled_from_3_13(doc: str) -> str:
+    """*doc* as Python 3.13 and 3.14 compile a docstring, which 3.11 and 3.12 keep as written: tabs expanded, the first line's leading spaces stripped, and from every later line the leading spaces each later line holding more than spaces begins with; unlike inspect.cleandoc, it drops no blank line."""
+    first, *rest = doc.expandtabs().split("\n")
+    margin = min(
+        (len(line) - len(line.lstrip(" ")) for line in rest if line.lstrip(" ")), default=0
+    )
+    return "\n".join([first.lstrip(" "), *(line[margin:] for line in rest)])
 
 
 def _resolved_constructors(cls: type) -> Iterator[tuple[str, type, object]]:
