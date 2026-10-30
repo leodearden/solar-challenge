@@ -213,8 +213,8 @@ def _shuffled(pool: ShuffledPoolDistribution, rng: random.Random) -> list[Any]:
 
 
 def _drawn_settings(home: HomeConfig) -> dict[str, object]:
-    """Return what a home of the fleet of 12 homes holds for each setting it draws, but its heat pump's."""
-    assert home.battery_config is not None and home.ev_config is not None
+    """Return what a home of the fleet of 12 homes holds for each setting it draws."""
+    assert home.battery_config is not None and home.heat_pump_config is not None and home.ev_config is not None
     return {
         "pv.capacity_kw": home.pv_config.capacity_kw,
         "pv.tilt": home.pv_config.tilt,
@@ -222,6 +222,7 @@ def _drawn_settings(home: HomeConfig) -> dict[str, object]:
         "load.household_occupants": home.load_config.household_occupants,
         "battery.capacity_kwh": home.battery_config.capacity_kwh,
         "battery.max_charge_kw": home.battery_config.max_charge_kw,
+        "heat_pump.heat_pump_type": home.heat_pump_config.heat_pump_type,
         "ev.charger_type": home.ev_config.charger_type,
         "ev.departure_hour": home.ev_config.departure_hour,
     }
@@ -236,6 +237,7 @@ def _modelled_settings(pools: dict[str, list[Any]], consumptions: Sequence[Optio
         "load.household_occupants": int(pools["load.household_occupants"][index]),
         "battery.capacity_kwh": pools["battery.capacity_kwh"][index],
         "battery.max_charge_kw": pools["battery.max_charge_kw"][index],
+        "heat_pump.heat_pump_type": pools["heat_pump.heat_pump_type"][index],
         "ev.charger_type": pools["ev.charger_type"][index],
         "ev.departure_hour": int(pools["ev.departure_hour"][index]),
     }
@@ -285,8 +287,8 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
         """The homes hold what a model of the documented order draws from an RNG seeded alike.
 
         The model draws the consumptions the order draws ahead, shuffles every pool in the order's sequence, and then
-        draws the other consumptions, one per home: a home of this fleet draws nothing else afresh. Its heat pumps go
-        unread: the heat_pump_type pool takes its place in the sequence, but no home draws from it.
+        draws the other consumptions, one per home: a home of this fleet draws nothing else afresh. Every home draws
+        its heat pump's type from the heat_pump_type pool, which takes its place in the sequence as every pool does.
         """
         homes = generate_homes_from_distribution(_fleet_of_12_pools(random_order), Location.bristol())
 
