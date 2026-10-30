@@ -8,7 +8,7 @@ seg values that every endpoint reading a seg block refuses with a 400 naming seg
 import pytest
 
 
-VALID_HOME_PAYLOAD: dict = {
+VALID_HOME_PAYLOAD: dict[str, object] = {
     "pv_kw": 4.0,
     "battery_kwh": 5.0,
     "occupants": 3,
