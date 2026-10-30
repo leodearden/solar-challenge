@@ -349,9 +349,9 @@ refused before any is bound. The other readings are:
   or, with no such class in the MRO, reads it as the entry below on a class of which
   `inspect` reads no constructor says.
 - A metaclass `__call__` or an `__init__` that is not itself a callable defined in C, but
-  that `inspect` binds to one: `staticmethod(object().__init__)`, or a `Giver`, whose
-  `__get__` gives the object it was made with, made with `dict.__dict__['fromkeys']`,
-  `object.__new__` or `object.__init__`. `inspect` looks either up with
+  that `inspect` binds to one: any of `object().__init__`, `dict.__dict__['fromkeys']`,
+  `object.__new__` or `object.__init__`, held in a `staticmethod` or in a `Giver`, whose
+  `__get__` gives the object it was made with. `inspect` looks either up with
   `inspect.getattr_static`, and skips it as defined in C only where what the class holds
   is such a callable or, from 3.13, where the walk along `__wrapped__` from it ends at
   one. That walk stops at a `staticmethod` or a `Giver`, as the first entry says. So
@@ -365,13 +365,13 @@ refused before any is bound. The other readings are:
   `getattr`, which binds a `staticmethod` of such a callable before that check, so every
   minor skips it, as the entry above says. `surface_form` spells such a class by that
   text signature, and `named_classes` names no class for it. That is how `surface_form`
-  spells a routine defined in C wherever every minor reads it alike: `len` as `(obj, /)`
-  and, as the first entry says, `staticmethod(functools.wraps(object.__init__)(build))`,
-  held as `__init__` or as a metaclass `__call__`, as `(self, /, *args, **kwargs)`. It
-  does not refuse such a class as it refuses one constructed by a class defined in C,
-  below: there `inspect` reads a class's own text signature, which differs by minor or is
-  missing, and here it reads a routine's, which every minor reads alike. The rule test
-  pins each text, so a release that adds or rewrites one fails it.
+  spells a routine defined in C that every minor reads alike, as the first entry says of
+  `staticmethod(functools.wraps(object.__init__)(build))`, held as `__init__` or as a
+  metaclass `__call__`: `(self, /, *args, **kwargs)`. It does not refuse such a class as
+  it refuses one constructed by a class defined in C, below: there `inspect` reads a
+  class's own text signature, which differs by minor or is missing, and here it reads a
+  routine's, which every minor reads alike. The rule test pins each text, so a release
+  that adds or rewrites one fails it.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`, at the end of the chain from a constructor whose binding gives a
   callable: the binding gives such a descriptor that is callable, or a wrapper that
