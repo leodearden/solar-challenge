@@ -32,10 +32,11 @@ of a class member that is a `functools.partial`, 4.1's reading of a constructor
 `inspect` binds as a `classmethod` or through a descriptor, and 4.7's readings on those
 releases on 2026-10-28. 4.5's reading of where `inspect`'s lookup of a constructor stops
 following `__wrapped__`, its readings of a constructor whose binding gives an object
-that is not callable or whose lookup or binding gives `None`, and its readings of a
-constructor that is, or wraps, a method-wrapper or a `classmethod_descriptor`, were
-measured on those releases on 2026-10-29. A new refusal gets its rule test first, then
-its entry here.
+that is not callable or whose lookup or binding gives `None`, its readings of a
+constructor that is, or wraps, a method-wrapper or a `classmethod_descriptor`, and its
+readings of a constructor `inspect` skips above the class holding the one it reads and
+of a class of which it reads no constructor, were measured on those releases on
+2026-10-29. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -291,19 +292,30 @@ refused before any is bound. The other readings are:
   minor skips it, as it skips `object.__init__`, and reads the constructor after it: a
   `__new__` or `__init__` in place of a metaclass `__call__`; in place of a `__new__`,
   the `__init__` the class resolves, which a base may hold; in place of an `__init__`,
-  the `__new__`. With `object().__init__` or `dict.__dict__['fromkeys']` as a metaclass
-  `__call__`, or either in a `staticmethod` as `__new__`,
-  `def __init__(self, rate: int) -> None` reads as `(rate: int) -> None`. With none
-  left, every minor reads the first text signature a class in the MRO other than
-  `object` gives: over `property`, `(fget=None, fset=None, fdel=None, doc=None)`; over
-  `frozenset`, `__init__ = object().__init__` raises `ValueError` on 3.11 and 3.12 and
-  reads as `(iterable=(), /)` from 3.13. Where none gives one, every minor raises
-  `ValueError`, or the `TypeError` binding a `classmethod_descriptor` `__init__` to the
-  class raises, as for `__init__ = dict.__dict__['fromkeys']` over `int`.
-  `surface_form` skips such a constructor too. It refuses the constructor `inspect`
-  reads in its place by this section's readings, or refuses the class as constructed by
-  the class defined in C its MRO holds, naming that class. With no such class in the
-  MRO, it leaves the class to `inspect`, as for `__init__ = None` alone.
+  the `__new__` the class resolves, which a base may hold. It skips such a constructor,
+  and a builtin or a slot wrapper, wherever in the MRO the class holding it sits, and
+  reads a base's constructor in its place: with `def __init__(self, share)` in a base,
+  `__new__ = object().__init__` or `__new__ = object.__new__` in a subclass reads as
+  that `__init__`, `(share)`, as does `__init__ = object().__init__`, `object.__init__`
+  or `dict.__dict__['fromkeys']` over a base's `def __new__(cls, share)`. With
+  `object().__init__` or `dict.__dict__['fromkeys']` as a metaclass `__call__`, or
+  either in a `staticmethod` as `__new__`, `def __init__(self, rate: int) -> None`
+  reads as `(rate: int) -> None`. With none left, every minor reads the first text
+  signature a class in the MRO other than `object` gives: over `property`,
+  `(fget=None, fset=None, fdel=None, doc=None)`; over `frozenset`,
+  `__init__ = object().__init__` raises `ValueError` on 3.11 and 3.12 and reads as
+  `(iterable=(), /)` from 3.13. Where none gives one, every minor raises `ValueError`,
+  or the `TypeError` binding a `classmethod_descriptor` `__init__` to the class raises,
+  as for `__init__ = dict.__dict__['fromkeys']` over `int`. `surface_form` skips such a
+  constructor too, wherever the class holding it sits. It spells the constructor
+  `inspect` reads in its place, or refuses it by this section's readings: over a base's
+  `__init__ = functools.partial(build)`, with `def build(receiver, rate: int) -> None`,
+  `__new__ = object().__init__` or `__new__ = object.__new__` reads as
+  `(receiver, rate: int) -> None` on 3.11 to 3.13 and as `(rate: int) -> None` on 3.14,
+  and is refused as 4.4's partial. Where `inspect` reads none, `surface_form` refuses
+  the class as constructed by the class defined in C its MRO holds, naming that class,
+  or, with no such class in the MRO, reads it as the entry below on a class of which
+  `inspect` reads no constructor says.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`, at the end of the chain from a constructor whose binding gives a
   callable: the binding gives such a descriptor that is callable, or a wrapper that
@@ -341,10 +353,30 @@ refused before any is bound. The other readings are:
   raises `ValueError`, as `int` does; and over `frozenset`, which gives one from 3.13,
   either raises `ValueError` on 3.11 and 3.12 and reads as `(iterable=(), /)` on 3.13
   and 3.14. `surface_form` refuses such a class as one constructed by a class defined in
-  C wherever its MRO holds one other than `object`, and otherwise leaves it to
-  `inspect`, so `__init__ = None` alone raises that `ValueError`.
+  C wherever its MRO holds one other than `object`, and otherwise as a class of which
+  `inspect` reads no constructor, below.
+- A class of which `inspect` reads no constructor, since it skips each `__new__` and
+  `__init__` the class resolves, by the readings above. Every minor reads the first text
+  signature a class in its MRO other than `object` gives. Failing that, it reads `()` if
+  the `__new__` and `__init__` the class resolves are `object`'s, as for
+  `__new__ = object.__new__`, `__new__ = staticmethod(object.__new__)` or
+  `__init__ = object.__init__` alone, and otherwise raises `ValueError`, or
+  the `TypeError` binding a `classmethod_descriptor` `__init__` to the class raises, as
+  for `__init__ = dict.__dict__['fromkeys']`. A class docstring written as a text
+  signature, `Name(rate)`, `--` and a blank line, and indented as a class body indents
+  it, gives one from 3.13, whose compiler strips that indentation, and none on 3.11 and
+  3.12: with `__init__ = None`, such a class reads as `(rate)` on 3.13 and 3.14 and
+  raises `ValueError` on 3.11 and 3.12. `surface_form` raises `TypeError` naming the
+  class and the first of its `__new__` and `__init__` that is not `object`'s, by the
+  class holding it, whatever text signature a class in its MRO gives. Where its MRO
+  holds a class defined in C other than `object`, it refuses the class as constructed
+  by that class instead, as the next entry says.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
+  `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
+  own namespace holds is a builtin or a slot wrapper and none is `object`'s own, which a
+  class defined in Python holds where it assigns one: over `dict`,
+  `__init__ = object.__init__` is refused as constructed by `dict`.
 - A constructor read through an object its class makes callable. `inspect` reads a
   metaclass `__call__`, a `__new__` or an `__init__`, bound as it binds it, as it reads a
   routine (§2), so where that constructor is such an object, or a chain from it ends at
@@ -381,7 +413,12 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_metaclass_call_new_or_init_is_a_method_wrapper_or_a_classmethod_descriptor_is_spelled_by_the_constructor_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_metaclass_call_is_a_method_wrapper_or_a_classmethod_descriptor_raises_the_type_error_naming_the_init_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_only_constructor_is_a_method_wrapper_or_a_classmethod_descriptor_over_a_class_defined_in_c_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_that_object_constructs_is_spelled_with_no_parameters`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`

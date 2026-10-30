@@ -462,8 +462,10 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - that first-read constructor, if it is an __init__ that is a functools.partial;
     - that first-read constructor, if it is not callable once bound, is read as an Enum,
       carries such a __signature__, or is read as a builtin or through such an object;
-    - the constructor of the class _refuse_class_constructed_in_c finds, if that
-      first-read constructor is a _CCallableInspectSkips.
+    - if inspect reads no constructor of *cls*, as _first_read_constructor then gives
+      object's __init__: the constructor of the class _refuse_class_constructed_in_c
+      finds, else the __new__ or __init__, one inspect skips, that
+      _refuse_class_with_no_constructor_inspect_reads names.
     """
     call = _metaclass_call(cls)
     if call is not None:
@@ -474,11 +476,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         _refuse_partial_bound_as_method(cls, "is constructed through", type(cls), "__call__", call)
         _refuse_constructor_reading(cls, type(cls), "__call__", _metaclass_call_as_read(cls))
         return
-    for name in ("__new__", "__init__"):
-        owner = next(namespace_holders(cls.__mro__, name))
-        _refuse_classmethod_bound_by_minor(
-            cls, "is constructed through", owner, name, vars(owner)[name]
-        )
+    for name, owner, held in _resolved_constructors(cls):
+        _refuse_classmethod_bound_by_minor(cls, "is constructed through", owner, name, held)
     holder, name, constructor = _first_read_constructor(cls)
     _refuse_wrapper_of_c_callable(cls, holder, name, constructor)
     if name == "__init__":
@@ -486,18 +485,11 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     _refuse_constructor_reading(cls, holder, name, _constructor_as_read(cls, name, constructor))
     if isinstance(constructor, _CCallableInspectSkips):
         _refuse_class_constructed_in_c(cls)
+        _refuse_class_with_no_constructor_inspect_reads(cls)
 
 
 def _refuse_class_constructed_in_c(cls: type) -> None:
-    """Raise TypeError naming *cls* and the first class in its MRO, object aside, that holds a __new__ or __init__ and that _constructed_in_c counts as defined in C, if one does; inspect reads no constructor of *cls*, so it reads the first text signature a class in that MRO gives.
-
-    That class is the one holding the constructor _first_read_constructor gives, unless
-    _skipped_as_none skips the name such a class holds, as a __new__ that gives None
-    over int skips int's, or that constructor is a method-wrapper or a
-    classmethod_descriptor, a _CCallableInspectSkips of a kind not in
-    _C_CONSTRUCTOR_KINDS, which only a class defined in Python holds, as an __init__
-    that is object().__init__ over int is.
-    """
+    """Raise TypeError naming *cls* and the first class in its MRO, object aside, that holds a __new__ or __init__ and that _constructed_in_c counts as defined in C, if one does; inspect reads no constructor of *cls*, so it reads the first text signature a class in that MRO gives."""
     constructing = next(
         (
             base
@@ -517,29 +509,59 @@ def _refuse_class_constructed_in_c(cls: type) -> None:
 
 
 def _constructed_in_c(holder: type) -> bool:
-    """Whether the constructors *holder*'s own namespace holds are defined in C, as object's are and as a builtin or extension type's are: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS."""
+    """Whether *holder*, a class other than object, is defined in C, as a builtin or extension type is, by the constructors its own namespace holds: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS and is not object's own, which a class defined in Python holds where it assigns one."""
     namespace = vars(holder)
     return all(
         isinstance(namespace[name], _C_CONSTRUCTOR_KINDS)
+        and namespace[name] is not vars(object)[name]
         for name in ("__new__", "__init__")
         if name in namespace
     )
 
 
+def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
+    """Raise TypeError naming *cls*, of which inspect reads no constructor, and the first of the __new__ and __init__ it resolves that is not object's, by the class holding it: each as inspect's last check reads it, through getattr, but a _CCallableInspectSkips as held, since binding a classmethod_descriptor to *cls* raises.
+
+    docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
+    """
+    for name, holder, held in _resolved_constructors(cls):
+        read = held if isinstance(held, _CCallableInspectSkips) else getattr(cls, name)
+        if read is not vars(object)[name]:
+            raise TypeError(
+                f"{label_of(cls)} is constructed through {label_of(holder)}.{name}, which "
+                "inspect skips, as it skips a constructor whose lookup or binding gives None "
+                "or that is defined in C, and through no other constructor inspect reads, so "
+                "inspect reads a text signature a class in its MRO gives, which a class "
+                "docstring can give on some minors and not others, and where none gives one "
+                "raises ValueError, or the TypeError binding a classmethod_descriptor "
+                f"__init__ to the class raises: make the name private, or define {name} "
+                "with def"
+            )
+
+
+def _resolved_constructors(cls: type) -> Iterator[tuple[str, type, object]]:
+    """The __new__ and then the __init__ *cls* resolves: each name, the first class in *cls*'s MRO whose namespace holds that name, and what it holds there."""
+    for name in ("__new__", "__init__"):
+        holder = next(namespace_holders(cls.__mro__, name))
+        yield name, holder, vars(holder)[name]
+
+
 def _first_read_constructor(cls: type) -> tuple[type, str, object]:
     """The class in *cls*'s MRO that holds the constructor inspect reads first for *cls*, with that constructor's name and value.
 
-    Of __new__ and __init__, inspect reads a name only if _skipped_as_none does not find
-    the one *cls* resolves skipped. The class is the first in the MRO that holds a name
-    it reads, else object, whose constructors are defined in C. The constructor is that
-    class's __new__, as getattr gives it (a staticmethod unwrapped), or as
-    _classmethod_as_read gives it if it is a classmethod, unless it is a
-    _CCallableInspectSkips beside an __init__ inspect reads; else its __init__.
+    Of __new__ and __init__, inspect reads a name only if _skipped_by_inspect does not
+    find the one *cls* resolves skipped. The class is the first in the MRO that holds a
+    name it reads. The constructor is that class's __new__ if inspect reads that name and
+    the class holds it, as getattr gives it (a staticmethod unwrapped), or as
+    _classmethod_as_read gives it if it is a classmethod; else its __init__. Where
+    inspect reads neither name, the class is object and the constructor object's
+    __init__, so the constructor is a _CCallableInspectSkips exactly when inspect reads
+    no constructor of *cls*.
     """
     names = [
         name
         for name in ("__new__", "__init__")
-        if not _skipped_as_none(cls, name, inspect.getattr_static(cls, name))
+        if not _skipped_by_inspect(cls, name, inspect.getattr_static(cls, name))
     ]
     holder = next(namespace_holders(cls.__mro__, *names), object)
     namespace = vars(holder)
@@ -550,18 +572,28 @@ def _first_read_constructor(cls: type) -> tuple[type, str, object]:
             if isinstance(held, classmethod)
             else getattr(holder, "__new__")
         )
-        init_beside = "__init__" in names and "__init__" in namespace
-        if not (isinstance(new, _CCallableInspectSkips) and init_beside):
-            return holder, "__new__", new
+        return holder, "__new__", new
     return holder, "__init__", namespace["__init__"]
 
 
-def _skipped_as_none(owner: type, name: str, held: object) -> bool:
-    """Whether inspect skips *held*, the constructor *owner* resolves as *name*, as inspect.getattr_static finds it, on every admitted minor, reading that name of no class in the MRO: it gives None as inspect looks it up, a __new__ through getattr and any other bound to *owner* as _bound_to binds it. Neither a classmethod, which inspect binds to a method even of None, nor a _CCallableInspectSkips, which inspect never binds, gives None."""
-    if isinstance(held, (classmethod, _CCallableInspectSkips)):
+def _skipped_by_inspect(owner: type, name: str, held: object) -> bool:
+    """Whether inspect skips *held*, the constructor *owner* resolves as *name*, as inspect.getattr_static finds it, on every admitted minor, reading that name of no class in the MRO.
+
+    A classmethod, which inspect binds to a method even of None, is never skipped. A
+    _CCallableInspectSkips is skipped as defined in C before inspect binds it. Else
+    inspect skips what its lookup gives: a __new__ if getattr gives None or a
+    _CCallableInspectSkips, as a staticmethod of one gives, and any other name if
+    binding it to *owner*, as _bound_to binds it, gives None; inspect reads what that
+    binding gives otherwise, a _CCallableInspectSkips included.
+    """
+    if isinstance(held, classmethod):
         return False
-    read = getattr(owner, name) if name == "__new__" else _bound_to(held, owner)
-    return read is None
+    if isinstance(held, _CCallableInspectSkips):
+        return True
+    if name == "__new__":
+        new = getattr(owner, "__new__")
+        return new is None or isinstance(new, _CCallableInspectSkips)
+    return _bound_to(held, owner) is None
 
 
 def _refuse_wrapper_of_c_callable(
@@ -932,9 +964,9 @@ def _constructor_as_read(cls: type, name: str, constructor: object) -> object:
 
 
 def _metaclass_call(cls: type) -> object | None:
-    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if inspect skips it on every minor: it is a _CCallableInspectSkips, as type.__call__ is, or _skipped_as_none finds it skipped."""
+    """The __call__ *cls*'s metaclass resolves, as inspect looks it up before any __new__ or __init__, through inspect.getattr_static; None if _skipped_by_inspect finds it skipped on every minor, as type.__call__, defined in C, is."""
     call: object = inspect.getattr_static(type(cls), "__call__")
-    if isinstance(call, _CCallableInspectSkips) or _skipped_as_none(type(cls), "__call__", call):
+    if _skipped_by_inspect(type(cls), "__call__", call):
         return None
     return call
 

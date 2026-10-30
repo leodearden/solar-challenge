@@ -981,6 +981,54 @@ def test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_th
 @pytest.mark.parametrize(
     "name",
     [
+        pytest.param("RenewedByABuiltin", id="builtin-as-new"),
+        pytest.param("RenewedByAMethodWrapper", id="staticmethod-of-a-method-wrapper-as-new"),
+        pytest.param("ReinitialisedByASlotWrapper", id="slot-wrapper-as-init"),
+        pytest.param("ReinitialisedByAMethodWrapper", id="method-wrapper-as-init"),
+    ],
+)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "shadowing",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Created:\n"
+        "    def __new__(cls, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Initialised:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    reshadowing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reshadowing",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from shadowing import Created, Initialised\n"
+        "\n"
+        "class RenewedByABuiltin(Initialised):\n"
+        "    __new__ = object.__new__\n"
+        "\n"
+        "class RenewedByAMethodWrapper(Initialised):\n"
+        "    __new__ = staticmethod(object().__init__)\n"
+        "\n"
+        "class ReinitialisedByASlotWrapper(Created):\n"
+        "    __init__ = object.__init__\n"
+        "\n"
+        "class ReinitialisedByAMethodWrapper(Created):\n"
+        "    __init__ = object().__init__\n",
+    )
+
+    assert named_classes(getattr(reshadowing, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
         pytest.param("Assigned", id="assigned"),
         pytest.param("Wrapping", id="functools-wraps-wrapper"),
     ],

@@ -36,6 +36,12 @@ class Ledger(dict):
     """A class that inherits its constructor from dict, which CPython defines in C."""
 
 
+class ReinitialisedLedger(dict):
+    """A class over dict that holds object's own __init__, as a class defined in Python can."""
+
+    __init__ = object.__init__
+
+
 class DeletableCallableGetter(CallableGetter):
     """A CallableGetter whose type also defines __delete__, so that inspect counts it a method descriptor before Python 3.13 alone."""
 
@@ -122,9 +128,33 @@ class SettingGiver(Giver):
     def __set__(self, instance: object, value: object) -> None: ...
 
 
+class Rated:
+    """A class whose __init__ is defined with def, for a subclass to shadow."""
+
+    def __init__(self, rate: int) -> None: ...
+
+
 def _recording_object_init(wrapper: object) -> object:
     wrapper.__wrapped__ = object.__init__
     return wrapper
+
+
+_INSPECT_SKIPS_AS_DEFINED_IN_C = (
+    pytest.param("__new__", object.__new__, id="builtin-as-new"),
+    pytest.param("__new__", staticmethod(object.__new__), id="staticmethod-of-a-builtin-as-new"),
+    pytest.param("__new__", object().__init__, id="method-wrapper-as-new"),
+    pytest.param(
+        "__new__", staticmethod(object().__init__), id="staticmethod-of-a-method-wrapper-as-new"
+    ),
+    pytest.param(
+        "__new__",
+        staticmethod(dict.__dict__["fromkeys"]),
+        id="staticmethod-of-a-classmethod-descriptor-as-new",
+    ),
+    pytest.param("__init__", object.__init__, id="slot-wrapper-as-init"),
+    pytest.param("__init__", object().__init__, id="method-wrapper-as-init"),
+    pytest.param("__init__", dict.__dict__["fromkeys"], id="classmethod-descriptor-as-init"),
+)
 
 
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
@@ -242,6 +272,11 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_ty
             r"\btests\.unit\.surface_forms_helper\.test_surface_form_constructors\.Ledger\b.*\bbuiltins\.dict\b",
             id="Ledger",
         ),
+        pytest.param(
+            ReinitialisedLedger,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_constructors\.ReinitialisedLedger\b.*\bbuiltins\.dict\b",
+            id="ReinitialisedLedger",
+        ),
     ],
 )
 def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
@@ -257,8 +292,20 @@ def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
     class Plain:
         pass
 
+    class RenewedByAStaticmethod:
+        __new__ = staticmethod(object.__new__)
+
+    class RenewedByABuiltin:
+        __new__ = object.__new__
+
+    class ReinitialisedByASlotWrapper:
+        __init__ = object.__init__
+
     assert surface_form(object) == "()"
     assert surface_form(Plain) == "()"
+    assert surface_form(RenewedByAStaticmethod) == "()"
+    assert surface_form(RenewedByABuiltin) == "()"
+    assert surface_form(ReinitialisedByASlotWrapper) == "()"
 
 
 def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor() -> None:
@@ -1510,6 +1557,163 @@ def test_a_class_whose_only_constructor_is_a_method_wrapper_or_a_classmethod_des
 
     for subject in (skipping, Inheriting):
         naming_it = rf"\.{subject.__name__}\b.*{naming_base}.*\bdefined in C\b.*\btext signature\b"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(("name", "held"), _INSPECT_SKIPS_AS_DEFINED_IN_C)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds(
+    name: str, held: object
+) -> None:
+    class Initialised:
+        def __init__(self, share: "fractions.Fraction") -> None: ...
+
+    class Created:
+        def __new__(cls, share: "fractions.Fraction") -> object: ...
+
+    base, form, classes = {
+        "__new__": (Initialised, "(share: fractions.Fraction) -> None", {fractions.Fraction}),
+        "__init__": (
+            Created,
+            "(share: fractions.Fraction) -> object",
+            {fractions.Fraction, object},
+        ),
+    }[name]
+    skipping = type("Skipping", (base,), {name: held})
+
+    assert surface_form(skipping) == form
+    assert named_classes(skipping) == classes
+
+
+@pytest.mark.parametrize(("name", "held"), _INSPECT_SKIPS_AS_DEFINED_IN_C)
+def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds(
+    name: str, held: object
+) -> None:
+    def build(receiver: object, rate: int) -> None: ...
+
+    def make(receiver: object, rate: int) -> None: ...
+
+    class Built:
+        __init__ = functools.partial(build)
+
+    class Created:
+        __new__ = _with_a_string_signature(make)
+
+    base, refused = {
+        "__new__": (Built, r"\.Built\.__init__\b.*\bfunctools\.partial\b"),
+        "__init__": (Created, r"\.Created\.__new__\b.*'\(receiver, rate\)', a builtins\.str\b"),
+    }[name]
+    skipping = type("Skipping", (base,), {name: held})
+
+    class Inheriting(skipping):
+        pass
+
+    for subject in (skipping, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*{refused}"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    ("bases", "namespace", "skipped"),
+    [
+        pytest.param((), {"__init__": None}, "Skipping.__init__", id="init-none"),
+        pytest.param(
+            (), {"__init__": Giver(None)}, "Skipping.__init__", id="init-descriptor-giving-none"
+        ),
+        pytest.param(
+            (),
+            {"__init__": staticmethod(None)},
+            "Skipping.__init__",
+            id="init-staticmethod-of-none",
+        ),
+        pytest.param((), {"__new__": None}, "Skipping.__new__", id="new-none"),
+        pytest.param(
+            (), {"__new__": Giver(None)}, "Skipping.__new__", id="new-descriptor-giving-none"
+        ),
+        pytest.param(
+            (), {"__new__": staticmethod(None)}, "Skipping.__new__", id="new-staticmethod-of-none"
+        ),
+        pytest.param(
+            (), {"__new__": None, "__init__": None}, "Skipping.__new__", id="new-and-init-none"
+        ),
+        pytest.param(
+            (),
+            {"__new__": staticmethod(object.__new__), "__init__": None},
+            "Skipping.__init__",
+            id="init-none-beside-object-new",
+        ),
+        pytest.param(
+            (),
+            {"__new__": None, "__init__": object.__init__},
+            "Skipping.__new__",
+            id="new-none-beside-object-init",
+        ),
+        pytest.param(
+            (Rated,),
+            {"__init__": None},
+            "Skipping.__init__",
+            id="init-none-over-a-base-init-defined-with-def",
+        ),
+        pytest.param(
+            (Rated,),
+            {"__new__": object.__new__, "__init__": None},
+            "Skipping.__init__",
+            id="init-none-beside-a-builtin-new-over-a-base-init-defined-with-def",
+        ),
+        pytest.param(
+            (class_whose_metaclass_call_is(Giver(None)),),
+            {"__init__": None},
+            "Skipping.__init__",
+            id="init-none-under-a-metaclass-call-giving-none",
+        ),
+        pytest.param(
+            (), {"__init__": object().__init__}, "Skipping.__init__", id="init-method-wrapper"
+        ),
+        pytest.param(
+            (),
+            {"__init__": dict.__dict__["fromkeys"]},
+            "Skipping.__init__",
+            id="init-classmethod-descriptor",
+        ),
+        pytest.param(
+            (), {"__new__": object().__init__}, "Skipping.__new__", id="new-method-wrapper"
+        ),
+        pytest.param(
+            (),
+            {"__new__": staticmethod(object().__init__)},
+            "Skipping.__new__",
+            id="new-staticmethod-of-a-method-wrapper",
+        ),
+        pytest.param(
+            (),
+            {"__new__": staticmethod(dict.__dict__["fromkeys"])},
+            "Skipping.__new__",
+            id="new-staticmethod-of-a-classmethod-descriptor",
+        ),
+    ],
+)
+def test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips(
+    bases: tuple[type, ...], namespace: dict[str, object], skipped: str
+) -> None:
+    skipping = type("Skipping", bases, namespace)
+
+    class Inheriting(skipping):
+        pass
+
+    for subject in (skipping, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__}\b.*\.{re.escape(skipped)}\b.*\binspect skips\b"
+            r".*\bValueError\b.*\bTypeError\b.*\bclassmethod_descriptor __init__"
+        )
         with pytest.raises(TypeError, match=naming_it):
             surface_form(subject)
         with pytest.raises(TypeError, match=naming_it):
