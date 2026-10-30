@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""JSON text nested too deeply for json.loads to decode, as tests write it into a stored run's document.
+"""JSON text nested too deeply for json.loads to decode, as tests store it in a stored run's document or a saved preset's config.
 
 json.loads gives up on deep nesting at a depth that differs by minor, from about a thousand
 arrays on 3.11 to tens of thousands on 3.14, whose check is stack-based. A million arrays is

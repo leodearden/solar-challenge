@@ -34,6 +34,7 @@ from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
 from tests._plotly_figure import traces_by_name
@@ -591,6 +592,23 @@ class TestScenarioAPI:
             500,
             {"error": "Saved preset 'Broken' could not be read: its config is not JSON"},
         )
+
+    def test_a_saved_fleet_preset_whose_config_is_nested_too_deeply_to_decode_answers_500_naming_it_caused_by_the_recursion(
+        self, app: Flask, client: FlaskClient, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A saved fleet preset the list holds, but whose config json.loads gives up on as nested too deeply, is a 500 naming it and that fault, logged once at ERROR with the RecursionError as the cause."""
+        insert_saved_fleet_preset(database_of(app), "Deep", JSON_NESTED_TOO_DEEPLY_TO_DECODE)
+        assert "Deep" in [p["name"] for p in client.get("/api/scenarios/presets").get_json()["presets"]]
+
+        with caplog.at_level(logging.WARNING):
+            resp = client.get("/api/scenarios/presets/Deep")
+
+        message = "Saved preset 'Deep' could not be read: its config is nested too deeply to decode as JSON"
+        assert (resp.status_code, resp.get_json()) == (500, {"error": message})
+        records = [r for r in caplog.records if "'Deep'" in r.getMessage()]
+        assert [(r.levelno, r.getMessage()) for r in records] == [(logging.ERROR, message)]
+        assert records[0].exc_info is not None
+        assert isinstance(records[0].exc_info[1].__cause__, RecursionError)
 
     @pytest.mark.parametrize("config_json", ["[1]", "3", '"text"', "null"], ids=["array", "number", "string", "json-null"])
     def test_a_saved_fleet_preset_whose_config_is_json_but_not_an_object_answers_500_naming_it(

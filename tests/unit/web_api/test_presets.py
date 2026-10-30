@@ -17,6 +17,7 @@ from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
+from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
 
 _BUILTIN_PRESET_NAMES = ("Small Urban", "Medium Suburban", "Large with Battery")
@@ -94,7 +95,11 @@ class TestListPresets:
 
     @pytest.mark.parametrize(
         "config_json",
-        [pytest.param("{not json", id="not-json"), pytest.param("[9.5]", id="not-an-object")],
+        [
+            pytest.param("{not json", id="not-json"),
+            pytest.param("[9.5]", id="not-an-object"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, id="nested-too-deeply"),
+        ],
     )
     def test_a_saved_home_preset_whose_config_is_not_a_json_object_is_left_out(
         self, app: Flask, client: FlaskClient, config_json: str
