@@ -37,9 +37,10 @@ constructor that is, or wraps, a method-wrapper or a `classmethod_descriptor`, a
 readings of a constructor `inspect` skips above the class holding the one it reads and
 of a class of which it reads no constructor, were measured on those releases on
 2026-10-29. §2's reading of a class held where `inspect` binds a constructor or a
-`__call__`, and 4.4's reading of a `__call__` whose binding gives an object that is not
-callable, were measured on those releases on 2026-10-30. A new refusal gets its rule
-test first, then its entry here.
+`__call__`, 4.4's reading of a `__call__` whose binding gives an object that is not
+callable, and 4.5's reading of a metaclass `__call__` or an `__init__` that `inspect`
+binds to a callable defined in C, were measured on those releases on 2026-10-30. A new
+refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -347,6 +348,30 @@ refused before any is bound. The other readings are:
   the class as constructed by the class defined in C its MRO holds, naming that class,
   or, with no such class in the MRO, reads it as the entry below on a class of which
   `inspect` reads no constructor says.
+- A metaclass `__call__` or an `__init__` that is not itself a callable defined in C, but
+  that `inspect` binds to one: `staticmethod(object().__init__)`, or a `Giver`, whose
+  `__get__` gives the object it was made with, made with `dict.__dict__['fromkeys']`,
+  `object.__new__` or `object.__init__`. `inspect` looks either up with
+  `inspect.getattr_static`, and skips it as defined in C only where what the class holds
+  is such a callable or, from 3.13, where the walk along `__wrapped__` from it ends at
+  one. That walk stops at a `staticmethod` or a `Giver`, as the first entry says. So
+  every minor binds it and reads, alike, the text signature of the callable the binding
+  gives: `(*args, **kwargs)` for `object().__init__` and `object.__new__`,
+  `(type, iterable, value=None, /)` for `dict.__dict__['fromkeys']`, and
+  `(self, /, *args, **kwargs)` for `object.__init__`. It reads that in place of a
+  `def __init__(self, share: "fractions.Fraction") -> None` beneath such a metaclass
+  `__call__`, and of a base's `def __new__(cls, share: "fractions.Fraction") -> object`
+  above such an `__init__`. A `__new__` is different: `inspect` looks it up with
+  `getattr`, which binds a `staticmethod` of such a callable before that check, so every
+  minor skips it, as the entry above says. `surface_form` spells such a class by that
+  text signature, and `named_classes` names no class for it. That is how `surface_form`
+  spells a routine defined in C wherever every minor reads it alike: `len` as `(obj, /)`
+  and, as the first entry says, `staticmethod(functools.wraps(object.__init__)(build))`,
+  held as `__init__` or as a metaclass `__call__`, as `(self, /, *args, **kwargs)`. It
+  does not refuse such a class as it refuses one constructed by a class defined in C,
+  below: there `inspect` reads a class's own text signature, which differs by minor or is
+  missing, and here it reads a routine's, which every minor reads alike. The rule test
+  pins each text, so a release that adds or rewrites one fails it.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`, at the end of the chain from a constructor whose binding gives a
   callable: the binding gives such a descriptor that is callable, or a wrapper that
@@ -444,6 +469,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_metaclass_call_new_or_init_is_a_method_wrapper_or_a_classmethod_descriptor_is_spelled_by_the_constructor_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_metaclass_call_is_a_method_wrapper_or_a_classmethod_descriptor_raises_the_type_error_naming_the_init_inspect_reads_in_its_place`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_only_constructor_is_a_method_wrapper_or_a_classmethod_descriptor_over_a_class_defined_in_c_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_metaclass_call_or_init_inspect_binds_to_a_callable_defined_in_c_is_spelled_by_that_callable_text_signature`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips`
