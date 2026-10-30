@@ -2060,18 +2060,15 @@ def generate_homes_from_distribution(
         # Sample heat pump parameters (may be None)
         heat_pump_config: Optional[HeatPumpConfig] = None
         if config.heat_pump is not None:
-            # Handle heat_pump_type: can be string, distribution, or None
+            # Handle heat_pump_type: a bare string, or a spec drawn like any other setting (a null is no heat pump)
             heat_pump_type: Optional[str]
             if isinstance(config.heat_pump.heat_pump_type, str):
                 heat_pump_type = config.heat_pump.heat_pump_type
-            elif isinstance(config.heat_pump.heat_pump_type, WeightedDiscreteDistribution):
-                # Sample from distribution (values can include None)
-                # Note: WeightedDiscreteDistribution is typed for floats but used with strings here
+            else:
+                # Note: the specs are typed for floats but list heat pump types here
                 heat_pump_type = sampler.sample(  # type: ignore[assignment]
                     config.heat_pump.heat_pump_type, "heat_pump.heat_pump_type"
                 )
-            else:
-                heat_pump_type = None
 
             if heat_pump_type is not None:
                 if heat_pump_type not in HEAT_PUMP_TYPES:

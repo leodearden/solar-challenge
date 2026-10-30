@@ -872,6 +872,13 @@ message text, or pass such values, change them when they re-pin.
 had a package caller; sweeps run through `fleet.simulate_multi_sweep_iter`,
 `optimize.run_sweep` and the web's sweep endpoint.
 
+**Unreleased on main** (task 919): a `fleet_distribution:` block's
+`heat_pump.heat_pump_type` given as a `shuffled_pool`, or as any spec other
+than a `weighted_discrete` or a bare type, is now drawn: a pool hands each home
+the type it draws, a null being no heat pump, and a drawn value that is not one
+of `heat_pump.HEAT_PUMP_TYPES` is refused. The tag gives every home of such a
+fleet no heat pump. Only such fleets' generated homes change.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
