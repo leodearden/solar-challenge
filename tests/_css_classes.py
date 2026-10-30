@@ -338,7 +338,7 @@ def _macro_defaults(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
     ]
 
 
-def _set_variables(tree: nodes.Template) -> list[tuple[str, nodes.Expr]]:
+def _set_variables(tree: nodes.Template) -> list[tuple[str, nodes.Node]]:
     """(name, value) for every ``{% set name = value %}``; a tuple target and a
     ``{% set %}...{% endset %}`` block are not read."""
     return [

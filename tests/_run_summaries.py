@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from typing import Any
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
@@ -67,12 +68,12 @@ _FLEET_SUMMARY = FleetSummary(
 )
 
 
-def home_summary(**figures: object) -> SummaryStatistics:
+def home_summary(**figures: Any) -> SummaryStatistics:
     """A home run's full summary: 100 kWh generated, 60 of it self-consumed (ratio 0.6), over 7 days, with *figures* in place of those fields' figures."""
     return dataclasses.replace(_HOME_SUMMARY, **figures)
 
 
-def fleet_summary(**figures: object) -> FleetSummary:
+def fleet_summary(**figures: Any) -> FleetSummary:
     """A 2-home fleet run's full summary: 200 kWh generated, 120 of it self-consumed (ratio 0.6), over 7 days, with *figures* in place of those fields' figures."""
     return dataclasses.replace(_FLEET_SUMMARY, **figures)
 
