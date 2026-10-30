@@ -36,7 +36,10 @@ that is not callable or whose lookup or binding gives `None`, its readings of a
 constructor that is, or wraps, a method-wrapper or a `classmethod_descriptor`, and its
 readings of a constructor `inspect` skips above the class holding the one it reads and
 of a class of which it reads no constructor, were measured on those releases on
-2026-10-29. A new refusal gets its rule test first, then its entry here.
+2026-10-29. §2's reading of a class held where `inspect` binds a constructor or a
+`__call__`, and 4.4's reading of a `__call__` whose binding gives an object that is not
+callable, were measured on those releases on 2026-10-30. A new refusal gets its rule
+test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -50,11 +53,24 @@ is, not as what it wraps, so no refusal looks past it; a `functools.partial` who
 callable, at the chain's end, is read through the `__call__` that class resolves, bound to
 the object, unless the object carries a signature.
 
+`inspect` binds that `__call__`, as it binds a class's `__init__` or metaclass `__call__`
+(4.1), with `inspect._descriptor_get`, which binds no class: a class held there is read as
+it is, whatever `__get__` its metaclass defines. A `__new__` it looks up with `getattr`,
+which binds a class through that `__get__`. With a metaclass whose `__get__` gives `1` or
+`None`, a class of it with `def __init__(self, rate: int) -> None` reads as
+`(rate: int) -> None` held as an `__init__`, a metaclass `__call__` or an object's
+`__call__`, on every minor. `surface_form` and `named_classes` read it so, spelling its
+annotations where its `__init__` is.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_wraps_a_callable_defined_in_c_but_carries_a_signature_of_none_is_spelled_by_that_constructor`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines_get_is_spelled_by_that_class_which_inspect_binds_to_nothing`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_class_whose_metaclass_defines_get_is_spelled_by_that_class_which_inspect_binds_to_nothing`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines_get_names_the_classes_the_module_spelling_that_class_constructor_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_class_whose_metaclass_defines_get_names_the_classes_the_module_spelling_that_class_constructor_binds_the_names_to`
 
 ## 3. Read Alike on Every Minor
 
@@ -213,6 +229,20 @@ to the routine, and names the routine. Four readings of the object differ by min
   type defines `__get__`: 3.11 and 3.12 bind it through that `__get__`, and 3.13 and 3.14
   as a method of what it wraps, as 4.7 says.
 
+Every minor binds that `__call__` to the object with `inspect._descriptor_get` (§2), and
+checks that what the binding gives is callable before it reads anything of it, raising
+`TypeError`, as not a callable object, where it is not. So it reads such an object
+neither as a method descriptor, nor as a data descriptor (4.3), nor by a `__signature__`
+it carries (4.1), an `inspect.Signature` included. A binding that gives `None` is no
+exception: unlike a constructor whose binding gives `None` (4.5), such a `__call__` is not
+skipped. With `Giver`, whose `__get__` gives the object it was made with, and
+`def build(receiver, rate: int) -> None`, `__call__ = Giver(None)`, `Giver(Giver(build))`,
+`staticmethod(None)` and `classmethod(None)` read so, as does an object whose type
+defines no `__get__`. Where the `__call__` the class resolves is `None` itself, every
+minor raises `ValueError` instead, as a callable it does not support. `surface_form`
+raises `TypeError` naming the routine, that `__call__` by the class holding it, and what
+the binding gives with its type, on every minor.
+
 The section's other case is a class member that is a `functools.partial`. Read from an
 instance, it is bound as a partial `__call__` is: 3.14 binds it to the instance as a
 method, so its first parameter goes, while 3.11 to 3.13 call it without the instance, 3.13
@@ -227,6 +257,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_overrides_a_call_a_base_defines_in_c_raises_a_type_error_naming_it_that_object_and_that_base`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_text_signature_raises_a_type_error_naming_it_that_object_and_that_text`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
+- `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_a_call_inspect_binds_to_an_object_that_is_not_callable_raises_a_type_error_naming_it_that_call_and_that_object_type`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_partial_member_raises_a_type_error_naming_the_class_the_member_and_that_only_python_3_14_binds_it_to_the_instance`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_partial_member_wrapped_in_staticmethod_is_spelled_staticmethod_then_the_signature_the_partial_leaves`
 
@@ -422,6 +453,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as_call_raises_a_type_error_naming_it_and_that_call_without_binding_the_partial`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_whose_class_resolves_a_call_inspect_binds_to_an_object_that_is_not_callable_raises_a_type_error_naming_it_that_call_and_that_object_type`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_its_class_makes_callable_raises_the_type_error_a_routine_whose_chain_ends_at_that_object_raises_naming_the_class`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_an_object_its_class_makes_callable_is_spelled_by_the_call_its_class_resolves_bound_to_it_or_by_the_signature_that_object_carries`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_its_constructor`
