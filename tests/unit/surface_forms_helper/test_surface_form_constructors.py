@@ -21,9 +21,11 @@ import pytest
 
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
+    CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE,
     GIVEN_BY_A_METACLASS_GET,
     CallableGetter,
     ChainedCall,
+    Giver,
     NoneSignedCallableGetter,
     PartialFirstGetterPartial,
     SettableGetterPartial,
@@ -31,6 +33,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_metaclass_call_is,
     class_whose_new_is,
     metaclass_whose_get_gives,
+    object_whose_call_is,
 )
 
 
@@ -88,16 +91,6 @@ class Period(enum.Enum):
     """An Enum with a member, whose signature inspect reads from a different place on each minor."""
 
     PEAK = "peak"
-
-
-class Giver:
-    """A descriptor whose __get__ gives the object it was made with."""
-
-    def __init__(self, given: object) -> None:
-        self.given = given
-
-    def __get__(self, instance: object, owner: type | None = None) -> object:
-        return self.given
 
 
 class CallableGiver(Giver):
@@ -1817,6 +1810,35 @@ def test_a_class_constructed_through_an_object_whose_class_resolves_a_partial_as
                 named_classes(cls)
         with pytest.raises(TypeError, match=r"\.Built\b.*\.PartialCall\.__call__\b"):
             surface_form(functools.partial(Built))
+
+
+@pytest.mark.parametrize(("call", "kind"), CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_new_is, id="new"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_constructed_through_an_object_whose_class_resolves_a_call_inspect_binds_to_an_object_that_is_not_callable_raises_a_type_error_naming_it_that_call_and_that_object_type(
+    construct: Callable[[object], type], call: object, kind: str
+) -> None:
+    cls = construct(object_whose_call_is(call))
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        naming_it = (
+            rf"\.{subject.__name__} is read through .*\.Caller\.__call__\b.*{kind}.*\bnot callable\b"
+        )
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
 
 
 @pytest.mark.parametrize(

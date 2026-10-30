@@ -10,7 +10,8 @@ REFUSED_ROUTINE_AND_PARTIAL_MEMBERS adds a plain functools.partial to those: the
 that both branches of refuse_member_without_a_portable_form refuse.
 GetterDeleter is a descriptor whose type defines __get__ and __delete__ but no __set__,
 and CallableGetterDeleter a callable one, for the rules about how inspect reads such a
-descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
+descriptor. Giver is a descriptor whose __get__ gives the object it was made with, for
+the rules about what inspect binds a constructor or a __call__ to. GetterPartial is a functools.partial whose type takes __get__ from a class
 other than functools.partial, and SettableGetterPartial one whose type also defines
 __set__, for the rules about how inspect reads and binds such a partial.
 PartialFirstGetterPartial is one whose type takes __get__ from GetMixin, a base after
@@ -33,10 +34,14 @@ rules about a class held where inspect binds a constructor or a __call__, which 
 unbound.
 GIVEN_BY_A_METACLASS_GET holds what such a __get__ gives in those rules: an object that
 is not callable, and None.
+CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE holds a __call__ of each kind inspect binds
+to an object that is not callable, each with a pattern naming that object's type, for the
+rules about a routine or a class read through an object whose class resolves one.
 """
 
 import functools
 import importlib.util
+import inspect
 import pathlib
 import sys
 import types
@@ -98,6 +103,16 @@ class CallableGetterDeleter(GetterDeleter):
     """A callable GetterDeleter."""
 
     def __call__(self, rate: int) -> str: ...
+
+
+class Giver:
+    """A descriptor whose __get__ gives the object it was made with."""
+
+    def __init__(self, given: object) -> None:
+        self.given = given
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self.given
 
 
 class GetterPartial(functools.partial):
@@ -187,6 +202,37 @@ GIVEN_BY_A_METACLASS_GET = (
 
 def _settle(self: object, rate: int) -> None: ...
 
+
+_NONE_TYPE = r"\bbuiltins\.NoneType\b"
+_SIMPLE_NAMESPACE = r"\btypes\.SimpleNamespace\b"
+
+CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE = (
+    pytest.param(None, _NONE_TYPE, id="none"),
+    pytest.param(staticmethod(None), _NONE_TYPE, id="staticmethod-of-none"),
+    pytest.param(classmethod(None), _NONE_TYPE, id="classmethod-of-none"),
+    pytest.param(Giver(None), _NONE_TYPE, id="descriptor-giving-none"),
+    pytest.param(types.SimpleNamespace(), _SIMPLE_NAMESPACE, id="object-defining-no-get"),
+    pytest.param(staticmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="staticmethod"),
+    pytest.param(classmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="classmethod"),
+    pytest.param(
+        Giver(Giver(_settle)), r"\.Giver\b", id="descriptor-giving-a-get-only-descriptor"
+    ),
+    pytest.param(
+        Giver(GetterDeleter()),
+        r"\.GetterDeleter\b",
+        id="descriptor-giving-a-get-delete-descriptor",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__="(rate)")),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-string-signature",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__=inspect.Signature())),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-signature",
+    ),
+)
 
 UNREADABLE_ROUTINES = (
     pytest.param(
