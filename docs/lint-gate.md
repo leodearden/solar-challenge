@@ -96,4 +96,7 @@ without annotations, which only strict mode reports, and a `# type: ignore` that
 suppresses no error, which only `warn_unused_ignores` reports. An override that relaxes
 `tests.*`, or one helper module, then fails them, while the gate itself would still pass.
 
-The test modules stay outside mypy, and F821 (§6) is the check on their annotations.
+The test modules stay outside mypy, and F821 (§6) is the check on their annotations. So do
+the modules of a test directory whose names start with an underscore, such as
+`tests/unit/web_jobs/_fakes.py` and those of `tests/e2e`: they are not helper modules in this
+sense. Task 1211 decides whether the check should reach them.
