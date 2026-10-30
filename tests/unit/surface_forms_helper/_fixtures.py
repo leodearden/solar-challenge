@@ -161,6 +161,12 @@ def metaclass_whose_get_gives(given: object) -> type:
     return Getting
 
 
+def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
+    """*function*, carrying the string '(receiver, rate)' as its __signature__."""
+    function.__signature__ = "(receiver, rate)"
+    return function
+
+
 GIVEN_BY_A_METACLASS_GET = (
     pytest.param(1, id="get-giving-an-object-that-is-not-callable"),
     pytest.param(None, id="get-giving-none"),
