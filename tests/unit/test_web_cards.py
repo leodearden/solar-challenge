@@ -26,6 +26,7 @@ from flask.testing import FlaskClient
 from jinja2 import Environment, nodes
 
 from solar_challenge.web.storage import RunStorage
+from tests._css_classes import alpine_class_binding_literals
 from tests._dashboard_divider import DIVIDER_CLASSES
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
@@ -402,7 +403,7 @@ def test_every_call_that_gives_a_header_band_argument_gives_a_title(macros: Any,
 
 
 class _StartTagClasses(HTMLParser):
-    """Collects the classes of each start tag of an HTML text, in text order."""
+    """Collects the class lists of each start tag of an HTML text, in text order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -410,10 +411,13 @@ class _StartTagClasses(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.class_sets.append(_classes(dict(attrs)))
+        self.class_sets.extend(frozenset(literal.split()) for literal in alpine_class_binding_literals(attrs))
 
 
 def _markup_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, read with every Jinja tag blanked."""
+    """The class lists of the Jinja template *source*'s literal markup, read with every Jinja tag blanked:
+    each element's classes, then the words of each string literal of its Alpine class bindings, each
+    literal read alone."""
     elements = _StartTagClasses()
     elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
     elements.close()
@@ -421,8 +425,8 @@ def _markup_class_lists(source: str) -> list[frozenset[str]]:
 
 
 def _template_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
-    each string its Jinja builds, such as a {% set %} value."""
+    """The class lists of the Jinja template *source*'s literal markup, then the words of each string its
+    Jinja builds, such as a {% set %} value."""
     strings = _template_strings(_JINJA.parse(source))
     return [*_markup_class_lists(source), *(frozenset(string.split()) for string in strings)]
 
@@ -552,9 +556,8 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
 
 
 def _spelled_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
-    each string literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the
-    set's classes."""
+    """The class lists of the Jinja template *source*'s literal markup, then the words of each string
+    literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the set's classes."""
     literals = [const.value for const in _JINJA.parse(source).find_all(nodes.Const) if isinstance(const.value, str)]
     return [*_markup_class_lists(source), *(frozenset(literal.split()) for literal in literals)]
 
@@ -575,3 +578,60 @@ def test_components_macros_html_writes_the_divider_under_its_header_bands_and_ta
         f"order, in these {len(spellings)} class lists:{listing}\n"
         "Its header bands and tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(_template_class_lists, id="per-look-guard"),
+        pytest.param(_spelled_class_lists, id="divider-guard"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "<div :class=\"open ? 'border-b border-slate-200' : ''\"></div>",
+            [set(), {"border-b", "border-slate-200"}, set()],
+            id="ternary-branches",
+        ),
+        pytest.param(
+            "<div x-bind:class=\"{ 'border-b border-slate-200': open }\"></div>",
+            [set(), {"border-b", "border-slate-200"}],
+            id="object-key-of-the-long-form",
+        ),
+        pytest.param(
+            "<div :class='open ? \"border-b border-slate-200\" : \"\"'></div>",
+            [set(), {"border-b", "border-slate-200"}, set()],
+            id="double-quoted-literals-in-a-single-quoted-binding",
+        ),
+        pytest.param(
+            "<button :class=\"{{ state }} ? 'bg-primary-500' : 'bg-slate-300 dark:bg-slate-600'\"></button>",
+            [set(), {"bg-primary-500"}, {"bg-slate-300", "dark:bg-slate-600"}],
+            id="literals-beside-a-jinja-expression",
+        ),
+        pytest.param(
+            "<div :class=\"open && 'border-b border-slate-200'\"></div>",
+            [set(), {"border-b", "border-slate-200"}],
+            id="operand-of-a-logical-and",
+        ),
+        pytest.param(
+            "<div :class=\"['border-b border-slate-200', open ? 'p-4' : '']\"></div>",
+            [set(), {"border-b", "border-slate-200"}, {"p-4"}, set()],
+            id="element-of-an-array",
+        ),
+        pytest.param(
+            "<div class=\"p-4\" :class=\"open ? 'border-b' : ''\">"
+            "<p x-text=\"'border-b border-slate-200'\" :aria-checked=\"open ? 'true' : 'false'\"></p></div>",
+            [{"p-4"}, {"border-b"}, set(), set()],
+            id="each-elements-classes-then-its-class-binding-literals",
+        ),
+    ],
+)
+def test_both_written_once_guards_read_each_string_literal_of_an_alpine_class_binding_as_a_class_list(
+    read: Callable[[str], list[frozenset[str]]], source: str, expected: list[set[str]]
+) -> None:
+    """Alpine applies the classes a :class or x-bind:class expression yields, so a look's classes or the
+    divider spelled in one of its string literals is another writing, which both guards must count; a
+    literal of any other attribute is not a class list."""
+    assert read(source) == expected

@@ -133,6 +133,19 @@ def applied_classes_in_script(source: str) -> set[str]:
     )
 
 
+def alpine_class_binding_literals(attrs: list[tuple[str, str | None]]) -> list[str]:
+    """Every string literal of the Alpine class bindings among the attributes *attrs* of one start tag, in
+    attribute order. applied_classes_in_template reads a binding's object keys and ternary branches; this
+    reads all its literals, an operand of ``&&`` or an array element too, so a check for a second spelling
+    of a class list misses none."""
+    return [
+        _literal_value(literal)
+        for name, value in attrs
+        if name in _ALPINE_CLASS_BINDINGS and value is not None
+        for literal in _STRING_LITERAL.finditer(value)
+    ]
+
+
 def selector_classes(stylesheet: str) -> set[str]:
     """Classes the selectors of *stylesheet* name, with CSS escapes decoded.
 
