@@ -9,6 +9,7 @@ import decimal
 import fractions
 import functools
 import re
+import sys
 import types
 from typing import Callable
 
@@ -564,3 +565,166 @@ def test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_namin
             named_classes(subject)
         with pytest.raises(TypeError, match=naming_it):
             surface_form(functools.partial(subject))
+
+
+def test_a_class_that_object_constructs_under_a_docstring_in_text_signature_form_raises_a_type_error_naming_it_the_class_holding_that_docstring_and_its_text_signature() -> None:
+    class Plain:
+        """Plain(rate)
+        --
+
+        A class object constructs, whose docstring is in text-signature form once dedented."""
+
+    class RenewedByAStaticmethod:
+        """RenewedByAStaticmethod(rate)
+        --
+
+        A class object constructs, whose docstring is in text-signature form once dedented."""
+
+        __new__ = staticmethod(object.__new__)
+
+    class RenewedByABuiltin:
+        """RenewedByABuiltin(rate)
+        --
+
+        A class object constructs, whose docstring is in text-signature form once dedented."""
+
+        __new__ = object.__new__
+
+    class ReinitialisedByASlotWrapper:
+        """ReinitialisedByASlotWrapper(rate)
+        --
+
+        A class object constructs, whose docstring is in text-signature form once dedented."""
+
+        __init__ = object.__init__
+
+    for cls in (Plain, RenewedByAStaticmethod, RenewedByABuiltin, ReinitialisedByASlotWrapper):
+
+        class Inheriting(cls):
+            pass
+
+        for subject in (cls, Inheriting):
+            naming_it = rf"\.{subject.__name__}\b.*\bdocstring of .*\.{cls.__name__}\b.*'\(rate\)'"
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                named_classes(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(functools.partial(subject))
+
+
+def test_a_class_that_object_constructs_raises_a_type_error_naming_the_first_class_in_its_mro_whose_docstring_is_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_however_it_is_indented() -> None:
+    class Flush:
+        """Flush(rate)
+--
+
+A docstring set flush-left, in text-signature form on every minor."""
+
+    class Bare:
+        """Bare(rate)
+        --
+
+        """
+
+    class Redocumented(Flush):
+        """Redocumented(share)
+        --
+
+        A docstring in text-signature form once dedented, over a base's set flush-left."""
+
+    class Tabbed:
+        """Tabbed(rate)\n\t--\n\n\tA docstring whose lines after the first a tab indents."""
+
+    class Undented:
+        """Undented(rate)
+        --
+
+        A docstring whose closing line holds only spaces, fewer than the lines before it.
+    """
+
+    class Assigned:
+        __doc__ = """Assigned(rate)
+        --
+
+        A docstring the class body assigns to __doc__, which no compiler dedents."""
+
+    Typed = type("Typed", (), {"__doc__": "Typed(rate)\n    --\n\n    A docstring type() gives."})
+
+    for subject, naming_it in (
+        (Flush, r"\.Flush\b.*\bdocstring of .*\.Flush\b.*'\(rate\)'"),
+        (Bare, r"\.Bare\b.*\bdocstring of .*\.Bare\b.*'\(rate\)'"),
+        (Redocumented, r"\.Redocumented\b.*\bdocstring of .*\.Redocumented\b.*'\(share\)'"),
+        (Tabbed, r"\.Tabbed\b.*\bdocstring of .*\.Tabbed\b.*'\(rate\)'"),
+        (Undented, r"\.Undented\b.*\bdocstring of .*\.Undented\b.*'\(rate\)'"),
+        (Assigned, r"\.Assigned\b.*\bdocstring of .*\.Assigned\b.*'\(rate\)'"),
+        (Typed, r"\.Typed\b.*\bdocstring of .*\.Typed\b.*'\(rate\)'"),
+    ):
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+
+
+def test_a_class_that_object_constructs_under_a_docstring_not_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_is_spelled_with_no_parameters() -> None:
+    class Opened:
+        """
+        Opened(rate)
+        --
+
+        A docstring whose signature follows a blank first line, which no minor reads as one."""
+
+    class Misnamed:
+        """Ledger(rate)
+        --
+
+        A docstring in text-signature form for another class's name."""
+
+    for cls in (Opened, Misnamed):
+        assert surface_form(cls) == "()"
+        assert named_classes(cls) == set()
+
+
+def test_a_class_that_object_constructs_created_under_a_docstring_in_text_signature_form_set_flush_left_raises_a_type_error_naming_the_text_signature_it_keeps_whatever_its_doc_later_holds() -> None:
+    class Reassigned:
+        """Reassigned(rate)
+--
+
+A docstring set flush-left, in text-signature form on every minor, until reassigned."""
+
+    Reassigned.__doc__ = "A docstring that gives no text signature."
+
+    class Inheriting(Reassigned):
+        pass
+
+    for subject in (Reassigned, Inheriting):
+        naming_it = rf"\.{subject.__name__}\b.*\.Reassigned's __text_signature__ gives, '\(rate\)'"
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            named_classes(subject)
+        with pytest.raises(TypeError, match=naming_it):
+            surface_form(functools.partial(subject))
+
+
+def test_a_class_that_object_constructs_created_under_a_docstring_in_text_signature_form_that_a_class_body_indents_raises_that_type_error_from_python_3_13_and_is_spelled_with_no_parameters_on_3_11_and_3_12_once_its_doc_is_reassigned() -> None:
+    class Indented:
+        """Indented(rate)
+        --
+
+        A docstring in text-signature form once dedented, until reassigned."""
+
+    Indented.__doc__ = "A docstring that gives no text signature."
+
+    class Inheriting(Indented):
+        pass
+
+    for subject in (Indented, Inheriting):
+        if sys.version_info < (3, 13):
+            assert surface_form(subject) == "()"
+            assert named_classes(subject) == set()
+        else:
+            naming_it = rf"\.{subject.__name__}\b.*\.Indented's __text_signature__ gives, '\(rate\)'"
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                named_classes(subject)
