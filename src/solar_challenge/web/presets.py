@@ -184,7 +184,7 @@ def _saved_preset_config(row: sqlite3.Row) -> dict[str, Any]:
     try:
         config = decoded_json(row["config_json"]) if row["config_json"] else {}
     except UndecodableJson as undecodable:
-        raise SavedPresetUnreadable(row["name"], f"its config {undecodable.reason}") from undecodable.__cause__
+        raise SavedPresetUnreadable(row["name"], f"its config {undecodable.reason}") from undecodable.refusal
     if not isinstance(config, dict):
         raise SavedPresetUnreadable(row["name"], "its config is not a JSON object")
     return config

@@ -33,7 +33,8 @@ def test_text_that_is_not_json_is_refused_as_not_json_caused_by_the_value_error_
         decoded_json(text)
 
     assert refused.value.reason == "is not JSON"
-    assert isinstance(refused.value.__cause__, ValueError)
+    assert isinstance(refused.value.refusal, ValueError)
+    assert refused.value.__cause__ is refused.value.refusal
 
 
 def test_text_nested_too_deeply_to_decode_is_refused_as_such_caused_by_the_recursion() -> None:
@@ -41,4 +42,5 @@ def test_text_nested_too_deeply_to_decode_is_refused_as_such_caused_by_the_recur
         decoded_json(JSON_NESTED_TOO_DEEPLY_TO_DECODE)
 
     assert refused.value.reason == "is nested too deeply to decode as JSON"
-    assert isinstance(refused.value.__cause__, RecursionError)
+    assert isinstance(refused.value.refusal, RecursionError)
+    assert refused.value.__cause__ is refused.value.refusal

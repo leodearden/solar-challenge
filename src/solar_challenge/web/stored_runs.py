@@ -122,8 +122,9 @@ class StoredDocument:
         try:
             return cls(run_id, name, decoded_json(text))
         except UndecodableJson as undecodable:
-            refusal = undecodable.__cause__
-            raise StoredRunUnreadable(run_id, name, None, f"{undecodable.reason}: {refusal}") from refusal
+            raise StoredRunUnreadable(
+                run_id, name, None, f"{undecodable.reason}: {undecodable.refusal}"
+            ) from undecodable.refusal
 
     def read(self, cls: type[T]) -> T:
         """The *cls*, a dataclass, whose field tree the document holds, read strictly by read_field_tree.
