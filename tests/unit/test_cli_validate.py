@@ -206,6 +206,28 @@ def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
     return document
 
 
+def _committed_scenario_with_seg_rate(scenario_name: str, rate: float) -> str:
+    """scenarios/<scenario_name> as YAML, its seg: block's rate_pence_per_kwh set to *rate*."""
+    scenario = Path(__file__).resolve().parents[2] / "scenarios" / scenario_name
+    document: dict[str, Any] = yaml.safe_load(scenario.read_text())
+    document["seg"]["rate_pence_per_kwh"] = rate
+    return yaml.safe_dump(document)
+
+
+def _scenario_document_holding(block: str, setting: Any) -> str:
+    """A scenario: document of one 4 kW PV home for a week, the scenario also carrying a *block* block set to *setting*."""
+    return yaml.safe_dump(
+        {
+            "scenario": {
+                "name": "winter",
+                "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
+                "home": {"pv": {"capacity_kw": 4.0}},
+                block: setting,
+            }
+        }
+    )
+
+
 class TestValidateConfig:
     """Tests for validate config command."""
 
@@ -408,15 +430,8 @@ home:
                 id="fleet-distribution",
             ),
             pytest.param(
-                yaml.safe_dump(
-                    {
-                        "scenario": {
-                            "name": "Bristol Phase 1 Flex",
-                            "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
-                            "home": {"pv": {"capacity_kw": 4.0}},
-                            "finance": _flex_document_with_infinite_event_hours()["finance"],
-                        }
-                    }
+                _scenario_document_holding(
+                    "finance", _flex_document_with_infinite_event_hours()["finance"]
                 ),
                 "event_hours",
                 "inf",
@@ -462,34 +477,52 @@ home:
         assert names_as_a_word(error_row, value_repr)
 
     @pytest.mark.parametrize(
-        ("scenario_name", "rate"),
+        ("document", "value_repr"),
         [
-            pytest.param("bristol-phase1-flex.yaml", float("nan"), id="fleet-distribution"),
-            pytest.param("bristol-arbitrage.yaml", float("inf"), id="home"),
+            pytest.param(
+                _committed_scenario_with_seg_rate("bristol-phase1-flex.yaml", float("nan")),
+                "nan",
+                id="fleet-distribution",
+            ),
+            pytest.param(
+                _scenario_document_holding("seg", {"rate_pence_per_kwh": float("inf")}),
+                "inf",
+                id="scenario",
+            ),
+            pytest.param(
+                "homes:\n  - {}\nseg: {rate_pence_per_kwh: .nan}\n",
+                "nan",
+                id="homes-list",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "seg: {rate_pence_per_kwh: .nan}\n",
+                "nan",
+                id="fleet-sweep",
+            ),
+            pytest.param(
+                _committed_scenario_with_seg_rate("bristol-arbitrage.yaml", float("inf")),
+                "inf",
+                id="home",
+            ),
         ],
     )
     def test_a_seg_rate_its_parser_refuses_is_an_error_row_naming_the_rate_and_the_value(
-        self, tmp_path: Path, scenario_name: str, rate: float
+        self, tmp_path: Path, document: str, value_repr: str
     ) -> None:
-        """A committed scenario whose seg: block carries *rate*.
+        """Whatever the file's shape, a SEG rate its parser refuses is the file's ERROR row.
 
-        The fleet-distribution row is a fleet file, whose seg: block `finance run` reads;
-        the home row is a home: file, whose seg: block `home run` reads.
+        The rows cover the same shapes as the finance test's. The fleet-distribution row is a
+        fleet file whose seg: block `finance run` reads, and the home row a home: file whose
+        seg: block `home run` reads: each a committed scenario with its rate replaced.
         """
-        scenario = Path(__file__).resolve().parents[2] / "scenarios" / scenario_name
-        document = yaml.safe_load(scenario.read_text())
-        document["seg"]["rate_pence_per_kwh"] = rate
-
-        result = self._validate_config(
-            tmp_path, yaml.safe_dump(document), file_name=scenario_name
-        )
+        result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 1
         text = table_text(result.stdout)
         assert "ERROR" in text
         error_row = text[text.index("ERROR"):]
         assert "rate_pence_per_kwh" in error_row
-        assert names_as_a_word(error_row, rate)
+        assert names_as_a_word(error_row, value_repr)
 
     def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
         self, tmp_path: Path

@@ -216,14 +216,23 @@ def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
     )
 
 
+def _refuse_a_seg_or_finance_block_its_parser_refuses(document: Mapping[str, Any]) -> None:
+    """Raise the ConfigurationError that the commands raise on the document's seg: or finance: block.
+
+    seg: is read as `finance run` and `home run` read it, then finance: as `finance run`
+    reads it, the order a scenario's blocks are read in. Either block may be absent.
+    """
+    parse_seg_rate(document.get("seg"))
+    parse_finance_config(document.get("finance"))
+
+
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     """The homes the file defines, built by the config.py loader its shape needs.
 
-    A fleet or home file's seg: and finance: blocks are also read, after its homes and in
-    the order a scenario's are: seg: as `finance run` and `home run` read it, finance: as
-    `finance run` reads it, except that either block may be absent. A scenario's are read
-    with the scenario. Raises the loader's own ConfigurationError or ValueError when the
-    file is refused, and the block parser's ConfigurationError when a block is.
+    The loader of a fleet or home file does not read its seg: and finance: blocks, so they
+    are read after its homes; a scenario's loader reads them with the scenario. Raises the
+    ConfigurationError or ValueError of the loader, or of a block parser, when the file is
+    refused.
     """
     document = load_config(config_file)
     if "scenarios" in document or "scenario" in document:
@@ -238,8 +247,7 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
         defined = _fleet_homes(document)
     else:
         defined = _DefinedHomes(homes=[load_home_config(config_file)])
-    parse_seg_rate(document.get("seg"))
-    parse_finance_config(document.get("finance"))
+    _refuse_a_seg_or_finance_block_its_parser_refuses(document)
     return defined
 
 
