@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import (
+    CHARGER_TYPES,
     EVConfig,
     EVChargerType,
     SmartChargingMode,
@@ -735,3 +736,16 @@ class TestEnumTypes:
         )
         assert config.charger_type == "7kW"
         assert config.smart_charging_mode == "solar"
+
+
+class TestChargerTypes:
+    """CHARGER_TYPES is the charger vocabulary, the EVChargerType values, and EVConfig refuses by it."""
+
+    def test_charger_types_are_the_charger_type_enum_values_in_member_order(self):
+        assert CHARGER_TYPES == tuple(charger.value for charger in EVChargerType)
+
+    @pytest.mark.parametrize("charger_type", ["50kW", "invalid"])
+    def test_a_charger_type_outside_charger_types_is_refused_listing_each_one(self, charger_type):
+        with pytest.raises(ConfigurationError) as exc_info:
+            EVConfig(charger_type=charger_type)
+        assert str(exc_info.value) == f"Charger type must be one of {list(CHARGER_TYPES)}, got '{charger_type}'"
