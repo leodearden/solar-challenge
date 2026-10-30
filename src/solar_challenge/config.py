@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Configuration file support for simulation scenarios.
 
-Supports loading configurations from YAML and JSON files,
-scenario definitions, and parameter sweep functionality.
+Supports loading configurations from YAML and JSON files and
+scenario definitions.
 """
 
 import json
@@ -37,17 +37,16 @@ from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyCo
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig, household_occupant_count
 from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-from solar_challenge.weather import default_weather
 
 
 #: Dispatch strategy names recognised by the simulation engine.
@@ -580,81 +579,6 @@ class ScenarioConfig:
     def get_location(self) -> Location:
         """Get location, defaulting to Bristol."""
         return self.location if self.location is not None else Location.bristol()
-
-
-@dataclass
-class ParameterSweepConfig:
-    """Configuration for parameter sweep analysis.
-
-    Attributes:
-        parameter_name: Name of parameter to sweep (e.g., "battery_capacity_kwh")
-        values: Explicit list of values to test
-        min_value: Minimum value for range generation
-        max_value: Maximum value for range generation
-        step: Step size for range generation
-        n_steps: Number of steps (alternative to step)
-    """
-
-    parameter_name: str
-    values: Optional[list[float]] = None
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
-    step: Optional[float] = None
-    n_steps: Optional[int] = None
-
-    def __post_init__(self) -> None:
-        """Validate sweep configuration."""
-        if self.values is not None:
-            if len(self.values) == 0:
-                raise ConfigurationError("Parameter sweep values list cannot be empty")
-            return
-
-        if self.min_value is None or self.max_value is None:
-            raise ConfigurationError(
-                "Parameter sweep requires either 'values' list or 'min_value' and 'max_value'"
-            )
-        if self.min_value >= self.max_value:
-            raise ConfigurationError(
-                f"min_value ({self.min_value}) must be less than max_value ({self.max_value})"
-            )
-        if self.step is None and self.n_steps is None:
-            raise ConfigurationError(
-                "Parameter sweep requires either 'step' or 'n_steps'"
-            )
-
-    def get_values(self) -> list[float]:
-        """Get list of parameter values to sweep."""
-        if self.values is not None:
-            return self.values
-
-        if self.min_value is None or self.max_value is None:
-            raise ConfigurationError("Range parameters not configured")
-
-        if self.step is not None:
-            values: list[float] = []
-            current = self.min_value
-            while current <= self.max_value:
-                values.append(current)
-                current += self.step
-            return values
-        elif self.n_steps is not None:
-            step = (self.max_value - self.min_value) / self.n_steps
-            return [self.min_value + i * step for i in range(self.n_steps + 1)]
-        else:
-            return [self.min_value, self.max_value]
-
-
-@dataclass
-class SweepResult:
-    """Result from a single parameter sweep iteration.
-
-    Attributes:
-        parameter_value: The parameter value used
-        results: Simulation results (SimulationResults or FleetResults)
-    """
-
-    parameter_value: float
-    results: Union[SimulationResults, FleetResults]
 
 
 def _child_path(block_path: str, key: str) -> str:
@@ -2822,207 +2746,6 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
         (value, FleetConfig(homes=settings.generate_homes(point), name=f"multiplier={value:.4f}"))
         for value, point in expand_sweep_configs(distribution)
     ]
-
-
-def run_parameter_sweep(
-    base_scenario: ScenarioConfig,
-    sweep_config: ParameterSweepConfig,
-) -> Iterator[SweepResult]:
-    """Run a parameter sweep over a scenario.
-
-    Yields results for each parameter value in the sweep.
-
-    Args:
-        base_scenario: Base scenario configuration
-        sweep_config: Parameter sweep configuration
-
-    Yields:
-        SweepResult for each parameter value
-
-    Raises:
-        ConfigurationError: If parameter cannot be swept
-        ValueError: If the swept parameter's config refuses a value (for
-            household_occupants, see load.household_occupant_count).
-    """
-    values = sweep_config.get_values()
-    param_name = sweep_config.parameter_name
-    location = base_scenario.get_location()
-
-    for value in values:
-        # Create modified scenario for this parameter value
-        if base_scenario.home is not None:
-            # Single home simulation
-            home = _apply_parameter_to_home(base_scenario.home, param_name, value, location)
-            start = base_scenario.period.get_start_timestamp(location.timezone)
-            end = base_scenario.period.get_end_timestamp(location.timezone)
-            home_results = simulate_home(home, start, end, weather=default_weather())
-            yield SweepResult(parameter_value=value, results=home_results)
-        else:
-            # Fleet simulation
-            homes = [
-                _apply_parameter_to_home(h, param_name, value, location)
-                for h in base_scenario.homes
-            ]
-            fleet = FleetConfig(homes=homes, name=base_scenario.name)
-            start = base_scenario.period.get_start_timestamp(location.timezone)
-            end = base_scenario.period.get_end_timestamp(location.timezone)
-            fleet_results = simulate_fleet(fleet, start, end)
-            yield SweepResult(parameter_value=value, results=fleet_results)
-
-
-def _apply_parameter_to_home(
-    home: HomeConfig,
-    param_name: str,
-    value: float,
-    location: Location,
-) -> HomeConfig:
-    """Apply a parameter value to a home configuration.
-
-    Args:
-        home: Base home configuration
-        param_name: Parameter name to modify
-        value: New parameter value
-        location: Location for the home
-
-    Returns:
-        Modified HomeConfig
-    """
-    # Map parameter names to config modifications
-    pv_params = {"pv_capacity_kw", "pv_tilt", "pv_azimuth"}
-    battery_params = {"battery_capacity_kwh", "battery_charge_kw", "battery_discharge_kw"}
-    load_params = {"annual_consumption_kwh", "household_occupants"}
-
-    if param_name in pv_params:
-        pv_config = _modify_pv_config(home.pv_config, param_name, value)
-        return HomeConfig(
-            pv_config=pv_config,
-            load_config=home.load_config,
-            battery_config=home.battery_config,
-            location=location,
-            name=home.name,
-            tariff_config=home.tariff_config,
-            dispatch_strategy=home.dispatch_strategy,
-        )
-    elif param_name in battery_params:
-        battery_config = _modify_battery_config(home.battery_config, param_name, value)
-        return HomeConfig(
-            pv_config=home.pv_config,
-            load_config=home.load_config,
-            battery_config=battery_config,
-            location=location,
-            name=home.name,
-            tariff_config=home.tariff_config,
-            dispatch_strategy=home.dispatch_strategy,
-        )
-    elif param_name in load_params:
-        load_config = _modify_load_config(home.load_config, param_name, value)
-        return HomeConfig(
-            pv_config=home.pv_config,
-            load_config=load_config,
-            battery_config=home.battery_config,
-            location=location,
-            name=home.name,
-            tariff_config=home.tariff_config,
-            dispatch_strategy=home.dispatch_strategy,
-        )
-    else:
-        raise ConfigurationError(f"Unknown parameter for sweep: {param_name}")
-
-
-def _modify_pv_config(config: PVConfig, param_name: str, value: float) -> PVConfig:
-    """Modify PV config with new parameter value."""
-    if param_name == "pv_capacity_kw":
-        return PVConfig(
-            capacity_kw=value,
-            azimuth=config.azimuth,
-            tilt=config.tilt,
-            name=config.name,
-            module_efficiency=config.module_efficiency,
-            temperature_coefficient=config.temperature_coefficient,
-            inverter_efficiency=config.inverter_efficiency,
-            inverter_capacity_kw=config.inverter_capacity_kw,
-            system_age_years=config.system_age_years,
-            degradation_rate_per_year=config.degradation_rate_per_year,
-        )
-    elif param_name == "pv_tilt":
-        return PVConfig(
-            capacity_kw=config.capacity_kw,
-            azimuth=config.azimuth,
-            tilt=value,
-            name=config.name,
-            module_efficiency=config.module_efficiency,
-            temperature_coefficient=config.temperature_coefficient,
-            inverter_efficiency=config.inverter_efficiency,
-            inverter_capacity_kw=config.inverter_capacity_kw,
-            system_age_years=config.system_age_years,
-            degradation_rate_per_year=config.degradation_rate_per_year,
-        )
-    elif param_name == "pv_azimuth":
-        return PVConfig(
-            capacity_kw=config.capacity_kw,
-            azimuth=value,
-            tilt=config.tilt,
-            name=config.name,
-            module_efficiency=config.module_efficiency,
-            temperature_coefficient=config.temperature_coefficient,
-            inverter_efficiency=config.inverter_efficiency,
-            inverter_capacity_kw=config.inverter_capacity_kw,
-            system_age_years=config.system_age_years,
-            degradation_rate_per_year=config.degradation_rate_per_year,
-        )
-    return config
-
-
-def _modify_battery_config(
-    config: Optional[BatteryConfig],
-    param_name: str,
-    value: float,
-) -> Optional[BatteryConfig]:
-    """Modify battery config with new parameter value."""
-    if config is None:
-        if param_name == "battery_capacity_kwh" and has_battery(value, param_name):
-            return BatteryConfig(capacity_kwh=value)
-        return None
-
-    if param_name == "battery_capacity_kwh":
-        if not has_battery(value, param_name):
-            return None  # Remove battery
-        return BatteryConfig(
-            capacity_kwh=value,
-            max_charge_kw=config.max_charge_kw,
-            max_discharge_kw=config.max_discharge_kw,
-            name=config.name,
-        )
-    elif param_name == "battery_charge_kw":
-        return BatteryConfig(
-            capacity_kwh=config.capacity_kwh,
-            max_charge_kw=value,
-            max_discharge_kw=config.max_discharge_kw,
-            name=config.name,
-        )
-    elif param_name == "battery_discharge_kw":
-        return BatteryConfig(
-            capacity_kwh=config.capacity_kwh,
-            max_charge_kw=config.max_charge_kw,
-            max_discharge_kw=value,
-            name=config.name,
-        )
-    return config
-
-
-def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> LoadConfig:
-    """Modify load config with new parameter value."""
-    if param_name == "annual_consumption_kwh":
-        return LoadConfig(
-            annual_consumption_kwh=value,
-            household_occupants=config.household_occupants,
-            name=config.name,
-            use_stochastic=config.use_stochastic,
-            seed=config.seed,
-        )
-    elif param_name == "household_occupants":
-        return replace(config, household_occupants=household_occupant_count(value))
-    return config
 
 
 # ---------------------------------------------------------------------------

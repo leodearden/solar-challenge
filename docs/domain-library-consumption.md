@@ -867,6 +867,11 @@ for a `scenario:` file, and still does not read a fleet file's `finance:` block.
 Consumers that catch `ValueError` need no change for the type; those that match
 message text, or pass such values, change them when they re-pin.
 
+**Unreleased on main** (task 945): `solar_challenge.config.run_parameter_sweep`,
+`ParameterSweepConfig` and `SweepResult` are removed. None was in `__all__` or
+had a package caller; sweeps run through `fleet.simulate_multi_sweep_iter`,
+`optimize.run_sweep` and the web's sweep endpoint.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
