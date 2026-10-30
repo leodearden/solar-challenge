@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import NonCallableMagicMock
 
+import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
@@ -109,6 +110,27 @@ _CONFIG_DAMAGES = [
 _DAMAGES = [*_SUMMARY_DAMAGES, *_CONFIG_DAMAGES]
 
 
+@dataclass(frozen=True)
+class _TimeSeriesDamage:
+    """A damage of a run's data.parquet, and the field its refusal names, None for the file as a whole.
+
+    damaged makes the damaged frame from the frame data.parquet holds.
+    """
+
+    damaged: Callable[[pd.DataFrame], pd.DataFrame]
+    field: str | None
+
+
+_TIME_SERIES_DAMAGES = [
+    pytest.param(
+        _TimeSeriesDamage(lambda frame: frame.reset_index(drop=True), None), id="time-series-has-no-timestamps"
+    ),
+    pytest.param(
+        _TimeSeriesDamage(lambda frame: frame.assign(generation_kw="x"), "generation_kw"), id="time-series-holds-strings"
+    ),
+]
+
+
 def _store_a_damaged_run(storage: RunStorage, damage: _Damage) -> None:
     """Save a day's home run under _RUN_ID, then replace the JSON text of its file and of its runs column with *damage* of it."""
     store_home_run(storage, _RUN_ID, make_home_config(), make_sim_results(days=1))
@@ -119,10 +141,10 @@ def _store_a_damaged_run(storage: RunStorage, damage: _Damage) -> None:
         conn.execute(f"UPDATE runs SET {damage.column} = ? WHERE id = ?", (damage.damaged(text), _RUN_ID))
 
 
-def _store_a_run_whose_time_series_has_a_range_index(storage: RunStorage) -> None:
-    """Save a day's home run under _RUN_ID, then rewrite its data.parquet with a RangeIndex in the place of its timestamps."""
+def _store_a_run_whose_time_series_is_damaged(storage: RunStorage, damage: _TimeSeriesDamage) -> None:
+    """Save a day's home run under _RUN_ID, then rewrite its data.parquet as *damage* of the frame it holds."""
     store_home_run(storage, _RUN_ID, make_home_config(), make_sim_results(days=1))
-    rewrite_time_series(stored_run_dir(storage, _RUN_ID) / "data.parquet", lambda frame: frame.reset_index(drop=True))
+    rewrite_time_series(stored_run_dir(storage, _RUN_ID) / "data.parquet", damage.damaged)
 
 
 def _named(document: str, field: str | None) -> tuple[str, ...]:
@@ -159,14 +181,15 @@ def test_the_results_page_of_an_unreadable_run_redirects_to_the_dashboard_flashi
     _assert_redirected_flashing_refusal(response, damage.file, damage.field)
 
 
-def test_the_results_page_of_a_run_whose_time_series_has_no_timestamps_redirects_to_the_dashboard_flashing_its_refusal(
-    storage: RunStorage, client: FlaskClient
+@pytest.mark.parametrize("damage", _TIME_SERIES_DAMAGES)
+def test_the_results_page_of_a_run_whose_time_series_cannot_be_read_redirects_to_the_dashboard_flashing_its_refusal(
+    storage: RunStorage, client: FlaskClient, damage: _TimeSeriesDamage
 ) -> None:
-    _store_a_run_whose_time_series_has_a_range_index(storage)
+    _store_a_run_whose_time_series_is_damaged(storage, damage)
 
     response = client.get(f"/results/{_RUN_ID}", follow_redirects=True)
 
-    _assert_redirected_flashing_refusal(response, "data.parquet", None)
+    _assert_redirected_flashing_refusal(response, "data.parquet", damage.field)
 
 
 @pytest.mark.parametrize("damage", _DAMAGES)
@@ -180,14 +203,15 @@ def test_the_csv_export_of_an_unreadable_run_answers_409_naming_the_damaged_file
     _assert_refused(response, damage.file, damage.field)
 
 
-def test_the_csv_export_of_a_run_whose_time_series_has_no_timestamps_answers_409_naming_its_file(
-    storage: RunStorage, client: FlaskClient
+@pytest.mark.parametrize("damage", _TIME_SERIES_DAMAGES)
+def test_the_csv_export_of_a_run_whose_time_series_cannot_be_read_answers_409_naming_its_file(
+    storage: RunStorage, client: FlaskClient, damage: _TimeSeriesDamage
 ) -> None:
-    _store_a_run_whose_time_series_has_a_range_index(storage)
+    _store_a_run_whose_time_series_is_damaged(storage, damage)
 
     response = client.get(f"/api/history/runs/{_RUN_ID}/export/csv")
 
-    _assert_refused(response, "data.parquet", None)
+    _assert_refused(response, "data.parquet", damage.field)
 
 
 @pytest.mark.parametrize("damage", _DAMAGES)
