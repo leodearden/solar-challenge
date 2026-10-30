@@ -1,42 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The fixtures more than one rule module of this package uses.
+"""The fixtures more than one rule module of this package uses; each one's name, or its own docstring, says what it is.
 
 Outer and Preset are defined at module level, where a qualified name carries no
 '<locals>'; a rule module that imports them binds their names for its own forward
-references to resolve. imported_module writes a module and imports it, for the rules
-about the module a name is read in. UNREADABLE_ROUTINES holds a routine of each kind
-whose signature inspect cannot read, each with its kind's name, for the refusal rules.
-REFUSED_ROUTINE_AND_PARTIAL_MEMBERS adds a plain functools.partial to those: the members
-that both branches of refuse_member_without_a_portable_form refuse.
-GetterDeleter is a descriptor whose type defines __get__ and __delete__ but no __set__,
-and CallableGetterDeleter a callable one, for the rules about how inspect reads such a
-descriptor. Giver is a descriptor whose __get__ gives the object it was made with, for
-the rules about what inspect binds a constructor or a __call__ to. GetterPartial is a functools.partial whose type takes __get__ from a class
-other than functools.partial, and SettableGetterPartial one whose type also defines
-__set__, for the rules about how inspect reads and binds such a partial.
-PartialFirstGetterPartial is one whose type takes __get__ from GetMixin, a base after
-functools.partial, whose own __get__ comes first from Python 3.13, for the rules about a
-classmethod that wraps such a partial and about how inspect reads and binds such a
-partial.
-ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
-inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
-what it wraps. CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR makes, from a function, a method
-descriptor, a classmethod or a property, each of which a classmethod that wraps it binds
-through its __get__ on 3.11 and 3.12 and as a method from 3.13, for the rules about where
-named_classes binds such a classmethod itself.
-class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
-whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
-rules about each constructor site.
-object_whose_call_is builds an object whose class's __call__ is the argument, for the
-rules about an object inspect reads through the __call__ its class resolves.
-metaclass_whose_get_gives builds a metaclass whose __get__ gives the argument, for the
-rules about a class held where inspect binds a constructor or a __call__, which it reads
-unbound.
-GIVEN_BY_A_METACLASS_GET holds what such a __get__ gives in those rules: an object that
-is not callable, and None.
-CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE holds a __call__ of each kind inspect binds
-to an object that is not callable, each with a pattern naming that object's type, for the
-rules about a routine or a class read through an object whose class resolves one.
+references to resolve.
 """
 
 import functools
@@ -136,7 +103,7 @@ class GetMixin:
 
 
 class PartialFirstGetterPartial(functools.partial, GetMixin):
-    """A functools.partial whose type takes __get__ from a base after functools.partial in its MRO."""
+    """A functools.partial whose type takes __get__ from GetMixin, a base after functools.partial in its MRO, on Python 3.11 and 3.12, and from functools.partial's own __get__, which comes first, from 3.13."""
 
 
 def _share(receiver: object, rate: int) -> None: ...
