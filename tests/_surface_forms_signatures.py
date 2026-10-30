@@ -584,31 +584,42 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
 
 
 _TEXT_SIGNATURE_END = ")\n--\n\n"
+_DOCSTRING_READING_BY_MINOR_AND_REMEDIES = (
+    "Python 3.13 and 3.14 dedent a docstring as they compile it, so they read it however the "
+    "source indents the docstring, and 3.11 and 3.12 read it only where the source sets the "
+    "docstring flush-left, reading otherwise the next text signature a class in the MRO "
+    "gives, or object's (): make the name private, give the class an __init__ or __new__ "
+    "defined with def, or begin that docstring with anything but its class's name and '('"
+)
 
 
 def _refuse_class_read_by_a_docstring_text_signature(cls: type) -> None:
-    """Raise TypeError naming *cls*, of which inspect reads no constructor, the first class in its MRO, object aside, for which _docstring_text_signature gives a text signature, and that text signature, if one does.
+    """Raise TypeError naming *cls*, of which inspect reads no constructor, the first class in its MRO, object aside, for which _docstring_text_signature gives a text signature, or else whose __text_signature__ gives one, and that text signature, if one does.
 
     docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
     """
     for holder in cls.__mro__[:-1]:
-        text_signature = _docstring_text_signature(holder)
-        if text_signature is not None:
+        in_docstring = _docstring_text_signature(holder)
+        if in_docstring is not None:
             raise TypeError(
                 f"{label_of(cls)} is constructed by object, so inspect reads in place of a "
                 f"constructor the text signature the docstring of {label_of(holder)} opens "
-                f"with once dedented, {text_signature!r}: Python 3.13 and 3.14 dedent a "
-                "docstring as they compile it, so they read it however the source indents the "
-                "docstring, and 3.11 and 3.12 read it only where the source sets the docstring "
-                "flush-left, reading otherwise the next text signature a class in the MRO "
-                "gives, or object's (): make the name private, give the class an __init__ or "
-                "__new__ defined with def, or begin that docstring with anything but its "
-                "class's name and '('"
+                f"with once dedented, {in_docstring!r}: "
+                f"{_DOCSTRING_READING_BY_MINOR_AND_REMEDIES}"
+            )
+        kept_from_creation = holder.__text_signature__
+        if kept_from_creation:
+            raise TypeError(
+                f"{label_of(cls)} is constructed by object, so inspect reads in place of a "
+                f"constructor the text signature {label_of(holder)}'s __text_signature__ "
+                f"gives, {kept_from_creation!r}, which CPython reads from the docstring a "
+                "class is created with and keeps when __doc__ is reassigned: "
+                f"{_DOCSTRING_READING_BY_MINOR_AND_REMEDIES}"
             )
 
 
 def _docstring_text_signature(holder: type) -> str | None:
-    """The text signature CPython reads from the docstring *holder*'s own namespace holds, once _dedented_as_compiled_from_3_13 dedents it: what follows the last dotted part of *holder*'s __name__, from '(' to the first ')' that a line holding only '--' and an empty line follow, if no empty line comes before; None if that docstring is no str or does not open so."""
+    """The text signature the docstring *holder*'s own namespace holds opens with once _dedented_as_compiled_from_3_13 dedents it, by the rule CPython reads one from the docstring a class is created with: what follows the last dotted part of *holder*'s __name__, from '(' to the first ')' that a line holding only '--' and an empty line follow, if no empty line comes before; None if that docstring is no str or does not open so."""
     doc = vars(holder).get("__doc__")
     if not isinstance(doc, str):
         return None

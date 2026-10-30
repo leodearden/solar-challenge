@@ -452,7 +452,15 @@ refused before any is bound. The other readings are:
   spells the second `()`. It refuses alike a docstring that `type()` or an assignment to
   `__doc__` in the class body gives, which no compiler dedents and every minor reads as
   written, since on 3.11 and 3.12 it cannot tell such a docstring from one a class body
-  indents.
+  indents. CPython reads a class's text signature from the docstring the class is
+  created with, and `__text_signature__` keeps giving it after `__doc__` is reassigned,
+  so `surface_form` also refuses a class for which a class in its MRO, `object` aside,
+  gives one only by its `__text_signature__`, naming that class and that text signature.
+  Created under a docstring in text-signature form set flush-left, such a class is
+  refused on every minor, whatever `__doc__` later holds. Created under one that a class
+  body indents, it reads as `(rate)` on 3.13 and 3.14, where `surface_form` refuses it,
+  and as `()` on 3.11 and 3.12, where nothing `surface_form` can read gives a text
+  signature once `__doc__` is reassigned, so it spells the class `()` there.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
   `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
@@ -523,6 +531,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_under_a_docstring_in_text_signature_form_raises_a_type_error_naming_it_the_class_holding_that_docstring_and_its_text_signature`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_raises_a_type_error_naming_the_first_class_in_its_mro_whose_docstring_is_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_however_it_is_indented`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_under_a_docstring_not_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_is_spelled_with_no_parameters`
+- `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_created_under_a_docstring_in_text_signature_form_set_flush_left_raises_a_type_error_naming_the_text_signature_it_keeps_whatever_its_doc_later_holds`
+- `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_created_under_a_docstring_in_text_signature_form_that_a_class_body_indents_raises_that_type_error_from_python_3_13_and_is_spelled_with_no_parameters_on_3_11_and_3_12_once_its_doc_is_reassigned`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
