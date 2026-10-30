@@ -39,9 +39,10 @@ of a class of which it reads no constructor, were measured on those releases on
 2026-10-29. §2's reading of a class held where `inspect` binds a constructor or a
 `__call__`, 4.4's reading of a `__call__` whose binding gives an object that is not
 callable, 4.5's reading of a metaclass `__call__` or an `__init__` that `inspect` binds
-to a callable defined in C, and its reading of a constructor `inspect` reads as a class,
-were measured on those releases on 2026-10-30. A new refusal gets its rule test first,
-then its entry here.
+to a callable defined in C, its reading of a constructor `inspect` reads as a class, and
+its reading of a class whose `__new__` and `__init__` are `object`'s under a docstring
+in text-signature form, were measured on those releases on 2026-10-30. A new refusal
+gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -432,6 +433,25 @@ refused before any is bound. The other readings are:
   class holding it, whatever text signature a class in its MRO gives. Where its MRO
   holds a class defined in C other than `object`, it refuses the class as constructed
   by that class instead, as the next entry says.
+  Where the `__new__` and `__init__` the class resolves are `object`'s, as for a class
+  that holds no constructor, `__new__ = object.__new__`,
+  `__new__ = staticmethod(object.__new__)` or `__init__ = object.__init__`, that
+  docstring makes the class, and a subclass whose own docstring gives no text signature,
+  read as `(rate)` on 3.13 and 3.14 and as `()` on 3.11 and 3.12; set flush-left, it
+  reads as `(rate)` on every minor. 3.13 and 3.14 compile the two docstrings to one
+  string, so `surface_form` refuses both: it raises `TypeError` naming the class, the
+  first class in its MRO, `object` aside, whose own docstring opens with a text
+  signature once dedented as 3.13's compiler dedents a docstring, and that text
+  signature. CPython reads a class's text signature where its docstring begins with the
+  last dotted part of its `__name__` and `(`, and `)`, a line holding only `--` and a
+  blank line follow before any blank line. That compiler expands tabs and strips the
+  first line's leading spaces and the margin the later lines share, but unlike
+  `inspect.cleandoc` it drops no blank line: a docstring that ends at the blank line
+  after `--` reads as `(rate)` on 3.13 and 3.14, and one that opens with a blank line
+  reads as `()` on every minor, so `surface_form` refuses the first and spells the
+  second `()`. It refuses alike a docstring that `type()` or an assignment to `__doc__`
+  in the class body gives, which no compiler dedents and every minor reads as written,
+  since on 3.11 and 3.12 it cannot tell such a docstring from one a class body indents.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
   `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
@@ -499,6 +519,9 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_is_spelled_with_no_parameters`
+- `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_under_a_docstring_in_text_signature_form_raises_a_type_error_naming_it_the_class_holding_that_docstring_and_its_text_signature`
+- `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_raises_a_type_error_naming_the_first_class_in_its_mro_whose_docstring_is_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_however_it_is_indented`
+- `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_that_object_constructs_under_a_docstring_not_in_text_signature_form_once_dedented_as_python_3_13_compiles_it_is_spelled_with_no_parameters`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_names_the_classes_the_module_spelling_the_constructor_inspect_reads_in_its_place_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads`
@@ -631,9 +654,10 @@ On a newly admitted minor, re-measure each reading here (§6) and run the rule t
 entry whose readings no longer differ among the admitted minors no longer needs its
 refusal or its normalization. 3.2, 4.3, the first two readings listed in 4.4, the first
 listed in 4.5, 4.5's reading of a constructor read through an object its class makes
-callable where it meets those two readings of 4.4, the reading 4.6 refuses where
-`inspect` reads a partial, and the binding 4.7 refuses differ only between 3.11 and 3.12
-on one side and 3.13 and 3.14 on the other, so they rest on 3.11 and 3.12 alone. But 3.13
+callable where it meets those two readings of 4.4, 4.5's reading of a class docstring in
+text-signature form, the reading 4.6 refuses where `inspect` reads a partial, and the
+binding 4.7 refuses differ only between 3.11 and 3.12 on one side and 3.13 and 3.14 on
+the other, so they rest on 3.11 and 3.12 alone. But 3.13
 and 3.14 also read differently a `functools.partial` that records `__wrapped__`, where
 4.5's first reading meets one, since 3.14 counts it a method descriptor and 3.13 does not:
 held as `__new__` with `object.__new__` as `__wrapped__`, it reads as `(*args, **kwargs)`
