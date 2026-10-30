@@ -13,8 +13,9 @@ from flask.testing import FlaskClient
 from solar_challenge.pv import PVConfig
 from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
+from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
-from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
+from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
 
 
 VALID_FLEET_PAYLOAD: dict = {

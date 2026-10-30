@@ -26,8 +26,9 @@ from solar_challenge.web.request_boundary import resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
+from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
-from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES, VALID_HOME_PAYLOAD
+from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
 
 
 UNUSABLE_SHUFFLED_POOL_ENTRIES = [

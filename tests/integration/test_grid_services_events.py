@@ -117,16 +117,6 @@ def _constant_simulate(
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:
-    """Build (scenario, finance_loaded) from the board YAML.
-
-    Delegates to ``tests.integration._helpers.board_econ_scenario`` — the
-    canonical shared implementation — to avoid duplication with
-    ``test_flex_grid_services._board_econ_scenario``.
-    """
-    return board_econ_scenario("Board-EventsGridServices-Test")
-
-
 def _rev_at(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
@@ -172,7 +162,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     computed, the isolated delta would equal the flat increment (0, since flat
     rate=0) while the event-derived figure is positive.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
@@ -230,7 +220,7 @@ def test_guard_capacity_at_events_with_events_none_raises_configuration_error() 
     ConfigurationError before it simulates a fleet, so the injected simulate
     fails the test if it is called.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
 
     def _simulate_must_not_run(fc, s, e):
         pytest.fail("project_multi_year simulated a fleet before refusing the configuration")
@@ -425,7 +415,7 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
     The single conditional on the model preserves the flat path char-for-char and
     ignores grid_services_events when model is "flat".
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
@@ -493,7 +483,7 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     (own_use_rate never enters physical dispatch or gridservices computation),
     so the existing affine reconstruction (finance.py:1789-1802) remains exact.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
     simulate = _constant_simulate(fr)
@@ -602,7 +592,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     dist = bill_distribution([summary], finance, 365)
 
     # Build an in-window FleetResults from the board homes
-    scenario, _finance_base = _board_econ_scenario()
+    scenario, _finance_base = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 
@@ -660,7 +650,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
 
     # In-window FleetResults from the board homes
-    scenario, _finance = _board_econ_scenario()
+    scenario, _finance = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 

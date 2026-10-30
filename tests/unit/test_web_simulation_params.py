@@ -29,18 +29,10 @@ from solar_challenge.web.simulation_params import (
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
 
-
-VALID_HOME_PAYLOAD: dict = {
-    "pv_kw": 4.0,
-    "battery_kwh": 5.0,
-    "occupants": 3,
-    "location": "bristol",
-    "days": 7,
-    "name": "Test Home",
-}
 
 FORM_PAYLOAD_BATTERY_ON: dict = {
     "pv_kw": 4.0,

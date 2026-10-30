@@ -22,7 +22,6 @@ from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
     load_config,
-    load_fleet_config,
     parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
@@ -32,6 +31,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from tests._finance_builders import make_fleet_results_of
+from tests.integration._helpers import board_econ_scenario
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
@@ -116,26 +116,14 @@ def _constant_simulate(
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:
-    """Build (scenario, finance_loaded) from the board YAML.
+def _board_scenario_on_the_flat_model() -> tuple[ScenarioConfig, FinanceConfig]:
+    """board_econ_scenario's scenario and finance, the finance pinned to the flat grid-services model.
 
-    Mirrors the canonical consumer path in cli/finance.py:
-      load_config → parse_finance_config → load_fleet_config → ScenarioConfig
+    The board YAML selects capacity_at_events, and these seam tests check the flat per-kW
+    arithmetic.
     """
-    cfg = load_config(SCENARIO)
-    finance = parse_finance_config(cfg.get("finance"))
-    # The board YAML ships capacity_at_events after task-76 ε flip; pin flat
-    # model so these seam tests continue verifying flat-rate arithmetic before
-    # and after that flip.  The pin is a no-op while the YAML is still flat.
-    finance = dataclasses.replace(finance, grid_services_model="flat", grid_services_events=None)
-    fleet = load_fleet_config(SCENARIO)
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
-    scenario = ScenarioConfig(
-        name="Board-GridServices-Test",
-        period=period,
-        homes=list(fleet.homes),
-    )
-    return scenario, finance
+    scenario, finance = board_econ_scenario()
+    return scenario, dataclasses.replace(finance, grid_services_model="flat", grid_services_events=None)
 
 
 def _surplus_at(
@@ -160,7 +148,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     Uses constant simulate (PVGIS-free, age-independent) → exact delta to rel=1e-9.
     The board fleet has 100 homes × 2.5 kW battery → Σ = 250 kW.
     """
-    scenario, finance_loaded = _board_econ_scenario()
+    scenario, finance_loaded = _board_scenario_on_the_flat_model()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
@@ -202,7 +190,7 @@ def test_each_band_moves_project_surplus_by_its_increment() -> None:
 
     Additionally asserts strict monotonicity: surplus(low) < surplus(central) < surplus(high).
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = _board_scenario_on_the_flat_model()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
@@ -263,7 +251,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     from 0.0, or that has the parser supply its own value for an omitted key,
     would be caught here.
     """
-    scenario, finance_base = _board_econ_scenario()
+    scenario, finance_base = _board_scenario_on_the_flat_model()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
@@ -355,13 +343,8 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
 
-    # Finance config: board-like but with controllable grid_services
-    cfg = load_config(SCENARIO)
-    finance_base = parse_finance_config(cfg.get("finance"))
-    assert finance_base is not None
-    # Pin to flat model: board YAML ships capacity_at_events after task-76 ε
-    # flip; this test verifies flat-rate seam math, so decouple from board default.
-    finance_base = dataclasses.replace(finance_base, grid_services_model="flat", grid_services_events=None)
+    # Finance config: the board's on the flat model, with controllable grid_services
+    _, finance_base = _board_scenario_on_the_flat_model()
 
     finance_zero = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=0.0
