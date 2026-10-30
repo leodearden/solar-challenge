@@ -563,9 +563,7 @@ def _constructed_in_c(holder: type) -> bool:
 def _is_own_c_slot(holder: type, name: str, held: object) -> bool:
     """Whether *held*, which *holder*'s own namespace holds as *name*, is the C slot CPython makes for *holder* as it readies a class defined in C: a builtin bound to *holder*, as such a class's __new__ is, or a slot wrapper whose __objclass__ is *holder*, as its __init__ is, either one called *name*.
 
-    No class defined in Python holds one: a slot it assigns, object's own among them, is
-    another class's, and a classmethod defined in C bound to it, as its own fromkeys or
-    __init_subclass__ is, is called otherwise.
+    docs/surface-forms-inspect-readings.md §4.5 says why no class defined in Python holds one.
     """
     if isinstance(held, types.BuiltinFunctionType):
         return held.__self__ is holder and held.__name__ == name
