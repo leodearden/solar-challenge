@@ -426,6 +426,29 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
 
 
 @pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "{% set _rule = 'border-b border-slate-200' %}{% set _band = 'px-5 py-4 ' ~ _rule %}",
+            [{"border-b", "border-slate-200"}, {"px-5", "py-4", "border-b", "border-slate-200"}],
+            id="tilde-of-a-string-and-an-earlier-set",
+        ),
+        pytest.param(
+            "{% macro band(rule) %}<div class=\"{{ 'px-5 py-4 ' ~ rule }}\"></div>{% endmacro %}",
+            [set(), {"px-5", "py-4"}],
+            id="tilde-of-a-string-and-a-macro-parameter",
+        ),
+    ],
+)
+def test_the_written_once_guard_reads_a_tilde_of_strings_and_earlier_sets_as_the_one_class_list_it_builds(
+    source: str, expected: list[set[str]]
+) -> None:
+    """A ~ that reads a name no module-level {% set %} above it holds, such as a macro parameter, builds
+    no string the guard can know, so its strings are read alone."""
+    assert _template_class_lists(source) == expected
+
+
+@pytest.mark.parametrize(
     "look",
     [
         pytest.param(_CARD_LOOK, id="card"),
