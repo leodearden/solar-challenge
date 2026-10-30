@@ -362,6 +362,48 @@ def test_a_class_whose_constructor_is_or_wraps_a_descriptor_whose_type_defines_g
 
 
 @pytest.mark.parametrize(
+    ("callable_defined_in_c", "form"),
+    [
+        pytest.param(object().__init__, "(*args, **kwargs)", id="method-wrapper"),
+        pytest.param(
+            dict.__dict__["fromkeys"],
+            "(type, iterable, value=None, /)",
+            id="classmethod-descriptor",
+        ),
+        pytest.param(object.__new__, "(*args, **kwargs)", id="builtin"),
+        pytest.param(object.__init__, "(self, /, *args, **kwargs)", id="slot-wrapper"),
+    ],
+)
+@pytest.mark.parametrize(
+    "hold",
+    [pytest.param(staticmethod, id="staticmethod"), pytest.param(Giver, id="descriptor")],
+)
+def test_a_class_whose_metaclass_call_or_init_inspect_binds_to_a_callable_defined_in_c_is_spelled_by_that_callable_text_signature(
+    hold: Callable[[object], object], callable_defined_in_c: object, form: str
+) -> None:
+    constructor = hold(callable_defined_in_c)
+
+    class Reinitialised(class_whose_metaclass_call_is(constructor)):
+        def __init__(self, share: "fractions.Fraction") -> None: ...
+
+    class Created:
+        def __new__(cls, share: "fractions.Fraction") -> object: ...
+
+    class Built(Created):
+        __init__ = constructor
+
+    for cls in (Reinitialised, Built):
+
+        class Inheriting(cls):
+            pass
+
+        for subject in (cls, Inheriting):
+            assert surface_form(subject) == form
+            assert named_classes(subject) == set()
+            assert surface_form(functools.partial(subject)) == form
+
+
+@pytest.mark.parametrize(
     "giver",
     [
         pytest.param(CallableGiver, id="get-only-descriptor"),
