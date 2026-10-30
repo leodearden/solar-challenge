@@ -146,6 +146,11 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
     _refuse_wrapped_enum(subject, end)
     _refuse_wrapped_get_delete_descriptor(subject, end)
     _refuse_minor_dependent_signature(subject, end)
+    _refuse_chain_end_without_a_portable_form(subject, end)
+
+
+def _refuse_chain_end_without_a_portable_form(subject: object, end: object) -> None:
+    """Raise TypeError if inspect, reading *end*, the end of a chain it follows in *subject*'s place, reads it differently by minor or cannot read it: by the constructor _refuse_constructor_without_a_portable_form checks if *end* is a class, the TypeError naming that class, not *subject*; else through the __call__ _refuse_call_without_a_portable_form checks; nothing if *end* carries an inspect.Signature, which inspect reads as given on every minor."""
     if _carries_inspect_signature(end):
         return
     if inspect.isclass(end):
@@ -477,16 +482,16 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     The constructors it refuses, in the order it checks them; a constructor wraps a
     callable defined in C here if _wrapped_c_callable gives one for it, and is not
     callable once bound, is read as an Enum, carries a __signature__ inspect reads by
-    minor, or is read as a builtin or through an object its class makes callable, if
-    _refuse_constructor_reading finds it so:
+    minor, or is read as a builtin, through an object its class makes callable or as a
+    class whose constructor this refuses, if _refuse_constructor_reading finds it so:
 
     - the __call__ _metaclass_call gives for *cls*, which inspect looks up before any
       __new__ or __init__, if it is a classmethod _refuse_classmethod_bound_by_minor
       refuses, checked before it is bound, or if it wraps a callable defined in C, is a
       functools.partial, is not callable once bound, is read as an Enum, carries such a
-      __signature__, or is read as a builtin or through such an object. inspect reads
-      any other __call__ _metaclass_call gives in their place, so none of the
-      constructors below is then checked;
+      __signature__, or is read as a builtin, through such an object or as such a
+      class. inspect reads any other __call__ _metaclass_call gives in their place, so
+      none of the constructors below is then checked;
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
@@ -495,7 +500,8 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
       object.__new__;
     - that first-read constructor, if it is an __init__ that is a functools.partial;
     - that first-read constructor, if it is not callable once bound, is read as an Enum,
-      carries such a __signature__, or is read as a builtin or through such an object;
+      carries such a __signature__, or is read as a builtin, through such an object or
+      as such a class;
     - if inspect reads no constructor of *cls*, as _first_read_constructor then gives
       object's __init__: the constructor of the class _refuse_class_constructed_in_c
       finds, else the __new__ or __init__, one inspect skips, that
@@ -727,13 +733,13 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 
 def _refuse_constructor_reading(site: _ReadSite, read: object) -> None:
-    """Raise the TypeError for *site* that the first refusal below finds for *read*, the constructor at *site*, which inspect reads first for its class, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    """Raise the TypeError for *site* that the first refusal below finds for *read*, the constructor at *site*, which inspect reads first for its class, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin, through an object its class makes callable, or as a class whose own constructor _refuse_constructor_without_a_portable_form refuses, whose TypeError names that class, not *site*."""
     _refuse_bound_to_uncallable(site, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(site, end)
     _refuse_constructor_signature(site, end)
     _refuse_constructor_read_as_builtin(site, read)
-    _refuse_call_without_a_portable_form(site.subject, end)
+    _refuse_chain_end_without_a_portable_form(site.subject, end)
 
 
 def _refuse_bound_to_uncallable(site: _ReadSite, read: object) -> None:
