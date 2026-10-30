@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from types import MappingProxyType
+from typing import TypedDict, Unpack
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Error, Page, Request, Route
@@ -58,8 +59,17 @@ def disconnect_request(route: Route) -> None:
     route.abort(_DISCONNECT_ERROR_CODE)
 
 
-def a_job_state(job_id: str, run_id: str, status: JobStatus, **changes: object) -> JobState:
-    """The state of job job_id, of run run_id, in status, with a plausible progress, step and message for a home job in that status and a fixed created_at; changes replaces any of its fields."""
+class _JobStateChanges(TypedDict, total=False):
+    """The fields of a JobState a_job_state can be given in place of the ones it picks: its plausible progress, step and message, and its fixed created_at."""
+
+    progress_pct: float
+    current_step: str
+    message: str
+    created_at: str
+
+
+def a_job_state(job_id: str, run_id: str, status: JobStatus, **changes: Unpack[_JobStateChanges]) -> JobState:
+    """The state of job job_id, of run run_id, in status, with a plausible progress, step and message for a home job in that status and a fixed created_at; changes replaces any of those four fields."""
     progress_pct, current_step, message = _PROGRESS_STEP_AND_MESSAGE_OF_EACH_STATUS[status]
     state = JobState(
         job_id=job_id,
