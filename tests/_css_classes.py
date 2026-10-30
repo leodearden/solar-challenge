@@ -83,7 +83,8 @@ _CLASS_LIST_ATTRIBUTES = frozenset(
         "x-transition:leave-end",
     }
 )
-_ALPINE_CLASS_BINDINGS = frozenset({":class", "x-bind:class"})
+ALPINE_CLASS_BINDINGS = frozenset({":class", "x-bind:class"})
+"""The attributes through which Alpine binds an element's classes to a JS expression."""
 
 _STRING_LITERAL = re.compile(r"""'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`""")
 _CLASS_NAME_ASSIGNMENT = re.compile(r"\.className\s*\+?=(?!=)\s*([^;]*);")
@@ -265,7 +266,7 @@ def _element_class_lists(attrs: list[tuple[str, str | None]]) -> list[str]:
 def _attribute_class_lists(name: str, value: str) -> list[str]:
     if name in _CLASS_LIST_ATTRIBUTES:
         return [value]
-    if name in _ALPINE_CLASS_BINDINGS:
+    if name in ALPINE_CLASS_BINDINGS:
         return _alpine_class_lists(value)
     return []
 
