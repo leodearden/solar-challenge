@@ -66,6 +66,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.web.field_tree import FieldTreeRefused, field_tree, read_field_tree, without_unknown_keys
 from solar_challenge.web.run_names import is_run_name
+from solar_challenge.web.stored_json import UndecodableJson, decoded_json
 
 RunType = Literal["home", "fleet"]  # the type of a run, held by the runs table's type column
 RUN_TYPES: tuple[RunType, ...] = get_args(RunType)
@@ -114,17 +115,15 @@ class StoredDocument:
         """The document *name* of run *run_id* whose JSON text is *text*.
 
         Raises:
-            StoredRunUnreadable: *text* is not JSON, or is nested too deeply for json.loads to
-                decode; its field is None.
+            StoredRunUnreadable: decoded_json refuses *text*, as not JSON or nested too deeply to
+                decode; the reason is decoded_json's, followed by json.loads's refusal, which is
+                the cause; its field is None.
         """
         try:
-            return cls(run_id, name, json.loads(text))
-        except ValueError as refusal:
-            raise StoredRunUnreadable(run_id, name, None, f"is not JSON: {refusal}") from refusal
-        except RecursionError as refusal:
-            raise StoredRunUnreadable(
-                run_id, name, None, f"is nested too deeply to decode as JSON: {refusal}"
-            ) from refusal
+            return cls(run_id, name, decoded_json(text))
+        except UndecodableJson as undecodable:
+            refusal = undecodable.__cause__
+            raise StoredRunUnreadable(run_id, name, None, f"{undecodable.reason}: {refusal}") from refusal
 
     def read(self, cls: type[T]) -> T:
         """The *cls*, a dataclass, whose field tree the document holds, read strictly by read_field_tree.
