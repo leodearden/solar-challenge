@@ -99,12 +99,22 @@ _BindingVerb: typing.TypeAlias = typing.Literal["is constructed through", "is re
 
 @dataclasses.dataclass(frozen=True)
 class _ReadSite:
-    """What *owner* holds as *name*, which inspect reads for *subject*: a constructor of *subject*, a class, or the __call__ of an object inspect reads in *subject*'s place, as *verb* says; its str, *subject* *verb* *owner*.*name*, is how a refusal names it."""
+    """Where *owner* holds, as *name*, what inspect reads for *subject*: a constructor of *subject*, a class, or the __call__ of an object inspect reads in *subject*'s place, as *verb* says; its str, *subject* *verb* *owner*.*name*, is how a refusal names it."""
 
     subject: object
     verb: _BindingVerb
     owner: type
     name: str
+
+    @classmethod
+    def constructor(cls, subject: type, owner: type, name: str) -> typing.Self:
+        """The site of the constructor of *subject*, a class, that *owner* holds as *name*."""
+        return cls(subject, "is constructed through", owner, name)
+
+    @classmethod
+    def call(cls, subject: object, owner: type) -> typing.Self:
+        """The site of the __call__ that *owner* holds, of an object inspect reads in *subject*'s place."""
+        return cls(subject, "is read through", owner, "__call__")
 
     def __str__(self) -> str:
         return f"{label_of(self.subject)} {self.verb} {label_of(self.owner)}.{self.name}"
@@ -149,9 +159,7 @@ def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
     if _is_read_through_its_call(obj):
         _refuse_minor_dependent_call(subject, obj)
         call = _call_as_read(obj)
-        _refuse_bound_to_uncallable(
-            _ReadSite(subject, "is read through", _call_holder(obj), "__call__"), call
-        )
+        _refuse_bound_to_uncallable(_ReadSite.call(subject, _call_holder(obj)), call)
         _refuse_chain_without_a_portable_form(subject, call)
 
 
@@ -202,7 +210,7 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "on that object or on what is read through it"
         )
     holder = holders[0]
-    site = _ReadSite(subject, "is read through", holder, "__call__")
+    site = _ReadSite.call(subject, holder)
     held = vars(holder)["__call__"]
     _refuse_partial_bound_as_method(site, held)
     _refuse_classmethod_bound_by_minor(site, held)
@@ -495,18 +503,16 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     """
     call = _metaclass_call(cls)
     if call is not None:
-        site = _ReadSite(cls, "is constructed through", type(cls), "__call__")
+        site = _ReadSite.constructor(cls, type(cls), "__call__")
         _refuse_classmethod_bound_by_minor(site, call)
         _refuse_wrapper_of_c_callable(site, call)
         _refuse_partial_bound_as_method(site, call)
         _refuse_constructor_reading(site, _metaclass_call_as_read(cls))
         return
     for name, owner, held in _resolved_constructors(cls):
-        _refuse_classmethod_bound_by_minor(
-            _ReadSite(cls, "is constructed through", owner, name), held
-        )
+        _refuse_classmethod_bound_by_minor(_ReadSite.constructor(cls, owner, name), held)
     holder, name, constructor = _first_read_constructor(cls)
-    site = _ReadSite(cls, "is constructed through", holder, name)
+    site = _ReadSite.constructor(cls, holder, name)
     _refuse_wrapper_of_c_callable(site, constructor)
     if name == "__init__":
         _refuse_partial_bound_as_method(site, constructor)
@@ -555,7 +561,7 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
     for name, holder, held in _resolved_constructors(cls):
         read = held if isinstance(held, _CCallableInspectSkips) else getattr(cls, name)
         if read is not vars(object)[name]:
-            site = _ReadSite(cls, "is constructed through", holder, name)
+            site = _ReadSite.constructor(cls, holder, name)
             raise TypeError(
                 f"{site}, which "
                 "inspect skips, as it skips a constructor whose lookup or binding gives None "
@@ -626,7 +632,7 @@ def _skipped_by_inspect(owner: type, name: str, held: object) -> bool:
 
 
 def _refuse_wrapper_of_c_callable(site: _ReadSite, constructor: object) -> None:
-    """Raise TypeError naming *site* and the callable defined in C that *constructor*, the one *site* holds, which inspect reads first for its class, wraps, if _wrapped_c_callable gives one.
+    """Raise TypeError naming *site* and the callable defined in C that *constructor*, the one at *site*, which inspect reads first for its class, wraps, if _wrapped_c_callable gives one.
 
     On some Python releases inspect follows __wrapped__ to that callable and skips the
     constructor as defined in C, reading the next constructor instead, and on others it
@@ -674,7 +680,7 @@ _PARTIAL_BOUND_BY_MINOR = (
 
 
 def _refuse_partial_bound_as_method(site: _ReadSite, method: object) -> None:
-    """Raise TypeError naming *site*, and stating the clause _partial_binding_clause gives for *method*, if *method*, the one *site* holds, which inspect binds through its type's __get__, is a functools.partial."""
+    """Raise TypeError naming *site*, and stating the clause _partial_binding_clause gives for *method*, if *method*, the one at *site*, which inspect binds through its type's __get__, is a functools.partial."""
     if isinstance(method, functools.partial):
         raise TypeError(f"{site}, {_partial_binding_clause(method)}: define {site.name} with def")
 
@@ -697,7 +703,7 @@ _CLASSMETHOD_BOUND_BY_MINOR = (
 
 
 def _refuse_classmethod_bound_by_minor(site: _ReadSite, held: object) -> None:
-    """Raise TypeError naming *site*, the type of what *held* wraps and _CLASSMETHOD_BOUND_BY_MINOR, if *held*, the one *site* holds, which inspect binds, is a classmethod whose __func__ _is_bound_through_a_get_no_rule_reads finds."""
+    """Raise TypeError naming *site*, the type of what *held* wraps and _CLASSMETHOD_BOUND_BY_MINOR, if *held*, the one at *site*, which inspect binds, is a classmethod whose __func__ _is_bound_through_a_get_no_rule_reads finds."""
     if isinstance(held, classmethod) and _is_bound_through_a_get_no_rule_reads(held.__func__):
         raise TypeError(
             f"{site}, a classmethod that wraps a "
@@ -721,7 +727,7 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 
 def _refuse_constructor_reading(site: _ReadSite, read: object) -> None:
-    """Raise the TypeError for *site* that the first refusal below finds for *read*, the constructor *site* holds, which inspect reads first for its class, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
+    """Raise the TypeError for *site* that the first refusal below finds for *read*, the constructor at *site*, which inspect reads first for its class, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
     _refuse_bound_to_uncallable(site, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(site, end)
@@ -731,7 +737,7 @@ def _refuse_constructor_reading(site: _ReadSite, read: object) -> None:
 
 
 def _refuse_bound_to_uncallable(site: _ReadSite, read: object) -> None:
-    """Raise TypeError naming *site*, and *read* with its type, if *read*, what *site* holds bound as inspect binds it, is not callable.
+    """Raise TypeError naming *site*, and *read* with its type, if *read*, what is at *site* bound as inspect binds it, is not callable.
 
     On every admitted minor, inspect checks that *read* is callable before it reads
     anything of it, its __signature__ included.
@@ -741,7 +747,7 @@ def _refuse_bound_to_uncallable(site: _ReadSite, read: object) -> None:
 
 
 def _read_as_error(site: _ReadSite, link: object, reading: str) -> TypeError:
-    """The error naming *site*, and *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from what *site* holds, bound as inspect binds it."""
+    """The error naming *site*, and *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from what is at *site*, bound as inspect binds it."""
     return TypeError(
         f"{site}, which inspect reads as "
         f"{label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
@@ -750,7 +756,7 @@ def _read_as_error(site: _ReadSite, link: object, reading: str) -> TypeError:
 
 
 def _refuse_constructor_read_as_enum(site: _ReadSite, end: object) -> None:
-    """Raise TypeError naming *site* and *end* if *end* is an Enum; *end* is the end of the chain inspect follows from the constructor *site* holds, bound as inspect binds it."""
+    """Raise TypeError naming *site* and *end* if *end* is an Enum; *end* is the end of the chain inspect follows from the constructor at *site*, bound as inspect binds it."""
     if is_enum(end):
         raise TypeError(
             f"{site}, which inspect "
@@ -760,7 +766,7 @@ def _refuse_constructor_read_as_enum(site: _ReadSite, end: object) -> None:
 
 
 def _refuse_constructor_read_as_builtin(site: _ReadSite, read: object) -> None:
-    """Raise TypeError naming *site*, and the link _constructor_link_read_as_builtin finds on the chain inspect follows from *read*, with that link's type and its reading, if it finds one; *read* is the constructor *site* holds, bound as inspect binds it."""
+    """Raise TypeError naming *site*, and the link _constructor_link_read_as_builtin finds on the chain inspect follows from *read*, with that link's type and its reading, if it finds one; *read* is the constructor at *site*, bound as inspect binds it."""
     found = _constructor_link_read_as_builtin(read)
     if found is None:
         return
@@ -782,7 +788,7 @@ def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None
 
 
 def _refuse_constructor_signature(site: _ReadSite, end: object) -> None:
-    """Raise TypeError naming *site* and the __signature__ _minor_dependent_signature gives for *end*, if it gives one; *end* is the end of the chain inspect follows from the constructor *site* holds, bound as inspect binds it.
+    """Raise TypeError naming *site* and the __signature__ _minor_dependent_signature gives for *end*, if it gives one; *end* is the end of the chain inspect follows from the constructor at *site*, bound as inspect binds it.
 
     The constructor is named by *site*, not by the label of *end*: a
     functools.wraps wrapper's label is that of the callable it wraps, and *end* may be
