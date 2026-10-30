@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, get_args
 
 from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table
-from solar_challenge.web.stored_json import UndecodableJson, decoded_json
+from solar_challenge.web.stored_json import JsonObjectRefused, decoded_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +138,7 @@ def _message_metadata(message_id: int, metadata_json: str | None) -> dict[str, A
     if metadata_json is None:
         return None
     try:
-        metadata = decoded_json(metadata_json)
-    except UndecodableJson as undecodable:
-        logger.warning(_UNREADABLE_METADATA_WARNING, message_id, undecodable.reason)
+        return decoded_json_object(metadata_json)
+    except JsonObjectRefused as unreadable:
+        logger.warning(_UNREADABLE_METADATA_WARNING, message_id, unreadable.reason)
         return None
-    if not isinstance(metadata, dict):
-        logger.warning(_UNREADABLE_METADATA_WARNING, message_id, "is not a JSON object")
-        return None
-    return metadata
