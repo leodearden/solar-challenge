@@ -14,6 +14,7 @@ import pytest
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR,
+    GIVEN_BY_A_METACLASS_GET,
     imported_module,
 )
 
@@ -976,6 +977,51 @@ def test_a_class_whose_new_init_or_metaclass_call_inspect_binds_to_none_names_th
     )
 
     assert named_classes(getattr(reskipping, name)) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize("given", GIVEN_BY_A_METACLASS_GET)
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Built", id="init"),
+        pytest.param("Called", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines_get_names_the_classes_the_module_spelling_that_class_constructor_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, given: object
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "getting",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Getting(type):\n"
+        "    def __get__(cls, instance, owner=None):\n"
+        f"        return {given!r}\n"
+        "\n"
+        "class Held(metaclass=Getting):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    regetting = imported_module(
+        tmp_path,
+        monkeypatch,
+        "regetting",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from getting import Held\n"
+        "\n"
+        "class Built:\n"
+        "    __init__ = Held\n"
+        "\n"
+        "class Calling(type):\n"
+        "    __call__ = Held\n"
+        "\n"
+        "class Called(metaclass=Calling):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(getattr(regetting, name)) == {fractions.Fraction}
 
 
 @pytest.mark.parametrize(

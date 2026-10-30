@@ -20,6 +20,7 @@ import pytest
 from tests._surface_forms import named_classes
 from tests.unit.surface_forms_helper._fixtures import (
     CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR,
+    GIVEN_BY_A_METACLASS_GET,
     class_whose_init_is,
     class_whose_metaclass_call_is,
     class_whose_new_is,
@@ -572,3 +573,35 @@ def test_a_routine_that_wraps_a_callable_object_whose_class_resolves_a_descripto
     )
 
     assert named_classes(functools.partial(rebinding.Caller())) == {decimal.Decimal}
+
+
+@pytest.mark.parametrize("given", GIVEN_BY_A_METACLASS_GET)
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_class_whose_metaclass_defines_get_names_the_classes_the_module_spelling_that_class_constructor_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, given: object
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "classcalling",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Getting(type):\n"
+        "    def __get__(cls, instance, owner=None):\n"
+        f"        return {given!r}\n"
+        "\n"
+        "class Held(metaclass=Getting):\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n",
+    )
+    reclasscalling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "reclasscalling",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from classcalling import Held\n"
+        "\n"
+        "class Caller:\n"
+        "    __call__ = Held\n",
+    )
+
+    assert named_classes(functools.partial(reclasscalling.Caller())) == {fractions.Fraction}

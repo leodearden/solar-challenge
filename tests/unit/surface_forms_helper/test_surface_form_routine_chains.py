@@ -22,12 +22,15 @@ import pytest
 
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
+    GIVEN_BY_A_METACLASS_GET,
     UNREADABLE_ROUTINES,
     CallableGetter,
     CallableGetterDeleter,
     ChainedCall,
     GetterDeleter,
     PartialFirstGetterPartial,
+    metaclass_whose_get_gives,
+    object_whose_call_is,
 )
 
 
@@ -532,6 +535,16 @@ def test_a_routine_whose_chain_ends_at_an_object_its_class_makes_callable_is_spe
         assert surface_form(functools.partial(HalvedCall())) == "(*, rate: int = 1) -> None"
         assert surface_form(functools.partial(SignedCall())) == "(share: float)"
         assert named_classes(functools.partial(SignedCall())) == {float}
+
+
+@pytest.mark.parametrize("given", GIVEN_BY_A_METACLASS_GET)
+def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_class_whose_metaclass_defines_get_is_spelled_by_that_class_which_inspect_binds_to_nothing(
+    given: object,
+) -> None:
+    class Held(metaclass=metaclass_whose_get_gives(given)):
+        def __init__(self, rate: int) -> None: ...
+
+    assert surface_form(functools.partial(object_whose_call_is(Held))) == "(rate: int) -> None"
 
 
 def test_a_routine_whose_chain_ends_at_an_object_a_class_defined_in_c_makes_callable_raises_a_type_error_naming_it_that_object_and_that_class() -> None:

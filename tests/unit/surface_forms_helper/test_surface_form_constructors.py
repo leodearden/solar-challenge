@@ -21,6 +21,7 @@ import pytest
 
 from tests._surface_forms import named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
+    GIVEN_BY_A_METACLASS_GET,
     CallableGetter,
     ChainedCall,
     NoneSignedCallableGetter,
@@ -29,6 +30,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_init_is,
     class_whose_metaclass_call_is,
     class_whose_new_is,
+    metaclass_whose_get_gives,
 )
 
 
@@ -1304,6 +1306,23 @@ def test_a_class_whose_constructor_wraps_a_descriptor_whose_type_defines_get_but
             named_classes(subject)
         with pytest.raises(TypeError, match=naming_it):
             surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize("given", GIVEN_BY_A_METACLASS_GET)
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines_get_is_spelled_by_that_class_which_inspect_binds_to_nothing(
+    construct: Callable[[object], type], given: object
+) -> None:
+    class Held(metaclass=metaclass_whose_get_gives(given)):
+        def __init__(self, rate: int) -> None: ...
+
+    assert surface_form(construct(Held)) == "(rate: int) -> None"
 
 
 @pytest.mark.parametrize(

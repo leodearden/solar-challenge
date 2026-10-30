@@ -26,6 +26,13 @@ named_classes binds such a classmethod itself.
 class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
 whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
 rules about each constructor site.
+object_whose_call_is builds an object whose class's __call__ is the argument, for the
+rules about an object inspect reads through the __call__ its class resolves.
+metaclass_whose_get_gives builds a metaclass whose __get__ gives the argument, for the
+rules about a class held where inspect binds a constructor or a __call__, which it reads
+unbound.
+GIVEN_BY_A_METACLASS_GET holds what such a __get__ gives in those rules: an object that
+is not callable, and None.
 """
 
 import functools
@@ -155,6 +162,27 @@ def class_whose_metaclass_call_is(constructor: object) -> type:
         pass
 
     return Called
+
+
+def object_whose_call_is(call: object) -> object:
+    class Caller:
+        __call__ = call
+
+    return Caller()
+
+
+def metaclass_whose_get_gives(given: object) -> type:
+    class Getting(type):
+        def __get__(cls, instance: object, owner: type | None = None) -> object:
+            return given
+
+    return Getting
+
+
+GIVEN_BY_A_METACLASS_GET = (
+    pytest.param(1, id="get-giving-an-object-that-is-not-callable"),
+    pytest.param(None, id="get-giving-none"),
+)
 
 
 def _settle(self: object, rate: int) -> None: ...
