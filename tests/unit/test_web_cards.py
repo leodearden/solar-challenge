@@ -26,7 +26,7 @@ from flask.testing import FlaskClient
 from jinja2 import Environment, nodes
 
 from solar_challenge.web.storage import RunStorage
-from tests._css_classes import ALPINE_CLASS_BINDINGS
+from tests._css_classes import alpine_class_binding_literals
 from tests._dashboard_divider import DIVIDER_CLASSES
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
@@ -412,9 +412,7 @@ class _StartTagClasses(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.class_sets.append(_classes(dict(attrs)))
-        for name, value in attrs:
-            if name in ALPINE_CLASS_BINDINGS:
-                self.class_sets.extend(_script_class_lists(value or ""))
+        self.class_sets.extend(frozenset(literal.split()) for literal in alpine_class_binding_literals(attrs))
 
 
 def _markup_class_lists(source: str) -> list[frozenset[str]]:
@@ -613,6 +611,16 @@ def test_components_macros_html_writes_the_divider_under_its_header_bands_and_ta
             "<button :class=\"{{ state }} ? 'bg-primary-500' : 'bg-slate-300 dark:bg-slate-600'\"></button>",
             [set(), {"bg-primary-500"}, {"bg-slate-300", "dark:bg-slate-600"}],
             id="literals-beside-a-jinja-expression",
+        ),
+        pytest.param(
+            "<div :class=\"open && 'border-b border-slate-200'\"></div>",
+            [set(), {"border-b", "border-slate-200"}],
+            id="operand-of-a-logical-and",
+        ),
+        pytest.param(
+            "<div :class=\"['border-b border-slate-200', open ? 'p-4' : '']\"></div>",
+            [set(), {"border-b", "border-slate-200"}, {"p-4"}, set()],
+            id="element-of-an-array",
         ),
         pytest.param(
             "<div class=\"p-4\" :class=\"open ? 'border-b' : ''\">"
