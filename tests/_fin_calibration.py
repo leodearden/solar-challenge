@@ -118,7 +118,7 @@ def make_fin_finance(*, self_consumption_override: float | None) -> FinanceConfi
         inverter_cost_per_kw_gbp=0.0,
         grant_gbp=FIN_GOLDEN["grant_gbp"],
         equity_fraction=FIN_GOLDEN["equity_fraction"],
-        loan_term_years=FIN_GOLDEN["loan_term_years"],
+        loan_term_years=int(FIN_GOLDEN["loan_term_years"]),
         loan_rate=FIN_GOLDEN["loan_rate"],
         opex_per_home_per_year_gbp=131.0,
         asset_life_years=25,

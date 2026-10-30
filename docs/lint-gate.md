@@ -1,8 +1,8 @@
 # Lint: The Gate Is a Test, Not `lint_command`
 
-**Task:** #246; #994 (§4); #1003 (§5); #302 (§6)
+**Task:** #246; #994 (§4); #1003 (§5); #302 (§6); #884 (§7)
 **Rules:** [`pyproject.toml`](../pyproject.toml), table `[tool.ruff.lint]`
-**Test:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py)
+**Tests:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py); [`tests/unit/test_helper_type_check.py`](../tests/unit/test_helper_type_check.py)
 
 ---
 
@@ -81,3 +81,22 @@ With both trees clean, a lint that skipped one would also pass. So
 `tests/unit/test_lint.py::test_the_lint_covers_the_package_and_its_tests` lints a scratch
 project that carries this `pyproject.toml` and one finding in each tree, and expects both
 findings.
+
+## 7. Decision (task 884, 2026-10-30): The Helper Type Check Covers Every Helper Module
+
+`tests/unit/test_helper_type_check.py::test_every_helper_module_passes_the_type_check`
+runs mypy, with `pyproject.toml`'s `[tool.mypy]`, over every helper module: each module
+directly in `tests` whose name starts with an underscore, and each module anywhere under a
+directory of `tests` whose name does, such as `tests/_pytest_plugins`. The verify's
+type-check command checks `src/solar_challenge` alone, and §3's reasons for a test over an
+orchestrator command hold for this gate too.
+
+Its two probes put a module of known verdict in every helper module's place: a function
+without annotations, which only strict mode reports, and a `# type: ignore` that
+suppresses no error, which only `warn_unused_ignores` reports. An override that relaxes
+`tests.*`, or one helper module, then fails them, while the gate itself would still pass.
+
+The test modules stay outside mypy, and F821 (§6) is the check on their annotations. So do
+the modules of a test directory whose names start with an underscore, such as
+`tests/unit/web_jobs/_fakes.py` and those of `tests/e2e`: they are not helper modules in this
+sense. Task 1211 decides whether the check should reach them.

@@ -22,4 +22,5 @@ def autospecced_job_manager() -> NonCallableMagicMock:
     mock itself cannot be called, as a JobManager cannot. Its methods return
     mocks until a test configures them.
     """
-    return create_autospec(JobManager, instance=True)
+    job_manager: NonCallableMagicMock = create_autospec(JobManager, instance=True)
+    return job_manager

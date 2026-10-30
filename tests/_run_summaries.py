@@ -69,12 +69,12 @@ _FLEET_SUMMARY = FleetSummary(
 
 def home_summary(**figures: object) -> SummaryStatistics:
     """A home run's full summary: 100 kWh generated, 60 of it self-consumed (ratio 0.6), over 7 days, with *figures* in place of those fields' figures."""
-    return dataclasses.replace(_HOME_SUMMARY, **figures)
+    return dataclasses.replace(_HOME_SUMMARY, **figures)  # type: ignore[arg-type]  # callers pass ill-typed figures on purpose, to write rows no save writes
 
 
 def fleet_summary(**figures: object) -> FleetSummary:
     """A 2-home fleet run's full summary: 200 kWh generated, 120 of it self-consumed (ratio 0.6), over 7 days, with *figures* in place of those fields' figures."""
-    return dataclasses.replace(_FLEET_SUMMARY, **figures)
+    return dataclasses.replace(_FLEET_SUMMARY, **figures)  # type: ignore[arg-type]  # callers pass ill-typed figures on purpose, to write rows no save writes
 
 
 def summary_json(summary: SummaryStatistics | FleetSummary) -> str:
