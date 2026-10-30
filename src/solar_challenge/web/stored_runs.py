@@ -480,7 +480,8 @@ def _check_window(results: SimulationResults) -> None:
 def _check_numbers(run_id: str, name: str, results: SimulationResults) -> None:
     """Check that each series of *results*, read from the time series *name* of run *run_id*, holds numbers: its dtype is an integer's or a float's, never a bool's.
 
-    NaN and the infinities are floats, so a series holding them holds numbers.
+    NaN and the infinities are floats, so a series holding them holds numbers. SimulationResults
+    names each series after its column, so a refusal reads the column from the series' name.
 
     Raises:
         StoredRunUnreadable: A series is of another dtype, e.g. strings, bools or timestamps; the
