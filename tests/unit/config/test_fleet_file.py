@@ -648,6 +648,33 @@ fleet_distribution:
         assert heat_pumps.count(None) == 5
 
 
+class TestFleetKeysBeyondTheOldDistributionClasses:
+    """A fleet file may draw any key of a component's table, not only those the old distribution classes listed (D3)."""
+
+    def test_a_pv_temperature_coefficient_and_a_battery_min_soc_fraction_reach_every_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "fleet.yaml"
+        path.write_text("""
+name: Fleet Keys Test
+fleet_distribution:
+  n_homes: 3
+  seed: 1
+  pv:
+    capacity_kw: 4.0
+    temperature_coefficient: -0.0035
+  battery:
+    capacity_kwh: 5.0
+    min_soc_fraction: 0.2
+  load:
+    annual_consumption_kwh: 3400
+    use_stochastic: false
+""")
+
+        homes = load_fleet_config(path).homes
+
+        assert [home.pv_config.temperature_coefficient for home in homes] == [-0.0035] * 3
+        assert [home.battery_config and home.battery_config.min_soc_fraction for home in homes] == [0.2] * 3
+
+
 _PV_KW = 4.0
 
 _ECONOMY_7 = {"type": "economy_7", "off_peak_rate": 0.09, "peak_rate": 0.25}

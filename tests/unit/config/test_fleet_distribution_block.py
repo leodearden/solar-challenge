@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for a fleet_distribution: block and the distribution specs that vary each home's parameters."""
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from solar_challenge.config import (
+    ComponentDistribution,
     FleetDistributionConfig,
-    LoadDistributionConfig,
     NormalDistribution,
-    PVDistributionConfig,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
@@ -17,6 +17,7 @@ from solar_challenge.config import (
     parse_fleet_distribution_config,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 
 
@@ -163,12 +164,12 @@ class TestDistributionParsing:
 
     def test_parse_none(self) -> None:
         """Test parsing None value."""
-        result = _parsed_fleet_distribution(pv={"capacity_kw": None}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": None}).pv.draws["capacity_kw"]
         assert result is None
 
     def test_parse_scalar_int(self) -> None:
         """Test parsing scalar int converts to float."""
-        result = _parsed_fleet_distribution(pv={"capacity_kw": 5}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": 5}).pv.draws["capacity_kw"]
         assert result == 5.0
         assert isinstance(result, float)
 
@@ -179,7 +180,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0],
             "weights": [20, 50, 30],
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (3.0, 4.0, 5.0)
         assert result.weights == (20.0, 50.0, 30.0)
@@ -191,7 +192,7 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "weights": [40, 40, 20],
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, WeightedDiscreteDistribution)
         assert result.values == (None, 5.0, 10.0)
 
@@ -202,7 +203,7 @@ class TestDistributionParsing:
             "values": [3.0, 4.0, 5.0, 6.0],
             "counts": [20, 40, 30, 10],
         }
-        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (3.0, 4.0, 5.0, 6.0)
         assert result.counts == (20, 40, 30, 10)
@@ -214,7 +215,7 @@ class TestDistributionParsing:
             "values": [None, 5.0, 10.0],
             "counts": [40, 40, 20],
         }
-        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(n_homes=100, pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, ShuffledPoolDistribution)
         assert result.values == (None, 5.0, 10.0)
 
@@ -225,7 +226,7 @@ class TestDistributionParsing:
             "mean": 3400,
             "std": 800,
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, NormalDistribution)
         assert result.mean == 3400.0
         assert result.std == 800.0
@@ -239,7 +240,7 @@ class TestDistributionParsing:
             "min": 2000,
             "max": 6000,
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, NormalDistribution)
         assert result.min == 2000.0
         assert result.max == 6000.0
@@ -251,7 +252,7 @@ class TestDistributionParsing:
             "min": 3.0,
             "max": 6.0,
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert isinstance(result, UniformDistribution)
         assert result.min == 3.0
         assert result.max == 6.0
@@ -262,7 +263,7 @@ class TestDistributionParsing:
             "type": "fixed",
             "value": 4.5,
         }
-        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.capacity_kw
+        result = _parsed_fleet_distribution(pv={"capacity_kw": data}).pv.draws["capacity_kw"]
         assert result == 4.5
 
 
@@ -280,7 +281,7 @@ class TestFleetDistributionConfig:
         }
         config = parse_fleet_distribution_config(data)
         assert config.n_homes == 10
-        assert config.pv.capacity_kw == 4.0
+        assert config.pv.draws["capacity_kw"] == 4.0
         assert config.battery is None
 
     def test_parse_full_fleet_distribution(self) -> None:
@@ -317,11 +318,11 @@ class TestFleetDistributionConfig:
         config = parse_fleet_distribution_config(data)
         assert config.n_homes == 100
         assert config.seed == 42
-        assert isinstance(config.pv.capacity_kw, WeightedDiscreteDistribution)
-        assert config.pv.azimuth == 180.0
+        assert isinstance(config.pv.draws["capacity_kw"], WeightedDiscreteDistribution)
+        assert config.pv.draws["azimuth"] == 180.0
         assert config.battery is not None
-        assert isinstance(config.battery.capacity_kwh, WeightedDiscreteDistribution)
-        assert isinstance(config.load.annual_consumption_kwh, NormalDistribution)
+        assert isinstance(config.battery.draws["capacity_kwh"], WeightedDiscreteDistribution)
+        assert isinstance(config.load.draws["annual_consumption_kwh"], NormalDistribution)
 
     def test_parse_missing_n_homes_raises(self) -> None:
         """Test parsing without n_homes raises."""
@@ -338,8 +339,7 @@ class TestFleetDistributionConfig:
         with pytest.raises(ConfigurationError, match="at least 1"):
             FleetDistributionConfig(
                 n_homes=0,
-                pv=PVDistributionConfig(capacity_kw=4.0),
-                load=LoadDistributionConfig(),
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
             )
 
 
@@ -407,10 +407,9 @@ class TestShuffledPoolHoldsOneValuePerHome:
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(
                 n_homes=3,
-                pv=PVDistributionConfig(
-                    capacity_kw=ShuffledPoolDistribution(values=(4.0,), counts=(2,))
-                ),
-                load=LoadDistributionConfig(),
+                pv=ComponentDistribution({
+                    "capacity_kw": ShuffledPoolDistribution(values=(4.0,), counts=(2,))
+                }),
             )
         assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", 3, 2)
 
@@ -423,41 +422,42 @@ class TestShuffledPoolHoldsOneValuePerHome:
                 },
             }
         )
-        assert config.pv.capacity_kw == ShuffledPoolDistribution(values=(3.0, 4.0), counts=(1, 2))
+        assert config.pv.draws["capacity_kw"] == ShuffledPoolDistribution(values=(3.0, 4.0), counts=(1, 2))
 
 
 class TestPVDistributionDegradationParsing:
-    """parse_fleet_distribution_config threads the pv section's degradation keys into PVDistributionConfig."""
+    """parse_fleet_distribution_config draws the pv section's degradation keys it is given, and draws none it is not."""
 
     def test_explicit_keys_are_parsed(self) -> None:
-        """system_age_years and degradation_rate_per_year from data reach PVDistributionConfig."""
+        """system_age_years and degradation_rate_per_year from data are drawn as given."""
         data = {
             "capacity_kw": 4.0,
             "system_age_years": 20.0,
             "degradation_rate_per_year": 0.008,
         }
         pv_dist = _parsed_fleet_distribution(pv=data).pv
-        assert pv_dist.system_age_years == 20.0
-        assert pv_dist.degradation_rate_per_year == 0.008
+        assert pv_dist.draws["system_age_years"] == 20.0
+        assert pv_dist.draws["degradation_rate_per_year"] == 0.008
 
-    def test_defaults_apply_when_keys_omitted(self) -> None:
-        """Omitting both keys yields defaults: system_age_years=0.0, degradation_rate_per_year=0.005."""
-        data = {"capacity_kw": 4.0}
-        pv_dist = _parsed_fleet_distribution(pv=data).pv
-        assert pv_dist.system_age_years == 0.0
-        assert pv_dist.degradation_rate_per_year == 0.005
+    def test_omitted_keys_are_not_drawn(self) -> None:
+        """Omitting both keys draws neither, so each home takes PVConfig's default for them."""
+        pv_dist = _parsed_fleet_distribution(pv={"capacity_kw": 4.0}).pv
+        assert "system_age_years" not in pv_dist.draws
+        assert "degradation_rate_per_year" not in pv_dist.draws
 
 
 class TestPVDistributionModuleEfficiencyDefault:
     """A pv section that sets no module_efficiency draws none, so each home's module keeps its own."""
 
-    def test_the_declared_default_is_none(self) -> None:
-        assert PVDistributionConfig(capacity_kw=4.0).module_efficiency is None
+    def test_a_given_key_is_drawn(self) -> None:
+        parsed = parse_fleet_distribution_config({"n_homes": 2, "pv": {"capacity_kw": 4.0, "module_efficiency": 0.2}})
 
-    def test_an_omitted_key_parses_as_none(self) -> None:
+        assert parsed.pv.draws["module_efficiency"] == 0.2
+
+    def test_an_omitted_key_is_not_drawn(self) -> None:
         parsed = parse_fleet_distribution_config({"n_homes": 2, "pv": {"capacity_kw": 4.0}})
 
-        assert parsed.pv.module_efficiency is None
+        assert "module_efficiency" not in parsed.pv.draws
 
 
 class TestEVChargerTypeValuesAreChargerTypes:
@@ -505,7 +505,6 @@ class TestEVChargerTypeValuesAreChargerTypes:
     @pytest.mark.parametrize(
         "charger_type",
         [
-            pytest.param("7kW", id="a bare charger type"),
             pytest.param(["7kW", "3.6kW"], id="a bare list of charger types"),
             pytest.param(7, id="a number"),
             pytest.param({"type": "fixed", "value": 22}, id="a fixed number"),
@@ -517,12 +516,13 @@ class TestEVChargerTypeValuesAreChargerTypes:
     def test_a_spec_other_than_null_weighted_discrete_or_shuffled_pool_is_refused_at_read_naming_its_key_path(
         self, charger_type: object
     ) -> None:
-        """A bare charger type, list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type and the spec as written."""
+        """A bare list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type, the spec as written and every charger type."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
         assert str(refusal.value) == (
             f"Invalid fleet_distribution.ev.charger_type {charger_type!r}; "
-            "valid specs: null, or a weighted_discrete or shuffled_pool of charger types and nulls"
+            "valid specs: null, one of ['3.6kW', '7kW', '22kW'], "
+            "or a weighted_discrete or shuffled_pool of them and nulls"
         )
 
     @pytest.mark.parametrize(
@@ -557,3 +557,91 @@ class TestEVChargerTypeValuesAreChargerTypes:
             sorted(home.ev_config.charger_type if home.ev_config else "no EV" for home in homes)
             == expected
         )
+
+
+class TestAChoiceIsOneOfItsChoices:
+    """A heat_pump_type or charger_type is null, one of its choices given bare, or a weighted_discrete or shuffled_pool of them and nulls, and is read when the block is read."""
+
+    @pytest.mark.parametrize(
+        ("component", "key", "value", "read"),
+        [
+            pytest.param("ev", "charger_type", "7kW", lambda home: home.ev_config.charger_type, id="charger_type"),
+            pytest.param(
+                "heat_pump",
+                "heat_pump_type",
+                "GSHP",
+                lambda home: home.heat_pump_config.heat_pump_type,
+                id="heat_pump_type",
+            ),
+        ],
+    )
+    def test_a_bare_choice_gives_every_home_it(
+        self, component: str, key: str, value: str, read: Callable[[HomeConfig], str]
+    ) -> None:
+        config = _parsed_fleet_distribution(3, pv={"capacity_kw": 4.0}, **{component: {key: value}})
+
+        homes = generate_homes_from_distribution(config, Location.bristol())
+
+        assert [read(home) for home in homes] == [value] * 3
+
+    @pytest.mark.parametrize(
+        "heat_pump_type",
+        [
+            pytest.param("XSHP", id="bare"),
+            pytest.param({"type": "weighted_discrete", "values": ["ASHP", "XSHP"], "weights": [1, 0]}, id="weighted_discrete"),
+        ],
+    )
+    def test_a_heat_pump_type_outside_heat_pump_types_is_refused_at_read_naming_its_key_path_and_every_type(
+        self, heat_pump_type: object
+    ) -> None:
+        """XSHP is no heat pump type, so the block is refused as it is read, even when no home would draw it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, heat_pump={"heat_pump_type": heat_pump_type})
+        assert str(refusal.value) == (
+            "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
+        )
+
+
+class TestAComponentBlockGivesItsRequiredKeys:
+    """A pv block gives capacity_kw, a battery block capacity_kwh and an ev block charger_type, null or not."""
+
+    @pytest.mark.parametrize(
+        ("sections", "path"),
+        [
+            pytest.param({"pv": {"tilt": 30.0}}, "fleet_distribution.pv.capacity_kw", id="pv"),
+            pytest.param({"battery": {"max_charge_kw": 3.0}}, "fleet_distribution.battery.capacity_kwh", id="battery"),
+            pytest.param({"ev": {"arrival_hour": 18}}, "fleet_distribution.ev.charger_type", id="ev"),
+        ],
+    )
+    def test_a_block_leaving_out_its_required_key_is_refused_naming_its_path(
+        self, sections: dict[str, Any], path: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(**{"pv": {"capacity_kw": 4.0}, **sections})
+        block_path = path.rsplit(".", 1)[0]
+        assert str(refusal.value) == f"Missing required keys in {block_path}: {path}"
+
+    def test_a_null_battery_capacity_is_drawn_as_null_and_gives_no_battery(self) -> None:
+        config = _parsed_fleet_distribution(2, pv={"capacity_kw": 4.0}, battery={"capacity_kwh": None})
+
+        assert config.battery is not None
+        assert config.battery.draws == {"capacity_kwh": None}
+        assert [home.battery_config for home in generate_homes_from_distribution(config, Location.bristol())] == [None, None]
+
+
+class TestANullSettingReadsAsAbsent:
+    """A setting given null in a fleet's component block reads as the block without it."""
+
+    @pytest.mark.parametrize(
+        ("component", "block"),
+        [
+            pytest.param("load", {"annual_consumption_kwh": 3400.0}, id="load.use_stochastic"),
+            pytest.param("ev", {"charger_type": "7kW"}, id="ev.smart_charging_mode"),
+        ],
+    )
+    def test_a_null_setting_parses_as_the_block_without_it(self, component: str, block: dict[str, Any]) -> None:
+        setting = {"load": "use_stochastic", "ev": "smart_charging_mode"}[component]
+
+        with_null = _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: {**block, setting: None}})
+
+        assert with_null == _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: block})

@@ -9,10 +9,9 @@ from typing import Any, Optional
 import pytest
 
 from solar_challenge.config import (
+    ComponentDistribution,
     FleetDistributionConfig,
-    LoadDistributionConfig,
     NormalDistribution,
-    PVDistributionConfig,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
@@ -54,7 +53,7 @@ class TestAStatelessSpecDrawsItself:
         The fleet's pv.tilt is the only setting it draws from its RNG.
         """
         fleet = FleetDistributionConfig(
-            n_homes=8, pv=PVDistributionConfig(capacity_kw=4.0, tilt=spec), load=LoadDistributionConfig(), seed=17
+            n_homes=8, pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": spec}), seed=17
         )
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
@@ -140,8 +139,7 @@ class TestOneSpecObjectOnTwoSettings:
         pool = ShuffledPoolDistribution(values=(30.0, 60.0), counts=(2, 2))
         fleet = FleetDistributionConfig(
             n_homes=4,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=pool, azimuth=pool),
-            load=LoadDistributionConfig(),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": pool, "azimuth": pool}),
             seed=1,
             random_order=random_order,
         )
@@ -156,8 +154,8 @@ class TestOneSpecObjectOnTwoSettings:
         normal = NormalDistribution(mean=45.0, std=10.0, min=10.0, max=80.0)
         fleet = FleetDistributionConfig(
             n_homes=4,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=normal),
-            load=LoadDistributionConfig(annual_consumption_kwh=normal),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": normal}),
+            load=ComponentDistribution({"annual_consumption_kwh": normal}),
             seed=1,
             random_order="bristol_legacy",
         )
@@ -309,8 +307,7 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(
                 n_homes=1,
-                pv=PVDistributionConfig(capacity_kw=4.0),
-                load=LoadDistributionConfig(),
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
                 random_order=random_order,
             )
 
@@ -338,8 +335,7 @@ class TestASettingDrawnPastItsValuesIsRefused:
         """The third of the fleet's 3 homes finds the pool's 2 values drawn, and its draw is refused."""
         fleet = FleetDistributionConfig(
             n_homes=3,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=_PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))),
-            load=LoadDistributionConfig(),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": _PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))}),
         )
 
         with pytest.raises(ConfigurationError) as refusal:
@@ -348,18 +344,46 @@ class TestASettingDrawnPastItsValuesIsRefused:
         assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
 
 
-class TestASpecTheSamplerCannotDrawIsRefusedNamingTheSetting:
-    """A spec the sampler cannot draw for a setting is refused, naming the setting and the spec."""
+def _fleet_with_tilt(tilt: dict[str, Any], **sections: Any) -> FleetDistributionConfig:
+    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*, beside *sections*."""
+    return parse_fleet_distribution_config(
+        {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}, **sections}
+    )
 
-    def test_a_proportional_to_drawn_without_its_source_is_refused(self) -> None:
-        """The generator hands a proportional_to its source's value for battery and heat pump settings, never for pv.tilt."""
+
+class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
+    """A proportional_to scales the value its home drew earlier for its source, and is refused, naming its path and its source, when the home has drawn no number for it."""
+
+    def test_a_source_drawn_earlier_in_the_same_component_is_scaled(self) -> None:
+        """Each home draws its PV capacity before its tilt, so a tilt of 5 times the capacity is 20 degrees."""
+        fleet = _fleet_with_tilt({"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 5})
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
+
+    def test_a_source_drawn_by_a_later_component_is_refused(self) -> None:
+        """A home draws its battery after its PV, so its tilt cannot be proportional_to its battery capacity."""
+        fleet = _fleet_with_tilt(
+            {"type": "proportional_to", "source": "battery.capacity_kwh"}, battery={"capacity_kwh": 5.0}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "pv.tilt is proportional_to battery.capacity_kwh, which no earlier field of the home drew"
+        )
+
+    def test_a_source_that_drew_a_choice_is_refused(self) -> None:
+        """A heat pump's type is a choice, not a number, so its thermal capacity cannot be proportional_to it."""
         fleet = parse_fleet_distribution_config(
             {
-                "n_homes": 2,
-                "seed": 1,
-                "pv": {
-                    "capacity_kw": 4.0,
-                    "tilt": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 5},
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "heat_pump": {
+                    "heat_pump_type": "ASHP",
+                    "thermal_capacity_kw": {"type": "proportional_to", "source": "heat_pump.heat_pump_type"},
                 },
             }
         )
@@ -368,5 +392,5 @@ class TestASpecTheSamplerCannotDrawIsRefusedNamingTheSetting:
             generate_homes_from_distribution(fleet, Location.bristol())
 
         assert str(refusal.value) == (
-            "pv.tilt cannot be drawn from ProportionalDistribution(source='pv.capacity_kw', multiplier=5.0, offset=0.0)"
+            "heat_pump.thermal_capacity_kw is proportional_to heat_pump.heat_pump_type, which drew 'ASHP', not a number"
         )
