@@ -3,9 +3,10 @@
 the panel, the flat card and the split card. Each element drawn in a look carries the
 look's classes plus the classes its page gives it. Each look's classes are written once,
 in its macro, so no other template or script draws that look itself, and so are the
-classes of the header band a titled panel draws, in panel. A card or panel call that
-gives a header band argument (card's subtitle, colours or aside; panel's
-subtitle_expression) also gives the title that opens the band.
+classes of the header band a titled panel draws, in panel; macros.html spells the divider
+under its header bands and tab bars once. A card or panel call that gives a header band
+argument (card's subtitle, colours or aside; panel's subtitle_expression) also gives the
+title that opens the band.
 """
 
 import re
@@ -531,4 +532,19 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
         f"'{' '.join(sorted(look.classes))}' in any order{lacking} in this many class lists:{listing}\n"
         f"Those classes are written once, in {_CARD_MACROS_KEY}'s {look.macro}, so a page draws "
         f"that look by calling {look.macro}."
+    )
+
+
+_DIVIDER = "border-b border-slate-200 dark:border-slate-700"
+"""The divider ruled under each header band components/macros.html draws, and under its tab bars."""
+
+
+def test_components_macros_html_writes_the_divider_under_its_header_bands_and_tab_bars_once() -> None:
+    """card's, chart_panel's and panel's header bands and tab_bar each rule this divider. Other templates
+    rule their page chrome off with a divider of their own, so this counts macros.html's raw text alone."""
+    spellings = dashboard_template_sources()[_CARD_MACROS_KEY].count(_DIVIDER)
+
+    assert spellings == 1, (
+        f"{_CARD_MACROS_KEY} spells the divider '{_DIVIDER}' {spellings} times. Its header bands and "
+        "tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
