@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, get_args
 
 from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table
+from solar_challenge.web.stored_json import UndecodableJson, decoded_json
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +178,13 @@ def _saved_preset_config(row: sqlite3.Row) -> dict[str, Any]:
     """The config a saved preset's row holds, a JSON object; a config stored as NULL or empty text reads as {}.
 
     Raises:
-        SavedPresetUnreadable: When the config is not JSON, or is JSON but not an object.
+        SavedPresetUnreadable: When decoded_json refuses the config, as not JSON or nested too
+            deeply to decode, or when the config is JSON but not an object.
     """
     try:
-        config = json.loads(row["config_json"]) if row["config_json"] else {}
-    except ValueError as exc:
-        raise SavedPresetUnreadable(row["name"], "its config is not JSON") from exc
+        config = decoded_json(row["config_json"]) if row["config_json"] else {}
+    except UndecodableJson as undecodable:
+        raise SavedPresetUnreadable(row["name"], f"its config {undecodable.reason}") from undecodable.refusal
     if not isinstance(config, dict):
         raise SavedPresetUnreadable(row["name"], "its config is not a JSON object")
     return config
@@ -226,7 +228,7 @@ def saved_fleet_preset_named(database: Database, name: str) -> dict[str, Any] | 
 
     Raises:
         SavedPresetUnreadable: When the database cannot be read, or the preset's config is not
-            JSON, or is JSON but not an object.
+            JSON, is nested too deeply to decode, or is JSON but not an object.
     """
     row = _saved_preset_row(database, name, "fleet")
     return None if row is None else {**_listed_saved_fleet_preset(row), "config": _saved_preset_config(row)}
