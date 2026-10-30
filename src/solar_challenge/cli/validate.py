@@ -24,6 +24,7 @@ from solar_challenge.config import (
     load_config,
     load_home_config,
     load_scenarios,
+    parse_finance_config,
     parse_fleet_config,
     parse_sweep_fleet_configs,
 )
@@ -217,7 +218,10 @@ def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     """The homes the file defines, built by the config.py loader its shape needs.
 
-    Raises the loader's own ConfigurationError or ValueError when the file is refused.
+    A fleet or home file's finance: block is also read, after its homes, as `finance run`
+    reads it, except that the block may be absent. A scenario's is read with the scenario.
+    Raises the loader's own ConfigurationError or ValueError when the file is refused,
+    and the finance parser's ConfigurationError when its block is.
     """
     document = load_config(config_file)
     if "scenarios" in document or "scenario" in document:
@@ -229,8 +233,11 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
             ]
         )
     if "fleet_distribution" in document or "homes" in document:
-        return _fleet_homes(document)
-    return _DefinedHomes(homes=[load_home_config(config_file)])
+        defined = _fleet_homes(document)
+    else:
+        defined = _DefinedHomes(homes=[load_home_config(config_file)])
+    parse_finance_config(document.get("finance"))
+    return defined
 
 
 @dataclass(frozen=True)
@@ -308,8 +315,8 @@ def _user_warnings(caught: Sequence[WarningMessage]) -> list[str]:
 def _findings(config_file: Path) -> tuple[list[str], list[str]]:
     """The (errors, warnings) of validating the file.
 
-    The errors are the loader's first refusal, if any. The warnings are the advisories
-    the loader raised on the way, then each domestic-scale size above its ceiling.
+    The errors are the first refusal met reading the file, if any. The warnings are the
+    advisories the loader raised on the way, then each domestic-scale size above its ceiling.
     """
     with catch_warnings(record=True) as caught:
         simplefilter("always")
@@ -361,9 +368,10 @@ def config(
     - any other file loads as a home file: a home: block, or a flat home
 
     A YAML-defined sweep is built at every sweep point, as `fleet sweep` builds it.
-    The first value or key the loader refuses is an ERROR. The loader's advisories,
-    and sizes beyond a domestic install, are WARNINGs. Only the homes are checked,
-    not the file's other top-level blocks, such as seg: or finance:.
+    A fleet or home file's finance: block is read as `finance run` reads it, and may be
+    absent; a scenario's is read with the scenario. The first value or key refused is an
+    ERROR. The loader's advisories, and sizes beyond a domestic install, are WARNINGs.
+    Other top-level blocks, such as seg:, flex_band: or community:, are not checked.
     """
     errors, warnings = _findings(config_file)
     _print_config_findings(config_file, errors=errors, warnings=warnings)
