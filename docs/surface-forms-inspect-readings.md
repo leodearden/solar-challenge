@@ -422,9 +422,10 @@ refused before any is bound. The other readings are:
   signature a class in its MRO other than `object` gives. Failing that, it reads `()` if
   the `__new__` and `__init__` the class resolves are `object`'s, as for
   `__new__ = object.__new__`, `__new__ = staticmethod(object.__new__)` or
-  `__init__ = object.__init__` alone, and otherwise raises `ValueError`, or
-  the `TypeError` binding a `classmethod_descriptor` `__init__` to the class raises, as
-  for `__init__ = dict.__dict__['fromkeys']`. A class docstring written as a text
+  `__init__ = object.__init__` alone, and otherwise raises `ValueError`, as for
+  `__init__ = dict.__init__` or `__new__ = int.__new__`, or the `TypeError` binding a
+  `classmethod_descriptor` `__init__` to the class raises, as for
+  `__init__ = dict.__dict__['fromkeys']`. A class docstring written as a text
   signature, `Name(rate)`, `--` and a blank line, and indented as a class body indents
   it, gives one from 3.13, whose compiler strips that indentation, and none on 3.11 and
   3.12: with `__init__ = None`, such a class reads as `(rate)` on 3.13 and 3.14 and
@@ -464,9 +465,19 @@ refused before any is bound. The other readings are:
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
   `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
-  own namespace holds is a builtin or a slot wrapper and none is `object`'s own, which a
-  class defined in Python holds where it assigns one: over `dict`,
-  `__init__ = object.__init__` is refused as constructed by `dict`.
+  own namespace holds is one CPython makes for that class as it readies a class defined
+  in C: a builtin bound to the class, as its `__new__` is, or a slot wrapper whose
+  `__objclass__` is the class, as its `__init__` is, named as the class holds it. No
+  class defined in Python holds one: a slot it assigns is another class's, as
+  `object.__init__`, `dict.__init__` and `int.__new__` are, and a classmethod defined in
+  C bound to it, such as its `fromkeys` set as `__new__` once the class is created, is
+  named otherwise. So over `dict`, `__init__ = object.__init__` or
+  `__init__ = dict.__init__` is refused as constructed by `dict`, and over `int`,
+  `__new__ = int.__new__` as constructed by `int`. A class holding
+  `__init__ = dict.__init__` or `__new__ = int.__new__` whose MRO holds no class defined
+  in C but `object` raises `ValueError` on every minor, and `surface_form` refuses it as a
+  class of which `inspect` reads no constructor, the entry above, naming that `__init__`
+  or `__new__`.
 - A constructor read through an object its class makes callable. `inspect` reads a
   metaclass `__call__`, a `__new__` or an `__init__`, bound as it binds it, as it reads a
   routine (§2), so where that constructor is such an object, or a chain from it ends at

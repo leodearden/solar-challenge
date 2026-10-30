@@ -33,6 +33,25 @@ class ReinitialisedLedger(dict):
     __init__ = object.__init__
 
 
+class LedgerReinitialisedByDict(dict):
+    """A class over dict that holds dict's own __init__, as a class defined in Python can."""
+
+    __init__ = dict.__init__
+
+
+class TallyRenewedByInt(int):
+    """A class over int that holds int's own __new__, as a class defined in Python can."""
+
+    __new__ = int.__new__
+
+
+class LedgerRenewedByItsOwnFromkeys(dict):
+    """A class over dict whose __new__, set once it is created, is its own fromkeys: a classmethod defined in C, bound to it."""
+
+
+LedgerRenewedByItsOwnFromkeys.__new__ = LedgerRenewedByItsOwnFromkeys.fromkeys
+
+
 class Rated:
     """A class whose __init__ is defined with def, for a subclass to shadow."""
 
@@ -120,6 +139,21 @@ def test_a_class_whose_init_is_a_partial_beside_a_new_defined_in_c_raises_the_ty
             r"\btests\.unit\.surface_forms_helper\.test_surface_form_skipped_constructors\.ReinitialisedLedger\b.*\bbuiltins\.dict\b",
             id="ReinitialisedLedger",
         ),
+        pytest.param(
+            LedgerReinitialisedByDict,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_skipped_constructors\.LedgerReinitialisedByDict\b.*\bbuiltins\.dict\b",
+            id="LedgerReinitialisedByDict",
+        ),
+        pytest.param(
+            TallyRenewedByInt,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_skipped_constructors\.TallyRenewedByInt\b.*\bbuiltins\.int\b",
+            id="TallyRenewedByInt",
+        ),
+        pytest.param(
+            LedgerRenewedByItsOwnFromkeys,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_skipped_constructors\.LedgerRenewedByItsOwnFromkeys\b.*\bbuiltins\.dict\b",
+            id="LedgerRenewedByItsOwnFromkeys",
+        ),
     ],
 )
 def test_a_class_constructed_by_a_class_defined_in_c_raises_a_type_error_naming_it_and_that_class(
@@ -144,11 +178,24 @@ def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
     class ReinitialisedByASlotWrapper:
         __init__ = object.__init__
 
+    class RenewedAndReinitialisedByObject:
+        __new__ = object.__new__
+        __init__ = object.__init__
+
+    class InheritingAReinitialisation(ReinitialisedByASlotWrapper):
+        pass
+
+    class ReinitialisedOverAPlainBase(Plain):
+        __init__ = object.__init__
+
     assert surface_form(object) == "()"
     assert surface_form(Plain) == "()"
     assert surface_form(RenewedByAStaticmethod) == "()"
     assert surface_form(RenewedByABuiltin) == "()"
     assert surface_form(ReinitialisedByASlotWrapper) == "()"
+    assert surface_form(RenewedAndReinitialisedByObject) == "()"
+    assert surface_form(InheritingAReinitialisation) == "()"
+    assert surface_form(ReinitialisedOverAPlainBase) == "()"
 
 
 @pytest.mark.parametrize(
@@ -543,6 +590,33 @@ def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type
             {"__new__": staticmethod(dict.__dict__["fromkeys"])},
             "Skipping.__new__",
             id="new-staticmethod-of-a-classmethod-descriptor",
+        ),
+        pytest.param(
+            (),
+            {"__init__": dict.__init__},
+            "Skipping.__init__",
+            id="init-slot-wrapper-of-another-class",
+        ),
+        pytest.param(
+            (), {"__new__": int.__new__}, "Skipping.__new__", id="new-builtin-of-another-class"
+        ),
+        pytest.param(
+            (),
+            {"__new__": dict.__new__, "__init__": dict.__init__},
+            "Skipping.__new__",
+            id="new-and-init-of-another-class",
+        ),
+        pytest.param(
+            (),
+            {"__new__": int.__new__, "__init__": object.__init__},
+            "Skipping.__new__",
+            id="new-builtin-of-another-class-beside-object-init",
+        ),
+        pytest.param(
+            (Rated,),
+            {"__init__": dict.__init__},
+            "Skipping.__init__",
+            id="init-slot-wrapper-of-another-class-over-a-base-init-defined-with-def",
         ),
     ],
 )

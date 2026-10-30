@@ -466,7 +466,6 @@ def _refuse_wrapped_get_delete_descriptor(obj: object, end: object) -> None:
         )
 
 
-_C_CONSTRUCTOR_KINDS = (types.BuiltinFunctionType, types.WrapperDescriptorType)
 _CCallableInspectSkips: typing.TypeAlias = (
     types.BuiltinFunctionType
     | types.WrapperDescriptorType
@@ -552,14 +551,25 @@ def _refuse_class_constructed_in_c(cls: type) -> None:
 
 
 def _constructed_in_c(holder: type) -> bool:
-    """Whether *holder*, a class other than object, is defined in C, as a builtin or extension type is, by the constructors its own namespace holds: each __new__ and __init__ there is of a kind in _C_CONSTRUCTOR_KINDS and is not object's own, which a class defined in Python holds where it assigns one."""
+    """Whether *holder* is defined in C, as a builtin or extension type is, by the constructors its own namespace holds: each __new__ and __init__ there is one _is_own_c_slot finds for *holder*."""
     namespace = vars(holder)
     return all(
-        isinstance(namespace[name], _C_CONSTRUCTOR_KINDS)
-        and namespace[name] is not vars(object)[name]
+        _is_own_c_slot(holder, name, namespace[name])
         for name in ("__new__", "__init__")
         if name in namespace
     )
+
+
+def _is_own_c_slot(holder: type, name: str, held: object) -> bool:
+    """Whether *held*, which *holder*'s own namespace holds as *name*, is the C slot CPython makes for *holder* as it readies a class defined in C: a builtin bound to *holder*, as such a class's __new__ is, or a slot wrapper whose __objclass__ is *holder*, as its __init__ is, either one called *name*.
+
+    docs/surface-forms-inspect-readings.md §4.5 says why no class defined in Python holds one.
+    """
+    if isinstance(held, types.BuiltinFunctionType):
+        return held.__self__ is holder and held.__name__ == name
+    if isinstance(held, types.WrapperDescriptorType):
+        return held.__objclass__ is holder and held.__name__ == name
+    return False
 
 
 def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
