@@ -84,7 +84,7 @@ findings.
 
 ## 7. Decision (task 884, 2026-10-30): The Helper Type Check Covers Every Helper Module
 
-`tests/unit/test_helper_type_check.py::test_every_helper_module_passes_the_type_check`
+`tests/unit/test_helper_type_check.py::test_every_helper_module_outside_the_e2e_suite_passes_the_type_check`
 runs mypy, with `pyproject.toml`'s `[tool.mypy]`, over every helper module: each module
 directly in `tests` whose name starts with an underscore, and each module anywhere under a
 directory of `tests` whose name does, such as `tests/_pytest_plugins`. The verify's
