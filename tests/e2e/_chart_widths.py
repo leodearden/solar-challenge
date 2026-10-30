@@ -43,7 +43,8 @@ def charts_not_as_wide_as_their_containers(page: Page, chart_ids: Sequence[str])
     {'chart': its container's id, 'drawn': the width of its first .main-svg, or None while Plotly has drawn none,
     'container': its container's clientWidth}. It raises playwright's Error if no element carries one of chart_ids.
     """
-    return page.evaluate(
+    misfits: list[dict[str, object]] = page.evaluate(
         _CHARTS_NOT_AS_WIDE_AS_THEIR_CONTAINERS,
         {"chartIds": list(chart_ids), "deadlineMs": _SETTLE_DEADLINE_MS, "pollIntervalMs": _POLL_INTERVAL_MS},
     )
+    return misfits

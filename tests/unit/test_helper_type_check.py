@@ -1,29 +1,46 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Type-check contract tests for the test helper modules.
 
-A helper module is a module directly in tests/ whose name starts with an underscore, or a
-module anywhere under a directory of tests/ whose name does. The verify's
-type_check_command checks src/solar_challenge alone, so these tests are how the verify
-type-checks each helper module, with the settings pyproject.toml's [tool.mypy] gives it.
-The test modules stay outside the check, and the lint's F821 is the check on their
-annotations. docs/lint-gate.md §7 records that the check covers every helper module, and
-its §3 says why a gate is a test rather than an orchestrator command.
+A helper module is a module of tests/ whose name starts with an underscore, or any module
+under a directory of tests/ whose name does, wherever either sits, save those
+_ILL_TYPED_ON_PURPOSE names. The verify's type_check_command checks src/solar_challenge
+alone, so these tests are how the verify type-checks each helper module, with the settings
+pyproject.toml's [tool.mypy] gives it. tests/e2e's modules import the e2e extra, which the
+verify's own environment lacks, so their check reads the packages of the environment the
+offline lane's e2e job runs in. The test modules stay outside the check, and the lint's
+F821 is the check on their annotations. docs/lint-gate.md §7 and §8 record which modules
+the check covers and where, and its §3 says why a gate is a test rather than an
+orchestrator command.
 """
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
+
+from tests._collect_only import requires_uv
+from tests._command_runner import ShellCommand, describe_outcome, run_command
+from tests._orchestrator_config import lane_command
+from tests._uv_env import SharedUvEnvironments, uv_run_options
 
 pytest.importorskip(
     "jinja2",
     reason="the helper modules' type check needs jinja2, from the web extra: tests/_css_classes.py imports it, "
     "and mypy reports a missing import as an error",
 )
+
+_E2E_SUITE = PurePosixPath("tests/e2e")
+"""The suite of the offline lane's e2e job. Its modules import the e2e extra, which only that job's environment installs."""
+
+_ILL_TYPED_ON_PURPOSE = frozenset({"tests/unit/surface_forms_helper/_fixtures.py"})
+"""The modules the rule selects that the type check leaves out: each builds objects that are ill-typed on purpose,
+as inputs its tests hand to inspect, which only a `# type: ignore` or a construct that hides them from mypy would let
+pass. tests/unit/surface_forms_helper/_fixtures.py builds them for the rule tests of tests/_surface_forms.py."""
 
 _ERROR_LINE = re.compile(r"(?P<path>[^:]+):(?P<line>\d+): error: (?P<message>.*?)(?:  \[(?P<code>[a-z0-9-]+)\])?")
 
@@ -75,10 +92,41 @@ def _type_check(project_root: Path, *mypy_args: str) -> list[_Error]:
 def _helper_modules(project_root: Path) -> list[str]:
     """The helper modules, as mypy is given them: sorted paths relative to *project_root*."""
     tests = project_root / "tests"
-    return sorted(
+    selected = {
         path.relative_to(project_root).as_posix()
-        for path in (*tests.glob("_*.py"), *tests.glob("_*/**/*.py"))
+        for path in tests.rglob("*.py")
+        if any(part.startswith("_") for part in path.relative_to(tests).parts)
+    }
+    stale = sorted(_ILL_TYPED_ON_PURPOSE - selected)
+    assert not stale, (
+        f"_ILL_TYPED_ON_PURPOSE leaves out {stale}, which the rule selects no module at: "
+        "drop each path, or name the module at its new one"
     )
+    return sorted(selected - _ILL_TYPED_ON_PURPOSE)
+
+
+def _in_the_e2e_suite(module: str) -> bool:
+    """Whether helper *module*, a path as _helper_modules gives it, lies in the e2e job's suite."""
+    return PurePosixPath(module).is_relative_to(_E2E_SUITE)
+
+
+def _e2e_job_interpreter(project_root: Path, environments: SharedUvEnvironments) -> str:
+    """The Python of the environment the offline lane's e2e job runs its suite in, synced as the job's command syncs it.
+
+    environments shares that environment with every probe that runs the job's command, so a session syncs it once.
+    """
+    command = lane_command(project_root, "e2e").command
+    print_interpreter = shlex.join(
+        ["uv", "run", *uv_run_options(command), "python", "-c", "import sys; print(sys.executable)"]
+    )
+    outcome = run_command(
+        ShellCommand(print_interpreter, project_root), environments.for_command(command), timeout_secs=300
+    )
+    assert outcome.returncode == 0, (
+        f"{print_interpreter!r} could not sync the e2e job's environment and name its Python; if uv could not "
+        f"download a wheel its cache lacks, run that command once with network access\n{describe_outcome(outcome)}"
+    )
+    return outcome.stdout.strip()
 
 
 def _type_check_probe(project_root: Path, source: str, tmp_path: Path) -> list[_Error]:
@@ -102,8 +150,7 @@ def test_the_type_check_flags_an_untyped_function_in_each_helper_module(project_
     this checks that the type check applies the project's settings to each helper
     module and still reports an error there once the module has none. Without it,
     an override that silences or relaxes tests.*, or one helper module, would leave
-    test_every_helper_module_passes_the_type_check passing on a check that reports
-    nothing there.
+    the gate tests passing on a check that reports nothing there.
     """
     errors = _type_check_probe(project_root, "def probe(value):\n    return value\n", tmp_path)
 
@@ -123,8 +170,8 @@ def test_the_type_check_flags_an_unused_type_ignore_in_each_helper_module(projec
     mode in pyproject.toml's [tool.mypy] turns on, is what reports it. The probe is
     such an ignore: an attr-defined one on the read of an attribute typeshed
     declares. Without this test, an override that turns warn_unused_ignores off, for
-    tests.* or for one helper module, would leave a stale ignore there while
-    test_every_helper_module_passes_the_type_check passes.
+    tests.* or for one helper module, would leave a stale ignore there while the gate
+    tests pass.
     """
     errors = _type_check_probe(project_root, "probe = int.__name__  # type: ignore[attr-defined]\n", tmp_path)
 
@@ -135,11 +182,33 @@ def test_the_type_check_flags_an_unused_type_ignore_in_each_helper_module(projec
     )
 
 
-def test_every_helper_module_passes_the_type_check(project_root: Path) -> None:
-    """No helper module has an error under the project's type check, so the verify fails a commit that adds one."""
-    errors = _type_check(project_root, *_helper_modules(project_root))
+def test_every_helper_module_outside_the_e2e_suite_passes_the_type_check(project_root: Path) -> None:
+    """No helper module outside tests/e2e has an error under the project's type check, so the verify fails a commit that adds one."""
+    modules = [module for module in _helper_modules(project_root) if not _in_the_e2e_suite(module)]
+    assert modules, f"no helper module lies outside {_E2E_SUITE}, so this gate has none to type-check"
+    errors = _type_check(project_root, *modules)
 
     assert not errors, (
         "the helper modules have type errors; clear each without hiding a real one:\n"
+        + "\n".join(map(str, errors))
+    )
+
+
+@requires_uv
+def test_every_helper_module_of_the_e2e_suite_passes_the_type_check(
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
+) -> None:
+    """No helper module of tests/e2e has an error under the project's type check, with the e2e job's packages.
+
+    Those modules import the e2e extra, which the verify's own environment lacks, so mypy reads the packages of the
+    environment the offline lane's e2e job runs its suite in, and the verify fails a commit that adds an error there.
+    """
+    modules = [module for module in _helper_modules(project_root) if _in_the_e2e_suite(module)]
+    assert modules, f"no helper module lies in {_E2E_SUITE}, so this gate has none to type-check"
+    interpreter = _e2e_job_interpreter(project_root, shared_uv_probe_environments)
+    errors = _type_check(project_root, f"--python-executable={interpreter}", *modules)
+
+    assert not errors, (
+        "the helper modules of tests/e2e have type errors; clear each without hiding a real one:\n"
         + "\n".join(map(str, errors))
     )

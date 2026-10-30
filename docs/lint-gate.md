@@ -1,6 +1,6 @@
 # Lint: The Gate Is a Test, Not `lint_command`
 
-**Task:** #246; #994 (§4); #1003 (§5); #302 (§6); #884 (§7)
+**Task:** #246; #994 (§4); #1003 (§5); #302 (§6); #884 (§7); #1211 (§8)
 **Rules:** [`pyproject.toml`](../pyproject.toml), table `[tool.ruff.lint]`
 **Tests:** [`tests/unit/test_lint.py`](../tests/unit/test_lint.py); [`tests/unit/test_helper_type_check.py`](../tests/unit/test_helper_type_check.py)
 
@@ -84,7 +84,7 @@ findings.
 
 ## 7. Decision (task 884, 2026-10-30): The Helper Type Check Covers Every Helper Module
 
-`tests/unit/test_helper_type_check.py::test_every_helper_module_passes_the_type_check`
+`tests/unit/test_helper_type_check.py::test_every_helper_module_outside_the_e2e_suite_passes_the_type_check`
 runs mypy, with `pyproject.toml`'s `[tool.mypy]`, over every helper module: each module
 directly in `tests` whose name starts with an underscore, and each module anywhere under a
 directory of `tests` whose name does, such as `tests/_pytest_plugins`. The verify's
@@ -99,4 +99,33 @@ suppresses no error, which only `warn_unused_ignores` reports. An override that 
 The test modules stay outside mypy, and F821 (§6) is the check on their annotations. So do
 the modules of a test directory whose names start with an underscore, such as
 `tests/unit/web_jobs/_fakes.py` and those of `tests/e2e`: they are not helper modules in this
-sense. Task 1211 decides whether the check should reach them.
+sense. §8 brings them under the check.
+
+## 8. Decision (task 1211, 2026-10-30): The Check Reaches the Helper Modules of Test Directories
+
+A helper module is now a module of `tests` whose name starts with an underscore, or any
+module under a directory whose name does, wherever either sits in `tests`. So the
+underscore modules of test directories join §7's set, such as
+`tests/unit/web_jobs/_fakes.py` and `tests/integration/_helpers.py`, and so do the test
+directories' package markers. Type errors had built up there unseen, as in §7's modules.
+
+The per-task verify checks all of them.
+`tests/unit/test_helper_type_check.py::test_every_helper_module_outside_the_e2e_suite_passes_the_type_check`
+checks those outside `tests/e2e`, in the verify's own environment. The modules of
+`tests/e2e` import the e2e extra, which that environment lacks. So
+`tests/unit/test_helper_type_check.py::test_every_helper_module_of_the_e2e_suite_passes_the_type_check`
+has mypy read the packages of the environment the offline lane's e2e job runs in, synced
+from uv's cache as that job's command syncs it. The verify already syncs that environment
+for
+`tests/unit/test_dependency_declarations.py::test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra`.
+So an error in an e2e helper fails the commit that adds it, not the lane after the merge.
+
+§7's probes shadow every module of the set, those of `tests/e2e` included: a probe imports
+nothing, so it needs no extra.
+
+One module the rule selects stays out: `tests/unit/surface_forms_helper/_fixtures.py`. It
+builds objects that are ill-typed on purpose, such as `staticmethod(None)` and a class
+whose `__new__` is any object, as the inputs the rule tests of `tests/_surface_forms.py`
+hand to inspect. Only a `# type: ignore` or a construct that hides them from mypy would let
+it pass. The gate module names it in `_ILL_TYPED_ON_PURPOSE`, and its tests fail if that
+path stops naming a module the rule selects.

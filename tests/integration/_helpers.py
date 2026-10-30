@@ -23,11 +23,12 @@ from solar_challenge.config import (
     load_fleet_config,
     parse_finance_config,
 )
+from solar_challenge.finance import FinanceConfig
 
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
 
-def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple:
+def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple[ScenarioConfig, FinanceConfig]:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py::
@@ -43,6 +44,7 @@ def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple
     """
     cfg = load_config(SCENARIO)
     finance = parse_finance_config(cfg.get("finance"))
+    assert finance is not None, f"the board scenario {SCENARIO} has no finance block"
     fleet = load_fleet_config(SCENARIO)
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     scenario = ScenarioConfig(
