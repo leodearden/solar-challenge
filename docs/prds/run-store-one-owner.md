@@ -108,7 +108,7 @@ default name, its summary decoding and its listing each have one implementation.
 |---|---|---|
 | `web/database.py` | `Database` (the connection policy), `TableSchema` + `rebuild_table` | none |
 | `web/field_tree.py` | the field-tree codec: `field_tree`, `read_field_tree`, `without_unknown_keys`, `FieldTreeRefused`, `UnknownKey` | none |
-| `web/stored_json.py` | `decoded_json`, the value of a store's JSON text, and `UndecodableJson`, its one refusal of text `json.loads` cannot decode: not JSON, or nested too deeply | none |
+| `web/stored_json.py` | `decoded_json`, the value of a store's JSON text, and `UndecodableJson`, its one refusal of text `json.loads` cannot decode: not JSON, or nested too deeply; `decoded_json_object`, the JSON object a store's JSON text holds, and `JsonObjectRefused`, its one refusal: that text, with `decoded_json`'s reason, or JSON that is not an object | none |
 | `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, its documents' field trees, read and written through `field_tree`, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι but `field_tree` and `stored_json`, below it (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
 | `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, stored_runs |
 | `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database, stored_json |
