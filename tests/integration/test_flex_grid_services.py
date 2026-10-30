@@ -344,7 +344,7 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     simulate = _constant_simulate(fr)
 
     # Finance config: the board's on the flat model, with controllable grid_services
-    _board_scenario, finance_base = _board_scenario_on_the_flat_model()
+    _, finance_base = _board_scenario_on_the_flat_model()
 
     finance_zero = dataclasses.replace(
         finance_base, grid_services_income_per_kw_per_year_gbp=0.0
