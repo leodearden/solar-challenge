@@ -980,11 +980,11 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if it is a class, which inspect binds to nothing, if its type defines no __get__, or if it is a functools.partial."""
     if isinstance(descriptor, classmethod):
         return _classmethod_as_read(descriptor.__func__, type(owner))
     get = getattr(type(descriptor), "__get__", None)
-    if get is None or isinstance(descriptor, functools.partial):
+    if get is None or inspect.isclass(descriptor) or isinstance(descriptor, functools.partial):
         return descriptor
     bound: object = get(descriptor, owner, type(owner))
     return bound
