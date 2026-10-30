@@ -575,3 +575,50 @@ def test_components_macros_html_writes_the_divider_under_its_header_bands_and_ta
         f"order, in these {len(spellings)} class lists:{listing}\n"
         "Its header bands and tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
+
+
+@pytest.mark.parametrize(
+    "read",
+    [
+        pytest.param(_template_class_lists, id="per-look-guard"),
+        pytest.param(_spelled_class_lists, id="divider-guard"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "<div :class=\"open ? 'border-b border-slate-200' : ''\"></div>",
+            [set(), {"border-b", "border-slate-200"}, set()],
+            id="ternary-branches",
+        ),
+        pytest.param(
+            "<div x-bind:class=\"{ 'border-b border-slate-200': open }\"></div>",
+            [set(), {"border-b", "border-slate-200"}],
+            id="object-key-of-the-long-form",
+        ),
+        pytest.param(
+            "<div :class='open ? \"border-b border-slate-200\" : \"\"'></div>",
+            [set(), {"border-b", "border-slate-200"}, set()],
+            id="double-quoted-literals-in-a-single-quoted-binding",
+        ),
+        pytest.param(
+            "<button :class=\"{{ state }} ? 'bg-primary-500' : 'bg-slate-300 dark:bg-slate-600'\"></button>",
+            [set(), {"bg-primary-500"}, {"bg-slate-300", "dark:bg-slate-600"}],
+            id="literals-beside-a-jinja-expression",
+        ),
+        pytest.param(
+            "<div class=\"p-4\" :class=\"open ? 'border-b' : ''\">"
+            "<p x-text=\"'border-b border-slate-200'\" :aria-checked=\"open ? 'true' : 'false'\"></p></div>",
+            [{"p-4"}, {"border-b"}, set(), set()],
+            id="each-elements-classes-then-its-class-binding-literals",
+        ),
+    ],
+)
+def test_both_written_once_guards_read_each_string_literal_of_an_alpine_class_binding_as_a_class_list(
+    read: Callable[[str], list[frozenset[str]]], source: str, expected: list[set[str]]
+) -> None:
+    """Alpine applies the classes a :class or x-bind:class expression yields, so a look's classes or the
+    divider spelled in one of its string literals is another writing, which both guards must count; a
+    literal of any other attribute is not a class list."""
+    assert read(source) == expected
