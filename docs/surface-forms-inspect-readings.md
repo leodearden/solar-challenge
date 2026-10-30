@@ -38,9 +38,10 @@ readings of a constructor `inspect` skips above the class holding the one it rea
 of a class of which it reads no constructor, were measured on those releases on
 2026-10-29. §2's reading of a class held where `inspect` binds a constructor or a
 `__call__`, 4.4's reading of a `__call__` whose binding gives an object that is not
-callable, and 4.5's reading of a metaclass `__call__` or an `__init__` that `inspect`
-binds to a callable defined in C, were measured on those releases on 2026-10-30. A new
-refusal gets its rule test first, then its entry here.
+callable, 4.5's reading of a metaclass `__call__` or an `__init__` that `inspect` binds
+to a callable defined in C, and its reading of a constructor `inspect` reads as a class,
+were measured on those releases on 2026-10-30. A new refusal gets its rule test first,
+then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -61,7 +62,9 @@ which binds a class through that `__get__`. With a metaclass whose `__get__` giv
 `None`, a class of it with `def __init__(self, rate: int) -> None` reads as
 `(rate: int) -> None` held as an `__init__`, a metaclass `__call__` or an object's
 `__call__`, on every minor. `surface_form` and `named_classes` read it so, spelling its
-annotations where its `__init__` is.
+annotations where its `__init__` is. Where what `inspect` reads there is a class with a
+constructor 4.5 refuses, they raise the `TypeError` that class raises, naming it, as 4.5
+says.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_carries_a_signature_of_none_is_spelled_by_its_own_signature_whatever_it_wraps`
@@ -270,6 +273,8 @@ it and what 4.4's `TypeError` names besides the routine, unless the class carrie
 signature, which `inspect` reads in that constructor's place. A routine that wraps such a
 class, through a `functools.partial`, a bound method or a `functools.wraps` wrapper,
 raises the same, unless the class or one of the routine's links carries a signature.
+A class whose metaclass `__call__`, `__new__` or `__init__` `inspect` reads as such a
+class raises the same, naming that class, as the last entry below says.
 `signature_of`'s docstring in `tests/_surface_forms_signatures.py` points at the list of
 the constructors refused, in the order they are checked. A constructor can meet the
 readings of 4.1, 4.2 and 4.3, and that of 4.4's partial: 3.14 binds a `functools.partial`
@@ -446,6 +451,23 @@ refused before any is bound. The other readings are:
   place of its `__call__` from 3.13. `surface_form` raises the `TypeError` 4.4 raises,
   naming the class in the routine's place, unless the object or the class carries a
   signature.
+- A constructor `inspect` reads as a class: its binding (§2) gives the class, or a
+  callable whose chain ends at one, as a `functools.wraps` wrapper of the class does.
+  Every minor reads that class's signature in the constructor's place, less its first
+  parameter as a `__new__`, so the class holding it is read differently by minor, or not
+  at all, wherever the class it holds is. With `class Ledger(dict)`, a class holding
+  `Ledger` as a metaclass `__call__`, a `__new__` or an `__init__` raises `ValueError` on
+  every minor, as `Ledger` does. With `PartialInit`, whose `__init__` is
+  `functools.partial(build)`, and `def build(self, rate: int) -> None`, a class holding
+  `PartialInit` as `__init__` or as a metaclass `__call__` reads as
+  `(self, rate: int) -> None` on 3.11 to 3.13 and as `(rate: int) -> None` on 3.14; held
+  as `__new__`, it reads as `(rate: int) -> None` on 3.11 to 3.13 and as `() -> None` on
+  3.14. `surface_form` raises the `TypeError` the held class raises, naming it, as for a
+  routine that wraps it, unless the class holding it, the held class or a link of the
+  chain between them carries a signature. A `dict` subclass carrying `(rate: int)` as an
+  `inspect.Signature` reads as `(rate: int)` held as `__init__` or as a metaclass
+  `__call__`, and as `()` held as `__new__`, on every minor, and `surface_form` spells it
+  so.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial`
@@ -486,6 +508,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_partial_of_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_a_refused_class_raises_the_type_error_naming_that_class`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_class_that_carries_a_signature_over_a_refused_constructor_is_spelled_by_that_signature_less_its_first_parameter_as_new`
 
 ### 4.6 A `functools.partial` whose type takes `__get__` from a class other than `functools.partial`
 
