@@ -631,10 +631,32 @@ A docstring set flush-left, in text-signature form on every minor."""
 
         A docstring in text-signature form once dedented, over a base's set flush-left."""
 
+    class Tabbed:
+        """Tabbed(rate)\n\t--\n\n\tA docstring whose lines after the first a tab indents."""
+
+    class Undented:
+        """Undented(rate)
+        --
+
+        A docstring whose closing line holds only spaces, fewer than the lines before it.
+    """
+
+    class Assigned:
+        __doc__ = """Assigned(rate)
+        --
+
+        A docstring the class body assigns to __doc__, which no compiler dedents."""
+
+    Typed = type("Typed", (), {"__doc__": "Typed(rate)\n    --\n\n    A docstring type() gives."})
+
     for subject, naming_it in (
         (Flush, r"\.Flush\b.*\bdocstring of .*\.Flush\b.*'\(rate\)'"),
         (Bare, r"\.Bare\b.*\bdocstring of .*\.Bare\b.*'\(rate\)'"),
         (Redocumented, r"\.Redocumented\b.*\bdocstring of .*\.Redocumented\b.*'\(share\)'"),
+        (Tabbed, r"\.Tabbed\b.*\bdocstring of .*\.Tabbed\b.*'\(rate\)'"),
+        (Undented, r"\.Undented\b.*\bdocstring of .*\.Undented\b.*'\(rate\)'"),
+        (Assigned, r"\.Assigned\b.*\bdocstring of .*\.Assigned\b.*'\(rate\)'"),
+        (Typed, r"\.Typed\b.*\bdocstring of .*\.Typed\b.*'\(rate\)'"),
     ):
         with pytest.raises(TypeError, match=naming_it):
             surface_form(subject)

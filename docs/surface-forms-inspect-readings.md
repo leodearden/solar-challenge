@@ -445,13 +445,14 @@ refused before any is bound. The other readings are:
   signature. CPython reads a class's text signature where its docstring begins with the
   last dotted part of its `__name__` and `(`, and `)`, a line holding only `--` and a
   blank line follow before any blank line. That compiler expands tabs and strips the
-  first line's leading spaces and the margin the later lines share, but unlike
-  `inspect.cleandoc` it drops no blank line: a docstring that ends at the blank line
-  after `--` reads as `(rate)` on 3.13 and 3.14, and one that opens with a blank line
-  reads as `()` on every minor, so `surface_form` refuses the first and spells the
-  second `()`. It refuses alike a docstring that `type()` or an assignment to `__doc__`
-  in the class body gives, which no compiler dedents and every minor reads as written,
-  since on 3.11 and 3.12 it cannot tell such a docstring from one a class body indents.
+  first line's leading spaces and the margin the later lines that hold more than spaces
+  share, but unlike `inspect.cleandoc` it drops no blank line: a docstring that ends at
+  the blank line after `--` reads as `(rate)` on 3.13 and 3.14, and one that opens with
+  a blank line reads as `()` on every minor, so `surface_form` refuses the first and
+  spells the second `()`. It refuses alike a docstring that `type()` or an assignment to
+  `__doc__` in the class body gives, which no compiler dedents and every minor reads as
+  written, since on 3.11 and 3.12 it cannot tell such a docstring from one a class body
+  indents.
 - A class constructed by a class defined in C: `inspect` reads its text signature, which a
   release of its package can add or rewrite. `dict` and `int` give none on any minor.
   `surface_form` counts a class as defined in C where each `__new__` and `__init__` its
