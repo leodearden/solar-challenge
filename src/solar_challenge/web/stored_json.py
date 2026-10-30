@@ -3,8 +3,8 @@
 
 json.loads refuses text that is not JSON with a ValueError, and text nested deeper than it can
 decode with a RecursionError, raised before it can tell whether the text is JSON. decoded_json
-refuses both as an UndecodableJson whose reason says which, so the run store and the presets
-table each catch one type.
+refuses both as an UndecodableJson whose reason says which, so each store that reads JSON text
+catches one type.
 """
 
 import json

@@ -8,11 +8,17 @@ the order they were saved.
 """
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Literal, get_args
 
 from solar_challenge.web.database import Database, TableSchema, check_one_of, rebuild_table
+from solar_challenge.web.stored_json import UndecodableJson, decoded_json
+
+logger = logging.getLogger(__name__)
+
+_UNREADABLE_METADATA_WARNING = "Chat message %d's metadata %s, so the message is read without it"
 
 ChatRole = Literal["user", "assistant"]  # who wrote a chat message, held by the chat_messages table's role column
 CHAT_ROLES: tuple[ChatRole, ...] = get_args(ChatRole)
@@ -90,6 +96,9 @@ def get_chat_history(
 ) -> list[dict[str, Any]]:
     """Return all chat messages for a session in insertion order.
 
+    A message whose metadata is not JSON, is nested too deeply to decode, or is JSON but not an
+    object is read with metadata ``None``, and a logged warning names its id and the fault.
+
     Args:
         database: The Database holding the chat_messages table.
         session_id: Browser-session identifier to filter by.
@@ -102,7 +111,7 @@ def get_chat_history(
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT role, content, created_at, metadata_json
+            SELECT id, role, content, created_at, metadata_json
             FROM chat_messages
             WHERE session_id = ?
             ORDER BY id ASC
@@ -113,13 +122,27 @@ def get_chat_history(
 
     result: list[dict[str, Any]] = []
     for row in rows:
-        meta_raw = row["metadata_json"]
         result.append(
             {
                 "role": row["role"],
                 "content": row["content"],
                 "created_at": row["created_at"],
-                "metadata": json.loads(meta_raw) if meta_raw is not None else None,
+                "metadata": _message_metadata(row["id"], row["metadata_json"]),
             }
         )
     return result
+
+
+def _message_metadata(message_id: int, metadata_json: str | None) -> dict[str, Any] | None:
+    """The metadata of the chat message *message_id*, stored as *metadata_json*: the JSON object that text holds, or None for NULL or, with a logged warning, for text that cannot be read as a JSON object."""
+    if metadata_json is None:
+        return None
+    try:
+        metadata = decoded_json(metadata_json)
+    except UndecodableJson as undecodable:
+        logger.warning(_UNREADABLE_METADATA_WARNING, message_id, undecodable.reason)
+        return None
+    if not isinstance(metadata, dict):
+        logger.warning(_UNREADABLE_METADATA_WARNING, message_id, "is not a JSON object")
+        return None
+    return metadata
