@@ -3,6 +3,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -197,6 +198,14 @@ _TOU_ADVISORY = (
 )
 
 
+def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
+    """scenarios/bristol-phase1-flex.yaml as loaded, its first event window's event_hours infinite."""
+    flex = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+    document: dict[str, Any] = yaml.safe_load(flex.read_text())
+    document["finance"]["grid_services_events"]["event_windows"][0]["event_hours"] = float("inf")
+    return document
+
+
 class TestValidateConfig:
     """Tests for validate config command."""
 
@@ -389,34 +398,68 @@ home:
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
 
+    @pytest.mark.parametrize(
+        ("document", "field", "value_repr"),
+        [
+            pytest.param(
+                yaml.safe_dump(_flex_document_with_infinite_event_hours()),
+                "event_hours",
+                "inf",
+                id="fleet-distribution",
+            ),
+            pytest.param(
+                yaml.safe_dump(
+                    {
+                        "scenario": {
+                            "name": "Bristol Phase 1 Flex",
+                            "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
+                            "home": {"pv": {"capacity_kw": 4.0}},
+                            "finance": _flex_document_with_infinite_event_hours()["finance"],
+                        }
+                    }
+                ),
+                "event_hours",
+                "inf",
+                id="scenario",
+            ),
+            pytest.param(
+                "homes:\n  - {}\nfinance: {standing_charge_pence_per_day: 60.0, equity_fraction: .nan}\n",
+                "equity_fraction",
+                "nan",
+                id="homes-list",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "finance: {standing_charge_pence_per_day: .inf}\n",
+                "standing_charge_pence_per_day",
+                "inf",
+                id="fleet-sweep",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\nfinance: {standing_charge_pence_per_day: .nan}\n",
+                "standing_charge_pence_per_day",
+                "nan",
+                id="home",
+            ),
+        ],
+    )
     def test_a_finance_number_its_type_refuses_is_an_error_row_naming_the_field_and_the_value(
-        self, tmp_path: Path
+        self, tmp_path: Path, document: str, field: str, value_repr: str
     ) -> None:
-        """scenarios/bristol-phase1-flex.yaml's finance block, its first event window's event_hours infinite, in a scenario: document.
+        """Whatever the file's shape, a finance number its type refuses is the file's ERROR row.
 
-        `validate config` reads a finance block only through a scenario's loader; a fleet
-        file's finance: block is not read.
+        The rows cover each shape: a fleet_distribution: file, a scenario:, a homes: list,
+        a YAML sweep and a home: file. The fleet-distribution row is the PRD's C3 file,
+        scenarios/bristol-phase1-flex.yaml with its first event window's event_hours
+        infinite; the scenario row holds that same finance block.
         """
-        flex = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
-        finance = yaml.safe_load(flex.read_text())["finance"]
-        finance["grid_services_events"]["event_windows"][0]["event_hours"] = float("inf")
-        document = {
-            "scenario": {
-                "name": "Bristol Phase 1 Flex",
-                "period": {"start_date": "2024-01-01", "end_date": "2024-01-07"},
-                "home": {"pv": {"capacity_kw": 4.0}},
-                "finance": finance,
-            }
-        }
-
-        result = self._validate_config(tmp_path, yaml.safe_dump(document))
+        result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 1
         text = table_text(result.stdout)
         assert "ERROR" in text
         error_row = text[text.index("ERROR"):]
-        assert "event_hours" in error_row
-        assert names_as_a_word(error_row, "inf")
+        assert field in error_row
+        assert names_as_a_word(error_row, value_repr)
 
     def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
         self, tmp_path: Path
