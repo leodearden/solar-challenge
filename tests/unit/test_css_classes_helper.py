@@ -13,6 +13,7 @@ import pytest
 pytest.importorskip("jinja2")
 from tests._css_classes import (
     InlineStyledElement,
+    alpine_class_binding_literals,
     applied_classes_in_script,
     applied_classes_in_template,
     custom_property_references,
@@ -62,6 +63,29 @@ def test_alpine_binding_counts_object_keys_and_ternary_branches_not_compared_val
         "text-white",
         "text-slate-900",
     }
+
+
+def test_alpine_class_binding_literals_lists_every_literal_of_the_class_bindings_in_attribute_order() -> None:
+    """'overview' is only compared against, yet counts; x-text and :aria-checked are not class bindings."""
+    attrs: list[tuple[str, str | None]] = [
+        ("class", "'not-a-binding'"),
+        (":class", "{ 'bg-amber-50 text-amber-700': tab === 'overview', 'opacity-0': !open }"),
+        ("x-text", "'label-text'"),
+        ("x-bind:class", "open && 'flex gap-3'"),
+        (":aria-checked", "selected ? 'true' : 'false'"),
+        (":class", None),
+        (":class", "['p-4', mode ? 'text-white' : 'text-slate-900']"),
+    ]
+
+    assert alpine_class_binding_literals(attrs) == [
+        "bg-amber-50 text-amber-700",
+        "overview",
+        "opacity-0",
+        "flex gap-3",
+        "p-4",
+        "text-white",
+        "text-slate-900",
+    ]
 
 
 def test_inline_script_in_a_template_counts_its_class_assignments() -> None:
