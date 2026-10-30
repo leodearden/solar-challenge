@@ -411,14 +411,19 @@ class _StartTagClasses(HTMLParser):
         self.class_sets.append(_classes(dict(attrs)))
 
 
-def _template_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, read with every
-    Jinja tag blanked, then the words of each string its Jinja builds, such as a {% set %} value."""
+def _markup_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, read with every Jinja tag blanked."""
     elements = _StartTagClasses()
     elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
     elements.close()
+    return elements.class_sets
+
+
+def _template_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
+    each string its Jinja builds, such as a {% set %} value."""
     strings = _template_strings(_JINJA.parse(source))
-    return [*elements.class_sets, *(frozenset(string.split()) for string in strings)]
+    return [*_markup_class_lists(source), *(frozenset(string.split()) for string in strings)]
 
 
 def _template_strings(template: nodes.Template) -> list[str]:
@@ -535,16 +540,31 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
     )
 
 
-_DIVIDER = "border-b border-slate-200 dark:border-slate-700"
+_DIVIDER = frozenset({"border-b", "border-slate-200", "dark:border-slate-700"})
 """The divider ruled under each header band components/macros.html draws, and under its tab bars."""
 
 
-def test_components_macros_html_writes_the_divider_under_its_header_bands_and_tab_bars_once() -> None:
-    """card's, chart_panel's and panel's header bands and tab_bar each rule this divider. Other templates
-    rule their page chrome off with a divider of their own, so this counts macros.html's raw text alone."""
-    spellings = dashboard_template_sources()[_CARD_MACROS_KEY].count(_DIVIDER)
+def _spelled_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
+    each string literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the
+    set's classes."""
+    literals = [const.value for const in _JINJA.parse(source).find_all(nodes.Const) if isinstance(const.value, str)]
+    return [*_markup_class_lists(source), *(frozenset(literal.split()) for literal in literals)]
 
-    assert spellings == 1, (
-        f"{_CARD_MACROS_KEY} spells the divider '{_DIVIDER}' {spellings} times. Its header bands and "
-        "tab_bar build on one spelling, so an edit of the divider reaches them all."
+
+def test_components_macros_html_writes_the_divider_under_its_header_bands_and_tab_bars_once() -> None:
+    """card's, chart_panel's and panel's header bands and tab_bar each rule this divider, whose classes
+    one class list spells, in whatever order. Other templates rule their page chrome off with a divider
+    of their own, so this reads macros.html alone."""
+    spellings = [
+        classes
+        for classes in _spelled_class_lists(dashboard_template_sources()[_CARD_MACROS_KEY])
+        if _DIVIDER <= classes
+    ]
+
+    listing = "".join(f"\n  {' '.join(sorted(classes))}" for classes in spellings)
+    assert len(spellings) == 1, (
+        f"{_CARD_MACROS_KEY} spells every class of the divider, '{' '.join(sorted(_DIVIDER))}' in any "
+        f"order, in these {len(spellings)} class lists:{listing}\n"
+        "Its header bands and tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
