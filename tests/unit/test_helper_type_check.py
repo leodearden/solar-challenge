@@ -42,7 +42,7 @@ _ILL_TYPED_ON_PURPOSE = frozenset({"tests/unit/surface_forms_helper/_fixtures.py
 as inputs its tests hand to inspect, which only a `# type: ignore` or a construct that hides them from mypy would let
 pass. tests/unit/surface_forms_helper/_fixtures.py builds them for the rule tests of tests/_surface_forms.py."""
 
-_ERROR_LINE =re.compile(r"(?P<path>[^:]+):(?P<line>\d+): error: (?P<message>.*?)(?:  \[(?P<code>[a-z0-9-]+)\])?")
+_ERROR_LINE = re.compile(r"(?P<path>[^:]+):(?P<line>\d+): error: (?P<message>.*?)(?:  \[(?P<code>[a-z0-9-]+)\])?")
 
 
 @dataclass(frozen=True)
@@ -185,6 +185,7 @@ def test_the_type_check_flags_an_unused_type_ignore_in_each_helper_module(projec
 def test_every_helper_module_outside_the_e2e_suite_passes_the_type_check(project_root: Path) -> None:
     """No helper module outside tests/e2e has an error under the project's type check, so the verify fails a commit that adds one."""
     modules = [module for module in _helper_modules(project_root) if not _in_the_e2e_suite(module)]
+    assert modules, f"no helper module lies outside {_E2E_SUITE}, so this gate has none to type-check"
     errors = _type_check(project_root, *modules)
 
     assert not errors, (
@@ -202,8 +203,9 @@ def test_every_helper_module_of_the_e2e_suite_passes_the_type_check(
     Those modules import the e2e extra, which the verify's own environment lacks, so mypy reads the packages of the
     environment the offline lane's e2e job runs its suite in, and the verify fails a commit that adds an error there.
     """
-    interpreter = _e2e_job_interpreter(project_root, shared_uv_probe_environments)
     modules = [module for module in _helper_modules(project_root) if _in_the_e2e_suite(module)]
+    assert modules, f"no helper module lies in {_E2E_SUITE}, so this gate has none to type-check"
+    interpreter = _e2e_job_interpreter(project_root, shared_uv_probe_environments)
     errors = _type_check(project_root, f"--python-executable={interpreter}", *modules)
 
     assert not errors, (
