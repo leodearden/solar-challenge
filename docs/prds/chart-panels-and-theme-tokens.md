@@ -249,6 +249,7 @@ Invariants and where each is enforced:
 | Each card is the card macro. | `card` | a source test: the triple appears only in `macros.html` (θ) |
 | Each other card look is its macro: `panel`, `flat_card`, `split_card` (task 1168). | those macros | a source test: each look's classes appear only in `macros.html` |
 | A titled panel's header band is `panel`'s (task 1196). | `panel` | a source test: the band's classes appear only in `macros.html`; a source test: a `panel` call that gives `subtitle_expression` gives a title |
+| The divider under `macros.html`'s header bands and tab bars is spelled once (task 1205). | `_divider_classes`, which `_panel_title_band_classes`, `_header_band_classes` and `tab_bar` build on | a source test: `macros.html` spells the divider once; the per-look source test reads a `~` of strings and earlier `{% set %}` values as the one class list it builds |
 
 Downstream readers and their seam lines:
 

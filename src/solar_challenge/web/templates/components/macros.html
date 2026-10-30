@@ -12,15 +12,17 @@
 {% set _card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm' %}
 {# The classes every panel is drawn in, which only panel writes: the card's surface in a larger radius #}
 {% set _panel_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm' %}
+{# The divider ruled under a header band or a tab bar, which the bands' classes and tab_bar build on #}
+{% set _divider_classes = 'border-b border-slate-200 dark:border-slate-700' %}
 {# The classes of the header band a titled panel draws above its content, which only panel writes #}
-{% set _panel_title_band_classes = 'px-5 py-4 border-b border-slate-200 dark:border-slate-700' %}
+{% set _panel_title_band_classes = 'px-5 py-4 ' ~ _divider_classes %}
 {# The classes every flat card is drawn in, which only flat_card writes: the card's surface with no shadow #}
 {% set _flat_card_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg' %}
 {# The classes of a split card's top and bottom parts, which only split_card writes: the bottom has no top border, so the top's bottom border divides them #}
 {% set _split_card_top_classes = 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg' %}
 {% set _split_card_bottom_classes = 'bg-white dark:bg-slate-800 border border-t-0 border-slate-200 dark:border-slate-700 rounded-b-lg' %}
 {# The frame of the header band at a card's top, which card's title band and chart_panel's band share #}
-{% set _header_band_classes = 'px-6 border-b border-slate-200 dark:border-slate-700' %}
+{% set _header_band_classes = 'px-6 ' ~ _divider_classes %}
 
 
 {# A card around its caller's content: a link to href if given, else a div, in the card classes and classes. A title draws a header band in header_classes: a dot in dot_classes, the title and header_aside in a row, then the subtitle. body_classes wraps the content in a div of them #}
@@ -156,7 +158,7 @@
 
 {# A tab bar named label: each of tabs sets the Alpine variable model to its key, and the server draws the first selected. tests/e2e/test_tab_bar_colours.py says why its :class is an object #}
 {% macro tab_bar(tabs, label, classes='', list_classes='', tab_classes='', model='activeTab') %}
-<div class="border-b border-slate-200 dark:border-slate-700 {{ classes }}">
+<div class="{{ _divider_classes }} {{ classes }}">
     <nav class="flex overflow-x-auto scrollbar-hide {{ list_classes }}" aria-label="{{ label }}" role="tablist">
         {% for tab in tabs %}
         <button

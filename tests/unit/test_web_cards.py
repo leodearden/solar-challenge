@@ -3,12 +3,14 @@
 the panel, the flat card and the split card. Each element drawn in a look carries the
 look's classes plus the classes its page gives it. Each look's classes are written once,
 in its macro, so no other template or script draws that look itself, and so are the
-classes of the header band a titled panel draws, in panel. A card or panel call that
-gives a header band argument (card's subtitle, colours or aside; panel's
-subtitle_expression) also gives the title that opens the band.
+classes of the header band a titled panel draws, in panel; macros.html spells the divider
+under its header bands and tab bars once. A card or panel call that gives a header band
+argument (card's subtitle, colours or aside; panel's subtitle_expression) also gives the
+title that opens the band.
 """
 
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -24,6 +26,7 @@ from flask.testing import FlaskClient
 from jinja2 import Environment, nodes
 
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_divider import DIVIDER_CLASSES
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, headings, texts
@@ -61,7 +64,7 @@ _PANEL_LOOK = _Look(
     "panel",
     frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm".split()),
 )
-_PANEL_TITLE_BAND_LOOK = _Look("panel", frozenset("px-5 py-4 border-b border-slate-200 dark:border-slate-700".split()))
+_PANEL_TITLE_BAND_LOOK = _Look("panel", DIVIDER_CLASSES | {"px-5", "py-4"})
 """The header band a titled panel draws above its content."""
 _SHADOWS = frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
 """The Tailwind box-shadow utilities that draw a shadow."""
@@ -280,7 +283,7 @@ def test_a_titled_card_draws_a_header_band_with_its_dot_title_aside_and_subtitle
 
     assert _div_classes(drawn) == [
         _CARD_CLASSES | {"overflow-hidden"},
-        {"px-6", "py-4", "border-b", "border-slate-200", "dark:border-slate-700", "bg-component-pv-50"},
+        DIVIDER_CLASSES | {"px-6", "py-4", "bg-component-pv-50"},
         {"flex", "items-center", "gap-2"},
         {"w-3", "h-3", "rounded-full", "bg-component-pv-500"},
         {"p-6"},
@@ -409,20 +412,108 @@ class _StartTagClasses(HTMLParser):
         self.class_sets.append(_classes(dict(attrs)))
 
 
-def _template_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, read with every
-    Jinja tag blanked, then the words of each string its Jinja holds, such as a {% set %} value."""
+def _markup_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, read with every Jinja tag blanked."""
     elements = _StartTagClasses()
     elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
     elements.close()
-    constants = _JINJA.parse(source).find_all(nodes.Const)
-    strings = [constant.value for constant in constants if isinstance(constant.value, str)]
-    return [*elements.class_sets, *(frozenset(string.split()) for string in strings)]
+    return elements.class_sets
+
+
+def _template_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
+    each string its Jinja builds, such as a {% set %} value."""
+    strings = _template_strings(_JINJA.parse(source))
+    return [*_markup_class_lists(source), *(frozenset(string.split()) for string in strings)]
+
+
+def _template_strings(template: nodes.Template) -> list[str]:
+    """Each string *template*'s Jinja builds, in source order. Jinja runs a template's module-level
+    statements top to bottom, so each is read knowing the string each {% set %} above it built, unless
+    something else in the template binds the same name, such as another set or a macro parameter. A
+    macro's body, which Jinja runs when the macro is called, is likewise read knowing only the sets above
+    the macro: a set below the macro has run before an importing page calls it, but not before a call
+    placed above the set."""
+    binding_counts = Counter(name.name for name in template.find_all(nodes.Name) if name.ctx != "load")
+    module_strings: dict[str, str] = {}
+    strings: list[str] = []
+    for statement in template.body:
+        strings += _built_strings(statement, module_strings)
+        if isinstance(statement, nodes.Assign) and isinstance(statement.target, nodes.Name):
+            built = _built(statement.node, module_strings)
+            if built is not None and binding_counts[statement.target.name] == 1:
+                module_strings[statement.target.name] = built
+    return strings
+
+
+def _built_strings(node: nodes.Node, module_strings: Mapping[str, str]) -> list[str]:
+    """Each string *node* builds, in source order: itself whole when it builds one, else the strings its parts build."""
+    built = _built(node, module_strings)
+    if built is not None:
+        return [built]
+    return [string for child in node.iter_child_nodes() for string in _built_strings(child, module_strings)]
+
+
+def _built(node: nodes.Node, module_strings: Mapping[str, str]) -> str | None:
+    """The one string *node* builds, when it is a string or a ~ of strings and names *module_strings*
+    holds, else None. A name is read only as a ~'s operand: a bare {{ _card_classes }} uses a set's
+    string rather than writes it, so reading it would count the look twice."""
+    if isinstance(node, nodes.Const):
+        return node.value if isinstance(node.value, str) else None
+    if not isinstance(node, nodes.Concat):
+        return None
+    parts = [
+        module_strings.get(operand.name) if isinstance(operand, nodes.Name) else _built(operand, module_strings)
+        for operand in node.nodes
+    ]
+    strings = [part for part in parts if part is not None]
+    return "".join(strings) if len(strings) == len(parts) else None
 
 
 def _script_class_lists(source: str) -> list[frozenset[str]]:
     """The words of each string literal of the script *source*."""
     return [frozenset(literal[1:-1].split()) for literal in _SCRIPT_STRING_LITERAL.findall(source)]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        pytest.param(
+            "{% set _rule = 'border-b border-slate-200' %}{% set _band = 'px-5 py-4 ' ~ _rule %}",
+            [{"border-b", "border-slate-200"}, {"px-5", "py-4", "border-b", "border-slate-200"}],
+            id="tilde-of-a-string-and-an-earlier-set",
+        ),
+        pytest.param(
+            "{% macro band(rule) %}<div class=\"{{ 'px-5 py-4 ' ~ rule }}\"></div>{% endmacro %}",
+            [set(), {"px-5", "py-4"}],
+            id="tilde-of-a-string-and-a-macro-parameter",
+        ),
+        pytest.param(
+            "{% set _band = 'px-5 py-4 ' ~ _rule %}{% set _rule = 'border-b border-slate-200' %}",
+            [{"px-5", "py-4"}, {"border-b", "border-slate-200"}],
+            id="tilde-of-a-string-and-a-later-set",
+        ),
+        pytest.param(
+            "{% macro band() %}<div class=\"{{ 'px-5 py-4 ' ~ _rule }}\"></div>{% endmacro %}"
+            "{% set _rule = 'border-b border-slate-200' %}",
+            [set(), {"px-5", "py-4"}, {"border-b", "border-slate-200"}],
+            id="tilde-in-a-macro-of-a-string-and-a-set-below-the-macro",
+        ),
+        pytest.param(
+            "{% set rule = 'border-b border-slate-200' %}"
+            "{% macro band(rule) %}<div class=\"{{ 'px-5 py-4 ' ~ rule }}\"></div>{% endmacro %}",
+            [set(), {"border-b", "border-slate-200"}, {"px-5", "py-4"}],
+            id="tilde-of-a-string-and-a-macro-parameter-named-like-an-earlier-set",
+        ),
+    ],
+)
+def test_the_written_once_guard_reads_a_tilde_of_strings_and_earlier_sets_as_the_one_class_list_it_builds(
+    source: str, expected: list[set[str]]
+) -> None:
+    """A ~ is read as its strings alone when it reads a name whose string the guard cannot know: a set
+    below it, which Jinja has yet to run, or may not have run when a macro holding the ~ is called; or a
+    macro parameter, even one named like a set above it."""
+    assert _template_class_lists(source) == expected
 
 
 @pytest.mark.parametrize(
@@ -457,4 +548,30 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
         f"'{' '.join(sorted(look.classes))}' in any order{lacking} in this many class lists:{listing}\n"
         f"Those classes are written once, in {_CARD_MACROS_KEY}'s {look.macro}, so a page draws "
         f"that look by calling {look.macro}."
+    )
+
+
+def _spelled_class_lists(source: str) -> list[frozenset[str]]:
+    """The classes of each element of the Jinja template *source*'s literal markup, then the words of
+    each string literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the
+    set's classes."""
+    literals = [const.value for const in _JINJA.parse(source).find_all(nodes.Const) if isinstance(const.value, str)]
+    return [*_markup_class_lists(source), *(frozenset(literal.split()) for literal in literals)]
+
+
+def test_components_macros_html_writes_the_divider_under_its_header_bands_and_tab_bars_once() -> None:
+    """card's, chart_panel's and panel's header bands and tab_bar each rule the divider, and one class
+    list spells its classes, in whatever order. Other templates rule their page chrome off with a
+    divider of their own, so this reads macros.html alone."""
+    spellings = [
+        classes
+        for classes in _spelled_class_lists(dashboard_template_sources()[_CARD_MACROS_KEY])
+        if DIVIDER_CLASSES <= classes
+    ]
+
+    listing = "".join(f"\n  {' '.join(sorted(classes))}" for classes in spellings)
+    assert len(spellings) == 1, (
+        f"{_CARD_MACROS_KEY} spells every class of the divider, '{' '.join(sorted(DIVIDER_CLASSES))}' in any "
+        f"order, in these {len(spellings)} class lists:{listing}\n"
+        "Its header bands and tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
