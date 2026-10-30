@@ -26,6 +26,7 @@ from solar_challenge.config import (
     load_scenarios,
     parse_finance_config,
     parse_fleet_config,
+    parse_seg_rate,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.errors import ConfigurationError
@@ -218,10 +219,11 @@ def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
 def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     """The homes the file defines, built by the config.py loader its shape needs.
 
-    A fleet or home file's finance: block is also read, after its homes, as `finance run`
-    reads it, except that the block may be absent. A scenario's is read with the scenario.
-    Raises the loader's own ConfigurationError or ValueError when the file is refused,
-    and the finance parser's ConfigurationError when its block is.
+    A fleet or home file's seg: and finance: blocks are also read, after its homes and in
+    the order a scenario's are: seg: as `finance run` and `home run` read it, finance: as
+    `finance run` reads it, except that either block may be absent. A scenario's are read
+    with the scenario. Raises the loader's own ConfigurationError or ValueError when the
+    file is refused, and the block parser's ConfigurationError when a block is.
     """
     document = load_config(config_file)
     if "scenarios" in document or "scenario" in document:
@@ -236,6 +238,7 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
         defined = _fleet_homes(document)
     else:
         defined = _DefinedHomes(homes=[load_home_config(config_file)])
+    parse_seg_rate(document.get("seg"))
     parse_finance_config(document.get("finance"))
     return defined
 
@@ -368,10 +371,11 @@ def config(
     - any other file loads as a home file: a home: block, or a flat home
 
     A YAML-defined sweep is built at every sweep point, as `fleet sweep` builds it.
-    A fleet or home file's finance: block is read as `finance run` reads it, and may be
-    absent; a scenario's is read with the scenario. The first value or key refused is an
-    ERROR. The loader's advisories, and sizes beyond a domestic install, are WARNINGs.
-    Other top-level blocks, such as seg:, flex_band: or community:, are not checked.
+    A fleet or home file's seg: block is read as `finance run` and `home run` read it, and
+    its finance: block as `finance run` reads it; either may be absent. A scenario's are
+    read with the scenario. The first value or key refused is an ERROR. The loader's
+    advisories, and sizes beyond a domestic install, are WARNINGs. Other top-level blocks,
+    such as flex_band:, community: or period:, are not checked.
     """
     errors, warnings = _findings(config_file)
     _print_config_findings(config_file, errors=errors, warnings=warnings)
