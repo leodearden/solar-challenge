@@ -14,6 +14,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from tests._chat_message_rows import insert_chat_message
 from tests._css_classes import names_palette
 from tests._html_page import element_attributes
 from tests._run_summaries import home_summary
@@ -116,6 +117,26 @@ class TestAssistantHistory:
 
         assert resp.status_code == 200
         assert [(m["role"], m["content"]) for m in resp.get_json()["messages"]] == [("user", "What is SOC?")]
+
+    def test_history_lists_a_message_whose_stored_metadata_is_not_json_with_metadata_null(
+        self, client: FlaskClient, app: Flask
+    ) -> None:
+        """A stored message whose metadata is not JSON leaves GET /history answering, with that message listed and its metadata null."""
+        database = database_of(app)
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "damaged-metadata-history-sid"
+        save_chat_message(database, "damaged-metadata-history-sid", "user", "What is SOC?")
+        insert_chat_message(
+            database, "damaged-metadata-history-sid", "assistant", "SOC is state of charge.", "{not json"
+        )
+
+        resp = client.get("/assistant/history")
+
+        assert resp.status_code == 200
+        assert [(m["role"], m["content"], m["metadata"]) for m in resp.get_json()["messages"]] == [
+            ("user", "What is SOC?", None),
+            ("assistant", "SOC is state of charge.", None),
+        ]
 
 
 class TestChatEndpointHappyPath:
@@ -304,6 +325,29 @@ class TestChatEndpointHappyPath:
         assert metadata["cache_creation_input_tokens"] == 40 + 2
         assert metadata["cache_read_input_tokens"] == 3 + 50
         assert metadata["model"] == anthropic_api.last_kwargs["model"]
+
+    def test_a_turn_replays_a_stored_reply_whose_metadata_is_not_json_and_streams_its_answer(
+        self,
+        client: FlaskClient,
+        app: Flask,
+        anthropic_api: FakeAnthropic,
+    ) -> None:
+        """A session holding a reply whose stored metadata is not JSON still takes its next turn, which replays that reply and streams its answer."""
+        database = database_of(app)
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "damaged-metadata-chat-sid"
+        save_chat_message(database, "damaged-metadata-chat-sid", "user", "hello")
+        insert_chat_message(database, "damaged-metadata-chat-sid", "assistant", "Hi there!", "{not json")
+        anthropic_api.set_chunks(["Hello again."])
+
+        body = client.post("/assistant/chat", json={"message": "again"}).get_data(as_text=True)
+
+        assert reply_text(parse_sse_events(body)) == "Hello again."
+        assert anthropic_api.last_kwargs["messages"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "again"},
+        ]
 
 
 class TestChatDegradation:
