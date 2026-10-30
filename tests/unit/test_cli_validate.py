@@ -461,6 +461,36 @@ home:
         assert field in error_row
         assert names_as_a_word(error_row, value_repr)
 
+    @pytest.mark.parametrize(
+        ("scenario_name", "rate"),
+        [
+            pytest.param("bristol-phase1-flex.yaml", float("nan"), id="fleet-distribution"),
+            pytest.param("bristol-arbitrage.yaml", float("inf"), id="home"),
+        ],
+    )
+    def test_a_seg_rate_its_parser_refuses_is_an_error_row_naming_the_rate_and_the_value(
+        self, tmp_path: Path, scenario_name: str, rate: float
+    ) -> None:
+        """A committed scenario whose seg: block carries *rate*.
+
+        The fleet-distribution row is a fleet file, whose seg: block `finance run` reads;
+        the home row is a home: file, whose seg: block `home run` reads.
+        """
+        scenario = Path(__file__).resolve().parents[2] / "scenarios" / scenario_name
+        document = yaml.safe_load(scenario.read_text())
+        document["seg"]["rate_pence_per_kwh"] = rate
+
+        result = self._validate_config(
+            tmp_path, yaml.safe_dump(document), file_name=scenario_name
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert "rate_pence_per_kwh" in error_row
+        assert names_as_a_word(error_row, rate)
+
     def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
         self, tmp_path: Path
     ) -> None:
