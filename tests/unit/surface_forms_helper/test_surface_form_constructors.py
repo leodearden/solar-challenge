@@ -34,6 +34,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_new_is,
     metaclass_whose_get_gives,
     object_whose_call_is,
+    with_a_string_signature,
 )
 
 
@@ -80,11 +81,6 @@ class DefCall:
 def _with_a_text_signature(call: DefCall) -> DefCall:
     call.__text_signature__ = "(rate)"
     return call
-
-
-def _with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
-    function.__signature__ = "(receiver, rate)"
-    return function
 
 
 class Period(enum.Enum):
@@ -852,7 +848,7 @@ def test_a_class_whose_classmethod_staticmethod_or_descriptor_new_itself_carries
     [
         pytest.param(Giver, r"\.Giver\b", id="descriptor"),
         pytest.param(
-            lambda build: Giver(_with_a_string_signature(build)),
+            lambda build: Giver(with_a_string_signature(build)),
             r"\.Giver\b",
             id="descriptor-giving-a-string-signature",
         ),
@@ -1347,7 +1343,7 @@ def test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_is_spelled_by
     [
         pytest.param(functools.partial, r"\bfunctools\.partial\b", id="partial"),
         pytest.param(
-            _with_a_string_signature,
+            with_a_string_signature,
             r"'\(receiver, rate\)', a builtins\.str\b",
             id="string-signature",
         ),
@@ -1399,7 +1395,7 @@ def test_a_class_whose_new_or_metaclass_call_inspect_binds_to_none_raises_the_ty
     ("hold", "refused"),
     [
         pytest.param(
-            _with_a_string_signature,
+            with_a_string_signature,
             r"'\(receiver, rate\)', a builtins\.str\b",
             id="string-signature",
         ),
@@ -1613,7 +1609,7 @@ def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type
         __init__ = functools.partial(build)
 
     class Created:
-        __new__ = _with_a_string_signature(make)
+        __new__ = with_a_string_signature(make)
 
     base, refused = {
         "__new__": (Built, r"\.Built\.__init__\b.*\bfunctools\.partial\b"),
