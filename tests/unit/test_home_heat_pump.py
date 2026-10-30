@@ -11,6 +11,8 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from tests._synthetic_weather import sunless_tmy, weather_for
 
+_TMY_WIND_SPEED = 3.0
+
 
 class TestHeatPumpConfig:
     """Test HeatPumpConfig construction — pure config, no simulation."""
@@ -51,7 +53,7 @@ def cold_january15_tmy_weather() -> pd.DataFrame:
     the afternoon the warmest (7 °C from 12:00 to 14:00 UTC).
     The rest of the year is 20 °C, so 15 January carries the whole year's heat demand.
     """
-    weather = sunless_tmy(temp_air=20.0, wind_speed=3.0)
+    weather = sunless_tmy(temp_air=20.0, wind_speed=_TMY_WIND_SPEED)
     weather.loc["1990-01-15", "temp_air"] = [
         2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 4.0, 5.0, 6.0,
         7.0, 7.0, 7.0, 6.0, 5.0, 4.0, 3.0, 3.0, 2.0, 2.0, 2.0, 2.0,
@@ -121,7 +123,7 @@ class TestSimulateHomeNamesTheHeatPumpLoad:
         )
         day = pd.Timestamp("2024-01-15")
 
-        results = simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=temp_air_c, wind_speed=3.0)))
+        results = simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=temp_air_c, wind_speed=_TMY_WIND_SPEED)))
 
         assert results.heat_pump_load is not None
         assert results.heat_pump_load.name == "heat_pump_load_kw"
@@ -133,7 +135,7 @@ def constant_10c_tmy_weather() -> pd.DataFrame:
 
     Every minute is 5.5 °C below the heat pump's 15.5 °C base temperature, so every day of the year needs the same heat.
     """
-    return sunless_tmy(temp_air=10.0, wind_speed=3.0)
+    return sunless_tmy(temp_air=10.0, wind_speed=_TMY_WIND_SPEED)
 
 
 class TestSimulateHomeSharesTheAnnualHeatDemandOverTheTMYYear:
@@ -186,7 +188,7 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
         day = pd.Timestamp("2025-01-15")
 
         with pytest.raises(ValueError) as refusal:
-            simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=10.0, wind_speed=3.0).loc["1990-01-15"]))
+            simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=10.0, wind_speed=_TMY_WIND_SPEED).loc["1990-01-15"]))
 
         named = (repr(home.location), "24 rows", "(8,760 to 8,784)")
         assert [value for value in named if value not in str(refusal.value)] == []
