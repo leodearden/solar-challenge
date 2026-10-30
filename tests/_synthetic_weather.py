@@ -112,7 +112,10 @@ def sunless_weather(day: str | pd.Timestamp, *, temp_air: float) -> pd.DataFrame
 
 
 def sunless_tmy(*, temp_air: float, wind_speed: float = _SUNLESS_WIND_SPEED) -> pd.DataFrame:
-    """A TMY year with no sun at a constant *temp_air* °C, shaped as PVGIS's (TMY_HOURS hourly rows from 1990-01-01 00:00 UTC), at sunless_weather's 2 m/s of wind unless *wind_speed* is given."""
+    """A TMY year with no sun at a constant *temp_air* °C, shaped as PVGIS's: TMY_HOURS hourly rows from 1990-01-01 00:00 UTC.
+
+    Its wind speed is sunless_weather's unless *wind_speed* is given.
+    """
     return _sunless_hours(_tmy_index(), temp_air=temp_air, wind_speed=wind_speed)
 
 
