@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form for the constructor inspect reads for a class, or the signature the class carries in its place, and the TypeError raised where inspect reads that constructor differently by minor or cannot read it, one per test.
 
-A constructor every minor skips, and what inspect reads in its place, are a family of
-their own.
+A constructor every minor skips, and what inspect reads in its place, have their rules
+in test_surface_form_skipped_constructors.py.
 
 The classes and functions above the first test are defined at module level, where their
 qualified names carry no '<locals>' and a parametrize decorator can reach them.
