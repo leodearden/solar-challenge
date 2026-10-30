@@ -11,6 +11,7 @@ import random
 import re
 import warnings
 from dataclasses import MISSING, asdict, dataclass, field, fields, replace
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
@@ -35,7 +36,7 @@ from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVChargerType, EVConfig
+from solar_challenge.ev import CHARGER_TYPES, EVChargerType, EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
@@ -647,6 +648,47 @@ class SubBlock:
     write: Callable[[Any], dict[str, Any]]
 
 
+class FieldKind(Enum):
+    """The ways a fleet_distribution: block can give each home a value for one key of a component."""
+
+    NUMBER = "number"
+    """A float: fixed, null, weighted_discrete, normal, uniform, shuffled_pool or proportional_to."""
+
+    COUNT = "count"
+    """A whole number: drawn as a NUMBER is, then converted by the sampler's one count conversion."""
+
+    CHOICE = "choice"
+    """One of its FleetField's choices: fixed, null, or a weighted_discrete or shuffled_pool of them."""
+
+    SETTING = "setting"
+    """Not drawn: one value, as written (a bool, a string or a sub-block), given to every home."""
+
+
+@dataclass(frozen=True)
+class FleetField:
+    """One key's row in a component's fleet grammar.
+
+    *kind* is how a fleet_distribution: block gives each home the key's value. *choices* are the
+    values a CHOICE field may take; a field of any other kind has none. *required* means the
+    block must give the key.
+    """
+
+    kind: FieldKind
+    choices: tuple[str, ...] = ()
+    required: bool = False
+
+    def __post_init__(self) -> None:
+        """Refuse a CHOICE field without choices, and a field of any other kind with some."""
+        if (self.kind is FieldKind.CHOICE) != bool(self.choices):
+            needs = "must list its choices" if self.kind is FieldKind.CHOICE else "takes no choices"
+            raise ConfigurationError(f"FleetField: a {self.kind.name} field {needs}, got {self.choices!r}")
+
+
+def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
+    """The presence rule of a component that any non-null draw of its presence field asks for."""
+    return True
+
+
 _Component = TypeVar("_Component", bound=DataclassInstance)
 
 
@@ -658,6 +700,12 @@ class ComponentBlock(Generic[_Component]):
     order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
     holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
     reads as, for each key where that is not the dataclass's declared default.
+
+    *fleet* holds the keys a fleet_distribution: block gives each home, each with its FleetField,
+    in key order, which is the order a home draws them; *not_in_fleet* maps each other key to the
+    reason the fleet grammar does not carry it. *presence* is the fleet field whose null draw
+    means the home has no such component, and *asks_for_component* says whether its non-null
+    draw, at its path, asks for one.
     tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields (T1).
     """
 
@@ -666,6 +714,10 @@ class ComponentBlock(Generic[_Component]):
     outside_grammar: Mapping[str, str]
     sub_blocks: Mapping[str, SubBlock]
     when_omitted: Mapping[str, object]
+    fleet: Mapping[str, FleetField]
+    not_in_fleet: Mapping[str, str]
+    presence: Optional[str] = None
+    asks_for_component: Callable[[object, str], bool] = _any_draw_asks_for_it
 
     def value_when_omitted(self, name: str) -> object:
         """The value field *name* is built with when a block does not set it, as no block sets a field outside the grammar.
@@ -914,6 +966,12 @@ def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]
     }
 
 
+_NUMBER_FIELD = FleetField(FieldKind.NUMBER)
+_COUNT_FIELD = FleetField(FieldKind.COUNT)
+_SETTING_FIELD = FleetField(FieldKind.SETTING)
+
+_UNNAMED_IN_A_FLEET = "the generator names each home, and leaves its components unnamed"
+
 PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
     config_type=PVConfig,
     keys=(
@@ -927,6 +985,17 @@ PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
     }),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType({"capacity_kw": 4.0}),
+    fleet=MappingProxyType({
+        "capacity_kw": FleetField(FieldKind.NUMBER, required=True),
+        **dict.fromkeys(
+            (
+                "azimuth", "tilt", "module_efficiency", "temperature_coefficient", "inverter_efficiency",
+                "inverter_capacity_kw", "system_age_years", "degradation_rate_per_year", "system_losses",
+            ),
+            _NUMBER_FIELD,
+        ),
+    }),
+    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
 )
 
 BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
@@ -943,6 +1012,24 @@ BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
         "grid_charging": SubBlock(_parse_grid_charge_config, _grid_charging_block),
     }),
     when_omitted=MappingProxyType({"capacity_kwh": 5.0}),
+    fleet=MappingProxyType({
+        "capacity_kwh": FleetField(FieldKind.NUMBER, required=True),
+        "max_charge_kw": _NUMBER_FIELD,
+        "max_discharge_kw": _NUMBER_FIELD,
+        "dispatch_strategy": _SETTING_FIELD,
+        "grid_charging": _SETTING_FIELD,
+        **dict.fromkeys(
+            (
+                "min_soc_fraction", "max_soc_fraction", "charge_efficiency", "discharge_efficiency",
+                "efficiency", "system_age_years", "calendar_fade_rate_per_year",
+                "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
+            ),
+            _NUMBER_FIELD,
+        ),
+    }),
+    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
+    presence="capacity_kwh",
+    asks_for_component=has_battery,
 )
 
 LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
@@ -951,6 +1038,15 @@ LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
     outside_grammar=MappingProxyType({}),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType({}),
+    fleet=MappingProxyType({
+        "annual_consumption_kwh": _NUMBER_FIELD,
+        "household_occupants": _COUNT_FIELD,
+        "use_stochastic": _SETTING_FIELD,
+    }),
+    not_in_fleet=MappingProxyType({
+        "name": _UNNAMED_IN_A_FLEET,
+        "seed": "the generator gives each home the fleet's seed plus the home's index",
+    }),
 )
 
 HEAT_PUMP_BLOCK: ComponentBlock[HeatPumpConfig] = ComponentBlock(
@@ -959,6 +1055,13 @@ HEAT_PUMP_BLOCK: ComponentBlock[HeatPumpConfig] = ComponentBlock(
     outside_grammar=MappingProxyType({}),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType({}),
+    fleet=MappingProxyType({
+        "heat_pump_type": FleetField(FieldKind.CHOICE, choices=HEAT_PUMP_TYPES),
+        "thermal_capacity_kw": _NUMBER_FIELD,
+        "annual_heat_demand_kwh": _NUMBER_FIELD,
+    }),
+    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
+    presence="heat_pump_type",
 )
 
 EV_BLOCK: ComponentBlock[EVConfig] = ComponentBlock(
@@ -970,15 +1073,30 @@ EV_BLOCK: ComponentBlock[EVConfig] = ComponentBlock(
     outside_grammar=MappingProxyType({}),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType({}),
+    fleet=MappingProxyType({
+        "charger_type": FleetField(FieldKind.CHOICE, choices=CHARGER_TYPES, required=True),
+        "arrival_hour": _COUNT_FIELD,
+        "departure_hour": _COUNT_FIELD,
+        "required_charge_kwh": _NUMBER_FIELD,
+        "smart_charging_mode": _SETTING_FIELD,
+    }),
+    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
+    presence="charger_type",
 )
+
+_LOCATION_KEYS = ("latitude", "longitude", "timezone", "altitude", "name")
 
 LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
     config_type=Location,
-    keys=("latitude", "longitude", "timezone", "altitude", "name"),
+    keys=_LOCATION_KEYS,
     outside_grammar=MappingProxyType({}),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType(
         {key: value for key, value in asdict(Location.bristol()).items() if key != "name"}
+    ),
+    fleet=MappingProxyType({}),
+    not_in_fleet=MappingProxyType(
+        dict.fromkeys(_LOCATION_KEYS, "a fleet's homes share the location: block of its file")
     ),
 )
 
