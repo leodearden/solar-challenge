@@ -29,8 +29,7 @@ class UndecodableJson(Exception):
 class JsonObjectRefused(Exception):
     """JSON text that holds no JSON object: the reason, decoded_json's or "is not a JSON object", and json.loads's refusal, which is also its cause, or None when the text is JSON but not an object.
 
-    It is not a ValueError, for the reason UndecodableJson is not: a store's own text is a server
-    fault, never a request's bad value.
+    It is not a ValueError, for the reason UndecodableJson is not.
     """
 
     def __init__(self, reason: str, refusal: ValueError | RecursionError | None) -> None:
