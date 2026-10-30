@@ -5,20 +5,28 @@ A helper module is a module of tests/ whose name starts with an underscore, or a
 under a directory of tests/ whose name does, wherever either sits, save those
 _ILL_TYPED_ON_PURPOSE names. The verify's type_check_command checks src/solar_challenge
 alone, so these tests are how the verify type-checks each helper module, with the settings
-pyproject.toml's [tool.mypy] gives it. The test modules stay outside the check, and the
-lint's F821 is the check on their annotations. docs/lint-gate.md §7 records that the check
-covers every helper module, and its §3 says why a gate is a test rather than an
-orchestrator command.
+pyproject.toml's [tool.mypy] gives it. tests/e2e's modules import the e2e extra, which the
+verify's own environment lacks, so their check reads the packages of the environment the
+offline lane's e2e job runs in. The test modules stay outside the check, and the lint's
+F821 is the check on their annotations. docs/lint-gate.md §7 records that the check covers
+every helper module, and its §3 says why a gate is a test rather than an orchestrator
+command.
 """
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 import pytest
+
+from tests._collect_only import requires_uv
+from tests._command_runner import ShellCommand, describe_outcome, run_command
+from tests._orchestrator_config import lane_command
+from tests._uv_env import SharedUvEnvironments, uv_run_options
 
 pytest.importorskip(
     "jinja2",
@@ -102,6 +110,25 @@ def _in_the_e2e_suite(module: str) -> bool:
     return PurePosixPath(module).is_relative_to(_E2E_SUITE)
 
 
+def _e2e_job_interpreter(project_root: Path, environments: SharedUvEnvironments) -> str:
+    """The Python of the environment the offline lane's e2e job runs its suite in, synced as the job's command syncs it.
+
+    environments shares that environment with every probe that runs the job's command, so a session syncs it once.
+    """
+    command = lane_command(project_root, "e2e").command
+    print_interpreter = shlex.join(
+        ["uv", "run", *uv_run_options(command), "python", "-c", "import sys; print(sys.executable)"]
+    )
+    outcome = run_command(
+        ShellCommand(print_interpreter, project_root), environments.for_command(command), timeout_secs=300
+    )
+    assert outcome.returncode == 0, (
+        f"{print_interpreter!r} could not sync the e2e job's environment and name its Python; if uv could not "
+        f"download a wheel its cache lacks, run that command once with network access\n{describe_outcome(outcome)}"
+    )
+    return outcome.stdout.strip()
+
+
 def _type_check_probe(project_root: Path, source: str, tmp_path: Path) -> list[_Error]:
     """Type-check *source* in place of each helper module, in one mypy run.
 
@@ -162,5 +189,24 @@ def test_every_helper_module_outside_the_e2e_suite_passes_the_type_check(project
 
     assert not errors, (
         "the helper modules have type errors; clear each without hiding a real one:\n"
+        + "\n".join(map(str, errors))
+    )
+
+
+@requires_uv
+def test_every_helper_module_of_the_e2e_suite_passes_the_type_check(
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
+) -> None:
+    """No helper module of tests/e2e has an error under the project's type check, with the e2e job's packages.
+
+    Those modules import the e2e extra, which the verify's own environment lacks, so mypy reads the packages of the
+    environment the offline lane's e2e job runs its suite in, and the verify fails a commit that adds an error there.
+    """
+    interpreter = _e2e_job_interpreter(project_root, shared_uv_probe_environments)
+    modules = [module for module in _helper_modules(project_root) if _in_the_e2e_suite(module)]
+    errors = _type_check(project_root, f"--python-executable={interpreter}", *modules)
+
+    assert not errors, (
+        "the helper modules of tests/e2e have type errors; clear each without hiding a real one:\n"
         + "\n".join(map(str, errors))
     )
