@@ -132,7 +132,9 @@ def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
     """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any."""
     if _is_read_through_its_call(obj):
         _refuse_minor_dependent_call(subject, obj)
-        _refuse_chain_without_a_portable_form(subject, _call_as_read(obj))
+        call = _call_as_read(obj)
+        _refuse_bound_to_uncallable(subject, "is read through", _call_holder(obj), "__call__", call)
+        _refuse_chain_without_a_portable_form(subject, call)
 
 
 def _is_read_through_its_call(obj: object) -> bool:
@@ -148,6 +150,11 @@ def _is_read_through_its_call(obj: object) -> bool:
 def _call_as_read(obj: object) -> object:
     """The __call__ inspect reads for *obj*, an object its class makes callable: the one its type resolves, as inspect.getattr_static finds it, bound to *obj* as _bound_to binds it."""
     return _bound_to(inspect.getattr_static(type(obj), "__call__"), obj)
+
+
+def _call_holder(obj: object) -> type:
+    """The first class in the MRO of *obj*'s type whose namespace holds __call__: the class holding the __call__ that type resolves."""
+    return next(namespace_holders(type(obj).__mro__, "__call__"))
 
 
 def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
@@ -708,7 +715,7 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
 
 def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object) -> None:
     """Raise the TypeError for *cls* that the first refusal below finds for *read*, the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it: *read* is not callable, is read as an Enum, carries at the end of its chain a __signature__ inspect reads by minor, or is read as a builtin or through an object its class makes callable."""
-    _refuse_constructor_bound_to_uncallable(cls, owner, name, read)
+    _refuse_bound_to_uncallable(cls, "is constructed through", owner, name, read)
     end = _chain_end(read, stop=_has_non_none_signature)
     _refuse_constructor_read_as_enum(cls, owner, name, end)
     _refuse_constructor_signature(cls, owner, name, end)
@@ -716,25 +723,25 @@ def _refuse_constructor_reading(cls: type, owner: type, name: str, read: object)
     _refuse_call_without_a_portable_form(cls, end)
 
 
-def _refuse_constructor_bound_to_uncallable(
-    cls: type, owner: type, name: str, read: object
+def _refuse_bound_to_uncallable(
+    subject: object, verb: _BindingVerb, owner: type, name: str, read: object
 ) -> None:
-    """Raise TypeError naming *cls*, *owner*'s *name*, and *read* with its type, if *read* is not callable; *read* is the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it.
+    """Raise TypeError saying *subject* *verb* *owner*'s *name*, and naming *read* with its type, if *read* is not callable; *read* is what *owner* holds as *name*, the constructor inspect reads first for *subject* or the __call__ an object's type resolves, which inspect reads in *subject*'s place, bound as inspect binds it.
 
     On every admitted minor, inspect checks that *read* is callable before it reads
     anything of it, its __signature__ included.
     """
     if not callable(read):
-        raise _constructor_read_as_error(cls, owner, name, read, _NOT_CALLABLE_ON_ANY_MINOR)
+        raise _read_as_error(subject, verb, owner, name, read, _NOT_CALLABLE_ON_ANY_MINOR)
 
 
-def _constructor_read_as_error(
-    cls: type, owner: type, name: str, link: object, reading: str
+def _read_as_error(
+    subject: object, verb: _BindingVerb, owner: type, name: str, link: object, reading: str
 ) -> TypeError:
-    """The error naming *cls*, *owner*'s *name*, and *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from the constructor *owner* holds as *name* that inspect reads first for *cls*, bound as inspect binds it."""
+    """The error saying *subject* *verb* *owner*'s *name*, and naming *link* with its type and *reading*, the clause saying how inspect reads it; *link* is a link of the chain inspect follows from what *owner* holds as *name*, the constructor inspect reads first for *subject* or the __call__ an object's type resolves, which inspect reads in *subject*'s place, bound as inspect binds it."""
     return TypeError(
-        f"{label_of(cls)} is constructed through {label_of(owner)}.{name}, which inspect reads "
-        f"as {label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
+        f"{label_of(subject)} {verb} {label_of(owner)}.{name}, which inspect reads as "
+        f"{label_of(link)}, a {label_of(type(link))}, {reading}: make the name private, or "
         f"define {name} with def"
     )
 
@@ -757,7 +764,7 @@ def _refuse_constructor_read_as_builtin(
     if found is None:
         return
     link, reading = found
-    raise _constructor_read_as_error(cls, owner, name, link, reading)
+    raise _read_as_error(cls, "is constructed through", owner, name, link, reading)
 
 
 def _constructor_link_read_as_builtin(read: object) -> tuple[object, str] | None:
@@ -980,11 +987,11 @@ def _metaclass_call_as_read(cls: type) -> object | None:
 
 
 def _bound_to(descriptor: object, owner: object) -> object:
-    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if its type defines no __get__ or it is a functools.partial."""
+    """*descriptor* bound to *owner* through its type's __get__, as inspect binds a constructor, or a callable object's __call__, it reads, but a classmethod as _classmethod_as_read gives it for *owner*'s type; *descriptor* itself if it is a class, which inspect binds to nothing, if its type defines no __get__, or if it is a functools.partial."""
     if isinstance(descriptor, classmethod):
         return _classmethod_as_read(descriptor.__func__, type(owner))
     get = getattr(type(descriptor), "__get__", None)
-    if get is None or isinstance(descriptor, functools.partial):
+    if get is None or inspect.isclass(descriptor) or isinstance(descriptor, functools.partial):
         return descriptor
     bound: object = get(descriptor, owner, type(owner))
     return bound

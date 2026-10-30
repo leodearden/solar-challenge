@@ -1,35 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The fixtures more than one rule module of this package uses.
+"""The fixtures more than one rule module of this package uses; each one's name, or its own docstring, says what it is.
 
 Outer and Preset are defined at module level, where a qualified name carries no
 '<locals>'; a rule module that imports them binds their names for its own forward
-references to resolve. imported_module writes a module and imports it, for the rules
-about the module a name is read in. UNREADABLE_ROUTINES holds a routine of each kind
-whose signature inspect cannot read, each with its kind's name, for the refusal rules.
-REFUSED_ROUTINE_AND_PARTIAL_MEMBERS adds a plain functools.partial to those: the members
-that both branches of refuse_member_without_a_portable_form refuse.
-GetterDeleter is a descriptor whose type defines __get__ and __delete__ but no __set__,
-and CallableGetterDeleter a callable one, for the rules about how inspect reads such a
-descriptor. GetterPartial is a functools.partial whose type takes __get__ from a class
-other than functools.partial, and SettableGetterPartial one whose type also defines
-__set__, for the rules about how inspect reads and binds such a partial.
-PartialFirstGetterPartial is one whose type takes __get__ from GetMixin, a base after
-functools.partial, whose own __get__ comes first from Python 3.13, for the rules about a
-classmethod that wraps such a partial and about how inspect reads and binds such a
-partial.
-ChainedCall's __call__ is a classmethod of a staticmethod, for the rules about an object
-inspect reads through a __call__ that Python 3.11 and 3.12 bind through the __get__ of
-what it wraps. CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR makes, from a function, a method
-descriptor, a classmethod or a property, each of which a classmethod that wraps it binds
-through its __get__ on 3.11 and 3.12 and as a method from 3.13, for the rules about where
-named_classes binds such a classmethod itself.
-class_whose_init_is, class_whose_new_is and class_whose_metaclass_call_is build a class
-whose __init__, whose __new__, or whose metaclass's __call__ is the argument, for the
-rules about each constructor site.
+references to resolve.
 """
 
 import functools
 import importlib.util
+import inspect
 import pathlib
 import sys
 import types
@@ -93,6 +72,16 @@ class CallableGetterDeleter(GetterDeleter):
     def __call__(self, rate: int) -> str: ...
 
 
+class Giver:
+    """A descriptor whose __get__ gives the object it was made with."""
+
+    def __init__(self, given: object) -> None:
+        self.given = given
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self.given
+
+
 class GetterPartial(functools.partial):
     """A functools.partial whose own __get__ binds it to an instance as a method, as a function's binds."""
 
@@ -114,7 +103,7 @@ class GetMixin:
 
 
 class PartialFirstGetterPartial(functools.partial, GetMixin):
-    """A functools.partial whose type takes __get__ from a base after functools.partial in its MRO."""
+    """A functools.partial whose type takes __get__ from GetMixin, a base after functools.partial in its MRO, on Python 3.11 and 3.12, and from functools.partial's own __get__, which comes first, from 3.13."""
 
 
 def _share(receiver: object, rate: int) -> None: ...
@@ -157,8 +146,60 @@ def class_whose_metaclass_call_is(constructor: object) -> type:
     return Called
 
 
+def object_whose_call_is(call: object) -> object:
+    class Caller:
+        __call__ = call
+
+    return Caller()
+
+
+def metaclass_whose_get_gives(given: object) -> type:
+    class Getting(type):
+        def __get__(cls, instance: object, owner: type | None = None) -> object:
+            return given
+
+    return Getting
+
+
+GIVEN_BY_A_METACLASS_GET = (
+    pytest.param(1, id="get-giving-an-object-that-is-not-callable"),
+    pytest.param(None, id="get-giving-none"),
+)
+
+
 def _settle(self: object, rate: int) -> None: ...
 
+
+_NONE_TYPE = r"\bbuiltins\.NoneType\b"
+_SIMPLE_NAMESPACE = r"\btypes\.SimpleNamespace\b"
+
+CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE = (
+    pytest.param(None, _NONE_TYPE, id="none"),
+    pytest.param(staticmethod(None), _NONE_TYPE, id="staticmethod-of-none"),
+    pytest.param(classmethod(None), _NONE_TYPE, id="classmethod-of-none"),
+    pytest.param(Giver(None), _NONE_TYPE, id="descriptor-giving-none"),
+    pytest.param(types.SimpleNamespace(), _SIMPLE_NAMESPACE, id="object-defining-no-get"),
+    pytest.param(staticmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="staticmethod"),
+    pytest.param(classmethod(types.SimpleNamespace()), _SIMPLE_NAMESPACE, id="classmethod"),
+    pytest.param(
+        Giver(Giver(_settle)), r"\.Giver\b", id="descriptor-giving-a-get-only-descriptor"
+    ),
+    pytest.param(
+        Giver(GetterDeleter()),
+        r"\.GetterDeleter\b",
+        id="descriptor-giving-a-get-delete-descriptor",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__="(rate)")),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-string-signature",
+    ),
+    pytest.param(
+        Giver(types.SimpleNamespace(__signature__=inspect.Signature())),
+        _SIMPLE_NAMESPACE,
+        id="descriptor-giving-an-object-carrying-a-signature",
+    ),
+)
 
 UNREADABLE_ROUTINES = (
     pytest.param(
