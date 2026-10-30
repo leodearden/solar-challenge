@@ -53,7 +53,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "raise ConfigurationError\\("
+          pattern: "raise ConfigurationError(\\.must_be)?\\("
           paths: ["src/solar_challenge/number_fields.py"]
           expect: present
       - name: "leaf-imports-only-errors-and-whole-numbers"
