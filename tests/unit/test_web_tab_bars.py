@@ -2,13 +2,13 @@
 """components/macros.html's tab_bar draws the dashboard's tab bars: the home form's
 configuration tabs, and the results and compare pages' chart tabs, through chart_tabs.
 Each bar is a tablist named for what it switches, ruled off below its tabs by a divider,
-and the server draws its first tab selected. Each tab carries its bar's layout and its selection's colours: one pair that
-every bar shares, whose dark hover colours mirror its light ones (shade n to 900 - n:
-hover text slate-700 to slate-200, hover underline slate-300 to slate-600), as the
-dashboard's other hover colours do. Every bar's list scrolls sideways inside the bar,
-its scrollbar hidden, and its tabs do not shrink, so a bar wider than its page leaves
-the page its width; tests/e2e/test_mobile_responsive.py checks that on a phone. The tab
-markup is written once, in tab_bar.
+and the server draws its first tab selected. Each tab carries its bar's layout and its
+selection's colours: one pair that every bar shares, whose dark hover colours mirror its
+light ones (shade n to 900 - n: hover text slate-700 to slate-200, hover underline
+slate-300 to slate-600), as the dashboard's other hover colours do. Every bar's list
+scrolls sideways inside the bar, its scrollbar hidden, and its tabs do not shrink, so a
+bar wider than its page leaves the page its width; tests/e2e/test_mobile_responsive.py
+checks that on a phone. The tab markup is written once, in tab_bar.
 
 The written-once guard reads each source's raw text for the tab markup as
 components/macros.html spells it, so it misses tab markup spelled any other way: a colour
