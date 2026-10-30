@@ -1230,6 +1230,68 @@ def test_a_class_whose_init_or_metaclass_call_is_a_class_whose_metaclass_defines
     assert surface_form(construct(Held)) == "(rate: int) -> None"
 
 
+@pytest.mark.parametrize(
+    "construct",
+    [
+        pytest.param(class_whose_init_is, id="init"),
+        pytest.param(class_whose_new_is, id="new"),
+        pytest.param(class_whose_metaclass_call_is, id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_inspect_reads_as_a_refused_class_raises_the_type_error_naming_that_class(
+    construct: Callable[[object], type],
+) -> None:
+    def build(self: object, rate: int) -> None: ...
+
+    class Ledger(dict):
+        pass
+
+    class PartialInit:
+        __init__ = functools.partial(build)
+
+    naming_ledger = r"\.Ledger is constructed by builtins\.dict\b.*\bdefined in C\b"
+    for held, naming_it in (
+        (Ledger, naming_ledger),
+        (functools.wraps(Ledger)(lambda *args: None), naming_ledger),
+        (
+            PartialInit,
+            r"\.PartialInit is constructed through .*\.PartialInit\.__init__, "
+            r"a functools\.partial\b.*\b3\.14\b",
+        ),
+    ):
+        cls = construct(held)
+
+        class Inheriting(cls):
+            pass
+
+        for subject in (cls, Inheriting):
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                named_classes(subject)
+            with pytest.raises(TypeError, match=naming_it):
+                surface_form(functools.partial(subject))
+
+
+@pytest.mark.parametrize(
+    ("construct", "form"),
+    [
+        pytest.param(class_whose_init_is, "(rate: int)", id="init"),
+        pytest.param(class_whose_new_is, "()", id="new"),
+        pytest.param(class_whose_metaclass_call_is, "(rate: int)", id="metaclass-call"),
+    ],
+)
+def test_a_class_whose_constructor_is_a_class_that_carries_a_signature_over_a_refused_constructor_is_spelled_by_that_signature_less_its_first_parameter_as_new(
+    construct: Callable[[object], type], form: str
+) -> None:
+    class SignedLedger(dict):
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        )
+
+    assert surface_form(construct(SignedLedger)) == form
+
+
 def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:
     def build(rate: int) -> str: ...
 
