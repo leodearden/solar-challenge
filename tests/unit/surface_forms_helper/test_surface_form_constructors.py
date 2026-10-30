@@ -1274,22 +1274,34 @@ def test_a_class_whose_constructor_inspect_reads_as_a_refused_class_raises_the_t
 
 
 @pytest.mark.parametrize(
-    ("construct", "form"),
+    ("construct", "form_by_that_class"),
     [
         pytest.param(class_whose_init_is, "(rate: int)", id="init"),
         pytest.param(class_whose_new_is, "()", id="new"),
         pytest.param(class_whose_metaclass_call_is, "(rate: int)", id="metaclass-call"),
     ],
 )
-def test_a_class_whose_constructor_is_a_class_that_carries_a_signature_over_a_refused_constructor_is_spelled_by_that_signature_less_its_first_parameter_as_new(
-    construct: Callable[[object], type], form: str
+def test_a_class_whose_constructor_inspect_reads_as_a_refused_class_is_spelled_by_a_signature_carried_by_it_by_that_class_or_by_a_link_between_them(
+    construct: Callable[[object], type], form_by_that_class: str
 ) -> None:
-    class SignedLedger(dict):
-        __signature__ = inspect.Signature(
-            [inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
-        )
+    receiver = inspect.Parameter("receiver", inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    rate = inspect.Parameter("rate", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)
 
-    assert surface_form(construct(SignedLedger)) == form
+    class Ledger(dict):
+        pass
+
+    class SignedLedger(dict):
+        __signature__ = inspect.Signature([rate])
+
+    signed_link = functools.wraps(Ledger)(lambda *args: None)
+    signed_link.__signature__ = inspect.Signature([receiver, rate])
+
+    class SignedHolder(construct(Ledger)):
+        __signature__ = inspect.Signature([rate])
+
+    assert surface_form(construct(SignedLedger)) == form_by_that_class
+    assert surface_form(construct(signed_link)) == "(rate: int)"
+    assert surface_form(SignedHolder) == "(rate: int)"
 
 
 def test_a_class_constructed_through_a_descriptor_that_carries_a_signature_or_whose_get_gives_a_function_is_spelled_by_what_inspect_reads() -> None:

@@ -466,8 +466,11 @@ refused before any is bound. The other readings are:
   routine that wraps it, unless the class holding it, the held class or a link of the
   chain between them carries a signature. A `dict` subclass carrying `(rate: int)` as an
   `inspect.Signature` reads as `(rate: int)` held as `__init__` or as a metaclass
-  `__call__`, and as `()` held as `__new__`, on every minor, and `surface_form` spells it
-  so.
+  `__call__`, and as `()` held as `__new__`. A `functools.wraps` wrapper of `Ledger`
+  carrying `(receiver, rate: int)` reads as `(rate: int)` held as any of the three, less
+  its first parameter at each, as any function held there is read. A class holding
+  `Ledger` as any of them that carries `(rate: int)` itself reads as `(rate: int)`. Each
+  reads so on every minor, and `surface_form` spells it so.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial`
@@ -509,7 +512,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_a_refused_class_raises_the_type_error_naming_that_class`
-- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_is_a_class_that_carries_a_signature_over_a_refused_constructor_is_spelled_by_that_signature_less_its_first_parameter_as_new`
+- `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_a_refused_class_is_spelled_by_a_signature_carried_by_it_by_that_class_or_by_a_link_between_them`
 
 ### 4.6 A `functools.partial` whose type takes `__get__` from a class other than `functools.partial`
 
