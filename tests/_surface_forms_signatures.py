@@ -129,7 +129,7 @@ def _refuse_chain_without_a_portable_form(subject: object, link: object) -> None
 
 
 def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any: in inspect's order, as _refuse_minor_dependent_call refuses *obj* before that __call__ is bound, as _refuse_bound_to_uncallable refuses a binding that is not callable, then as _refuse_chain_without_a_portable_form refuses the binding."""
+    """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any."""
     if _is_read_through_its_call(obj):
         _refuse_minor_dependent_call(subject, obj)
         call = _call_as_read(obj)
@@ -183,7 +183,7 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
             "on that object or on what is read through it"
         )
-    holder = _call_holder(obj)
+    holder = holders[0]
     held = vars(holder)["__call__"]
     _refuse_partial_bound_as_method(subject, "is read through", holder, "__call__", held)
     _refuse_classmethod_bound_by_minor(subject, "is read through", holder, "__call__", held)
