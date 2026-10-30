@@ -8,9 +8,9 @@ alone, so these tests are how the verify type-checks each helper module, with th
 pyproject.toml's [tool.mypy] gives it. tests/e2e's modules import the e2e extra, which the
 verify's own environment lacks, so their check reads the packages of the environment the
 offline lane's e2e job runs in. The test modules stay outside the check, and the lint's
-F821 is the check on their annotations. docs/lint-gate.md §7 records that the check covers
-every helper module, and its §3 says why a gate is a test rather than an orchestrator
-command.
+F821 is the check on their annotations. docs/lint-gate.md §7 and §8 record which modules
+the check covers and where, and its §3 says why a gate is a test rather than an
+orchestrator command.
 """
 
 import os
