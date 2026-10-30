@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Type-check contract tests for the test helper modules.
 
-A helper module is a module of tests/ whose name starts with an underscore, or a module
-anywhere under a directory of tests/ whose name does. The verify's type_check_command
-checks src/solar_challenge alone, so these tests are how the verify type-checks each
-helper module, with the settings pyproject.toml's [tool.mypy] gives it. The test modules
-stay outside the check, and the lint's F821 is the check on their annotations.
-docs/lint-gate.md says why a gate is a test rather than an orchestrator command.
+A helper module is a module directly in tests/ whose name starts with an underscore, or a
+module anywhere under a directory of tests/ whose name does. The verify's
+type_check_command checks src/solar_challenge alone, so these tests are how the verify
+type-checks each helper module, with the settings pyproject.toml's [tool.mypy] gives it.
+The test modules stay outside the check, and the lint's F821 is the check on their
+annotations. docs/lint-gate.md §7 records that the check covers every helper module, and
+its §3 says why a gate is a test rather than an orchestrator command.
 """
 
 import os
