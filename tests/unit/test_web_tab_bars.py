@@ -26,6 +26,7 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_divider import DIVIDER_CLASSES
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes
@@ -57,7 +58,6 @@ _TAB_LAYOUT = frozenset(
 _CONFIGURATION_TAB_LAYOUT = _TAB_LAYOUT | {"px-6"}
 _CHART_TAB_LAYOUT = _TAB_LAYOUT | {"px-1"}
 _SIDEWAYS_SCROLLING_LIST = frozenset({"overflow-x-auto", "scrollbar-hide"})
-_DIVIDER = frozenset({"border-b", "border-slate-200", "dark:border-slate-700"})
 
 
 def _classes(attributes: Mapping[str, str | None]) -> frozenset[str]:
@@ -148,7 +148,7 @@ def test_a_pages_tab_list_scrolls_sideways_inside_its_bar_with_its_scrollbar_hid
 def test_a_tab_bar_is_one_div_in_its_classes_ruled_off_below_its_tabs_by_a_divider(macros: Any) -> None:
     drawn = str(macros.tab_bar([{"key": "pv", "label": "PV"}], label="Configuration tabs", classes="mb-6"))
 
-    assert [_classes(div) for div in element_attributes(drawn, "div")] == [_DIVIDER | {"mb-6"}]
+    assert [_classes(div) for div in element_attributes(drawn, "div")] == [DIVIDER_CLASSES | {"mb-6"}]
 
 
 def test_no_dashboard_source_but_components_macros_html_writes_tab_markup() -> None:

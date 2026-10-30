@@ -26,6 +26,7 @@ from flask.testing import FlaskClient
 from jinja2 import Environment, nodes
 
 from solar_challenge.web.storage import RunStorage
+from tests._dashboard_divider import DIVIDER_CLASSES
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import element_attributes, headings, texts
@@ -63,7 +64,7 @@ _PANEL_LOOK = _Look(
     "panel",
     frozenset("bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm".split()),
 )
-_PANEL_TITLE_BAND_LOOK = _Look("panel", frozenset("px-5 py-4 border-b border-slate-200 dark:border-slate-700".split()))
+_PANEL_TITLE_BAND_LOOK = _Look("panel", DIVIDER_CLASSES | {"px-5", "py-4"})
 """The header band a titled panel draws above its content."""
 _SHADOWS = frozenset({"shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"})
 """The Tailwind box-shadow utilities that draw a shadow."""
@@ -282,7 +283,7 @@ def test_a_titled_card_draws_a_header_band_with_its_dot_title_aside_and_subtitle
 
     assert _div_classes(drawn) == [
         _CARD_CLASSES | {"overflow-hidden"},
-        {"px-6", "py-4", "border-b", "border-slate-200", "dark:border-slate-700", "bg-component-pv-50"},
+        DIVIDER_CLASSES | {"px-6", "py-4", "bg-component-pv-50"},
         {"flex", "items-center", "gap-2"},
         {"w-3", "h-3", "rounded-full", "bg-component-pv-500"},
         {"p-6"},
@@ -540,10 +541,6 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
     )
 
 
-_DIVIDER = frozenset({"border-b", "border-slate-200", "dark:border-slate-700"})
-"""The divider ruled under each header band components/macros.html draws, and under its tab bars."""
-
-
 def _spelled_class_lists(source: str) -> list[frozenset[str]]:
     """The classes of each element of the Jinja template *source*'s literal markup, then the words of
     each string literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the
@@ -553,18 +550,18 @@ def _spelled_class_lists(source: str) -> list[frozenset[str]]:
 
 
 def test_components_macros_html_writes_the_divider_under_its_header_bands_and_tab_bars_once() -> None:
-    """card's, chart_panel's and panel's header bands and tab_bar each rule this divider, whose classes
-    one class list spells, in whatever order. Other templates rule their page chrome off with a divider
-    of their own, so this reads macros.html alone."""
+    """card's, chart_panel's and panel's header bands and tab_bar each rule the divider, and one class
+    list spells its classes, in whatever order. Other templates rule their page chrome off with a
+    divider of their own, so this reads macros.html alone."""
     spellings = [
         classes
         for classes in _spelled_class_lists(dashboard_template_sources()[_CARD_MACROS_KEY])
-        if _DIVIDER <= classes
+        if DIVIDER_CLASSES <= classes
     ]
 
     listing = "".join(f"\n  {' '.join(sorted(classes))}" for classes in spellings)
     assert len(spellings) == 1, (
-        f"{_CARD_MACROS_KEY} spells every class of the divider, '{' '.join(sorted(_DIVIDER))}' in any "
+        f"{_CARD_MACROS_KEY} spells every class of the divider, '{' '.join(sorted(DIVIDER_CLASSES))}' in any "
         f"order, in these {len(spellings)} class lists:{listing}\n"
         "Its header bands and tab_bar build on one spelling, so an edit of the divider reaches them all."
     )
