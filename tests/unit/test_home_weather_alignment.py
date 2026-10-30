@@ -16,7 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import align_tmy_to_index
-from tests._synthetic_weather import weather_for
+from tests._synthetic_weather import sunless_tmy, weather_for
 
 
 @pytest.fixture
@@ -253,11 +253,8 @@ class TestAlignTMYToIndex:
 
 
 def _utc_tmy_with_one_marked_hour(marked_hour_utc: str, **marked: float) -> pd.DataFrame:
-    """A year of hourly UTC 1990 weather, the shape of a PVGIS TMY: dark and 25 °C except for the marked hour's columns."""
-    weather = pd.DataFrame(
-        {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 25.0, "wind_speed": 2.0},
-        index=pd.date_range("1990-01-01 00:00", periods=8760, freq="1h", tz="UTC"),
-    )
+    """sunless_tmy's dark year at 25 °C, except for the marked hour's columns."""
+    weather = sunless_tmy(temp_air=25.0)
     for column, value in marked.items():
         weather.loc[pd.Timestamp(marked_hour_utc, tz="UTC"), column] = value
     return weather

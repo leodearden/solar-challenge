@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.weather import TMY_HOURS
-from tests._synthetic_weather import TMY_DAYS, sunless_weather, synthetic_june_weather, synthetic_tmy
+from tests._synthetic_weather import TMY_DAYS, sunless_tmy, sunless_weather, synthetic_june_weather, synthetic_tmy
 
 
 def test_a_sunless_day_is_dark_every_hour_at_the_given_air_temperature() -> None:
@@ -115,9 +115,34 @@ def test_a_synthetic_tmy_refuses_any_count_of_day_scales_but_one_per_day_of_the_
 
 
 @pytest.mark.parametrize(
+    ("wind", "expected_wind_speed"),
+    [
+        pytest.param({}, 2.0, id="default-wind-is-a-sunless-days-2-m-s"),
+        pytest.param({"wind_speed": 3.0}, 3.0, id="given-wind"),
+    ],
+)
+def test_a_sunless_tmy_is_a_pvgis_shaped_year_dark_every_hour_at_its_air_temperature_and_wind_speed(
+    wind: dict[str, float], expected_wind_speed: float
+) -> None:
+    pd.testing.assert_frame_equal(
+        sunless_tmy(temp_air=25.0, **wind),
+        pd.DataFrame(
+            {"ghi": 0.0, "dni": 0.0, "dhi": 0.0, "temp_air": 25.0, "wind_speed": expected_wind_speed},
+            index=pd.date_range("1990-01-01", periods=TMY_HOURS, freq="h", tz="UTC"),
+        ),
+        check_exact=True,
+    )
+
+
+@pytest.mark.parametrize(
     "weather",
-    [synthetic_june_weather("2024-06-21"), sunless_weather("2024-06-21", temp_air=12.0), synthetic_tmy()],
-    ids=["clear-june", "sunless", "tmy"],
+    [
+        synthetic_june_weather("2024-06-21"),
+        sunless_weather("2024-06-21", temp_air=12.0),
+        synthetic_tmy(),
+        sunless_tmy(temp_air=12.0),
+    ],
+    ids=["clear-june", "sunless", "tmy", "sunless-tmy"],
 )
 def test_every_profile_carries_the_columns_the_pv_model_reads(weather: pd.DataFrame) -> None:
     """pvlib's ModelChain silently runs a missing temp_air at 20 °C and a missing wind_speed at 0 m/s, so a profile that loses a column fails nowhere else."""
