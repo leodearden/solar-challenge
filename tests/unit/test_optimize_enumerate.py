@@ -2,7 +2,6 @@
 
 import dataclasses
 import itertools
-from collections.abc import Callable
 
 import pytest
 
@@ -15,6 +14,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
 from solar_challenge.pv import PVConfig
+from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
@@ -47,15 +47,6 @@ def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
         seg_tariff_pence_per_kwh=7.5,
         finance=finance,
     )
-
-
-def _outcome_of(read: Callable[[], object]) -> tuple[type, object]:
-    """The type and value *read* returns, or the type and message of the ConfigurationError it raises."""
-    try:
-        value = read()
-    except ConfigurationError as refusal:
-        return type(refusal), str(refusal)
-    return type(value), value
 
 
 class TestConfigPoint:
@@ -132,9 +123,9 @@ class TestConfigPoint:
     )
     def test_battery_kwh_is_read_as_battery_reads_a_capacity_setting(self, battery_kwh: object) -> None:
         """ConfigPoint holds the float battery.require_valid_capacity_setting returns for battery_kwh, or refuses it with the same message."""
-        assert _outcome_of(
+        assert outcome_of(
             lambda: ConfigPoint(pv_kwp=4.0, battery_kwh=battery_kwh, inverter_kw=3.68).battery_kwh
-        ) == _outcome_of(lambda: require_valid_capacity_setting(battery_kwh, "battery_kwh"))
+        ) == outcome_of(lambda: require_valid_capacity_setting(battery_kwh, "battery_kwh"))
 
 
 class TestEnumerateContract:
