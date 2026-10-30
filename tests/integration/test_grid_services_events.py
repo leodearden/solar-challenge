@@ -117,13 +117,8 @@ def _constant_simulate(
     return lambda fc, s, e: fr
 
 
-def _board_econ_scenario() -> tuple:
-    """Build (scenario, finance_loaded) from the board YAML.
-
-    Delegates to ``tests.integration._helpers.board_econ_scenario`` — the
-    canonical shared implementation — to avoid duplication with
-    ``test_flex_grid_services._board_econ_scenario``.
-    """
+def _board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:
+    """board_econ_scenario's scenario and finance, under this module's scenario name."""
     return board_econ_scenario("Board-EventsGridServices-Test")
 
 
