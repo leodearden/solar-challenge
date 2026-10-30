@@ -430,7 +430,10 @@ def _template_class_lists(source: str) -> list[frozenset[str]]:
 def _template_strings(template: nodes.Template) -> list[str]:
     """Each string *template*'s Jinja builds, in source order. Jinja runs a template's module-level
     statements top to bottom, so each is read knowing the string each {% set %} above it built, unless
-    something else in the template binds the same name, such as another set or a macro parameter."""
+    something else in the template binds the same name, such as another set or a macro parameter. A
+    macro's body, which Jinja runs when the macro is called, is likewise read knowing only the sets above
+    the macro: a set below the macro has run before an importing page calls it, but not before a call
+    placed above the set."""
     binding_counts = Counter(name.name for name in template.find_all(nodes.Name) if name.ctx != "load")
     module_strings: dict[str, str] = {}
     strings: list[str] = []
@@ -491,6 +494,12 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
             id="tilde-of-a-string-and-a-later-set",
         ),
         pytest.param(
+            "{% macro band() %}<div class=\"{{ 'px-5 py-4 ' ~ _rule }}\"></div>{% endmacro %}"
+            "{% set _rule = 'border-b border-slate-200' %}",
+            [set(), {"px-5", "py-4"}, {"border-b", "border-slate-200"}],
+            id="tilde-in-a-macro-of-a-string-and-a-set-below-the-macro",
+        ),
+        pytest.param(
             "{% set rule = 'border-b border-slate-200' %}"
             "{% macro band(rule) %}<div class=\"{{ 'px-5 py-4 ' ~ rule }}\"></div>{% endmacro %}",
             [set(), {"border-b", "border-slate-200"}, {"px-5", "py-4"}],
@@ -502,7 +511,8 @@ def test_the_written_once_guard_reads_a_tilde_of_strings_and_earlier_sets_as_the
     source: str, expected: list[set[str]]
 ) -> None:
     """A ~ is read as its strings alone when it reads a name whose string the guard cannot know: a set
-    below it, which Jinja has yet to run, or a macro parameter, even one named like a set above it."""
+    below it, which Jinja has yet to run, or may not have run when a macro holding the ~ is called; or a
+    macro parameter, even one named like a set above it."""
     assert _template_class_lists(source) == expected
 
 
