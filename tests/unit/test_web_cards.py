@@ -9,6 +9,7 @@ subtitle_expression) also gives the title that opens the band.
 """
 
 import re
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -411,13 +412,52 @@ class _StartTagClasses(HTMLParser):
 
 def _template_class_lists(source: str) -> list[frozenset[str]]:
     """The classes of each element of the Jinja template *source*'s literal markup, read with every
-    Jinja tag blanked, then the words of each string its Jinja holds, such as a {% set %} value."""
+    Jinja tag blanked, then the words of each string its Jinja builds, such as a {% set %} value."""
     elements = _StartTagClasses()
     elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
     elements.close()
-    constants = _JINJA.parse(source).find_all(nodes.Const)
-    strings = [constant.value for constant in constants if isinstance(constant.value, str)]
+    strings = _template_strings(_JINJA.parse(source))
     return [*elements.class_sets, *(frozenset(string.split()) for string in strings)]
+
+
+def _template_strings(template: nodes.Template) -> list[str]:
+    """Each string *template*'s Jinja builds, in source order. Jinja runs a template's module-level
+    statements top to bottom, so each is read knowing the string each {% set %} above it built, unless
+    something else in the template binds the same name, such as another set or a macro parameter."""
+    binding_counts = Counter(name.name for name in template.find_all(nodes.Name) if name.ctx != "load")
+    module_strings: dict[str, str] = {}
+    strings: list[str] = []
+    for statement in template.body:
+        strings += _built_strings(statement, module_strings)
+        if isinstance(statement, nodes.Assign) and isinstance(statement.target, nodes.Name):
+            built = _built(statement.node, module_strings)
+            if built is not None and binding_counts[statement.target.name] == 1:
+                module_strings[statement.target.name] = built
+    return strings
+
+
+def _built_strings(node: nodes.Node, module_strings: Mapping[str, str]) -> list[str]:
+    """Each string *node* builds, in source order: itself whole when it builds one, else the strings its parts build."""
+    built = _built(node, module_strings)
+    if built is not None:
+        return [built]
+    return [string for child in node.iter_child_nodes() for string in _built_strings(child, module_strings)]
+
+
+def _built(node: nodes.Node, module_strings: Mapping[str, str]) -> str | None:
+    """The one string *node* builds, when it is a string or a ~ of strings and names *module_strings*
+    holds, else None. A name is read only as a ~'s operand: a bare {{ _card_classes }} uses a set's
+    string rather than writes it, so reading it would count the look twice."""
+    if isinstance(node, nodes.Const):
+        return node.value if isinstance(node.value, str) else None
+    if not isinstance(node, nodes.Concat):
+        return None
+    parts = [
+        module_strings.get(operand.name) if isinstance(operand, nodes.Name) else _built(operand, module_strings)
+        for operand in node.nodes
+    ]
+    strings = [part for part in parts if part is not None]
+    return "".join(strings) if len(strings) == len(parts) else None
 
 
 def _script_class_lists(source: str) -> list[frozenset[str]]:
@@ -438,13 +478,24 @@ def _script_class_lists(source: str) -> list[frozenset[str]]:
             [set(), {"px-5", "py-4"}],
             id="tilde-of-a-string-and-a-macro-parameter",
         ),
+        pytest.param(
+            "{% set _band = 'px-5 py-4 ' ~ _rule %}{% set _rule = 'border-b border-slate-200' %}",
+            [{"px-5", "py-4"}, {"border-b", "border-slate-200"}],
+            id="tilde-of-a-string-and-a-later-set",
+        ),
+        pytest.param(
+            "{% set rule = 'border-b border-slate-200' %}"
+            "{% macro band(rule) %}<div class=\"{{ 'px-5 py-4 ' ~ rule }}\"></div>{% endmacro %}",
+            [set(), {"border-b", "border-slate-200"}, {"px-5", "py-4"}],
+            id="tilde-of-a-string-and-a-macro-parameter-named-like-an-earlier-set",
+        ),
     ],
 )
 def test_the_written_once_guard_reads_a_tilde_of_strings_and_earlier_sets_as_the_one_class_list_it_builds(
     source: str, expected: list[set[str]]
 ) -> None:
-    """A ~ that reads a name no module-level {% set %} above it holds, such as a macro parameter, builds
-    no string the guard can know, so its strings are read alone."""
+    """A ~ is read as its strings alone when it reads a name whose string the guard cannot know: a set
+    below it, which Jinja has yet to run, or a macro parameter, even one named like a set above it."""
     assert _template_class_lists(source) == expected
 
 
