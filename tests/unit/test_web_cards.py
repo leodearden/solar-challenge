@@ -403,8 +403,7 @@ def test_every_call_that_gives_a_header_band_argument_gives_a_title(macros: Any,
 
 
 class _StartTagClasses(HTMLParser):
-    """Collects the classes of each start tag of an HTML text, in text order, each followed by the words
-    of each string literal of its Alpine class bindings, each literal read alone."""
+    """Collects the class lists of each start tag of an HTML text, in text order."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -416,8 +415,8 @@ class _StartTagClasses(HTMLParser):
 
 
 def _markup_class_lists(source: str) -> list[frozenset[str]]:
-    """The classes of each element of the Jinja template *source*'s literal markup, read with every Jinja
-    tag blanked, each followed by the words of each string literal of its Alpine class bindings, each
+    """The class lists of the Jinja template *source*'s literal markup, read with every Jinja tag blanked:
+    each element's classes, then the words of each string literal of its Alpine class bindings, each
     literal read alone."""
     elements = _StartTagClasses()
     elements.feed("".join(value if kind == "data" else " " for _, kind, value in _JINJA.lex(source)))
@@ -426,8 +425,8 @@ def _markup_class_lists(source: str) -> list[frozenset[str]]:
 
 
 def _template_class_lists(source: str) -> list[frozenset[str]]:
-    """The class lists of the Jinja template *source*'s literal markup, as _markup_class_lists reads them,
-    then the words of each string its Jinja builds, such as a {% set %} value."""
+    """The class lists of the Jinja template *source*'s literal markup, then the words of each string its
+    Jinja builds, such as a {% set %} value."""
     strings = _template_strings(_JINJA.parse(source))
     return [*_markup_class_lists(source), *(frozenset(string.split()) for string in strings)]
 
@@ -557,9 +556,8 @@ def test_each_card_looks_classes_are_written_once_in_the_dashboards_sources_in_c
 
 
 def _spelled_class_lists(source: str) -> list[frozenset[str]]:
-    """The class lists of the Jinja template *source*'s literal markup, as _markup_class_lists reads them,
-    then the words of each string literal of its Jinja, each read alone: a ~ that reads a set by name
-    spells none of the set's classes."""
+    """The class lists of the Jinja template *source*'s literal markup, then the words of each string
+    literal of its Jinja, each read alone: a ~ that reads a set by name spells none of the set's classes."""
     literals = [const.value for const in _JINJA.parse(source).find_all(nodes.Const) if isinstance(const.value, str)]
     return [*_markup_class_lists(source), *(frozenset(literal.split()) for literal in literals)]
 
