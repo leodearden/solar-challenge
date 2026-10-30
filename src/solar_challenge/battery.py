@@ -4,7 +4,7 @@
 import dataclasses
 import math
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.errors import ConfigurationError
@@ -73,14 +73,18 @@ def _require_valid_request(
         )
 
 
+CAPACITY_SETTING_KWH: Final = NON_NEGATIVE
+"""The battery capacity settings, in kWh, that require_valid_capacity_setting admits, where 0 means no battery; BatteryConfig.capacity_kwh, a battery's own capacity, is above 0."""
+
+
 def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> float:
-    """Return a battery capacity setting read as a finite number at least 0; 0 means no battery.
+    """Return a battery capacity setting read as a finite number CAPACITY_SETTING_KWH admits; 0 means no battery.
 
     Raises:
-        ConfigurationError: If *capacity_kwh* is not a finite number at least 0, naming
-            *setting* and *capacity_kwh*.
+        ConfigurationError: If *capacity_kwh* is not a finite number CAPACITY_SETTING_KWH
+            admits, naming *setting* and *capacity_kwh*.
     """
-    return as_finite_float(capacity_kwh, setting, NON_NEGATIVE)
+    return as_finite_float(capacity_kwh, setting, CAPACITY_SETTING_KWH)
 
 
 def has_battery(capacity_kwh: float, setting: str) -> bool:

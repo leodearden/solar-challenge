@@ -9,6 +9,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 from solar_challenge.battery import (
+    CAPACITY_SETTING_KWH,
     BatteryConfig,
     Battery,
     compute_soh,
@@ -18,6 +19,8 @@ from solar_challenge.battery import (
 )
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.number_fields import as_finite_float
+from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _SOC_ORDER_REFUSAL = (
@@ -208,6 +211,27 @@ class TestBatteryCapacitySetting:
 
         assert read == expected
         assert type(read) is float
+
+    @pytest.mark.parametrize(
+        "capacity_kwh",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="word"),
+            pytest.param(-1.0, id="-1.0"),
+            pytest.param(-1e-9, id="-1e-09"),
+            pytest.param(0, id="no-battery"),
+            pytest.param(1e-9, id="tiny"),
+            pytest.param(5, id="whole"),
+            pytest.param("5", id="quoted"),
+            pytest.param(np.float64(5.0), id="numpy"),
+            pytest.param(1e9, id="huge"),
+        ],
+    )
+    def test_require_valid_capacity_setting_reads_under_capacity_setting_kwh(self, capacity_kwh: object) -> None:
+        """A field read with as_finite_float under CAPACITY_SETTING_KWH reads as require_valid_capacity_setting reads it."""
+        assert outcome_of(lambda: require_valid_capacity_setting(capacity_kwh, "battery_kwh")) == outcome_of(
+            lambda: as_finite_float(capacity_kwh, "battery_kwh", CAPACITY_SETTING_KWH)
+        )
 
 
 class TestBatteryConfigGridCharging:

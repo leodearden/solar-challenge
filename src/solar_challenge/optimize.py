@@ -14,7 +14,7 @@ from dataclasses import dataclass, fields as dc_fields, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
 
-from solar_challenge.battery import BatteryConfig, has_battery
+from solar_challenge.battery import CAPACITY_SETTING_KWH, BatteryConfig, has_battery
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     FinanceConfig,
@@ -27,7 +27,7 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetConfig, simulate_fleet
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
-from solar_challenge.number_fields import NON_NEGATIVE, POSITIVE, as_finite_float, read_field
+from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
 from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
@@ -48,8 +48,8 @@ class ConfigPoint:
         pv_kwp: PV DC rated capacity in kWp, a finite number greater than 0,
             held as a float.
         battery_kwh: Battery nameplate (total) energy capacity in kWh, a finite
-            number of at least 0, held as a float, and set as
-            ``BatteryConfig.capacity_kwh`` on every home.  The
+            number ``battery.CAPACITY_SETTING_KWH`` admits, held as a float, and
+            set as ``BatteryConfig.capacity_kwh`` on every home.  The
             energy a home can actually cycle is the usable window inside that
             capacity, bounded by its battery's ``min_soc_fraction`` and
             ``max_soc_fraction``.
@@ -71,7 +71,7 @@ class ConfigPoint:
     def __post_init__(self) -> None:
         """Read the three install dimensions through number_fields, holding the floats read."""
         read_field(self, "pv_kwp", as_finite_float, POSITIVE)
-        read_field(self, "battery_kwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "battery_kwh", as_finite_float, CAPACITY_SETTING_KWH)
         read_field(self, "inverter_kw", as_finite_float, POSITIVE)
 
 
