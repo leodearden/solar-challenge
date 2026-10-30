@@ -4,7 +4,7 @@
 json.loads refuses text that is not JSON with a ValueError, and text nested deeper than it can
 decode with a RecursionError, raised before it can tell whether the text is JSON. decoded_json
 refuses both as an UndecodableJson whose reason says which, so the run store and the presets
-table each catch one type. It imports nothing from solar_challenge.
+table each catch one type.
 """
 
 import json
