@@ -66,7 +66,8 @@ def test_alpine_binding_counts_object_keys_and_ternary_branches_not_compared_val
 
 
 def test_alpine_class_binding_literals_lists_every_literal_of_the_class_bindings_in_attribute_order() -> None:
-    """'overview' is only compared against, yet counts; x-text and :aria-checked are not class bindings."""
+    """'overview' is only compared against, yet counts; double-quoted and backtick literals count as
+    single-quoted ones do; x-text and :aria-checked are not class bindings."""
     attrs: list[tuple[str, str | None]] = [
         ("class", "'not-a-binding'"),
         (":class", "{ 'bg-amber-50 text-amber-700': tab === 'overview', 'opacity-0': !open }"),
@@ -75,6 +76,7 @@ def test_alpine_class_binding_literals_lists_every_literal_of_the_class_bindings
         (":aria-checked", "selected ? 'true' : 'false'"),
         (":class", None),
         (":class", "['p-4', mode ? 'text-white' : 'text-slate-900']"),
+        (":class", 'open ? "ring-1" : `ring-0`'),
     ]
 
     assert alpine_class_binding_literals(attrs) == [
@@ -85,6 +87,8 @@ def test_alpine_class_binding_literals_lists_every_literal_of_the_class_bindings
         "p-4",
         "text-white",
         "text-slate-900",
+        "ring-1",
+        "ring-0",
     ]
 
 
