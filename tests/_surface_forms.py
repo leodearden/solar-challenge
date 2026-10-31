@@ -145,15 +145,16 @@ def member_forms(cls: type) -> dict[str, str]:
     *cls*'s named tuple fields are the names in the _fields its instances read: that of
     the first class in *cls*'s MRO whose own namespace holds one, whatever _fields
     *cls*'s metaclass gives, so a tuple whose metaclass alone gives one is no named
-    tuple. The attributes the body declares come first, in annotation order, then the
-    other names it defines, in class-body order. A ClassVar
-    annotation declares a class variable, not an instance attribute; a string annotation
-    is read as named_classes reads one, so a name its module does not bind raises
-    NameError, a module inspect reads no source for raises TypeError, and a module
-    another of the same name has replaced in sys.modules raises LookupError. A public
-    member that no member rule spells and that is a routine whose signature inspect
-    cannot read, as surface_form describes one, or a functools.partial, raises TypeError
-    naming *cls*, the member and its kind or binding.
+    tuple. Where that class holds anything but a tuple of strings, TypeError names
+    *cls*, that class and the type of what it holds. The attributes the body declares
+    come first, in annotation order, then the other names it defines, in class-body
+    order. A ClassVar annotation declares a class variable, not an instance attribute; a
+    string annotation is read as named_classes reads one, so a name its module does not
+    bind raises NameError, a module inspect reads no source for raises TypeError, and a
+    module another of the same name has replaced in sys.modules raises LookupError. A
+    public member that no member rule spells and that is a routine whose signature
+    inspect cannot read, as surface_form describes one, or a functools.partial, raises
+    TypeError naming *cls*, the member and its kind or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -203,8 +204,8 @@ def named_classes(obj: object) -> set[type]:
     there: that evaluation names them all.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class or routine whose signature surface_form refuses
-    raises the TypeError surface_form raises for it, and a class with a member
-    member_forms refuses, the TypeError member_forms raises for it.
+    raises the TypeError surface_form raises for it, and a class member_forms refuses,
+    the TypeError member_forms raises for it.
     A class's signature, an Enum's aside, is spelled where its constructor is, the
     __call__ its metaclass resolves if inspect reads that, as spelling_modules in
     tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives
@@ -232,8 +233,8 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 
     Each class found is followed through its own forms, as named_classes reads them, so
     the forms alone decide the set. A class among *roots* is left out by identity,
-    whatever name it goes by, though its forms are followed as a root's. A class with a
-    member that member_forms refuses raises the TypeError member_forms raises for it.
+    whatever name it goes by, though its forms are followed as a root's. A class that
+    member_forms refuses raises the TypeError member_forms raises for it.
     """
     pending = list(roots)
     root_classes = {root for root in pending if inspect.isclass(root)}
@@ -284,8 +285,8 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     scan cannot read raises TypeError unless *reviewed* holds its text, a text in
     *reviewed* that is no such write's raises ValueError, and one string given as
     *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
-    since its names are unknown. A class with a member that member_forms refuses raises
-    the TypeError member_forms raises for it.
+    since its names are unknown. A class that member_forms refuses raises the TypeError
+    member_forms raises for it.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a name
     its module does not bind raises NameError. Like such an annotation, *cls*'s source is
@@ -663,19 +664,32 @@ def _fields_holder(cls: type) -> type | None:
 
 
 def _fields_read_from_the_tuple(cls: type) -> set[str]:
-    """The names in the _fields of *cls*'s _fields_holder that its instances read from the tuple: each whose first binder in *cls*'s MRO, whichever class holds _fields, binds there an accessor _reads_from_the_tuple holds of, not a value that hides the field; a name no class there binds is none, since instances lack it; none if *cls* is no named tuple."""
+    """The names _field_names gives for *cls* that its instances read from the tuple: each whose first binder in *cls*'s MRO, whichever class holds _fields, binds there an accessor _reads_from_the_tuple holds of, not a value that hides the field; a name no class there binds is none, since instances lack it; none if *cls* is no named tuple."""
     holder = _fields_holder(cls)
     if holder is None:
         return set()
     mro = recorded_mro(cls)
     first_binders = {
-        name: next(namespace_holders(mro, name), None) for name in vars(holder)["_fields"]
+        name: next(namespace_holders(mro, name), None) for name in _field_names(cls, holder)
     }
     return {
         name
         for name, binder in first_binders.items()
         if binder is not None and _reads_from_the_tuple(vars(binder)[name])
     }
+
+
+def _field_names(cls: type, holder: type) -> tuple[str, ...]:
+    """The names in the _fields *holder*, *cls*'s _fields_holder, holds, which instances of *cls* read as their fields' names; TypeError naming *cls*, *holder* and the type of what it holds if that is no tuple of strings, such as a property, whose value only an instance gives."""
+    held = vars(holder)["_fields"]
+    if isinstance(held, tuple) and all(isinstance(name, str) for name in held):
+        return held
+    raise TypeError(
+        f"{label_of(cls)} is a named tuple whose instances read their fields' names from "
+        f"{label_of(holder)}._fields, which holds a {label_of(type(held))}, not a tuple of "
+        "strings, so no field is known: bind _fields to a tuple of the fields' names, as "
+        "collections.namedtuple does"
+    )
 
 
 _TUPLE_FIELD_ACCESSOR: type = type(vars(collections.namedtuple("Probe", "field"))["field"])

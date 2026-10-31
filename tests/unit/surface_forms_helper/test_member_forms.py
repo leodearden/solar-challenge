@@ -699,6 +699,33 @@ def test_a_named_tuple_field_is_named_by_the_fields_its_instances_read_not_by_th
     assert member_forms(Retyped) == {}
 
 
+def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_type_error_naming_it_that_holder_and_the_type_of_what_it_holds() -> None:
+    class Point(NamedTuple):
+        x: int
+
+    class Labelled(Point):
+        @property
+        def _fields(self) -> tuple[str, ...]:
+            return ("x",)
+
+    class Relabelled(Labelled):
+        pass
+
+    class Listed(Point):
+        _fields = ["x"]
+
+    class Numbered(Point):
+        _fields = (1,)
+
+    assert Relabelled(1)._fields == ("x",)
+    with pytest.raises(TypeError, match=r"\.Relabelled\b.*\.Labelled\._fields\b.*\bproperty\b"):
+        member_forms(Relabelled)
+    with pytest.raises(TypeError, match=r"\.Listed\b.*\.Listed\._fields\b.*\blist\b"):
+        member_forms(Listed)
+    with pytest.raises(TypeError, match=r"\.Numbered\b.*\.Numbered\._fields\b.*\bbuiltins\.tuple\b"):
+        member_forms(Numbered)
+
+
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
     class Base:
         def read(self) -> float: ...
