@@ -28,16 +28,12 @@ from solar_challenge.finance import FinanceConfig
 SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
 
 
-def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple[ScenarioConfig, FinanceConfig]:
+def board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:
     """Build (scenario, finance_loaded) from the board YAML.
 
     Mirrors the canonical consumer path in cli/finance.py::
 
         load_config → parse_finance_config → load_fleet_config → ScenarioConfig
-
-    Args:
-        scenario_name: Optional name for the constructed ``ScenarioConfig``
-            instance.  Defaults to ``"Board-GridServices-Test"``.
 
     Returns:
         Tuple of ``(ScenarioConfig, FinanceConfig)`` for the board scenario.
@@ -48,7 +44,7 @@ def board_econ_scenario(scenario_name: str = "Board-GridServices-Test") -> tuple
     fleet = load_fleet_config(SCENARIO)
     period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
     scenario = ScenarioConfig(
-        name=scenario_name,
+        name="Board-GridServices-Test",
         period=period,
         homes=list(fleet.homes),
     )
