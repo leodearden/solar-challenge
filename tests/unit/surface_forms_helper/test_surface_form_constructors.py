@@ -2,9 +2,9 @@
 """The rules of tests/_surface_forms.py's surface_form for the constructor inspect reads for a class, or the signature the class carries in its place, and the TypeError raised where inspect reads that constructor differently by minor or cannot read it, one per test.
 
 A constructor every minor skips, and what inspect reads in its place, have their rules
-in test_surface_form_skipped_constructors.py. A constructor that wraps a callable defined
-in C, recording it as __wrapped__ or giving it where inspect binds the constructor, has
-its rules in test_surface_form_c_wrapping_constructors.py.
+in test_surface_form_skipped_constructors.py. A constructor that wraps a callable
+defined in C, recording it as __wrapped__ or giving it where inspect binds the
+constructor, has its rules in test_surface_form_c_wrapping_constructors.py.
 
 The classes and functions above the first test are defined at module level, where their
 qualified names carry no '<locals>' and a parametrize decorator can reach them.
