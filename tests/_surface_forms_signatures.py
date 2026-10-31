@@ -13,6 +13,7 @@ import dataclasses
 import enum
 import functools
 import inspect
+import operator
 import types
 import typing
 import warnings
@@ -492,10 +493,11 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
-    - *cls* itself, if __mro__ gives for it anything but the MRO it records, since
-      inspect chooses by __mro__ which of the __new__ and __init__ it looks up by that
-      MRO it reads, as _refuse_class_whose_metaclass_shadows_mro says; none of the
-      constructors below is then checked;
+    - *cls* itself, if __mro__ gives for it anything but a tuple of the classes the MRO
+      it records lists, in its order, since inspect chooses by __mro__ which of the
+      __new__ and __init__ it looks up by that MRO it reads, as
+      _refuse_class_whose_metaclass_shadows_mro says; none of the constructors below is
+      then checked;
     - the constructor _first_read_constructor gives for *cls*, if it wraps a callable
       defined in C, as the __new__ warnings.deprecated writes for a class wraps
       object.__new__;
@@ -534,13 +536,18 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
 
 
 def _refuse_class_whose_metaclass_shadows_mro(cls: type) -> None:
-    """Raise TypeError naming *cls*, its metaclass, what __mro__ gives for *cls* and the MRO *cls* records, if __mro__ gives anything but that very MRO, by which inspect looks each __new__ and __init__ up, choosing which it reads by __mro__.
+    """Raise TypeError naming *cls*, its metaclass, what __mro__ gives for *cls* and the MRO *cls* records, if __mro__ gives anything but a tuple of the very classes that MRO lists, in its order: inspect looks each __new__ and __init__ up by that MRO, choosing which it reads by the classes __mro__ lists, whatever they compare equal to.
 
     docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
     """
     given: object = cls.__mro__
     recorded = recorded_mro(cls)
-    if given is not recorded:
+    lists_the_recorded_classes = (
+        type(given) is tuple
+        and len(given) == len(recorded)
+        and all(map(operator.is_, given, recorded))
+    )
+    if not lists_the_recorded_classes:
         raise TypeError(
             f"{label_of(cls)} has the metaclass {label_of(type(cls))}, whose __mro__ gives "
             f"{given!r} in place of the MRO the class records, {recorded!r}: inspect looks "

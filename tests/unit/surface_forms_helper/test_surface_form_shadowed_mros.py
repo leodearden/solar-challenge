@@ -99,6 +99,38 @@ class Recorded(
     """An Initialised whose __mro__ gives the very tuple that is the MRO the class records."""
 
 
+class CopiedRecorded(
+    Initialised,
+    metaclass=metaclass_whose_mro_gives(
+        lambda cls: tuple(list(type.__dict__["__mro__"].__get__(cls)))
+    ),
+):
+    """An Initialised whose __mro__ gives a copy of the tuple that is the MRO the class records: another tuple of the same classes, in the same order."""
+
+
+class Equating(type):
+    """A metaclass whose classes compare equal to every class."""
+
+    def __eq__(cls, other: object) -> bool:
+        return isinstance(other, type)
+
+    __hash__ = type.__hash__
+
+
+class Decoy(metaclass=Equating):
+    """A class that compares equal to every class, and whose __new__ is defined with def."""
+
+    def __new__(cls, share: str) -> "Decoy": ...
+
+
+class EquallyMislisted(
+    Initialised,
+    Made,
+    metaclass=metaclass_whose_mro_gives(lambda cls: (cls, Decoy, Made, object)),
+):
+    """A class of Initialised and then Made whose __mro__ lists Decoy in Initialised's place, so that it gives a tuple equal to the MRO the class records."""
+
+
 @pytest.mark.parametrize(
     ("build", "form"),
     [
@@ -169,6 +201,7 @@ def test_a_partial_or_a_classmethod_wrapped_object_whose_type_takes_get_from_a_b
     [
         pytest.param(Reordered, "Reordered", id="constructors-reordered"),
         pytest.param(Hidden, "Hidden", id="bases-hidden"),
+        pytest.param(EquallyMislisted, "EquallyMislisted", id="equal-tuple-listing-another-class"),
     ],
 )
 def test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_a_type_error_naming_it_its_metaclass_and_that_mro(
@@ -185,6 +218,7 @@ def test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raise
     [
         pytest.param(Called, id="metaclass-call"),
         pytest.param(Recorded, id="mro-giving-the-one-the-class-records"),
+        pytest.param(CopiedRecorded, id="mro-giving-a-copy-of-the-one-the-class-records"),
     ],
 )
 def test_a_class_whose_metaclass_defines_mro_is_spelled_by_the_constructor_inspect_reads_where_it_chooses_none_by_a_mro_other_than_the_one_the_class_records(

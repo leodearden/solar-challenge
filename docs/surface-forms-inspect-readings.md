@@ -560,12 +560,17 @@ refused before any is bound. The other readings are:
   `ValueError`. Over `Initialised`'s `def __init__(self, rate: int) -> None` and
   `Made`'s `def __new__(cls, share: str) -> "Made"`, `__mro__` giving
   `(cls, Made, Initialised, object)` reads as `(share: str) -> 'Made'` on every minor.
-  With `(cls,)` over `Initialised` alone, every minor raises `ValueError`.
-  `surface_form` raises `TypeError` naming the class, its metaclass, what `__mro__`
-  gives and the recorded MRO, wherever `inspect` reads its `__new__` or `__init__`,
-  whatever those are, since no rule reads that choice. A metaclass `__call__` that
-  `inspect` reads in their place lifts the refusal, as does a `__mro__` giving the
-  recorded MRO itself, or a signature the class carries.
+  With `(cls,)` over `Initialised` alone, every minor raises `ValueError`. A `__mro__`
+  can also give a tuple equal to the recorded MRO that lists another class, one whose
+  metaclass defines `__eq__`: over `Initialised` and then `Made`,
+  `(cls, Decoy, Made, object)`, where `Decoy` compares equal to every class and holds
+  `__new__`, reads as `(share: str) -> 'Made'` on every minor, though the recorded MRO
+  lists `Initialised` first. `surface_form` raises `TypeError` naming the class, its
+  metaclass, what `__mro__` gives and the recorded MRO, wherever `inspect` reads its
+  `__new__` or `__init__`, whatever those are, since no rule reads that choice. A
+  metaclass `__call__` that `inspect` reads in their place lifts the refusal, as does a
+  `__mro__` giving a tuple of the very classes the recorded MRO lists, in its order,
+  whether that MRO itself or a copy of it, or a signature the class carries.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial`
