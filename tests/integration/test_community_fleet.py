@@ -36,7 +36,7 @@ from solar_challenge.tariff import FlatRateTariff
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
-SCENARIO = Path("scenarios/bristol-community.yaml")
+SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-community.yaml"
 
 
 # ---------------------------------------------------------------------------
