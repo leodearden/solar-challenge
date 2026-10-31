@@ -16,6 +16,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR,
     GIVEN_BY_A_METACLASS_GET,
     imported_module,
+    metaclass_whose_mro_gives,
 )
 
 
@@ -133,6 +134,41 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
 
 
+def test_a_class_carrying_a_signature_a_base_holds_names_the_classes_it_names_read_where_that_base_is_spelled_whatever_mro_its_metaclass_gives(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "signing_bases",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Signing:\n"
+        "    __signature__ = inspect.Signature(\n"
+        "        [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        "    )\n",
+    )
+    hidden_signers = imported_module(
+        tmp_path,
+        monkeypatch,
+        "hidden_signers",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from signing_bases import Signing\n"
+        "\n"
+        "class Hiding(type):\n"
+        "    @property\n"
+        "    def __mro__(cls):\n"
+        "        return (cls,)\n"
+        "\n"
+        "class Signed(Signing, metaclass=Hiding):\n"
+        "    pass\n",
+    )
+
+    assert named_classes(hidden_signers.Signed) == {fractions.Fraction}
+
+
 def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_the_class_and_that_metaclass_whatever_its_constructor(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -208,6 +244,29 @@ def test_a_class_whose_metaclass_holds_its_signature_raises_type_error_naming_th
     assert "metas.PropertySigned" in str(defined_overriding.value)
     assert "users.Called" in str(called.value)
     assert "metas.CallingSigned" in str(called.value)
+
+
+def test_a_class_whose_metaclass_takes_a_signature_from_a_base_its_own_metaclass_mro_hides_raises_type_error_naming_the_class_and_that_metaclass() -> None:
+    class SigningMetaBase(type):
+        @property
+        def __signature__(cls) -> inspect.Signature:
+            return inspect.Signature(
+                [inspect.Parameter("meta", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=bytes)]
+            )
+
+    class SigningMeta(SigningMetaBase, metaclass=metaclass_whose_mro_gives(lambda cls: (cls,))):
+        pass
+
+    class Signed(metaclass=SigningMeta):
+        __signature__ = inspect.Signature(
+            [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
+        )
+
+    with pytest.raises(TypeError) as providing:
+        named_classes(Signed)
+
+    assert ".Signed" in str(providing.value)
+    assert ".SigningMeta" in str(providing.value)
 
 
 def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
