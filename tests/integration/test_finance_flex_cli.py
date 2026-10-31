@@ -20,6 +20,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.fleet import FleetResults
 from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
@@ -345,12 +346,12 @@ class TestFinanceFlexNamedScenario:
     """
 
     def test_bristol_flex_scenario_renders_central_block(
-        self, tmp_path: Path, flex_fleet_results: FleetResults
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flex_fleet_results: FleetResults
     ) -> None:
-        """finance run scenarios/bristol-phase1-flex.yaml → Flexibility Value block with 'central'."""
-        scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
+        """finance run on the board scenario renders the central Flexibility Value block from any cwd."""
+        monkeypatch.chdir(tmp_path)
 
-        result = invoke_finance_run([str(scenario_path)], flex_fleet_results)
+        result = invoke_finance_run([str(SCENARIO)], flex_fleet_results)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
