@@ -639,7 +639,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
       - exit_code == 0
       - "Grid services (capacity-at-events)" line in output
       - a positive event-derived £ figure in output
-      - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
+      - the supersede inequality: event income ≠ flat_rate × Σ kW
 
     The board YAML selects capacity_at_events and the CLI passes the computed
     grid_services_at_events to generate_finance_report.
@@ -663,17 +663,18 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
 
-    # Supersede inequality (only checkable after ε flips the board YAML to
-    # capacity_at_events; skips gracefully if still flat)
-    if finance.grid_services_events is not None:
-        flat_rate = finance.grid_services_income_per_kw_per_year_gbp
-        sigma = sum(
-            h.battery_config.max_discharge_kw
-            for h in homes if h.battery_config is not None
-        )
-        gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
-        assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
-            f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
-            f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
-            "confirms the supersede takes effect."
-        )
+    assert finance.grid_services_events is not None, (
+        f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) has no "
+        "grid_services_events block, so the supersede inequality cannot be checked"
+    )
+    flat_rate = finance.grid_services_income_per_kw_per_year_gbp
+    sigma = sum(
+        h.battery_config.max_discharge_kw
+        for h in homes if h.battery_config is not None
+    )
+    gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
+    assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
+        f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
+        f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
+        "confirms the supersede takes effect."
+    )
