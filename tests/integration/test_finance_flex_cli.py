@@ -20,6 +20,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.fleet import FleetResults
 from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
@@ -349,9 +350,8 @@ class TestFinanceFlexNamedScenario:
     ) -> None:
         """finance run on the board scenario, scenarios/bristol-phase1-flex.yaml, renders the Flexibility Value block with 'central' from a directory other than the repo root: the test runs in tmp_path so that a scenario path relative to the cwd cannot pass."""
         monkeypatch.chdir(tmp_path)
-        scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
 
-        result = invoke_finance_run([str(scenario_path)], flex_fleet_results)
+        result = invoke_finance_run([str(SCENARIO)], flex_fleet_results)
 
         assert result.exit_code == 0, (
             f"Exit {result.exit_code}. Output:\n{result.output}"
