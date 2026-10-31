@@ -624,6 +624,27 @@ def test_a_named_tuple_field_a_subclass_body_binds_to_a_value_is_a_member_since_
     assert member_forms(Shadow) == {"x": "int", "y": "(self) -> int"}
 
 
+def test_a_named_tuple_field_a_class_binds_to_a_value_is_a_member_even_where_that_class_or_a_subclass_binds_fields_again() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Shadow(Point):
+        _fields = ("x", "y")
+        x = 5
+
+    class Constant(Point):
+        y = 0
+
+    class Refielded(Constant):
+        _fields = ("x", "y")
+        y: int
+
+    assert (Shadow(1, 2).x, Refielded(1, 2).y) == (5, 0)
+    assert member_forms(Shadow) == {"x": "int"}
+    assert member_forms(Refielded) == {"y": "attribute int"}
+
+
 def test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_the_type_error_surface_form_raises_for_it() -> None:
     Point = collections.namedtuple("Point", "x y")
 
@@ -649,6 +670,60 @@ def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fiel
 
     assert member_forms(Pair) == {"first": "attribute int"}
     assert member_forms(Node) == {"value": "attribute int"}
+
+
+def test_a_tuple_whose_metaclass_alone_provides_fields_is_no_named_tuple_since_its_instances_never_read_the_metaclass() -> None:
+    class FieldsMeta(type):
+        _fields = ("x",)
+
+    class Fielded(tuple, metaclass=FieldsMeta):
+        x: int
+
+    assert not hasattr(Fielded((1,)), "_fields")
+    assert member_forms(Fielded) == {"x": "attribute int"}
+
+
+def test_a_named_tuple_field_is_named_by_the_fields_its_instances_read_not_by_the_fields_its_metaclass_gives_the_class() -> None:
+    class FieldsProperty(type):
+        @property
+        def _fields(cls) -> tuple[str, ...]:
+            return ("y",)
+
+    class Point(NamedTuple):
+        x: int
+
+    class Retyped(Point, metaclass=FieldsProperty):
+        x: int
+
+    assert (Retyped._fields, Retyped(1)._fields) == (("y",), ("x",))
+    assert member_forms(Retyped) == {}
+
+
+def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_type_error_naming_it_that_holder_and_the_type_of_what_it_holds() -> None:
+    class Point(NamedTuple):
+        x: int
+
+    class Labelled(Point):
+        @property
+        def _fields(self) -> tuple[str, ...]:
+            return ("x",)
+
+    class Relabelled(Labelled):
+        pass
+
+    class Listed(Point):
+        _fields = ["x"]
+
+    class Numbered(Point):
+        _fields = (1,)
+
+    assert Relabelled(1)._fields == ("x",)
+    with pytest.raises(TypeError, match=r"\.Relabelled\b.*\.Labelled\._fields\b.*\bproperty\b"):
+        member_forms(Relabelled)
+    with pytest.raises(TypeError, match=r"\.Listed\b.*\.Listed\._fields\b.*\blist\b"):
+        member_forms(Listed)
+    with pytest.raises(TypeError, match=r"\.Numbered\b.*\.Numbered\._fields\b.*\bbuiltins\.tuple\b"):
+        member_forms(Numbered)
 
 
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:

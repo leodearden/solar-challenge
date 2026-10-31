@@ -138,6 +138,29 @@ def test_a_named_tuple_field_its_instances_read_from_the_tuple_is_never_unset() 
     assert unset_attributes(Redeclared) == {"y"}
 
 
+def test_an_attribute_a_tuple_whose_metaclass_alone_provides_fields_declares_is_unset_where_its_initialisers_never_set_it() -> None:
+    class FieldsMeta(type):
+        _fields = ("x",)
+
+    class Fielded(tuple, metaclass=FieldsMeta):
+        x: int
+
+    assert not hasattr(Fielded((1,)), "x")
+    assert unset_attributes(Fielded) == {"x"}
+
+
+def test_a_name_a_named_tuple_lists_in_its_fields_that_no_class_binds_is_unset_where_its_initialisers_never_set_it() -> None:
+    class Point(NamedTuple):
+        x: int
+
+    class Extended(Point):
+        _fields = ("x", "y")
+        y: int
+
+    assert not hasattr(Extended(1), "y")
+    assert unset_attributes(Extended) == {"y"}
+
+
 def test_a_dataclass_field_a_data_descriptor_hides_from_instances_is_unset_where_a_class_body_declares_it_again_and_no_default_or_own_initialiser_supplies_it() -> None:
     @dataclass
     class Point:
