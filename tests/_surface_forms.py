@@ -200,9 +200,11 @@ def named_classes(obj: object) -> set[type]:
     member_forms refuses, the TypeError member_forms raises for it.
     A class's signature, an Enum's aside, is spelled where its constructor is, the
     __call__ its metaclass resolves if inspect reads that, as spelling_modules in
-    tests/_surface_forms_signatures.py says, whether or not the class carries a
-    signature in the constructor's place; one its metaclass or a descriptor gives raises
-    TypeError.
+    tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives
+    raises TypeError. A signature the class carries in the constructor's place is
+    spelled there too, except over a constructor whose chain, as inspect reads and
+    binds it, ends at a callable defined in C, which spells no annotation: that
+    signature is read where the class holding it is spelled, as spelling_modules says.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
