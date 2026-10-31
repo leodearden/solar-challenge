@@ -129,6 +129,7 @@ def test_an_attribute_a_base_body_declares_is_declared_whatever_mro_the_class_me
     assert undeclared_attributes(Setting) == set()
 
 
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
 @pytest.mark.parametrize(
     "shadow",
     [
@@ -137,15 +138,14 @@ def test_an_attribute_a_base_body_declares_is_declared_whatever_mro_the_class_me
     ],
 )
 def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes(
-    shadow: object,
+    scan: Callable[[type], set[str]], shadow: object
 ) -> None:
     class Meter(metaclass=metaclass_whose_dict_gives(lambda cls: shadow)):
         def __init__(self) -> None:
             self.label = "roof"
 
-    for scan in (undeclared_attributes, unset_attributes):
-        with pytest.raises(TypeError, match=dict_shadowing_refusal("Meter")):
-            scan(Meter)
+    with pytest.raises(TypeError, match=dict_shadowing_refusal("Meter")):
+        scan(Meter)
 
 
 def test_an_attribute_only_a_base_sets_on_self_is_undeclared_in_the_base_not_its_subclass() -> None:
