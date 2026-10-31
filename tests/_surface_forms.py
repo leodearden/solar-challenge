@@ -60,6 +60,7 @@ from tests._surface_forms_signatures import (
     is_decorated_dataclass,
     is_enum,
     namespace_holders,
+    recorded_mro,
     refuse_member_without_a_portable_form,
     signature_of,
     spelling_modules,
@@ -264,7 +265,7 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     one and *cls*'s body compiled no function to check it by.
     """
     _refuse_immutable_type(cls)
-    declared = {name for base in cls.__mro__ for name in _own_members(base)}
+    declared = {name for base in recorded_mro(cls) for name in _own_members(base)}
     return _attributes_set_on_self(cls, reviewed) - declared
 
 
@@ -623,7 +624,8 @@ def _dataclass_fields(cls: type) -> dict[str, dataclasses.Field[object]]:
 def _fields_read_from_the_instance(cls: type) -> set[str]:
     """The names of *cls*'s dataclass fields that its instances read from the instance, its __dict__ or a slot: each whose name no class in *cls*'s MRO binds, or whose first binder there binds a value _outranks_the_instance does not hold of; none if *cls* is no dataclass."""
     first_holders = {
-        name: next(namespace_holders(cls.__mro__, name), None) for name in _dataclass_fields(cls)
+        name: next(namespace_holders(recorded_mro(cls), name), None)
+        for name in _dataclass_fields(cls)
     }
     return {
         name
@@ -654,7 +656,7 @@ def _fields_read_from_the_tuple(cls: type) -> set[str]:
     return {
         name
         for name in cls._fields
-        if "_fields" in vars(next(namespace_holders(cls.__mro__, name, "_fields")))
+        if "_fields" in vars(next(namespace_holders(recorded_mro(cls), name, "_fields")))
     }
 
 

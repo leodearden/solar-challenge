@@ -32,6 +32,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     Preset,
     SettableGetterPartial,
     imported_module,
+    metaclass_whose_mro_gives,
 )
 
 
@@ -621,6 +622,18 @@ def test_a_named_tuple_field_a_subclass_body_binds_to_a_value_is_a_member_since_
 
     assert Shadow(1, 2).x == 5
     assert member_forms(Shadow) == {"x": "int", "y": "(self) -> int"}
+
+
+def test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_the_type_error_surface_form_raises_for_it() -> None:
+    Point = collections.namedtuple("Point", "x y")
+
+    class HiddenPoint(Point, metaclass=metaclass_whose_mro_gives(lambda cls: (cls,))):
+        pass
+
+    with pytest.raises(
+        TypeError, match=r"\.HiddenPoint has the metaclass \S*\.Shadowing, whose __mro__ gives "
+    ):
+        member_forms(HiddenPoint)
 
 
 def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fields() -> None:

@@ -180,6 +180,17 @@ def metaclass_whose_get_gives(given: object) -> type:
     return Getting
 
 
+def metaclass_whose_mro_gives(mro: Callable[[type], tuple[type, ...]]) -> type:
+    """A metaclass whose __mro__ gives, for each class of it, what *mro* gives for that class, in place of the MRO the class records."""
+
+    class Shadowing(type):
+        @property
+        def __mro__(cls) -> tuple[type, ...]:
+            return mro(cls)
+
+    return Shadowing
+
+
 def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
     """*function*, carrying the string '(receiver, rate)' as its __signature__."""
     function.__signature__ = "(receiver, rate)"

@@ -41,8 +41,11 @@ of a class of which it reads no constructor, were measured on those releases on
 callable, 4.5's reading of a metaclass `__call__` or an `__init__` that `inspect` binds
 to a callable defined in C, its reading of a constructor `inspect` reads as a class, and
 its reading of a class whose `__new__` and `__init__` are `object`'s under a docstring
-in text-signature form, were measured on those releases on 2026-10-30. A new refusal
-gets its rule test first, then its entry here.
+in text-signature form, were measured on those releases on 2026-10-30. 3.4's reading of
+a class whose metaclass gives a `__mro__` other than the MRO the class records, and
+4.5's reading of such a class's constructor, were measured on CPython 3.11.15, 3.11.17,
+3.12.3, 3.13.9 and 3.14.4 on 2026-10-31. A new refusal gets its rule test first, then
+its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -117,6 +120,38 @@ held as an `__init__` that `inspect` reads is refused before it is read, as 4.5 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_beside_a_new_defined_with_def_is_spelled_by_that_new_without_a_warning`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_inherited_init_is_a_partial_beside_its_own_new_defined_with_def_is_spelled_by_that_new_without_a_warning`
+
+### 3.4 A name looked up in a class whose metaclass gives another `__mro__`
+
+A metaclass can give `__mro__` as a property, so that a class's `__mro__` attribute is
+not the MRO the class records, which `type.__dict__['__mro__']` gives for it. Attribute
+lookup walks the recorded MRO on every minor, and so does `inspect.getattr_static`.
+Through it `inspect` looks up the `__call__` an object's class resolves, a class's
+`__init__` and its metaclass `__call__`; `getattr` gives it a `__new__` the same way.
+With `__mro__` giving `(cls,)`, an object whose class takes
+`def __call__(self, rate: int) -> None` from a base reads as `(rate: int) -> None` on
+every minor: through a `functools.partial` of it, or held as `__init__` or as a
+metaclass `__call__`. Held as `__new__`, it reads as `() -> None`.
+
+`surface_form`, `named_classes`, `member_forms` and `undeclared_attributes` read every
+MRO as the recorded one. So 4.4's refusal of a base defining `__call__` in C, 4.6's of a
+partial whose type takes `__get__` from another class, and 4.7's of a `classmethod`
+wrapping an object whose type defines `__get__` follow the recorded MRO too. Measured:
+hidden by `__mro__`, a `sqlite3.Connection` base still makes 3.13 and 3.14 read
+`(sql, /)`, where 3.11 and 3.12 read the subclass's `__call__`. A hidden `GetMixin` base
+still makes 3.11 and 3.12 raise `ValueError` for such a partial, which 3.13 and 3.14
+read through its `func`. A carried signature's holder is found the same way, the
+metaclass's included. `inspect` chooses a class's own constructor by `__mro__` instead,
+as 4.5 says.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_an_object_whose_types_metaclass_gives_a_mro_other_than_the_one_its_type_records_is_read_through_the_call_that_mro_resolves`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_an_object_whose_types_mro_holds_a_base_defining_call_in_c_raises_the_type_error_naming_that_base_whatever_mro_its_metaclass_gives`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_a_partial_or_a_classmethod_wrapped_object_whose_type_takes_get_from_a_base_its_metaclass_mro_hides_raises_the_type_error_for_that_get`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_carrying_a_signature_a_base_holds_names_the_classes_it_names_read_where_that_base_is_spelled_whatever_mro_its_metaclass_gives`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_class_whose_metaclass_takes_a_signature_from_a_base_its_own_metaclass_mro_hides_raises_type_error_naming_the_class_and_that_metaclass`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_an_attribute_a_base_body_declares_is_declared_whatever_mro_the_class_metaclass_gives`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_the_type_error_surface_form_raises_for_it`
 
 ## 4. Refused
 
@@ -517,6 +552,25 @@ refused before any is bound. The other readings are:
   its first parameter at each, as any function held there is read. A class holding
   `Ledger` as any of them that carries `(rate: int)` itself reads as `(rate: int)`. Each
   reads so on every minor, and `surface_form` spells it so.
+- A class whose metaclass gives a `__mro__` other than the MRO the class records (3.4).
+  Every minor looks the `__new__` and `__init__` such a class resolves up by the
+  recorded MRO, but chooses which to read by `__mro__`: the first class `__mro__` lists
+  whose `__dict__` holds a name it reads. Where none does, it reads the first text
+  signature given by a class `__mro__` lists before its last, and then `()` or
+  `ValueError`. Over `Initialised`'s `def __init__(self, rate: int) -> None` and
+  `Made`'s `def __new__(cls, share: str) -> "Made"`, `__mro__` giving
+  `(cls, Made, Initialised, object)` reads as `(share: str) -> 'Made'` on every minor.
+  With `(cls,)` over `Initialised` alone, every minor raises `ValueError`. A `__mro__`
+  can also give a tuple equal to the recorded MRO that lists another class, one whose
+  metaclass defines `__eq__`: over `Initialised` and then `Made`,
+  `(cls, Decoy, Made, object)`, where `Decoy` compares equal to every class and holds
+  `__new__`, reads as `(share: str) -> 'Made'` on every minor, though the recorded MRO
+  lists `Initialised` first. `surface_form` raises `TypeError` naming the class, its
+  metaclass, what `__mro__` gives and the recorded MRO, wherever `inspect` reads its
+  `__new__` or `__init__`, whatever those are, since no rule reads that choice. A
+  metaclass `__call__` that `inspect` reads in their place lifts the refusal, as does a
+  `__mro__` giving a tuple of the very classes the recorded MRO lists, in its order,
+  whether that MRO itself or a copy of it, or a signature the class carries.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial`
@@ -566,6 +620,9 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_routine_chains.py::test_a_routine_that_wraps_a_class_but_carries_a_signature_is_spelled_by_that_signature`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_a_refused_class_raises_the_type_error_naming_that_class`
 - `tests/unit/surface_forms_helper/test_surface_form_constructors.py::test_a_class_whose_constructor_inspect_reads_as_a_refused_class_is_spelled_by_a_signature_carried_by_it_by_that_class_or_by_a_link_between_them`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_a_type_error_naming_it_its_metaclass_and_that_mro`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_a_class_whose_metaclass_defines_mro_is_spelled_by_the_constructor_inspect_reads_where_it_chooses_none_by_a_mro_other_than_the_one_the_class_records`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_is_spelled_by_the_signature_it_carries`
 
 ### 4.6 A `functools.partial` whose type takes `__get__` from a class other than `functools.partial`
 
@@ -693,7 +750,9 @@ and 3.14 also read differently a `functools.partial` that records `__wrapped__`,
 held as `__new__` with `object.__new__` as `__wrapped__`, it reads as `(*args, **kwargs)`
 on 3.11, 3.12 and 3.14, and as `()` on 3.13. The warning 3.3 ignores rests on 3.13 alone.
 4.6's refusal where a partial is bound rests on no minor: it names a binding no rule
-reads. Whether to lift one is for the task that changes `requires-python`.
+reads. 4.5's refusal of a class whose metaclass gives another `__mro__` rests on no
+minor either: it names a choice no rule reads. Whether to lift one is for the task that
+changes `requires-python`.
 
 ## 6. How to Re-measure
 

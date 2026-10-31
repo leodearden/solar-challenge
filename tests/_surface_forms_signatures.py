@@ -13,6 +13,7 @@ import dataclasses
 import enum
 import functools
 import inspect
+import operator
 import types
 import typing
 import warnings
@@ -163,7 +164,7 @@ def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
     """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any."""
     if _is_read_through_its_call(obj):
         _refuse_text_signature_read_by_minor(subject, obj)
-        holder = next(namespace_holders(type(obj).__mro__, "__call__"))
+        holder = next(namespace_holders(recorded_mro(type(obj)), "__call__"))
         site = _ReadSite.call(subject, holder)
         held = vars(holder)["__call__"]
         _refuse_partial_bound_as_method(site, held)
@@ -193,7 +194,7 @@ def _refuse_text_signature_read_by_minor(subject: object, obj: object) -> None:
     c_holder = next(
         (
             cls
-            for cls in namespace_holders(type(obj).__mro__, "__call__")
+            for cls in namespace_holders(recorded_mro(type(obj)), "__call__")
             if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)
         ),
         None,
@@ -376,7 +377,7 @@ def _is_partial_with_its_own_get(obj: object) -> bool:
     """Whether *obj* is a functools.partial whose type's MRO, on either side of functools.partial, holds a class other than functools.partial that defines __get__."""
     return isinstance(obj, functools.partial) and any(
         holder is not functools.partial
-        for holder in namespace_holders(type(obj).__mro__, "__get__")
+        for holder in namespace_holders(recorded_mro(type(obj)), "__get__")
     )
 
 
@@ -492,6 +493,11 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
     - the __new__ and the __init__ *cls* resolves, both of which inspect binds before it
       chooses which to read, if either is a classmethod
       _refuse_classmethod_bound_by_minor refuses, checked before either is bound;
+    - *cls* itself, if __mro__ gives for it anything but a tuple of the classes the MRO
+      it records lists, in its order, since inspect chooses by __mro__ which of the
+      __new__ and __init__ it looks up by that MRO it reads, as
+      _refuse_class_whose_metaclass_shadows_mro says; none of the constructors below is
+      then checked;
     - the constructor _first_read_constructor gives for *cls*, if it wraps a callable
       defined in C, as the __new__ warnings.deprecated writes for a class wraps
       object.__new__;
@@ -516,6 +522,7 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         return
     for name, owner, held in _resolved_constructors(cls):
         _refuse_classmethod_bound_by_minor(_ReadSite.constructor(cls, owner, name), held)
+    _refuse_class_whose_metaclass_shadows_mro(cls)
     holder, name, constructor = _first_read_constructor(cls)
     site = _ReadSite.constructor(cls, holder, name)
     _refuse_wrapper_of_c_callable(site, constructor)
@@ -528,12 +535,34 @@ def _refuse_constructor_without_a_portable_form(cls: type) -> None:
         _refuse_class_read_by_a_docstring_text_signature(cls)
 
 
+def _refuse_class_whose_metaclass_shadows_mro(cls: type) -> None:
+    """Raise TypeError naming *cls*, its metaclass, what __mro__ gives for *cls* and the MRO *cls* records, if __mro__ gives anything but a tuple of the very classes that MRO lists, in its order: inspect looks each __new__ and __init__ up by that MRO, choosing which it reads by the classes __mro__ lists, whatever they compare equal to.
+
+    docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
+    """
+    given: object = cls.__mro__
+    recorded = recorded_mro(cls)
+    lists_the_recorded_classes = (
+        type(given) is tuple
+        and len(given) == len(recorded)
+        and all(map(operator.is_, given, recorded))
+    )
+    if not lists_the_recorded_classes:
+        raise TypeError(
+            f"{label_of(cls)} has the metaclass {label_of(type(cls))}, whose __mro__ gives "
+            f"{given!r} in place of the MRO the class records, {recorded!r}: inspect looks "
+            "each __new__ and __init__ up by the recorded MRO, but chooses which it reads, and "
+            "the text signature it reads where it reads neither, by __mro__, a choice no rule "
+            "of this helper reads: make the name private, or leave __mro__ to type"
+        )
+
+
 def _refuse_class_constructed_in_c(cls: type) -> None:
     """Raise TypeError naming *cls* and the first class in its MRO, object aside, that holds a __new__ or __init__ and that _constructed_in_c counts as defined in C, if one does; inspect reads no constructor of *cls*, so it reads the first text signature a class in that MRO gives."""
     constructing = next(
         (
             base
-            for base in namespace_holders(cls.__mro__[:-1], "__new__", "__init__")
+            for base in namespace_holders(recorded_mro(cls)[:-1], "__new__", "__init__")
             if _constructed_in_c(base)
         ),
         None,
@@ -606,7 +635,7 @@ def _refuse_class_read_by_a_docstring_text_signature(cls: type) -> None:
 
     docs/surface-forms-inspect-readings.md §4.5 says how each minor reads such a class.
     """
-    for holder in cls.__mro__[:-1]:
+    for holder in recorded_mro(cls)[:-1]:
         in_docstring = _docstring_text_signature(holder)
         if in_docstring is not None:
             raise TypeError(
@@ -653,7 +682,7 @@ def _dedented_as_compiled_from_3_13(doc: str) -> str:
 def _resolved_constructors(cls: type) -> Iterator[tuple[str, type, object]]:
     """The __new__ and then the __init__ *cls* resolves: each name, the first class in *cls*'s MRO whose namespace holds that name, and what it holds there."""
     for name in ("__new__", "__init__"):
-        holder = next(namespace_holders(cls.__mro__, name))
+        holder = next(namespace_holders(recorded_mro(cls), name))
         yield name, holder, vars(holder)[name]
 
 
@@ -674,7 +703,7 @@ def _first_read_constructor(cls: type) -> tuple[type, str, object]:
         for name in ("__new__", "__init__")
         if not _skipped_by_inspect(cls, name, inspect.getattr_static(cls, name))
     ]
-    holder = next(namespace_holders(cls.__mro__, *names), object)
+    holder = next(namespace_holders(recorded_mro(cls), *names), object)
     namespace = vars(holder)
     if "__new__" in names and "__new__" in namespace:
         held = namespace["__new__"]
@@ -798,7 +827,7 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
     """
     return any(
         holder not in (types.FunctionType, functools.partial, types.MethodType)
-        for holder in namespace_holders(type(wrapped).__mro__, "__get__")
+        for holder in namespace_holders(recorded_mro(type(wrapped)), "__get__")
     )
 
 
@@ -1101,7 +1130,7 @@ def _generated_constructor_modules(
     holder: type, names: Iterable[str]
 ) -> dict[str, types.ModuleType]:
     """The module spelling each of *names* in a constructor compiled outside *holder*'s body and renamed into it: that of the nearest class in *holder*'s MRO that the dataclass decorator processed and whose own body annotates the name, or *holder*'s if none does."""
-    decorated = tuple(base for base in holder.__mro__ if is_decorated_dataclass(base))
+    decorated = tuple(base for base in recorded_mro(holder) if is_decorated_dataclass(base))
     return {
         name: defining_module(
             next((base for base in decorated if name in inspect.get_annotations(base)), holder)
@@ -1126,7 +1155,7 @@ def _signature_holder(cls: type) -> type:
             "or __getattr__ it defines, so no module is known to spell it: make the name "
             "private, or give the class a metaclass that provides no __signature__"
         )
-    holder = next(namespace_holders(cls.__mro__, "__signature__"))
+    holder = next(namespace_holders(recorded_mro(cls), "__signature__"))
     held = vars(holder)["__signature__"]
     if not isinstance(held, inspect.Signature):
         raise TypeError(
@@ -1139,7 +1168,7 @@ def _signature_holder(cls: type) -> type:
 
 def _metaclass_may_provide_signature(cls: type) -> bool:
     """Whether *cls*'s metaclass provides the __signature__ type.__getattribute__ gives inspect for *cls*, or may: a class in the metaclass's MRO other than type and object defines __getattribute__; the first one there that holds a __signature__ holds a data descriptor, which outranks *cls*'s own; or no class in *cls*'s MRO holds one, so a metaclass attribute, descriptor or __getattr__ provides it."""
-    metaclass_mro = inspect.getmro(type(cls))
+    metaclass_mro = recorded_mro(type(cls))
     metaclass_holder = next(namespace_holders(metaclass_mro, "__signature__"), None)
     getattribute_holders = namespace_holders(
         (meta for meta in metaclass_mro if meta not in (type, object)), "__getattribute__"
@@ -1150,13 +1179,19 @@ def _metaclass_may_provide_signature(cls: type) -> bool:
             metaclass_holder is not None
             and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
         )
-        or next(namespace_holders(cls.__mro__, "__signature__"), None) is None
+        or next(namespace_holders(recorded_mro(cls), "__signature__"), None) is None
     )
 
 
 def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
     """The classes among *classes*, in their order, whose own namespace holds one of *names*."""
     return (cls for cls in classes if any(name in vars(cls) for name in names))
+
+
+def recorded_mro(cls: type) -> tuple[type, ...]:
+    """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
+    mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
+    return mro
 
 
 def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
