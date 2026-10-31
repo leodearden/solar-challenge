@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Shared integration-test helpers for grid-services tests.
-
-Provides the common board-scenario/finance builder shared across
-``test_flex_grid_services`` and ``test_grid_services_events`` to prevent
-independent drift when the board YAML or config API changes.
+"""The board scenario for the integration tests: ``SCENARIO``, the path of its YAML, and ``board_econ_scenario()``, which builds its ``ScenarioConfig`` and ``FinanceConfig``.
 
 Usage::
 
-    from tests.integration._helpers import board_econ_scenario
-    scenario, finance = board_econ_scenario()
+    from tests.integration._helpers import SCENARIO, board_econ_scenario
 
+    scenario, finance = board_econ_scenario()
+    raw = load_config(SCENARIO)
 """
+
 from __future__ import annotations
 
 from pathlib import Path
