@@ -6,6 +6,7 @@ Outer and Preset are defined at module level, where a qualified name carries no
 references to resolve.
 """
 
+import fractions
 import functools
 import importlib.util
 import inspect
@@ -82,6 +83,18 @@ class Giver:
         return self.given
 
 
+class CallableGiver(Giver):
+    """A callable Giver, whose type defines __get__ and __call__ but neither __set__ nor __delete__."""
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class DeletingGiver(Giver):
+    """A Giver whose type also defines __delete__ but no __call__."""
+
+    def __delete__(self, instance: object) -> None: ...
+
+
 class GetterPartial(functools.partial):
     """A functools.partial whose own __get__ binds it to an instance as a method, as a function's binds."""
 
@@ -113,6 +126,12 @@ class ChainedCall:
     """A class whose __call__ is a classmethod of a staticmethod, which Python 3.11 and 3.12 bind through the staticmethod's __get__ and later minors as a method of the staticmethod."""
 
     __call__ = classmethod(staticmethod(_share))
+
+
+class DefCall:
+    """A class whose __call__ is defined with def."""
+
+    def __call__(self, share: fractions.Fraction, rate: int) -> None: ...
 
 
 CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR = (
@@ -165,6 +184,12 @@ def with_a_string_signature(function: Callable[..., object]) -> Callable[..., ob
     """*function*, carrying the string '(receiver, rate)' as its __signature__."""
     function.__signature__ = "(receiver, rate)"
     return function
+
+
+def recording_object_init(wrapper: object) -> object:
+    """*wrapper*, recording object.__init__ as its __wrapped__."""
+    wrapper.__wrapped__ = object.__init__
+    return wrapper
 
 
 GIVEN_BY_A_METACLASS_GET = (
