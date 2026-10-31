@@ -1,0 +1,304 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The rules of tests/_surface_forms.py's surface_form for a class whose metaclass shadows __dict__, as a metaclass that defines __dict__ as a property does, and for an object of such a class, one per test.
+
+The classes and the function above the first test are defined at module level, where
+their qualified names carry no '<locals>' and a parametrize decorator can reach them.
+"""
+
+import functools
+import inspect
+from typing import Callable
+
+import pytest
+
+from tests._surface_forms import surface_form
+from tests.unit.surface_forms_helper._fixtures import (
+    class_whose_init_is,
+    class_whose_metaclass_call_is,
+    class_whose_new_is,
+    dict_shadowing_refusal,
+    metaclass_whose_dict_gives,
+)
+
+
+def _settle(receiver: object, rate: int) -> None: ...
+
+
+class Rating:
+    """A class whose __call__ is defined with def."""
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class NoneCalling(Rating, metaclass=metaclass_whose_dict_gives(lambda cls: {"__call__": None})):
+    """A Rating whose __dict__ gives None as __call__, over the __call__ Rating holds."""
+
+
+class PartialCalling(
+    Rating,
+    metaclass=metaclass_whose_dict_gives(lambda cls: {"__call__": functools.partial(_settle)}),
+):
+    """A Rating whose __dict__ gives a functools.partial as __call__."""
+
+
+class ClassmethodCalling(
+    Rating,
+    metaclass=metaclass_whose_dict_gives(
+        lambda cls: {"__call__": classmethod(staticmethod(_settle))}
+    ),
+):
+    """A Rating whose __dict__ gives a classmethod of a staticmethod as __call__."""
+
+
+class PartialHidden(Rating, metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A Rating whose own __call__ is a functools.partial, which its __dict__, giving nothing, hides."""
+
+    __call__ = functools.partial(_settle)
+
+
+class LoneCalling(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A class whose own __call__, defined with def and held by no base, its __dict__, giving nothing, hides."""
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class Initialised:
+    """A class whose __init__ is defined with def."""
+
+    def __init__(self, rate: int) -> None: ...
+
+
+class Made:
+    """A class whose __new__ is defined with def."""
+
+    def __new__(cls, share: str) -> "Made": ...
+
+
+class NewClaimed(
+    Initialised, Made, metaclass=metaclass_whose_dict_gives(lambda cls: {"__new__": None})
+):
+    """A class of Initialised and then Made whose __dict__ gives None as __new__."""
+
+
+class InitHidden(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A class whose own __init__, defined with def, its __dict__, giving nothing, hides."""
+
+    def __init__(self, rate: int) -> None: ...
+
+
+class PartialInitGiven(
+    Initialised,
+    metaclass=metaclass_whose_dict_gives(lambda cls: {"__init__": functools.partial(_settle)}),
+):
+    """An Initialised whose __dict__ gives a functools.partial as __init__."""
+
+
+class Bare(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A class that holds no constructor and whose __dict__ gives nothing."""
+
+
+class Transparent(
+    Initialised,
+    metaclass=metaclass_whose_dict_gives(lambda cls: type.__dict__["__dict__"].__get__(cls)),
+):
+    """An Initialised whose __dict__ gives the very namespace the class holds."""
+
+
+class PlainDictHolding(type):
+    """A metaclass whose body binds __dict__ to a plain dict."""
+
+    __dict__ = {}
+
+
+class TypeDictHolding(type):
+    """A metaclass whose body binds __dict__ to the descriptor type holds as its own __dict__."""
+
+    __dict__ = type.__dict__["__dict__"]
+
+
+class DictShadowingSubclass(metaclass_whose_dict_gives(lambda cls: {})):
+    """A subclass of a metaclass that defines __dict__ as a property, defining nothing itself."""
+
+
+class OverPlainDict(Initialised, metaclass=PlainDictHolding):
+    """An Initialised of PlainDictHolding."""
+
+
+class OverTypeDict(Initialised, metaclass=TypeDictHolding):
+    """An Initialised of TypeDictHolding."""
+
+
+class OverDictShadowingSubclass(Initialised, metaclass=DictShadowingSubclass):
+    """An Initialised of DictShadowingSubclass."""
+
+
+class HiddenGetterPartial(functools.partial, metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A functools.partial whose own __get__, giving the partial itself, its __dict__, giving nothing, hides."""
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self
+
+
+class HiddenGiver(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A callable descriptor whose own __get__ gives the object it was made with, and whose __dict__ gives nothing."""
+
+    def __init__(self, given: object) -> None:
+        self.given = given
+
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        return self.given
+
+    def __call__(self, rate: int) -> None: ...
+
+
+class CallingShadowing(metaclass_whose_dict_gives(lambda cls: {})):
+    """A metaclass whose __call__ is defined with def and whose __dict__ gives, for each class of it, nothing."""
+
+    def __call__(cls, rate: int) -> None: ...
+
+
+class Called(Initialised, metaclass=CallingShadowing):
+    """An Initialised of CallingShadowing, whose __call__ inspect reads in place of its __new__ and __init__."""
+
+
+class Carrying(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+    """A class whose __dict__ gives nothing and that carries the signature of Initialised."""
+
+    __signature__ = inspect.signature(Initialised)
+
+
+class InstanceDictHolding:
+    """A class whose own __dict__ is the descriptor CPython made for it, for its instances."""
+
+
+class InstanceDictMeta(InstanceDictHolding, type):
+    """A metaclass whose MRO holds InstanceDictHolding, and then type."""
+
+
+class Kept(Initialised, metaclass=InstanceDictMeta):
+    """An Initialised of InstanceDictMeta."""
+
+
+@pytest.mark.parametrize(
+    ("build", "name"),
+    [
+        pytest.param(lambda: functools.partial(NoneCalling()), "NoneCalling", id="partial-of-it"),
+        pytest.param(lambda: class_whose_init_is(NoneCalling()), "NoneCalling", id="init"),
+        pytest.param(lambda: class_whose_new_is(NoneCalling()), "NoneCalling", id="new"),
+        pytest.param(
+            lambda: class_whose_metaclass_call_is(NoneCalling()),
+            "NoneCalling",
+            id="metaclass-call",
+        ),
+        pytest.param(
+            lambda: class_whose_init_is(PartialCalling()),
+            "PartialCalling",
+            id="dict-giving-a-partial-call",
+        ),
+        pytest.param(
+            lambda: class_whose_init_is(ClassmethodCalling()),
+            "ClassmethodCalling",
+            id="dict-giving-a-classmethod-call",
+        ),
+        pytest.param(
+            lambda: class_whose_init_is(PartialHidden()),
+            "PartialHidden",
+            id="dict-hiding-a-partial-call",
+        ),
+        pytest.param(
+            lambda: class_whose_init_is(LoneCalling()),
+            "LoneCalling",
+            id="dict-hiding-a-call-no-base-holds",
+        ),
+    ],
+)
+def test_an_object_whose_types_metaclass_shadows_dict_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it(
+    build: Callable[[], object], name: str
+) -> None:
+    with pytest.raises(TypeError, match=dict_shadowing_refusal(name)):
+        surface_form(build())
+
+
+@pytest.mark.parametrize(
+    ("cls", "name"),
+    [
+        pytest.param(NewClaimed, "NewClaimed", id="dict-giving-new"),
+        pytest.param(InitHidden, "InitHidden", id="dict-hiding-init"),
+        pytest.param(PartialInitGiven, "PartialInitGiven", id="dict-giving-a-partial-init"),
+        pytest.param(Bare, "Bare", id="no-constructor"),
+        pytest.param(Transparent, "Transparent", id="dict-giving-the-namespace-the-class-holds"),
+    ],
+)
+def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init(
+    cls: type, name: str
+) -> None:
+    with pytest.raises(TypeError, match=dict_shadowing_refusal(name)):
+        surface_form(cls)
+
+
+@pytest.mark.parametrize(
+    ("cls", "refusal"),
+    [
+        pytest.param(
+            OverPlainDict,
+            r"\.OverPlainDict has the metaclass \S*\.PlainDictHolding, whose MRO holds "
+            r"\S*\.PlainDictHolding\.__dict__, a builtins\.dict, in place of the __dict__ type "
+            "gives each class",
+            id="plain-dict",
+        ),
+        pytest.param(
+            OverTypeDict,
+            r"\.OverTypeDict has the metaclass \S*\.TypeDictHolding, whose MRO holds "
+            r"\S*\.TypeDictHolding\.__dict__, a builtins\.getset_descriptor, in place of the "
+            "__dict__ type gives each class",
+            id="the-descriptor-type-holds",
+        ),
+        pytest.param(
+            OverDictShadowingSubclass,
+            r"\.OverDictShadowingSubclass has the metaclass \S*\.DictShadowingSubclass, whose "
+            r"MRO holds \S*\.DictShadowing\.__dict__, a builtins\.property, in place of the "
+            "__dict__ type gives each class",
+            id="subclass-of-a-shadowing-metaclass",
+        ),
+    ],
+)
+def test_a_type_error_for_a_class_whose_metaclass_shadows_dict_names_the_class_in_that_metaclass_mro_holding_the_dict_and_its_type_whatever_that_dict_is(
+    cls: type, refusal: str
+) -> None:
+    with pytest.raises(TypeError, match=refusal):
+        surface_form(cls)
+
+
+@pytest.mark.parametrize(
+    ("build", "name"),
+    [
+        pytest.param(lambda: HiddenGetterPartial(_settle), "HiddenGetterPartial", id="partial"),
+        pytest.param(
+            lambda: class_whose_init_is(classmethod(HiddenGiver(_settle))),
+            "HiddenGiver",
+            id="classmethod",
+        ),
+    ],
+)
+def test_a_partial_or_a_classmethod_wrapped_object_whose_types_metaclass_shadows_dict_raises_the_type_error_naming_that_type_and_its_metaclass(
+    build: Callable[[], object], name: str
+) -> None:
+    with pytest.raises(TypeError, match=dict_shadowing_refusal(name)):
+        surface_form(build())
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        pytest.param(Called, id="metaclass-call"),
+        pytest.param(Carrying, id="carried-signature"),
+    ],
+)
+def test_a_class_whose_metaclass_shadows_dict_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
+    cls: type,
+) -> None:
+    assert surface_form(cls) == "(rate: int) -> None"
+
+
+def test_a_class_whose_metaclass_mro_holds_a_class_whose_own_dict_is_the_one_cpython_made_for_it_is_spelled_by_its_constructor() -> None:
+    assert surface_form(Kept) == "(rate: int) -> None"

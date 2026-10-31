@@ -31,7 +31,9 @@ from tests.unit.surface_forms_helper._fixtures import (
     GetterPartial,
     Preset,
     SettableGetterPartial,
+    dict_shadowing_refusal,
     imported_module,
+    metaclass_whose_dict_gives,
     metaclass_whose_mro_gives,
 )
 
@@ -655,6 +657,28 @@ def test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records
         TypeError, match=r"\.HiddenPoint has the metaclass \S*\.Shadowing, whose __mro__ gives "
     ):
         member_forms(HiddenPoint)
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        pytest.param({"rate": 1}, id="dict-giving-a-member-the-body-never-defines"),
+        pytest.param(
+            {"__annotations__": {"x": int}}, id="dict-giving-annotations-the-body-never-wrote"
+        ),
+        pytest.param(None, id="dict-giving-no-mapping"),
+    ],
+)
+def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_that_dict_gives(
+    shadow: object,
+) -> None:
+    class Meter(metaclass=metaclass_whose_dict_gives(lambda cls: shadow)):
+        y: str
+
+        def settle(self, rate: int) -> None: ...
+
+    with pytest.raises(TypeError, match=dict_shadowing_refusal("Meter")):
+        member_forms(Meter)
 
 
 def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fields() -> None:

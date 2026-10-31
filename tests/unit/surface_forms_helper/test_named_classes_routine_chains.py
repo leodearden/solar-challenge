@@ -24,7 +24,9 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_init_is,
     class_whose_metaclass_call_is,
     class_whose_new_is,
+    dict_shadowing_refusal,
     imported_module,
+    metaclass_whose_dict_gives,
 )
 
 if TYPE_CHECKING:
@@ -605,3 +607,13 @@ def test_a_routine_whose_chain_ends_at_an_object_whose_class_resolves_as_call_a_
     )
 
     assert named_classes(functools.partial(reclasscalling.Caller())) == {fractions.Fraction}
+
+
+def test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_shadows_dict_raises_a_type_error_naming_that_class_and_its_metaclass() -> None:
+    def build(rate: int) -> None: ...
+
+    class Carrying(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
+        __signature__ = inspect.signature(build)
+
+    with pytest.raises(TypeError, match=dict_shadowing_refusal("Carrying")):
+        named_classes(functools.partial(Carrying))
