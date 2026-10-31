@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rule of tests/_surface_forms.py's surface_form for how its TypeError names the site of what it refuses: the class constructed through, or the class read through, what a class holds as a name.
 
-The classes and functions above the test are defined at module level, where their
+The classes and functions above the tests are defined at module level, where their
 qualified names carry no '<locals>' and a parametrize decorator can reach them.
 """
 
@@ -127,3 +127,28 @@ def test_a_type_error_for_a_constructor_or_a_call_names_the_class_read_through_i
 ) -> None:
     with pytest.raises(TypeError, match=site):
         surface_form(_inheriting(build()))
+
+
+@pytest.mark.parametrize(
+    ("call", "refusal"),
+    [
+        pytest.param(functools.partial(_settle), r"a functools\.partial, ", id="partial"),
+        pytest.param(
+            classmethod(Giver(_settle)),
+            r"a classmethod that wraps a ",
+            id="classmethod-bound-by-minor",
+        ),
+        pytest.param(
+            Giver(types.SimpleNamespace()),
+            r"which inspect reads as namespace\(\), a types\.SimpleNamespace, which is not callable",
+            id="bound-to-an-object-that-is-not-callable",
+        ),
+    ],
+)
+def test_a_type_error_for_a_call_that_an_objects_class_inherits_names_the_base_holding_it(
+    call: object, refusal: str
+) -> None:
+    inheriting_its_call = _inheriting(type(object_whose_call_is(call)))()
+
+    with pytest.raises(TypeError, match=r"\.Built is read through \S*\.Caller\.__call__, " + refusal):
+        surface_form(class_whose_init_is(inheriting_its_call))
