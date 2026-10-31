@@ -191,6 +191,26 @@ def metaclass_whose_mro_gives(mro: Callable[[type], tuple[type, ...]]) -> type:
     return Shadowing
 
 
+def metaclass_whose_dict_gives(namespace: Callable[[type], object]) -> type:
+    """A metaclass whose __dict__ gives, for each class of it, what *namespace* gives for that class, in place of the namespace the class holds."""
+
+    class DictShadowing(type):
+        @property
+        def __dict__(cls) -> object:
+            return namespace(cls)
+
+    return DictShadowing
+
+
+def dict_shadowing_refusal(name: str) -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass is one metaclass_whose_dict_gives makes."""
+    return (
+        rf"\.{name} has the metaclass \S*\.DictShadowing, whose MRO holds "
+        r"\S*\.DictShadowing\.__dict__, a builtins\.property, in place of the __dict__ type "
+        "gives each class"
+    )
+
+
 def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
     """*function*, carrying the string '(receiver, rate)' as its __signature__."""
     function.__signature__ = "(receiver, rate)"
