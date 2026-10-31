@@ -7,6 +7,7 @@ their qualified names carry no '<locals>' and a parametrize decorator can reach 
 
 import contextlib
 import functools
+import inspect
 import sqlite3
 from typing import Callable
 
@@ -225,3 +226,10 @@ def test_a_class_whose_metaclass_defines_mro_is_spelled_by_the_constructor_inspe
     cls: type,
 ) -> None:
     assert surface_form(cls) == "(rate: int) -> None"
+
+
+def test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_is_spelled_by_the_signature_it_carries() -> None:
+    class Carrying(metaclass=metaclass_whose_mro_gives(lambda cls: (cls,))):
+        __signature__ = inspect.signature(Initialised)
+
+    assert surface_form(Carrying) == "(rate: int) -> None"
