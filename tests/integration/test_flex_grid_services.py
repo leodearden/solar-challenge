@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
-from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -31,9 +30,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from tests._finance_builders import make_fleet_results_of
-from tests.integration._helpers import board_econ_scenario
-
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
 # ---------------------------------------------------------------------------

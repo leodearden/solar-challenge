@@ -20,14 +20,13 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from pathlib import Path
 from typing import Callable, NamedTuple
 
 import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, load_config, parse_finance_config
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     FinanceConfig,
@@ -49,9 +48,7 @@ from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance
-from tests.integration._helpers import board_econ_scenario
-
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -642,19 +639,17 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
       - exit_code == 0
       - "Grid services (capacity-at-events)" line in output
       - a positive event-derived £ figure in output
-      - (after YAML flip) the supersede inequality: event income ≠ flat_rate × Σ kW
+      - the supersede inequality: event income ≠ flat_rate × Σ kW
 
     The board YAML selects capacity_at_events and the CLI passes the computed
     grid_services_at_events to generate_finance_report.
     """
-    scenario_path = Path("scenarios/bristol-phase1-flex.yaml")
-
     # In-window FleetResults from the board homes
-    scenario, _finance = board_econ_scenario()
+    scenario, finance = board_econ_scenario()
     homes = scenario.homes
     fr = _synthetic_fleet_results_in_window(homes)
 
-    result = invoke_finance_run([str(scenario_path)], fr)
+    result = invoke_finance_run([str(SCENARIO)], fr)
 
     assert result.exit_code == 0, (
         f"CLI exited {result.exit_code}. Output:\n{result.output}"
@@ -668,20 +663,18 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
     # The rendered event-derived £ must be present (positive)
     assert "£" in result.output, "Output must contain a £ figure"
 
-    # Supersede inequality (only checkable after ε flips the board YAML to
-    # capacity_at_events; skips gracefully if still flat)
-    raw = load_config(scenario_path)
-    finance = parse_finance_config(raw.get("finance"))
-    assert finance is not None
-    if finance.grid_services_events is not None:
-        flat_rate = finance.grid_services_income_per_kw_per_year_gbp
-        sigma = sum(
-            h.battery_config.max_discharge_kw
-            for h in homes if h.battery_config is not None
-        )
-        gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
-        assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
-            f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
-            f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
-            "confirms the supersede takes effect."
-        )
+    assert finance.grid_services_events is not None, (
+        f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) has no "
+        "grid_services_events block, so the supersede inequality cannot be checked"
+    )
+    flat_rate = finance.grid_services_income_per_kw_per_year_gbp
+    sigma = sum(
+        h.battery_config.max_discharge_kw
+        for h in homes if h.battery_config is not None
+    )
+    gse_direct = compute_grid_services_at_events(fr, finance.grid_services_events)
+    assert gse_direct.annual_income_gbp != pytest.approx(flat_rate * sigma, rel=1e-3), (
+        f"Event-derived income (£{gse_direct.annual_income_gbp:.2f}) must differ from "
+        f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
+        "confirms the supersede takes effect."
+    )

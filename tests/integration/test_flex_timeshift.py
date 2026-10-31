@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from pathlib import Path
 
 import pandas as pd
 
@@ -26,8 +25,7 @@ from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
 from tests._synthetic_weather import sunless_weather, weather_for
-
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
