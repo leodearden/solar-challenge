@@ -26,7 +26,10 @@ from tests.unit.surface_forms_helper._fixtures import (
     CALLS_BOUND_TO_AN_OBJECT_THAT_IS_NOT_CALLABLE,
     GIVEN_BY_A_METACLASS_GET,
     CallableGetter,
+    CallableGiver,
     ChainedCall,
+    DefCall,
+    DeletingGiver,
     Giver,
     NoneSignedCallableGetter,
     PartialFirstGetterPartial,
@@ -36,6 +39,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_new_is,
     metaclass_whose_get_gives,
     object_whose_call_is,
+    recording_object_init,
     with_a_string_signature,
 )
 
@@ -64,12 +68,6 @@ class NestedCall:
     __call__ = PartialCall()
 
 
-class DefCall:
-    """A class whose __call__ is defined with def."""
-
-    def __call__(self, share: fractions.Fraction, rate: int) -> None: ...
-
-
 def _with_a_text_signature(call: DefCall) -> DefCall:
     call.__text_signature__ = "(rate)"
     return call
@@ -79,12 +77,6 @@ class Period(enum.Enum):
     """An Enum with a member, whose signature inspect reads from a different place on each minor."""
 
     PEAK = "peak"
-
-
-class CallableGiver(Giver):
-    """A callable Giver, whose type defines __get__ and __call__ but neither __set__ nor __delete__."""
-
-    def __call__(self, rate: int) -> None: ...
 
 
 class DeletingCallableGiver(CallableGiver):
@@ -99,21 +91,10 @@ class SettingCallableGiver(CallableGiver):
     def __set__(self, instance: object, value: object) -> None: ...
 
 
-class DeletingGiver(Giver):
-    """A Giver whose type also defines __delete__ but no __call__."""
-
-    def __delete__(self, instance: object) -> None: ...
-
-
 class SettingGiver(Giver):
     """A Giver whose type also defines __set__ but no __call__."""
 
     def __set__(self, instance: object, value: object) -> None: ...
-
-
-def _recording_object_init(wrapper: object) -> object:
-    wrapper.__wrapped__ = object.__init__
-    return wrapper
 
 
 def test_a_class_whose_init_is_a_partial_raises_a_type_error_naming_it_and_the_class_holding_the_partial() -> None:
@@ -308,7 +289,7 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
     ("hold", "form", "classes"),
     [
         pytest.param(
-            lambda build: _recording_object_init(CallableGiver(build)),
+            lambda build: recording_object_init(CallableGiver(build)),
             "(receiver: float, rate: int) -> None",
             {float, int},
             id="descriptor",
@@ -320,7 +301,7 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
             id="staticmethod",
         ),
         pytest.param(
-            lambda build: functools.wraps(_recording_object_init(CallableGiver(build)))(
+            lambda build: functools.wraps(recording_object_init(CallableGiver(build)))(
                 lambda self, rate: None
             ),
             "(*args, **kwargs)",
@@ -328,7 +309,7 @@ def test_a_class_whose_metaclass_call_wraps_a_callable_defined_in_c_raises_a_typ
             id="wrapper-of-such-a-descriptor",
         ),
         pytest.param(
-            lambda build: _recording_object_init(Giver(build)),
+            lambda build: recording_object_init(Giver(build)),
             "(receiver: float, rate: int) -> None",
             {float, int},
             id="non-callable-descriptor",
@@ -436,28 +417,28 @@ def test_a_class_whose_new_is_a_descriptor_that_records_a_callable_defined_in_c_
     "hold",
     [
         pytest.param(
-            lambda build: _recording_object_init(DeletingCallableGiver(build)),
+            lambda build: recording_object_init(DeletingCallableGiver(build)),
             id="get-delete-descriptor",
         ),
         pytest.param(
-            lambda build: _recording_object_init(SettingCallableGiver(build)),
+            lambda build: recording_object_init(SettingCallableGiver(build)),
             id="get-set-descriptor",
         ),
-        pytest.param(lambda build: _recording_object_init(DefCall()), id="object-defining-no-get"),
+        pytest.param(lambda build: recording_object_init(DefCall()), id="object-defining-no-get"),
         pytest.param(
             lambda build: functools.update_wrapper(functools.partial(build), object.__init__),
             id="partial",
         ),
         pytest.param(
-            lambda build: _recording_object_init(DeletingGiver(build)),
+            lambda build: recording_object_init(DeletingGiver(build)),
             id="non-callable-get-delete-descriptor",
         ),
         pytest.param(
-            lambda build: _recording_object_init(SettingGiver(build)),
+            lambda build: recording_object_init(SettingGiver(build)),
             id="non-callable-get-set-descriptor",
         ),
         pytest.param(
-            lambda build: _recording_object_init(types.SimpleNamespace()),
+            lambda build: recording_object_init(types.SimpleNamespace()),
             id="non-callable-object-defining-no-get",
         ),
     ],
@@ -649,7 +630,7 @@ def test_a_class_whose_constructor_carries_a_signature_attribute_that_is_neither
         pytest.param(classmethod, id="classmethod"),
         pytest.param(Giver, id="descriptor"),
         pytest.param(
-            lambda build: _recording_object_init(CallableGiver(build)),
+            lambda build: recording_object_init(CallableGiver(build)),
             id="descriptor-recording-a-callable-defined-in-c",
         ),
     ],
