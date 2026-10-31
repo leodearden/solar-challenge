@@ -662,6 +662,22 @@ def test_a_tuple_whose_metaclass_alone_provides_fields_is_no_named_tuple_since_i
     assert member_forms(Fielded) == {"x": "attribute int"}
 
 
+def test_a_named_tuple_field_is_named_by_the_fields_its_instances_read_not_by_the_fields_its_metaclass_gives_the_class() -> None:
+    class FieldsProperty(type):
+        @property
+        def _fields(cls) -> tuple[str, ...]:
+            return ("y",)
+
+    class Point(NamedTuple):
+        x: int
+
+    class Retyped(Point, metaclass=FieldsProperty):
+        x: int
+
+    assert (Retyped._fields, Retyped(1)._fields) == (("y",), ("x",))
+    assert member_forms(Retyped) == {}
+
+
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
     class Base:
         def read(self) -> float: ...
