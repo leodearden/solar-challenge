@@ -981,6 +981,77 @@ def test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain
 
 
 @pytest.mark.parametrize(
+    ("link", "naming_the_link_the_string_and_the_reason"),
+    [
+        pytest.param(
+            "functools.partial(object.__init__)",
+            r"\bfunctools\.partial\(<slot wrapper '__init__' of 'object' objects>\).*'Share'.*"
+            r"\brecords no module of its own\b",
+            id="partial",
+        ),
+        pytest.param(
+            "functools.wraps(wrapper)(_relayed)",
+            r"\blinkcalling\.object\.__init__\b.*'Share'.*"
+            r"\bwraps a callable that carries a signature of its own\b",
+            id="wrapper-of-a-signed-link",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("CopiedCalled", id="metaclass-call"),
+        pytest.param("CopiedInitialised", id="init"),
+    ],
+)
+def test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain_carries_over_a_callable_defined_in_c_raises_type_error_for_a_string_annotation_naming_that_link_if_it_records_no_module_or_wraps_a_link_carrying_a_signature_of_its_own(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    link: str,
+    naming_the_link_the_string_and_the_reason: str,
+) -> None:
+    imported_module(tmp_path, monkeypatch, "linkcalling", _LINKCALLING_SOURCE)
+    linksigning = imported_module(
+        tmp_path,
+        monkeypatch,
+        "linksigning",
+        "import functools\n"
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from linkcalling import wrapper\n"
+        "\n"
+        "def _relayed(receiver: 'Share', rate: int) -> None: ...\n"
+        "\n"
+        f"link = {link}\n"
+        "link.__signature__ = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class Calling(type):\n"
+        "    __call__ = staticmethod(link)\n"
+        "\n"
+        "class Initialised:\n"
+        "    __init__ = link\n"
+        "\n"
+        "class CopiedCalled(metaclass=Calling):\n"
+        "    __signature__ = link.__signature__\n"
+        "\n"
+        "class CopiedInitialised(Initialised):\n"
+        "    __signature__ = link.__signature__\n",
+    )
+    cls = getattr(linksigning, name)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        with pytest.raises(TypeError, match=naming_the_link_the_string_and_the_reason):
+            named_classes(subject)
+
+
+@pytest.mark.parametrize(
     "names",
     [
         pytest.param(("OwnCalled", "DerivedCalled", "ClassedCalled"), id="metaclass-call"),
@@ -1034,11 +1105,17 @@ def test_a_signature_a_class_carries_over_a_constructor_whose_chain_holds_a_link
     own, derived, classed = names
 
     for name in (own, derived):
-        naming_the_class_the_string_the_link_and_the_reason = (
+        holder = getattr(linksigning, name)
+
+        class Inheriting(holder):
+            pass
+
+        naming_the_holder_the_string_the_link_and_the_reason = (
             rf"\blinksigning\.{name}\b.*'Share'.*\blinkcalling\.object\.__init__\b.*\bmay be a copy\b"
         )
-        with pytest.raises(TypeError, match=naming_the_class_the_string_the_link_and_the_reason):
-            named_classes(getattr(linksigning, name))
+        for subject in (holder, Inheriting):
+            with pytest.raises(TypeError, match=naming_the_holder_the_string_the_link_and_the_reason):
+                named_classes(subject)
     assert named_classes(getattr(linksigning, classed)) == {decimal.Decimal}
 
 
