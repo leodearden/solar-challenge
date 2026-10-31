@@ -204,6 +204,13 @@ class TestSpreadsheetRevenueCurve:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Work in tmp_path, not the repo root, so the test shows it finds the committed scenario it reads from any working directory."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.usefixtures("in_tmp_path")
 class TestFinCalibrationScenarioParses:
     """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
 
@@ -216,7 +223,7 @@ class TestFinCalibrationScenarioParses:
     CLI parses it, and its rate is FIN_GOLDEN's [FIN] export rate.
     """
 
-    _SCENARIO_PATH = "scenarios/bristol-fin-calibration.yaml"
+    _SCENARIO_PATH = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-fin-calibration.yaml"
 
     def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
@@ -232,7 +239,7 @@ class TestFinCalibrationScenarioParses:
 
     def test_scenario_file_exists(self) -> None:
         """scenarios/bristol-fin-calibration.yaml must exist on disk."""
-        assert Path(self._SCENARIO_PATH).exists(), (
+        assert self._SCENARIO_PATH.exists(), (
             f"{self._SCENARIO_PATH} not found"
         )
 

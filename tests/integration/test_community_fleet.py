@@ -36,7 +36,7 @@ from solar_challenge.tariff import FlatRateTariff
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
-SCENARIO = Path("scenarios/bristol-community.yaml")
+SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-community.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,12 @@ def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
 bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
 
 
+@pytest.fixture
+def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Work in tmp_path, not the repo root, so the test shows it finds the committed scenario it reads from any working directory."""
+    monkeypatch.chdir(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -223,6 +229,7 @@ class TestGenerateCommunityReport:
         assert "note" in report_dict
 
 
+@pytest.mark.usefixtures("in_tmp_path")
 class TestDemoScenario:
     """Contract tests for scenarios/bristol-community.yaml.
 
@@ -272,7 +279,7 @@ class TestDemoScenario:
         assert cfg.community_battery.capacity_kwh > 0
 
 
-@pytest.mark.usefixtures("bristol_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy", "in_tmp_path")
 class TestFleetRunCommunityCLI:
     """CLI integration tests for `fleet run` with community wiring."""
 
@@ -707,7 +714,7 @@ class TestCommunityBillingAB:
         assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
 
 
-@pytest.mark.usefixtures("bristol_june_tmy")
+@pytest.mark.usefixtures("bristol_june_tmy", "in_tmp_path")
 class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
