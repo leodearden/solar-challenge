@@ -778,6 +778,96 @@ def test_a_class_that_carries_a_signature_over_a_constructor_that_wraps_a_callab
     assert named_classes(getattr(signing, name)) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("MethodWrapperCalled", id="metaclass-call-staticmethod-of-a-method-wrapper"),
+        pytest.param(
+            "ClassmethodDescriptorCalled",
+            id="metaclass-call-descriptor-giving-a-classmethod-descriptor",
+        ),
+        pytest.param(
+            "WrapperCalled", id="metaclass-call-staticmethod-of-a-wrapper-of-a-slot-wrapper"
+        ),
+        pytest.param("MethodWrapperRebuilt", id="init-staticmethod-of-a-method-wrapper"),
+        pytest.param(
+            "ClassmethodDescriptorRebuilt", id="init-descriptor-giving-a-classmethod-descriptor"
+        ),
+        pytest.param("WrapperRebuilt", id="init-staticmethod-of-a-wrapper-of-a-slot-wrapper"),
+    ],
+)
+def test_a_class_that_carries_a_signature_over_a_metaclass_call_or_init_inspect_binds_to_a_callable_defined_in_c_or_to_a_wrapper_of_one_names_the_classes_that_signature_names_read_where_the_class_holding_it_is_spelled(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "binding_in_c",
+        "import functools\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "from tests.unit.surface_forms_helper._fixtures import Giver\n"
+        "\n"
+        "def build(receiver: 'Share', rate: int) -> None: ...\n"
+        "\n"
+        "class MethodWrapperCalling(type):\n"
+        "    __call__ = staticmethod(object().__init__)\n"
+        "\n"
+        "class ClassmethodDescriptorCalling(type):\n"
+        "    __call__ = Giver(dict.__dict__['fromkeys'])\n"
+        "\n"
+        "class WrapperCalling(type):\n"
+        "    __call__ = staticmethod(functools.wraps(object.__init__)(build))\n"
+        "\n"
+        "class MethodWrapperBuilt:\n"
+        "    __init__ = staticmethod(object().__init__)\n"
+        "\n"
+        "class ClassmethodDescriptorBuilt:\n"
+        "    __init__ = Giver(dict.__dict__['fromkeys'])\n"
+        "\n"
+        "class WrapperBuilt:\n"
+        "    __init__ = staticmethod(functools.wraps(object.__init__)(build))\n",
+    )
+    signing_over_c = imported_module(
+        tmp_path,
+        monkeypatch,
+        "signing_over_c",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "import binding_in_c\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class MethodWrapperCalled(metaclass=binding_in_c.MethodWrapperCalling):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class ClassmethodDescriptorCalled(metaclass=binding_in_c.ClassmethodDescriptorCalling):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class WrapperCalled(metaclass=binding_in_c.WrapperCalling):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class MethodWrapperRebuilt(binding_in_c.MethodWrapperBuilt):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class ClassmethodDescriptorRebuilt(binding_in_c.ClassmethodDescriptorBuilt):\n"
+        "    __signature__ = signature\n"
+        "\n"
+        "class WrapperRebuilt(binding_in_c.WrapperBuilt):\n"
+        "    __signature__ = signature\n",
+    )
+    cls = getattr(signing_over_c, name)
+
+    class Inheriting(cls):
+        pass
+
+    for subject in (cls, Inheriting):
+        assert named_classes(subject) == {decimal.Decimal}
+
+
 @pytest.mark.parametrize("wrap", CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR)
 def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names(
     wrap: Callable[[Callable[..., object]], object],
