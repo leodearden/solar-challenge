@@ -15,7 +15,9 @@ A document is read strictly, as StoredDocument.read reads it, by web/field_tree.
 read_field_tree, and a value it refuses becomes a StoredRunUnreadable naming the run, the
 document, the field's dotted path and the reason. Non-JSON text, JSON nested too deeply to
 decode, a document that is missing or cannot be read, a time series that cannot be read, and one
-whose index SimulationResults.window refuses are refused the same way.
+whose index SimulationResults.window refuses are refused the same way. So is a time series
+holding a series that is not numbers, of a dtype no integer's or float's; the refusal's field
+is then that series' column.
 StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the boundary
 answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
@@ -60,6 +62,7 @@ from types import MappingProxyType
 from typing import Any, Literal, TypeVar, get_args
 
 import pandas as pd
+from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
@@ -79,9 +82,10 @@ class StoredRunUnreadable(Exception):
 
     document is a file of the run's directory, e.g. "summary.json", "homes/home_0_summary.json"
     or "data.parquet", or the runs column holding a copy, e.g. "runs.summary_json". field is
-    the dotted path of the refused value in the document, with [i] for an item; None means the
-    document as a whole. It is not a ValueError: a request's bad value is a ValueError the
-    boundary answers 400, while a stored run that cannot be read is answered 409 or flashed
+    the dotted path of the refused value in the document, with [i] for an item, or the column
+    of a time series' refused series; None means the document as a whole. It is not a
+    ValueError: a request's bad value is a ValueError the boundary answers 400, while a
+    stored run that cannot be read is answered 409 or flashed
     (docs/prds/run-store-one-owner.md §3.10).
     """
 
@@ -473,6 +477,25 @@ def _check_window(results: SimulationResults) -> None:
     _ = results.window
 
 
+def _check_numbers(run_id: str, name: str, results: SimulationResults) -> None:
+    """Check that each series of *results*, read from the time series *name* of run *run_id*, holds numbers: its dtype is an integer's or a float's, never a bool's.
+
+    NaN and the infinities are floats, so a series holding them holds numbers. SimulationResults
+    names each series after its column, so a refusal reads the column from the series' name.
+
+    Raises:
+        StoredRunUnreadable: A series is of another dtype, e.g. strings, bools or timestamps; the
+            field is the first such series' column, in SimulationResults' field order, and the
+            reason names its dtype. There is no cause.
+    """
+    for attribute in fields(results):
+        series = getattr(results, attribute.name)
+        if isinstance(series, pd.Series) and not (is_integer_dtype(series.dtype) or is_float_dtype(series.dtype)):
+            raise StoredRunUnreadable(
+                run_id, name, str(series.name), f"is of dtype {series.dtype}, not of an integer or a float dtype"
+            )
+
+
 def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
     """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
 
@@ -481,7 +504,8 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
             damaged page, is not a parquet of a SimulationResults' columns, or has an index
             SimulationResults.window refuses: not a DatetimeIndex, empty, one row with no
             fixed-duration freq, or rows not evenly spaced at a positive cadence. The error is
-            the cause, and the field is None.
+            the cause, and the field is None. Or it holds a series whose dtype is no integer's
+            or float's, as _check_numbers refuses it; the field is then that series' column.
     """
     path = run_dir / name
     if not path.is_file():
@@ -493,6 +517,7 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
         raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
     except OSError as unreadable:
         raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
+    _check_numbers(run_id, name, results)
     return results
 
 

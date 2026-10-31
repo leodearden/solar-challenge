@@ -8,8 +8,8 @@ field, or holds a key no field has, is refused naming the run id, the document a
 and a current run loads. Each test saves a run as a finished job saves it, or installs a
 legacy fixture of tests/_stored_run_fixtures, edits one of its documents, and loads it.
 
-The refusal's field is the dotted path in the document, with [i] for an item; None means the
-document as a whole.
+The refusal's field is the dotted path in the document, with [i] for an item, or the column of
+a time series' refused series; None means the document as a whole.
 """
 
 import json
@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -116,6 +117,11 @@ def _window_refusal(path: Path) -> ValueError:
     with pytest.raises(ValueError) as refused:
         SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow").index)
     return refused.value
+
+
+def _column_dtype(path: Path, column: str) -> str:
+    """The name of the dtype of *column* in the time series at *path*, as pandas reads it back."""
+    return str(pd.read_parquet(path, engine="pyarrow")[column].dtype)
 
 
 def test_a_stored_run_unreadable_is_not_a_value_error() -> None:
@@ -340,6 +346,62 @@ def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_re
     assert repr(refusal.__cause__) == repr(_window_refusal(path))
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        pytest.param("generation_kw", "x", id="a-power-of-strings"),
+        pytest.param("generation_kw", None, id="a-power-of-nulls"),
+        pytest.param("generation_kw", True, id="a-power-of-bools"),
+        pytest.param("generation_kw", pd.Timestamp("2020-01-01"), id="a-power-of-timestamps"),
+        pytest.param("generation_kw", pd.Timedelta(minutes=1), id="a-power-of-durations"),
+        pytest.param("battery_soc_kwh", "x", id="a-level-of-strings"),
+        pytest.param("heat_pump_load_kw", "x", id="an-optional-series-of-strings"),
+    ],
+)
+def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_its_column(
+    storage: RunStorage, column: str, value: Any
+) -> None:
+    """A series is read as a float field is, so it is of an integer or a float dtype, and never of a bool's.
+
+    The refusal's reason names the dtype the series is stored in. The run is saved without a heat
+    pump load, so that optional series' column is added, as from_dataframe reads an optional
+    column whenever it is present.
+    """
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, lambda frame: frame.assign(**{column: value}))
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", column)
+
+    assert _column_dtype(path, column) in refusal.reason
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda frame: frame.assign(generation_kw=1), id="integers"),
+        pytest.param(
+            lambda frame: frame.assign(
+                generation_kw=np.r_[[np.nan, np.inf, -np.inf], frame["generation_kw"].to_numpy()[3:]]
+            ),
+            id="nan-and-infinities",
+        ),
+    ],
+)
+def test_a_time_series_whose_series_hold_integers_nan_or_infinities_loads_them_as_stored(
+    storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
+) -> None:
+    """The boundary of the rule above: integers are numbers, and NaN and the infinities are floats, as a float field admits each."""
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(path, damage)
+
+    loaded = storage.load_run(_HOME_RUN_ID)
+
+    assert isinstance(loaded, StoredHomeRun)
+    pd.testing.assert_series_equal(loaded.results.generation, pd.read_parquet(path, engine="pyarrow")["generation_kw"])
+
+
 def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:
     """A directory in the place of its summary.json stands in for a file its permissions keep from being read, which they do not for a root user."""
     _store_home_run_of_every_shape(storage)
@@ -376,6 +438,15 @@ def test_a_fleet_home_s_time_series_with_a_range_index_is_refused_naming_its_fil
     refusal = _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", None)
 
     assert repr(refusal.__cause__) == repr(_window_refusal(path))
+
+
+def test_a_fleet_home_s_time_series_holding_strings_is_refused_naming_its_file_and_column(storage: RunStorage) -> None:
+    _store_fleet_run_of_two_homes(storage)
+    rewrite_time_series(
+        stored_run_dir(storage, _FLEET_RUN_ID) / "homes" / "home_1.parquet", lambda frame: frame.assign(demand_kw="x")
+    )
+
+    _refusal(storage, _FLEET_RUN_ID, "homes/home_1.parquet", "demand_kw")
 
 
 def test_a_saved_home_run_and_a_saved_fleet_run_carry_the_current_format_version(storage: RunStorage) -> None:
