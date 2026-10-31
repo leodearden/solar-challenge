@@ -162,9 +162,14 @@ def _refuse_chain_end_without_a_portable_form(subject: object, end: object) -> N
 def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
     """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any."""
     if _is_read_through_its_call(obj):
-        _refuse_minor_dependent_call(subject, obj)
+        _refuse_text_signature_read_by_minor(subject, obj)
+        holder = next(namespace_holders(type(obj).__mro__, "__call__"))
+        site = _ReadSite.call(subject, holder)
+        held = vars(holder)["__call__"]
+        _refuse_partial_bound_as_method(site, held)
+        _refuse_classmethod_bound_by_minor(site, held)
         call = _call_as_read(obj)
-        _refuse_bound_to_uncallable(_ReadSite.call(subject, _call_holder(obj)), call)
+        _refuse_bound_to_uncallable(site, call)
         _refuse_chain_without_a_portable_form(subject, call)
 
 
@@ -183,16 +188,14 @@ def _call_as_read(obj: object) -> object:
     return _bound_to(inspect.getattr_static(type(obj), "__call__"), obj)
 
 
-def _call_holder(obj: object) -> type:
-    """The first class in the MRO of *obj*'s type whose namespace holds __call__: the class holding the __call__ that type resolves."""
-    return next(namespace_holders(type(obj).__mro__, "__call__"))
-
-
-def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
-    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, is read differently by minor: a class in its type's MRO defines __call__ in C, *obj* carries a __text_signature__, or the __call__ its type resolves is a functools.partial or a classmethod _refuse_classmethod_bound_by_minor refuses."""
-    holders = list(namespace_holders(type(obj).__mro__, "__call__"))
+def _refuse_text_signature_read_by_minor(subject: object, obj: object) -> None:
+    """Raise TypeError naming *subject* if *obj*, an object its class makes callable, which inspect reads in *subject*'s place, may carry a __text_signature__, which inspect reads in place of the __call__ its type resolves from Python 3.13 and not on 3.11 and 3.12: a class in its type's MRO defines __call__ in C, or *obj* carries one."""
     c_holder = next(
-        (cls for cls in holders if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)),
+        (
+            cls
+            for cls in namespace_holders(type(obj).__mro__, "__call__")
+            if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)
+        ),
         None,
     )
     if c_holder is not None:
@@ -214,11 +217,6 @@ def _refuse_minor_dependent_call(subject: object, obj: object) -> None:
             "and 3.12: make the name private, or set a __signature__ that is an inspect.Signature "
             "on that object or on what is read through it"
         )
-    holder = holders[0]
-    site = _ReadSite.call(subject, holder)
-    held = vars(holder)["__call__"]
-    _refuse_partial_bound_as_method(site, held)
-    _refuse_classmethod_bound_by_minor(site, held)
 
 
 def _chain_end(obj: object, stop: Callable[[object], bool] = lambda link: False) -> object:
