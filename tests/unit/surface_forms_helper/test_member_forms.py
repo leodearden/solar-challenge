@@ -651,6 +651,17 @@ def test_a_class_is_a_named_tuple_only_if_it_is_a_tuple_whose_class_records_fiel
     assert member_forms(Node) == {"value": "attribute int"}
 
 
+def test_a_tuple_whose_metaclass_alone_provides_fields_is_no_named_tuple_since_its_instances_never_read_the_metaclass() -> None:
+    class FieldsMeta(type):
+        _fields = ("x",)
+
+    class Fielded(tuple, metaclass=FieldsMeta):
+        x: int
+
+    assert not hasattr(Fielded((1,)), "_fields")
+    assert member_forms(Fielded) == {"x": "attribute int"}
+
+
 def test_an_inherited_member_is_a_member_of_the_class_that_defines_it() -> None:
     class Base:
         def read(self) -> float: ...
