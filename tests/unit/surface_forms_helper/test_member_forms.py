@@ -624,6 +624,27 @@ def test_a_named_tuple_field_a_subclass_body_binds_to_a_value_is_a_member_since_
     assert member_forms(Shadow) == {"x": "int", "y": "(self) -> int"}
 
 
+def test_a_named_tuple_field_a_class_binds_to_a_value_is_a_member_even_where_that_class_or_a_subclass_binds_fields_again() -> None:
+    class Point(NamedTuple):
+        x: int
+        y: int
+
+    class Shadow(Point):
+        _fields = ("x", "y")
+        x = 5
+
+    class Constant(Point):
+        y = 0
+
+    class Refielded(Constant):
+        _fields = ("x", "y")
+        y: int
+
+    assert (Shadow(1, 2).x, Refielded(1, 2).y) == (5, 0)
+    assert member_forms(Shadow) == {"x": "int"}
+    assert member_forms(Refielded) == {"y": "attribute int"}
+
+
 def test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_the_type_error_surface_form_raises_for_it() -> None:
     Point = collections.namedtuple("Point", "x y")
 
