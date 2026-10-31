@@ -875,9 +875,33 @@ had a package caller; sweeps run through `fleet.simulate_multi_sweep_iter`,
 **Unreleased on main** (task 919): a `fleet_distribution:` block's
 `heat_pump.heat_pump_type` given as a `shuffled_pool`, or as any spec other
 than a `weighted_discrete` or a bare type, is now drawn: a pool hands each home
-the type it draws, a null being no heat pump, and a drawn value that is not one
-of `heat_pump.HEAT_PUMP_TYPES` is refused. The tag gives every home of such a
+the type it draws, a null being no heat pump. The tag gives every home of such a
 fleet no heat pump. Only such fleets' generated homes change.
+`solar_challenge.config`'s `PVDistributionConfig`, `BatteryDistributionConfig`,
+`LoadDistributionConfig`, `HeatPumpDistributionConfig` and `EVDistributionConfig`
+are replaced by one `ComponentDistribution(draws, settings)`; none was in
+`__all__` or the frozen surface, and `FleetDistributionConfig` keeps its field
+names, its `load` now defaulting to an empty distribution. The component tables
+(`PV_BLOCK` … `EV_BLOCK`) state each block's fleet keys, so a block accepts every
+key of its component's home block except `name` (and the load's `seed`, the
+fleet's seed plus the home's index): the PV's `temperature_coefficient`,
+`inverter_capacity_kw` and `system_losses` and the battery's SOC limits,
+efficiencies and ageing can now be drawn, where the tag ignores them. A
+`heat_pump_type` or `charger_type` may be one of its choices given bare, and a
+`heat_pump_type` outside `heat_pump.HEAT_PUMP_TYPES` is refused when the block is
+read, as a charger type outside `ev.CHARGER_TYPES` is since task 792. A field a fleet
+does not draw, or draws null, takes its dataclass's default. A component's
+refusal of what a home drew is re-raised as a `ConfigurationError` naming
+`fleet_distribution.<component>` and the home's number, e.g.
+`fleet_distribution.load, home 1: household_occupants must be between 1 and 10,
+got 0` for a 0-occupant draw, which the tag reads as 3, and a null `pv.capacity_kw` draw is refused naming its path and the home,
+where the tag refuses a PV capacity that is null or not positive with `PV
+capacity must be positive`. A `proportional_to` may take any field its home drew
+earlier as its source; a source the home has not drawn, or that drew a choice,
+is refused when the homes are generated, where the tag gives a battery or heat
+pump field its default for a source other than `pv.capacity_kw`. A null setting
+(`use_stochastic`, `smart_charging_mode`, `grid_charging`, `dispatch_strategy`)
+reads as absent. Every other generated fleet is unchanged, home for home.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
