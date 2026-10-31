@@ -139,7 +139,10 @@ def member_forms(cls: type) -> dict[str, str]:
     if any, binds there no data descriptor other than a slot. It pins a named tuple
     field only while instances read it from the tuple: while no class in *cls*'s MRO,
     *cls* included, binds a value to its name before the class typing.NamedTuple or
-    collections.namedtuple made. The attributes the body declares come first, in
+    collections.namedtuple made.
+    *cls*'s named tuple fields are the names in the _fields that class holds, which
+    instances read, whatever _fields *cls*'s metaclass gives; a tuple whose metaclass
+    alone gives one is no named tuple. The attributes the body declares come first, in
     annotation order, then the other names it defines, in class-body order. A ClassVar
     annotation declares a class variable, not an instance attribute; a string annotation
     is read as named_classes reads one, so a name its module does not bind raises
@@ -644,7 +647,7 @@ def _is_slot(value: object) -> bool:
     return inspect.ismemberdescriptor(value)
 
 
-def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
+def _is_named_tuple(cls: type) -> bool:
     """Whether *cls* is a named tuple, as dataclasses.asdict recognises one by the _fields an instance reads: a tuple whose instances read _fields from the class _fields_holder finds, as do those of each class typing.NamedTuple or collections.namedtuple makes and of each subclass of one."""
     return _fields_holder(cls) is not None
 
@@ -657,13 +660,15 @@ def _fields_holder(cls: type) -> type | None:
 
 
 def _fields_read_from_the_tuple(cls: type) -> set[str]:
-    """The names of *cls*'s named tuple fields that its instances read from the tuple: each that no class in *cls*'s MRO binds before the class typing.NamedTuple or collections.namedtuple made, which binds each field's descriptor beside _fields; a value bound earlier hides the field; none if *cls* is no named tuple."""
-    if not _is_named_tuple(cls):
+    """The names in the _fields of *cls*'s _fields_holder that its instances read from the tuple: each that no class in *cls*'s MRO binds before that holder, which binds each field's descriptor beside _fields, as the class typing.NamedTuple or collections.namedtuple makes does; a value bound earlier hides the field; none if *cls* is no named tuple."""
+    holder = _fields_holder(cls)
+    if holder is None:
         return set()
+    mro = recorded_mro(cls)
     return {
         name
-        for name in cls._fields
-        if "_fields" in vars(next(namespace_holders(recorded_mro(cls), name, "_fields")))
+        for name in vars(holder)["_fields"]
+        if next(namespace_holders(mro, name, "_fields")) is holder
     }
 
 
