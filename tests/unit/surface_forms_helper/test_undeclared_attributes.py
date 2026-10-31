@@ -17,7 +17,11 @@ from dataclasses import InitVar, dataclass
 import pytest
 
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
-from tests.unit.surface_forms_helper._fixtures import REFUSED_ROUTINE_AND_PARTIAL_MEMBERS, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
+    imported_module,
+    metaclass_whose_mro_gives,
+)
 
 
 def test_each_assignment_to_a_public_attribute_of_self_sets_it() -> None:
@@ -110,6 +114,17 @@ def test_an_attribute_a_class_body_in_the_mro_declares_or_defines_is_not_undecla
             self.reading = 0.0
 
     assert undeclared_attributes(Meter) == set()
+
+
+def test_an_attribute_a_base_body_declares_is_declared_whatever_mro_the_class_metaclass_gives() -> None:
+    class Declaring:
+        site: pathlib.Path
+
+    class Setting(Declaring, metaclass=metaclass_whose_mro_gives(lambda cls: (cls,))):
+        def __init__(self, site: pathlib.Path) -> None:
+            self.site = site
+
+    assert undeclared_attributes(Setting) == set()
 
 
 def test_an_attribute_only_a_base_sets_on_self_is_undeclared_in_the_base_not_its_subclass() -> None:
