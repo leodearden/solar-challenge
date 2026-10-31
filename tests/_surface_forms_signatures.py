@@ -1148,7 +1148,7 @@ def _signature_holder(cls: type) -> type:
             "or __getattr__ it defines, so no module is known to spell it: make the name "
             "private, or give the class a metaclass that provides no __signature__"
         )
-    holder = next(namespace_holders(cls.__mro__, "__signature__"))
+    holder = next(namespace_holders(recorded_mro(cls), "__signature__"))
     held = vars(holder)["__signature__"]
     if not isinstance(held, inspect.Signature):
         raise TypeError(
@@ -1161,7 +1161,7 @@ def _signature_holder(cls: type) -> type:
 
 def _metaclass_may_provide_signature(cls: type) -> bool:
     """Whether *cls*'s metaclass provides the __signature__ type.__getattribute__ gives inspect for *cls*, or may: a class in the metaclass's MRO other than type and object defines __getattribute__; the first one there that holds a __signature__ holds a data descriptor, which outranks *cls*'s own; or no class in *cls*'s MRO holds one, so a metaclass attribute, descriptor or __getattr__ provides it."""
-    metaclass_mro = inspect.getmro(type(cls))
+    metaclass_mro = recorded_mro(type(cls))
     metaclass_holder = next(namespace_holders(metaclass_mro, "__signature__"), None)
     getattribute_holders = namespace_holders(
         (meta for meta in metaclass_mro if meta not in (type, object)), "__getattribute__"
@@ -1172,7 +1172,7 @@ def _metaclass_may_provide_signature(cls: type) -> bool:
             metaclass_holder is not None
             and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
         )
-        or next(namespace_holders(cls.__mro__, "__signature__"), None) is None
+        or next(namespace_holders(recorded_mro(cls), "__signature__"), None) is None
     )
 
 
