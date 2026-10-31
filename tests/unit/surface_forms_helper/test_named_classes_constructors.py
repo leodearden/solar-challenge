@@ -262,11 +262,10 @@ def test_a_class_whose_metaclass_takes_a_signature_from_a_base_its_own_metaclass
             [inspect.Parameter("share", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=int)]
         )
 
-    with pytest.raises(TypeError) as providing:
+    with pytest.raises(
+        TypeError, match=r"\.Signed carries a signature its metaclass \S*\.SigningMeta provides\b"
+    ):
         named_classes(Signed)
-
-    assert ".Signed" in str(providing.value)
-    assert ".SigningMeta" in str(providing.value)
 
 
 def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
