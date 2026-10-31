@@ -53,6 +53,7 @@ from tests._surface_forms_module_lookup import (
     is_immutable_type,
     is_routine,
     label_of,
+    own_namespace,
     recorded_mro,
     spelled_function,
 )
@@ -152,7 +153,8 @@ def member_forms(cls: type) -> dict[str, str]:
     string annotation is read as named_classes reads one, so a name its module does not
     bind raises NameError, a module inspect reads no source for raises TypeError, and a
     module another of the same name has replaced in sys.modules raises LookupError. A
-    public member that no member rule spells and that is a routine whose signature
+    class whose metaclass shadows __dict__ raises the TypeError own_namespace raises for
+    it. A public member that no member rule spells and that is a routine whose signature
     inspect cannot read, as surface_form describes one, or a functools.partial, raises
     TypeError naming *cls*, the member and its kind or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
@@ -208,10 +210,11 @@ def named_classes(obj: object) -> set[type]:
     the TypeError member_forms raises for it.
     A class's signature, an Enum's aside, is spelled where its constructor is, the
     __call__ its metaclass resolves if inspect reads that, as spelling_modules in
-    tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives
-    raises TypeError. A signature the class carries in the constructor's place is
-    spelled there too, except over a constructor whose chain, as inspect reads and
-    binds it, ends at a callable defined in C, which spells no annotation: that
+    tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives, or
+    one a class whose metaclass shadows __dict__ carries, raises TypeError. A signature
+    the class carries in the constructor's place is spelled there too, except over a
+    constructor whose chain, as inspect reads and binds it, ends at a callable defined
+    in C, which spells no annotation: that
     signature is read where the class holding it is spelled, as spelling_modules says.
     Where a link of that chain carries a signature of its own, which the class's may
     copy, the class's is read where that link's is if the class holds that very
@@ -261,7 +264,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 
     An immutable type raises TypeError naming it before anything else is read, and a
     class with no class statement inspect can read, such as ast.AST or _json.Scanner,
-    raises TypeError naming it when its source is read.
+    raises TypeError naming it when its source is read. A class whose metaclass shadows
+    __dict__ raises the TypeError own_namespace raises for it.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
@@ -641,7 +645,7 @@ def _fields_read_from_the_instance(cls: type) -> set[str]:
     return {
         name
         for name, holder in first_holders.items()
-        if holder is None or not _outranks_the_instance(vars(holder)[name])
+        if holder is None or not _outranks_the_instance(own_namespace(holder)[name])
     }
 
 
@@ -679,13 +683,13 @@ def _fields_read_from_the_tuple(cls: type) -> set[str]:
     return {
         name
         for name, binder in first_binders.items()
-        if binder is not None and _reads_from_the_tuple(vars(binder)[name])
+        if binder is not None and _reads_from_the_tuple(own_namespace(binder)[name])
     }
 
 
 def _field_names(cls: type, holder: type) -> tuple[str, ...]:
     """The names in the _fields *holder*, *cls*'s _fields_holder, holds, which instances of *cls* read as their fields' names; TypeError naming *cls*, *holder* and the type of what it holds if that is no tuple of strings, such as a property, whose value only an instance gives."""
-    held = vars(holder)["_fields"]
+    held = own_namespace(holder)["_fields"]
     if isinstance(held, tuple) and all(isinstance(name, str) for name in held):
         return held
     raise TypeError(
@@ -696,7 +700,7 @@ def _field_names(cls: type, holder: type) -> tuple[str, ...]:
     )
 
 
-_TUPLE_FIELD_ACCESSOR: type = type(vars(collections.namedtuple("Probe", "field"))["field"])
+_TUPLE_FIELD_ACCESSOR: type = type(own_namespace(collections.namedtuple("Probe", "field"))["field"])
 
 
 def _reads_from_the_tuple(value: object) -> bool:
@@ -733,7 +737,7 @@ def _init_only_variables(cls: type) -> set[str]:
 
 def _field_slots(cls: type) -> set[str]:
     """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as _is_slot recognises one; none if *cls* is no dataclass."""
-    return {name for name in _dataclass_fields(cls) if _is_slot(vars(cls).get(name))}
+    return {name for name in _dataclass_fields(cls) if _is_slot(own_namespace(cls).get(name))}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -771,7 +775,7 @@ def _own_members(cls: type) -> dict[str, object]:
     slots = _field_slots(cls)
     defined = {
         name: value
-        for name, value in vars(cls).items()
+        for name, value in own_namespace(cls).items()
         if name not in declared and name not in slots
     }
     init_only = _init_only_variables(cls)
@@ -791,7 +795,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     field_names = _dataclass_fields(cls).keys()
     class_values = {
         name
-        for name, value in vars(cls).items()
+        for name, value in own_namespace(cls).items()
         if not _is_slot(value) and (name not in field_names or _outranks_the_instance(value))
     }
     return {
