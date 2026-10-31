@@ -2,9 +2,10 @@
 """The module that defined an object, as sys.modules holds it, checked to be that object's own, and a string annotation evaluated there as a type checker reads it.
 
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
-is_immutable_type and spelled_function, and names it in errors through label_of: the
-helper's other modules read and name objects through them too. This module imports no
-other module of the helper, as tests/unit/test_surface_forms_layers.py checks.
+is_immutable_type and spelled_function, a class's own namespace through own_namespace,
+which walks its metaclass's MRO through recorded_mro, and names it in errors through
+label_of: the helper's other modules read and name objects through them too. This module
+imports no other module of the helper, as tests/unit/test_surface_forms_layers.py checks.
 """
 
 import ast
@@ -14,7 +15,7 @@ import sys
 import types
 import typing
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 
 def is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
@@ -148,7 +149,7 @@ def _defined_elsewhere(
 
 def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
     """The first function *cls*'s own body compiled, read through spelled_function and unwrapped from any decorator that records it as __wrapped__: one whose code's qualified name is *cls*'s dotted with the code's name; None if the body compiled none, as an annotation-only body compiles none before Python 3.14, which compiles its __annotate__ unless the module imports annotations from __future__, and as the dataclass decorator and EnumType compile the functions they add elsewhere."""
-    functions = (spelled_function(member) or member for member in vars(cls).values())
+    functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
         inspect.unwrap(function) for function in functions if isinstance(function, types.FunctionType)
     )
@@ -241,3 +242,56 @@ def spelled_function(member: object) -> object | None:
             return member.func
         case _:
             return None
+
+
+def own_namespace(cls: type) -> Mapping[str, object]:
+    """The namespace *cls* holds itself, which attribute lookup reads: what type's own __dict__ descriptor gives for *cls*, whatever __dict__ its metaclass gives.
+
+    A class whose metaclass shadows __dict__ raises TypeError naming it, its metaclass, the
+    class in that metaclass's MRO that holds the __dict__ in place of type's, and that
+    __dict__'s type. By inspect's own rule, a metaclass shadows __dict__ if a class in the
+    MRO it records holds, in its own namespace, a __dict__ other than the descriptor CPython
+    made for that very class, as a metaclass that defines __dict__ as a property does. Each
+    such namespace is read as the class holds it, since inspect never asks whether the
+    metaclass's own metaclass shadows __dict__. docs/surface-forms-inspect-readings.md §4.8
+    says how each minor reads such a class.
+    """
+    for holder in recorded_mro(type(cls)):
+        namespace = _held_namespace(holder)
+        if "__dict__" in namespace and not _is_own_dict_descriptor(holder, namespace["__dict__"]):
+            raise _dict_shadowed_error(cls, holder, namespace["__dict__"])
+    return _held_namespace(cls)
+
+
+def _held_namespace(cls: type) -> Mapping[str, object]:
+    """The namespace *cls* holds itself, as type's own __dict__ descriptor gives it, read unchecked."""
+    namespace: Mapping[str, object] = type.__dict__["__dict__"].__get__(cls)
+    return namespace
+
+
+def _is_own_dict_descriptor(holder: type, held: object) -> bool:
+    """Whether *held*, which *holder*'s own namespace holds as __dict__, is the descriptor CPython makes for *holder* as it creates the class, through which its instances read their own __dict__: a getset descriptor called __dict__ whose __objclass__ is *holder*."""
+    return (
+        type(held) is types.GetSetDescriptorType
+        and held.__name__ == "__dict__"
+        and held.__objclass__ is holder
+    )
+
+
+def _dict_shadowed_error(cls: type, holder: type, held: object) -> TypeError:
+    """The error for *cls*, whose metaclass's MRO holds *holder*, whose own namespace holds *held* as __dict__ in place of the descriptor CPython made for it."""
+    return TypeError(
+        f"{label_of(cls)} has the metaclass {label_of(type(cls))}, whose MRO holds "
+        f"{label_of(holder)}.__dict__, a {label_of(type(held))}, in place of the __dict__ "
+        "type gives each class: inspect.getattr_static skips a class whose metaclass so "
+        "shadows __dict__, attribute lookup reads the namespace the class holds, and inspect "
+        "chooses which of its __new__ and __init__ it reads, and before Python 3.14 reads its "
+        "annotations, by what that __dict__ gives, readings no rule of this helper reads: "
+        "make the name private, or leave __dict__ to type"
+    )
+
+
+def recorded_mro(cls: type) -> tuple[type, ...]:
+    """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
+    mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
+    return mro

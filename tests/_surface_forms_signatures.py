@@ -24,6 +24,8 @@ from tests._surface_forms_module_lookup import (
     is_get_delete_descriptor,
     is_routine,
     label_of,
+    own_namespace,
+    recorded_mro,
 )
 
 
@@ -184,7 +186,7 @@ def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
         _refuse_text_signature_read_by_minor(subject, obj)
         holder = next(namespace_holders(recorded_mro(type(obj)), "__call__"))
         site = _ReadSite.call(subject, holder)
-        held = vars(holder)["__call__"]
+        held = own_namespace(holder)["__call__"]
         _refuse_partial_bound_as_method(site, held)
         _refuse_classmethod_bound_by_minor(site, held)
         call = _call_as_read(obj)
@@ -213,7 +215,7 @@ def _refuse_text_signature_read_by_minor(subject: object, obj: object) -> None:
         (
             cls
             for cls in namespace_holders(recorded_mro(type(obj)), "__call__")
-            if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)
+            if isinstance(own_namespace(cls)["__call__"], types.WrapperDescriptorType)
         ),
         None,
     )
@@ -597,7 +599,7 @@ def _refuse_class_constructed_in_c(cls: type) -> None:
 
 def _constructed_in_c(holder: type) -> bool:
     """Whether *holder* is defined in C, as a builtin or extension type is, by the constructors its own namespace holds: each __new__ and __init__ there is one _is_own_c_slot finds for *holder*."""
-    namespace = vars(holder)
+    namespace = own_namespace(holder)
     return all(
         _is_own_c_slot(holder, name, namespace[name])
         for name in ("__new__", "__init__")
@@ -624,7 +626,7 @@ def _refuse_class_with_no_constructor_inspect_reads(cls: type) -> None:
     """
     for name, holder, held in _resolved_constructors(cls):
         read = held if isinstance(held, _CCallableInspectSkips) else getattr(cls, name)
-        if read is not vars(object)[name]:
+        if read is not own_namespace(object)[name]:
             site = _ReadSite.constructor(cls, holder, name)
             raise TypeError(
                 f"{site}, which "
@@ -675,7 +677,7 @@ def _refuse_class_read_by_a_docstring_text_signature(cls: type) -> None:
 
 def _docstring_text_signature(holder: type) -> str | None:
     """The text signature the docstring *holder*'s own namespace holds opens with once _dedented_as_compiled_from_3_13 dedents it, by the rule CPython reads one from the docstring a class is created with: what follows the last dotted part of *holder*'s __name__, from '(' to the first ')' that a line holding only '--' and an empty line follow, if no empty line comes before; None if that docstring is no str or does not open so."""
-    doc = vars(holder).get("__doc__")
+    doc = own_namespace(holder).get("__doc__")
     if not isinstance(doc, str):
         return None
     dedented = _dedented_as_compiled_from_3_13(doc)
@@ -701,7 +703,7 @@ def _resolved_constructors(cls: type) -> Iterator[tuple[str, type, object]]:
     """The __new__ and then the __init__ *cls* resolves: each name, the first class in *cls*'s MRO whose namespace holds that name, and what it holds there."""
     for name in ("__new__", "__init__"):
         holder = next(namespace_holders(recorded_mro(cls), name))
-        yield name, holder, vars(holder)[name]
+        yield name, holder, own_namespace(holder)[name]
 
 
 def _first_read_constructor(cls: type) -> tuple[type, str, object]:
@@ -722,7 +724,7 @@ def _first_read_constructor(cls: type) -> tuple[type, str, object]:
         if not _skipped_by_inspect(cls, name, inspect.getattr_static(cls, name))
     ]
     holder = next(namespace_holders(recorded_mro(cls), *names), object)
-    namespace = vars(holder)
+    namespace = own_namespace(holder)
     if "__new__" in names and "__new__" in namespace:
         held = namespace["__new__"]
         new = (
@@ -1184,7 +1186,7 @@ def _signature_holder(cls: type) -> type:
             "private, or give the class a metaclass that provides no __signature__"
         )
     holder = next(namespace_holders(recorded_mro(cls), "__signature__"))
-    held = vars(holder)["__signature__"]
+    held = own_namespace(holder)["__signature__"]
     if not isinstance(held, inspect.Signature):
         raise TypeError(
             f"{label_of(cls)} carries the signature a {label_of(type(held))} descriptor gives "
@@ -1205,21 +1207,15 @@ def _metaclass_may_provide_signature(cls: type) -> bool:
         next(getattribute_holders, None) is not None
         or (
             metaclass_holder is not None
-            and inspect.isdatadescriptor(vars(metaclass_holder)["__signature__"])
+            and inspect.isdatadescriptor(own_namespace(metaclass_holder)["__signature__"])
         )
         or next(namespace_holders(recorded_mro(cls), "__signature__"), None) is None
     )
 
 
 def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
-    """The classes among *classes*, in their order, whose own namespace holds one of *names*."""
-    return (cls for cls in classes if any(name in vars(cls) for name in names))
-
-
-def recorded_mro(cls: type) -> tuple[type, ...]:
-    """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
-    mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
-    return mro
+    """The classes among *classes*, in their order, whose own namespace, as own_namespace reads it, holds one of *names*."""
+    return (cls for cls in classes if not own_namespace(cls).keys().isdisjoint(names))
 
 
 def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
@@ -1239,7 +1235,7 @@ def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
 
 def is_decorated_dataclass(cls: type) -> bool:
     """Whether the dataclass decorator processed *cls* itself; is_dataclass is true as well of an undecorated subclass of a dataclass, whose annotations the decorator never read."""
-    return "__dataclass_fields__" in vars(cls)
+    return "__dataclass_fields__" in own_namespace(cls)
 
 
 def refuse_member_without_a_portable_form(label: str, member: object) -> None:

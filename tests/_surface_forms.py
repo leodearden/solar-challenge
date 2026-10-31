@@ -53,6 +53,7 @@ from tests._surface_forms_module_lookup import (
     is_immutable_type,
     is_routine,
     label_of,
+    recorded_mro,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
@@ -61,7 +62,6 @@ from tests._surface_forms_signatures import (
     is_decorated_dataclass,
     is_enum,
     namespace_holders,
-    recorded_mro,
     refuse_member_without_a_portable_form,
     signature_of,
     spelling_modules,
