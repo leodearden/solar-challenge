@@ -990,33 +990,38 @@ def _constructor_spelling_modules(
     it, which a base defined in another module may hold. It is spelled where
     _chain_spelling_modules spells the end of its chain, so a function the class body
     assigns from another module, or that wraps one there as functools.wraps records one,
-    is spelled in that other module. If the function whose annotations that end holds,
-    as _annotations_author gives it, was compiled outside the class body and renamed
-    into it, as the dataclass decorator generates an __init__ and collections.namedtuple
-    a __new__, the constructor is spelled as _generated_constructor_modules spells it;
-    if that function was renamed into another class and assigned here, TypeError names
+    is spelled in that other module. If the constructor is the one
+    _first_read_constructor gives, and the function whose annotations that end holds, as
+    _annotations_author gives it, was compiled outside the class body and renamed into
+    it, as the dataclass decorator generates an __init__ and collections.namedtuple a
+    __new__, the constructor is spelled as _generated_constructor_modules spells it; if
+    that function was renamed into another class and assigned here, TypeError names
     *cls* and the function. A constructor defined in C, or one that wraps a callable
-    defined in C, spells no annotation, so the class's is that of the class
-    _signature_holder gives if *cls* carries a signature, else where
-    _chain_spelling_modules finds the link given the signature a link of that
-    constructor's chain carries, if any does; _signature_holder checks every other class
-    that carries a signature before the constructor is read.
+    defined in C, spells no annotation, so the class's is spelled where
+    _spelling_modules_over says; _signature_holder checks every class that carries a
+    signature before the constructor is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
     signature_holder = _signature_holder(cls) if _carries_inspect_signature(cls) else None
     call = _metaclass_call_as_read(cls)
     if call is not None:
-        return _chain_spelling_modules(call, names)
+        return _spelling_modules_over(call, signature_holder, names)
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
-    end = _chain_end(constructor)
-    if signature_holder is not None and isinstance(end, _CCallableInspectSkips):
-        return dict.fromkeys(names, defining_module(signature_holder))
-    author = _annotations_author(end)
+    author = _annotations_author(_chain_end(constructor))
     if _is_generated(author):
         _refuse_constructor_generated_for_another_class(cls, holder, author)
         return _generated_constructor_modules(holder, names)
+    return _spelling_modules_over(constructor, signature_holder, names)
+
+
+def _spelling_modules_over(
+    constructor: object, signature_holder: type | None, names: Collection[str]
+) -> Mapping[str, ModuleOrUnspelled] | None:
+    """The module that spells each of *names* in the signature inspect reads for a class whose constructor, as inspect reads and binds it, is *constructor*: if the class carries a signature, which *signature_holder* then holds, and the chain from *constructor* ends at a _CCallableInspectSkips, a callable defined in C, which spells no annotation, that of *signature_holder*; else where _chain_spelling_modules finds it on that chain, None if it finds none."""
+    if signature_holder is not None and isinstance(_chain_end(constructor), _CCallableInspectSkips):
+        return dict.fromkeys(names, defining_module(signature_holder))
     return _chain_spelling_modules(constructor, names)
 
 
