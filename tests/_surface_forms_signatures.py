@@ -163,7 +163,7 @@ def _refuse_call_without_a_portable_form(subject: object, obj: object) -> None:
     """Raise TypeError naming *subject* if inspect reads *obj*, in *subject*'s place, through the __call__ its type resolves, and so reads it differently by minor or cannot read it on any."""
     if _is_read_through_its_call(obj):
         _refuse_text_signature_read_by_minor(subject, obj)
-        holder = next(namespace_holders(type(obj).__mro__, "__call__"))
+        holder = next(namespace_holders(recorded_mro(type(obj)), "__call__"))
         site = _ReadSite.call(subject, holder)
         held = vars(holder)["__call__"]
         _refuse_partial_bound_as_method(site, held)
@@ -193,7 +193,7 @@ def _refuse_text_signature_read_by_minor(subject: object, obj: object) -> None:
     c_holder = next(
         (
             cls
-            for cls in namespace_holders(type(obj).__mro__, "__call__")
+            for cls in namespace_holders(recorded_mro(type(obj)), "__call__")
             if isinstance(vars(cls)["__call__"], types.WrapperDescriptorType)
         ),
         None,
@@ -376,7 +376,7 @@ def _is_partial_with_its_own_get(obj: object) -> bool:
     """Whether *obj* is a functools.partial whose type's MRO, on either side of functools.partial, holds a class other than functools.partial that defines __get__."""
     return isinstance(obj, functools.partial) and any(
         holder is not functools.partial
-        for holder in namespace_holders(type(obj).__mro__, "__get__")
+        for holder in namespace_holders(recorded_mro(type(obj)), "__get__")
     )
 
 
@@ -798,7 +798,7 @@ def _is_bound_through_a_get_no_rule_reads(wrapped: object) -> bool:
     """
     return any(
         holder not in (types.FunctionType, functools.partial, types.MethodType)
-        for holder in namespace_holders(type(wrapped).__mro__, "__get__")
+        for holder in namespace_holders(recorded_mro(type(wrapped)), "__get__")
     )
 
 
@@ -1157,6 +1157,12 @@ def _metaclass_may_provide_signature(cls: type) -> bool:
 def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
     """The classes among *classes*, in their order, whose own namespace holds one of *names*."""
     return (cls for cls in classes if any(name in vars(cls) for name in names))
+
+
+def recorded_mro(cls: type) -> tuple[type, ...]:
+    """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
+    mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
+    return mro
 
 
 def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
