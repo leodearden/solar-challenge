@@ -204,6 +204,13 @@ class TestSpreadsheetRevenueCurve:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def in_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Work in tmp_path, not the repo root, so the test shows it finds the committed scenario it reads from any working directory."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.usefixtures("in_tmp_path")
 class TestFinCalibrationScenarioParses:
     """Fast tests for scenarios/bristol-fin-calibration.yaml loading (step-3).
 
