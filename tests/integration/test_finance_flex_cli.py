@@ -348,7 +348,7 @@ class TestFinanceFlexNamedScenario:
     def test_bristol_flex_scenario_renders_central_block(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flex_fleet_results: FleetResults
     ) -> None:
-        """finance run on the board scenario, scenarios/bristol-phase1-flex.yaml, renders the Flexibility Value block with 'central' from a directory other than the repo root: the test runs in tmp_path so that a scenario path relative to the cwd cannot pass."""
+        """finance run on the board scenario renders the central Flexibility Value block from any cwd."""
         monkeypatch.chdir(tmp_path)
 
         result = invoke_finance_run([str(SCENARIO)], flex_fleet_results)
