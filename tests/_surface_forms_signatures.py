@@ -24,6 +24,7 @@ from tests._surface_forms_module_lookup import (
     is_get_delete_descriptor,
     is_routine,
     label_of,
+    own_annotations,
     own_namespace,
     recorded_mro,
 )
@@ -1163,7 +1164,7 @@ def _generated_constructor_modules(
     decorated = tuple(base for base in recorded_mro(holder) if is_decorated_dataclass(base))
     return {
         name: defining_module(
-            next((base for base in decorated if name in inspect.get_annotations(base)), holder)
+            next((base for base in decorated if name in own_annotations(base)), holder)
         )
         for name in names
     }

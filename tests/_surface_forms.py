@@ -53,6 +53,7 @@ from tests._surface_forms_module_lookup import (
     is_immutable_type,
     is_routine,
     label_of,
+    own_annotations,
     own_namespace,
     recorded_mro,
     spelled_function,
@@ -729,7 +730,7 @@ def _init_only_variables(cls: type) -> set[str]:
         return set()
     annotated = {
         name
-        for name, annotation in inspect.get_annotations(cls).items()
+        for name, annotation in own_annotations(cls).items()
         if not _is_class_var(annotation, cls)
     }
     return (annotated & _constructor_parameters(cls)) - _dataclass_fields(cls).keys()
@@ -787,11 +788,7 @@ def _own_members(cls: type) -> dict[str, object]:
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
-    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a slot is never a class value, since instances read their own storage through it, and what else the body binds under a dataclass field's name, its default, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place.
-
-    inspect.get_annotations reads the body's own annotations, never a base's, and leaves
-    a string annotation a string.
-    """
+    """The annotation of each attribute *cls*'s own body declares, by name: each name it annotates, other than as a ClassVar, and gives no class value; a slot is never a class value, since instances read their own storage through it, and what else the body binds under a dataclass field's name, its default, is the field's, not a class value, unless _outranks_the_instance holds of it, since instances then read it in the field's place."""
     field_names = _dataclass_fields(cls).keys()
     class_values = {
         name
@@ -800,7 +797,7 @@ def _declared_attributes(cls: type) -> dict[str, object]:
     }
     return {
         name: annotation
-        for name, annotation in inspect.get_annotations(cls).items()
+        for name, annotation in own_annotations(cls).items()
         if name not in class_values and not _is_class_var(annotation, cls)
     }
 

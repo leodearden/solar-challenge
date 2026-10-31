@@ -4,8 +4,10 @@
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
 is_immutable_type and spelled_function, a class's own namespace through own_namespace,
 which walks its metaclass's MRO through recorded_mro, and names it in errors through
-label_of: the helper's other modules read and name objects through them too. This module
-imports no other module of the helper, as tests/unit/test_surface_forms_layers.py checks.
+label_of: the helper's other modules read and name objects through them too, and read a
+class's own annotations through own_annotations, which refuses each class own_namespace
+refuses. This module imports no other module of the helper, as
+tests/unit/test_surface_forms_layers.py checks.
 """
 
 import ast
@@ -256,11 +258,22 @@ def own_namespace(cls: type) -> Mapping[str, object]:
     metaclass's own metaclass shadows __dict__. docs/surface-forms-inspect-readings.md §4.8
     says how each minor reads such a class.
     """
+    _refuse_shadowed_dict(cls)
+    return _held_namespace(cls)
+
+
+def own_annotations(cls: type) -> Mapping[str, object]:
+    """The annotations *cls*'s own body wrote, as inspect.get_annotations reads them: never a base's, and each string left a string; the TypeError own_namespace raises for a class whose metaclass shadows __dict__, since inspect.get_annotations reads, before Python 3.14, the annotations that __dict__ gives."""
+    _refuse_shadowed_dict(cls)
+    return inspect.get_annotations(cls)
+
+
+def _refuse_shadowed_dict(cls: type) -> None:
+    """Raise the TypeError own_namespace raises for *cls* if its metaclass shadows __dict__."""
     for holder in recorded_mro(type(cls)):
         namespace = _held_namespace(holder)
         if "__dict__" in namespace and not _is_own_dict_descriptor(holder, namespace["__dict__"]):
             raise _dict_shadowed_error(cls, holder, namespace["__dict__"])
-    return _held_namespace(cls)
 
 
 def _held_namespace(cls: type) -> Mapping[str, object]:
