@@ -645,8 +645,15 @@ def _is_slot(value: object) -> bool:
 
 
 def _is_named_tuple(cls: type) -> typing.TypeGuard[type[typing.NamedTuple]]:
-    """Whether *cls* is a named tuple, as dataclasses.asdict recognises one: a tuple whose class records its fields' names as _fields, as each class typing.NamedTuple or collections.namedtuple makes does, and each subclass of one."""
-    return issubclass(cls, tuple) and hasattr(cls, "_fields")
+    """Whether *cls* is a named tuple, as dataclasses.asdict recognises one by the _fields an instance reads: a tuple whose instances read _fields from the class _fields_holder finds, as do those of each class typing.NamedTuple or collections.namedtuple makes and of each subclass of one."""
+    return _fields_holder(cls) is not None
+
+
+def _fields_holder(cls: type) -> type | None:
+    """The class whose _fields the instances of *cls* read, as each class typing.NamedTuple or collections.namedtuple makes holds its fields' names: the first class in *cls*'s MRO whose own namespace holds _fields; None if *cls* is no tuple or no class there holds one, whatever _fields its metaclass provides, since instances read no attribute through their class's metaclass."""
+    if not issubclass(cls, tuple):
+        return None
+    return next(namespace_holders(recorded_mro(cls), "_fields"), None)
 
 
 def _fields_read_from_the_tuple(cls: type) -> set[str]:
