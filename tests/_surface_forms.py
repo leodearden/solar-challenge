@@ -213,6 +213,10 @@ def named_classes(obj: object) -> set[type]:
     spelled there too, except over a constructor whose chain, as inspect reads and
     binds it, ends at a callable defined in C, which spells no annotation: that
     signature is read where the class holding it is spelled, as spelling_modules says.
+    Where a link of that chain carries a signature of its own, which the class's may
+    copy, the class's is read where that link's is if the class holds that very
+    signature; otherwise a string in it raises TypeError naming the class, the link
+    and the string.
     What a type variable or a NewType carries is spelled in the module that declares it;
     inside its own declaration, as in TypeVar("T", bound="Node[T]"), it names no class.
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what

@@ -66,6 +66,24 @@ class _MayBeCopied(Unspelled):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class _MayCopyAConstructorLink(Unspelled):
+    """*holder*, the class whose namespace holds the signature, holds another inspect.Signature than *link*, the first link to carry one on the chain of the constructor it is carried over, and *holder*'s may be a copy derived from *link*'s: its strings may be spelled where *link*'s was given."""
+
+    holder: type
+    link: object
+
+    def refusal(self, source: str) -> TypeError:
+        return TypeError(
+            f"{label_of(self.holder)} carries a signature whose string annotation {source!r} "
+            "no module is known to spell: the chain of the constructor it is carried over "
+            f"holds {label_of(self.link)}, which carries a signature of its own, so this one "
+            "may be a copy of it, spelled where that one was given: make the name private, "
+            "annotate with the class, not a string, or set the class's __signature__ to that "
+            "link's own signature object, which is read where that link's is"
+        )
+
+
 _ENUM_SIGNATURE_BY_MINOR = (
     "whose signature inspect reads from EnumType.__call__ on Python 3.11, from "
     "Enum.__signature__ on 3.12 and 3.13, and from EnumType.__signature__ on 3.14"
@@ -985,9 +1003,9 @@ def _signature_author(carrier: object) -> object:
     return author
 
 
-def _holds_signature_of(wrapper: object, wrapped: object) -> bool:
-    """Whether *wrapper* holds *wrapped*'s signature, as functools.wraps copies it along with __dict__, by reference: the same __signature__ object; never by equality, since two links given equal signatures each can be spelled in two modules."""
-    return getattr(wrapper, "__signature__", None) is getattr(wrapped, "__signature__", _ABSENT)
+def _holds_signature_of(carrier: object, source: object) -> bool:
+    """Whether *carrier* holds *source*'s signature by reference, the same __signature__ object, as functools.wraps copies it along with __dict__ and as a class body that assigns another callable's __signature__ holds it; never by equality, since equal signatures given to two objects can be spelled in two modules."""
+    return getattr(carrier, "__signature__", None) is getattr(source, "__signature__", _ABSENT)
 
 
 def _annotations_author(routine: object) -> object:
@@ -1048,10 +1066,20 @@ def _constructor_spelling_modules(
 def _spelling_modules_over(
     constructor: object, signature_holder: type | None, names: Collection[str]
 ) -> Mapping[str, ModuleOrUnspelled] | None:
-    """The module that spells each of *names* in the signature inspect reads for a class whose constructor, as inspect reads and binds it, is *constructor*: if the class carries a signature, which *signature_holder* then holds, and the chain from *constructor* ends at a _CCallableInspectSkips, a callable defined in C, which spells no annotation, that of *signature_holder*; else where _chain_spelling_modules finds it on that chain, None if it finds none."""
+    """The module that spells each of *names* in the signature inspect reads for a class whose constructor, as inspect reads and binds it, is *constructor*: if the class carries a signature, which *signature_holder* then holds, and the chain from *constructor* ends at a _CCallableInspectSkips, a callable defined in C, which spells no annotation, the one _held_signature_module gives for *signature_holder*; else where _chain_spelling_modules finds it on that chain, None if it finds none."""
     if signature_holder is not None and isinstance(_chain_end(constructor), _CCallableInspectSkips):
-        return dict.fromkeys(names, defining_module(signature_holder))
+        return dict.fromkeys(names, _held_signature_module(signature_holder, constructor))
     return _chain_spelling_modules(constructor, names)
+
+
+def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspelled:
+    """Where the signature *holder* holds, carried over *constructor*, whose chain ends at a callable defined in C, is spelled: *holder*'s module if _signed_link finds no link of that chain that carries an inspect.Signature; where _carried_signature_module finds that link's spelled if *holder* holds that very signature; else _MayCopyAConstructorLink, as *holder*'s may be a copy of that link's."""
+    link = _signed_link(constructor)
+    if link is None:
+        return defining_module(holder)
+    if _holds_signature_of(holder, link):
+        return _carried_signature_module(link)
+    return _MayCopyAConstructorLink(holder, link)
 
 
 def _refuse_constructor_generated_for_another_class(
