@@ -906,9 +906,9 @@ is refused when the homes are generated, where the tag gives a battery or heat
 pump field its default for a source other than `pv.capacity_kw`. A home draws no
 field of a component it has none of, past the presence field, so a source there
 is refused at the first home without that component, and a fleet whose homes all
-have it generates. A `proportional_to` on a count gives a whole number, as the
-count's other specs do: `household_occupants` rounded, an EV hour truncated; the
-tag refuses one there with `Unknown distribution type`. A null setting
+have it generates. A `proportional_to` on a count gives a whole number, as a
+normal or uniform draw there does: `household_occupants` rounded, an EV hour
+truncated; the tag refuses one there with `Unknown distribution type`. A null setting
 (`use_stochastic`, `smart_charging_mode`, `grid_charging`, `dispatch_strategy`)
 reads as absent. Every other generated fleet is unchanged, home for home.
 
