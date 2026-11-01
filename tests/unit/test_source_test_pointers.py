@@ -21,9 +21,8 @@ that reads as a test, such as Werkzeug's TestResponse, is written after its modu
 """
 
 import ast
-import functools
 import re
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -53,6 +52,8 @@ _NAMED_WITHOUT_ITS_NODE_ID = (
     " or its node-id tests/<file>.py::[<Class>::]<name>"
 )
 
+_OWN_NAMES_UNREADABLE = "does not parse, so the names it uses itself cannot be told from pointers"
+
 
 @dataclass(frozen=True)
 class _Pointer:
@@ -74,24 +75,71 @@ class _Pointer:
         return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
 
 
-def _pointers(root: Path, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
-    """Return every pointer in the *sources*, POSIX paths relative to *root*, file by file and in text order."""
+class _NoSyntaxTree(Enum):
+    """Why a Python file has no syntax tree for the gate to read.
+
+    A reason for a pointer gives the member's value after the file's path.
+    """
+
+    NOT_UTF8 = "is not UTF-8 text"
+    DOES_NOT_PARSE = "does not parse"
+
+
+class _Checkout:
+    """A git checkout as the gate reads it, from its root.
+
+    Its paths are the files git lists in it and the directories holding them, as a fresh clone would hold them, listed
+    once, when it is built. It reads each file's text, and parses each Python file, at most once, in caches of its own,
+    so none outlives it.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root
+        self.paths: WorkingTreePaths = working_tree_paths(root)
+        self._texts: dict[PurePosixPath, str | None] = {}
+        self._syntax_trees: dict[PurePosixPath, ast.Module | _NoSyntaxTree] = {}
+
+    def text(self, path: PurePosixPath) -> str | None:
+        """Return the text of the file at *path*, relative to the root, as utf8_text reads it."""
+        if path not in self._texts:
+            self._texts[path] = utf8_text(self._root / path)
+        return self._texts[path]
+
+    def syntax_tree(self, path: PurePosixPath) -> ast.Module | _NoSyntaxTree:
+        """Return the syntax tree of the Python file at *path*, relative to the root, or why it has none."""
+        if path not in self._syntax_trees:
+            self._syntax_trees[path] = _syntax_tree(self.text(path))
+        return self._syntax_trees[path]
+
+
+def _syntax_tree(text: str | None) -> ast.Module | _NoSyntaxTree:
+    """Return the syntax tree of the Python module whose text, as utf8_text reads it, is *text*, or why it has none."""
+    if text is None:
+        return _NoSyntaxTree.NOT_UTF8
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        return _NoSyntaxTree.DOES_NOT_PARSE
+
+
+def _pointers(checkout: _Checkout, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
+    """Return every pointer in the *sources*, paths relative to the *checkout*'s root, file by file and in text order."""
     pointers: list[_Pointer] = []
     for source in sources:
-        text = utf8_text(root / source)
+        text = checkout.text(source)
         if text is not None:
-            pointers.extend(_pointers_in(source, text))
+            pointers.extend(_pointers_in(checkout, source, text))
     return pointers
 
 
-def _pointers_in(source: PurePosixPath, text: str) -> list[_Pointer]:
-    """Return the pointers in *text*, the text of the file *source*, in text order.
+def _pointers_in(checkout: _Checkout, source: PurePosixPath, text: str) -> list[_Pointer]:
+    """Return the pointers in *text*, the text of the file *source* in the *checkout*, in text order.
 
     A test name given alone that the file uses itself, as a Python module's identifier or a YAML file's key, is not one.
     """
     matches = list(_POINTER.finditer(text))
     has_bare_name = any(match["bare"] is not None for match in matches)
-    own_names = _own_names(source, text) if has_bare_name else frozenset()
+    own_names = _own_names(checkout, source, text) if has_bare_name else frozenset()
     return [
         _pointer(source, text, match)
         for match in matches
@@ -113,30 +161,30 @@ def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer
     )
 
 
-def _own_names(source: PurePosixPath, text: str) -> frozenset[str]:
-    """Return the names the file *source*, whose text is *text*, uses itself.
+def _own_names(checkout: _Checkout, source: PurePosixPath, text: str) -> frozenset[str]:
+    """Return the names the file *source* in the *checkout*, whose text is *text*, uses itself.
 
     They are a Python module's identifiers or a YAML file's mapping keys. A file of any other kind uses none. A Python or
     YAML file that does not parse raises ValueError, naming the file.
     """
     match source.suffix:
         case ".py":
-            read_names = _code_names
+            module = checkout.syntax_tree(source)
+            if isinstance(module, _NoSyntaxTree):
+                raise ValueError(f"{source} {_OWN_NAMES_UNREADABLE}")
+            return _code_names(module)
         case ".yaml" | ".yml":
-            read_names = _yaml_keys
+            try:
+                return _yaml_keys(text)
+            except yaml.YAMLError as error:
+                raise ValueError(f"{source} {_OWN_NAMES_UNREADABLE}: {error}") from error
         case _:
             return frozenset()
-    try:
-        return read_names(text)
-    except (SyntaxError, yaml.YAMLError) as error:
-        raise ValueError(
-            f"{source} does not parse, so the names it uses itself cannot be told from pointers: {error}"
-        ) from error
 
 
-def _code_names(text: str) -> frozenset[str]:
-    """Return the names of the variables, arguments, attributes, keywords, defs and classes in the Python module *text*."""
-    return frozenset(name for node in ast.walk(ast.parse(text)) if (name := _code_name(node)) is not None)
+def _code_names(module: ast.Module) -> frozenset[str]:
+    """Return the names of the variables, arguments, attributes, keywords, defs and classes in the Python *module*."""
+    return frozenset(name for node in ast.walk(module) if (name := _code_name(node)) is not None)
 
 
 def _code_name(node: ast.AST) -> str | None:
@@ -177,67 +225,29 @@ def _mapping_keys(node: yaml.Node) -> Iterator[str]:
                 yield from _mapping_keys(item)
 
 
-def _dangling(root: Path, pointers: Iterable[_Pointer]) -> list[str]:
-    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in *root*'s working tree, in their order."""
-    tree = working_tree_paths(root)
-
-    @functools.cache
-    def syntax_tree_of(path: PurePosixPath) -> ast.Module | _NoSyntaxTree:
-        return _syntax_tree(root / path)
-
-    return [
-        f"{pointer}: {reason}"
-        for pointer in pointers
-        if (reason := _unresolved(tree, syntax_tree_of, pointer)) is not None
-    ]
+def _dangling(checkout: _Checkout, pointers: Iterable[_Pointer]) -> list[str]:
+    """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in the *checkout*, in their order."""
+    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(checkout, pointer)) is not None]
 
 
-class _NoSyntaxTree(Enum):
-    """Why a Python file has no syntax tree to look the names of a pointer up in.
+def _unresolved(checkout: _Checkout, pointer: _Pointer) -> str | None:
+    """Return why *pointer* leads to no file, directory or test in the *checkout*, or None if it leads to one.
 
-    A reason for a pointer gives the member's value after the file's path.
-    """
-
-    NOT_UTF8 = "is not UTF-8 text"
-    DOES_NOT_PARSE = "does not parse"
-
-
-def _syntax_tree(path: Path) -> ast.Module | _NoSyntaxTree:
-    """Return the syntax tree of the Python file at *path*, or why it has none.
-
-    It is parsed from the file's text as utf8_text reads it.
-    """
-    text = utf8_text(path)
-    if text is None:
-        return _NoSyntaxTree.NOT_UTF8
-    try:
-        return ast.parse(text)
-    except SyntaxError:
-        return _NoSyntaxTree.DOES_NOT_PARSE
-
-
-def _unresolved(
-    tree: WorkingTreePaths,
-    syntax_tree_of: Callable[[PurePosixPath], ast.Module | _NoSyntaxTree],
-    pointer: _Pointer,
-) -> str | None:
-    """Return why *pointer* leads to no file, directory or test in the working *tree*, or None if it leads to one.
-
-    It must give a path, with its names joined by ::, and the tree must hold that path. Its names are looked up in the
-    syntax tree *syntax_tree_of* gives for the Python file there, and the file is never imported.
+    It must give a path, with its names joined by ::, and the checkout's paths must hold that path. Its names are looked
+    up in the syntax tree of the Python file there, and the file is never imported.
     """
     if pointer.path is None:
         return _NAMED_WITHOUT_ITS_NODE_ID
     if pointer.dotted_names:
         node_id = "::".join((str(pointer.path), *pointer.names, *pointer.dotted_names))
         return f"a node-id joins its names with ::, so write {node_id}"
-    if not tree.holds(pointer.path):
+    if not checkout.paths.holds(pointer.path):
         return f"{pointer.path} does not exist, or git ignores it"
     if not pointer.names:
         return None
-    if pointer.path.suffix != ".py" or pointer.path not in tree.files:
+    if pointer.path.suffix != ".py" or pointer.path not in checkout.paths.files:
         return f"{pointer.path} is not a Python file, so it defines no {pointer.names[0]}"
-    module = syntax_tree_of(pointer.path)
+    module = checkout.syntax_tree(pointer.path)
     if isinstance(module, _NoSyntaxTree):
         return f"{pointer.path} {module.value}, so it defines no {pointer.names[0]}"
     return _undefined(pointer.path, pointer.names, module)
