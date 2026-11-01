@@ -1083,10 +1083,10 @@ def _spelling_modules_over(
 def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspelled:
     """Where the signature *holder* holds, carried over *constructor*, whose chain ends at a callable defined in C, is spelled: *holder*'s module if _signed_link finds no link of that chain that carries an inspect.Signature; where _carried_signature_module finds that link's spelled if *holder*'s own namespace, as own_namespace reads it, holds that very signature; else _MayCopyAConstructorLink, as *holder*'s may be a copy of that link's.
 
-    What *holder*'s own namespace holds is the signature inspect reads for a class
-    _signature_holder found *holder* for, though *holder*'s own attribute lookup may
-    answer through *holder*'s metaclass: docs/surface-forms-inspect-readings.md §4.5
-    says why.
+    What *holder*'s own namespace holds is the signature inspect reads, alike on every
+    minor, for a class _signature_holder found *holder* for, whatever *holder*'s
+    metaclass gives *holder* itself: the metaclass of the class read can shadow, with a
+    plain attribute, a property __signature__ that gives *holder* another.
     """
     link = _signed_link(constructor)
     if link is None:

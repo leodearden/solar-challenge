@@ -428,17 +428,13 @@ refused before any is bound. The other readings are:
   `__signature__` does. The class's signature may then be a copy of that link's, taken
   by reference or derived from it, as `inspect.Signature.replace` derives one, and so be
   spelled where that link's was given. `named_classes` reads its string annotations
-  where it reads the first such link's if the class carries that link's very
-  `inspect.Signature` object, compared by identity, alike with the constructor held as a
-  metaclass `__call__` or as an `__init__`. Otherwise it raises `TypeError` naming the
-  class holding the signature, that link and the string, as for a function given a
-  signature that wraps a link carrying one of its own. The object compared is the one
-  the class holding the signature holds in its own namespace, which is what `inspect`
-  reads for the class. That holds even where the metaclass of the class holding it gives
-  that class another `__signature__`, as a property does once a metaclass of the class
-  being read shadows it with a plain attribute. Where `named_classes` reads that link's,
-  it refuses what it refuses for that link: a string raises `TypeError` naming the link
-  and the string where the link records no module, as
+  where it reads the first such link's if the class holding the signature holds that
+  link's very `inspect.Signature` object in its own namespace, compared by identity,
+  alike with the constructor held as a metaclass `__call__` or as an `__init__`.
+  Otherwise it raises `TypeError` naming the class holding the signature, that link and
+  the string, as for a function given a signature that wraps a link carrying one of its
+  own. Where it reads that link's, it refuses what it refuses for that link: a string
+  raises `TypeError` naming the link and the string where the link records no module, as
   `functools.partial(object.__init__)` given a `__signature__` records none, or is a
   function given a signature that wraps a link carrying one of its own. An annotation
   that is a class, not a string, names that class.
