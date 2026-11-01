@@ -18,15 +18,17 @@ import typing
 import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
+from tests._surface_forms_class_reads import (
+    overriding_getattribute_holder,
+    own_annotations,
+    own_namespace,
+    recorded_mro,
+)
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     defining_module,
     is_get_delete_descriptor,
     is_routine,
-    overriding_getattribute_holder,
-    own_annotations,
-    own_namespace,
-    recorded_mro,
 )
 
 

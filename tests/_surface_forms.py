@@ -47,15 +47,13 @@ import types
 import typing
 from collections.abc import Callable, Collection, Iterable, Iterator
 
+from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     defining_module,
     evaluated_in,
     is_immutable_type,
     is_routine,
-    own_annotations,
-    own_namespace,
-    recorded_mro,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
