@@ -20,8 +20,10 @@ string annotation in the module that spells it, and raises `TypeError` where tha
 could differ by minor (4.2). `member_forms`, which spells the public members a class's own
 body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Both
 raise `TypeError` for a class whose metaclass shadows `__dict__` or defines
-`__getattribute__` (4.8). Each entry says how each minor reads its objects, and names
-the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do. Each
+`__getattribute__` (4.8). `member_forms` also raises `TypeError` for a named tuple whose
+`_fields` holder holds anything but a tuple of strings (4.9), though every minor reads
+such a class alike. Each entry says how each minor reads its objects, and names the rule
+tests that pin what `surface_form`, `member_forms` and `named_classes` do. Each
 `TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
@@ -47,8 +49,8 @@ a class whose metaclass gives a `__mro__` other than the MRO the class records, 
 reading of such a class's constructor, and 4.8's readings, of a class whose metaclass
 shadows `__dict__`, were measured on CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4
 on 2026-10-31, and 4.8's readings of a class whose metaclass defines `__getattribute__`
-on those releases on 2026-11-01. A new refusal gets its rule test first, then its entry
-here.
+and 4.9's readings on those releases on 2026-11-01. A new refusal gets its rule test
+first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -847,6 +849,29 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes`
 
+### 4.9 A named tuple whose `_fields` holder holds anything but a tuple of strings
+
+A subclass of `tuple` is a named tuple to `member_forms` where a class in its recorded MRO
+holds `_fields` in its own namespace. The first such class is its `_fields` holder, from
+which its instances read their fields' names, and each class `typing.NamedTuple` or
+`collections.namedtuple` makes holds a tuple of strings there. Every minor reads any other
+`_fields` alike, by attribute lookup. With `Point`, a `typing.NamedTuple` whose one field
+is `x`, a subclass whose body binds `_fields` to a property giving `("x",)` gives its
+instances `("x",)` and the class the property itself, and one whose body binds `["x"]` or
+`(1,)` gives both that value.
+
+`member_forms` reads the fields' names only from a tuple of strings, and calls no property
+to learn what it gives, since only an instance gives that. So it raises `TypeError` for a
+named tuple whose holder holds anything else, naming the class, the holder's `_fields`,
+which a base may hold, and the type of what it holds, as in `builtins.property`, and
+saying to bind `_fields` to a tuple of the fields' names, as `collections.namedtuple`
+does. `named_classes`, `unset_attributes` and `signature_closure` raise that `TypeError`
+for such a class, as for any class `member_forms` refuses. `member_forms`' docstring in
+`tests/_surface_forms.py` states the rule.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_type_error_naming_it_that_holder_and_the_type_of_what_it_holds`
+
 ## 5. When the Admitted Minors Change
 
 On a newly admitted minor, re-measure each reading here (§6) and run the rule tests. An
@@ -867,7 +892,9 @@ minor either: it names a choice no rule reads. 4.8's refusal rests on 3.11 and 3
 it meets 4.6's or 4.7's reading, on 3.14 where `inspect.get_annotations` reads the
 namespace the class holds, and on 3.13 and 3.14 where `inspect.getsource` finds a class's
 statement by what its `__dict__` gives; otherwise it rests on no minor: it names readings
-no rule reads. Whether to lift one is for the task that changes `requires-python`.
+no rule reads. 4.9's refusal rests on no minor either, since every minor reads `_fields`
+alike: it names a `_fields` from which no rule reads the fields' names. Whether to lift
+one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 
