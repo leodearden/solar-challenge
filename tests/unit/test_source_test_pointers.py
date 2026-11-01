@@ -307,8 +307,8 @@ def _pointers_given(
     if files:
         node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
         return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
-    words_after_py = re.findall(r"\w+", match["after_py"])
-    test_like_names = [name for name in (*words_after_py, *names, *dotted_names) if _TEST_LIKE_NAME.fullmatch(name)]
+    words_after_py = re.findall(r"\w+", match["after_py"] + match["names"] + match["dotted_names"])
+    test_like_names = [word for word in words_after_py if _TEST_LIKE_NAME.fullmatch(word)]
     return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
 
 
