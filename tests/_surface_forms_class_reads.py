@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or defines __getattribute__, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
+"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or its metaclass's MRO holds a __getattribute__ other than type's and object's, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
 
 The helper's other modules read classes through own_namespace, own_annotations,
 recorded_mro and overriding_getattribute_holder. Of the helper, this module imports only
