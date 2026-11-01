@@ -34,7 +34,11 @@ from solar_challenge.web.fleet_config import (
     read_fleet_seed,
     read_fleet_size,
 )
-from solar_challenge.web.request_boundary import refuse_unrecognised_keys, resolve_location
+from solar_challenge.web.request_boundary import (
+    refuse_unencodable_text,
+    refuse_unrecognised_keys,
+    resolve_location,
+)
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.simulation_params import (
     DATE_RANGE_KEYS,
@@ -103,6 +107,8 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
             listing the fleet form's keys.
         ValueError, TypeError: From the form's distribution conversion, location, SEG or
             date range, or for a date that does not parse.
+        ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
+            refusal naming name.
         ConfigurationError: For a block the loaders refuse, or homes they cannot generate.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
@@ -112,6 +118,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     homes = _with_fleet_overlay(generate_homes_from_distribution(fleet, location), form)
     start, end = parse_date_range(form)
     sent_name = form.get("name")
+    refuse_unencodable_text(sent_name, "name")
     name = sent_name if is_run_name(sent_name) else None
     return ParsedFleetForm(
         name=name,
