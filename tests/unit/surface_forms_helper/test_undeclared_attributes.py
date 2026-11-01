@@ -19,9 +19,11 @@ import pytest
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
 from tests.unit.surface_forms_helper._fixtures import (
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
+    dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
     metaclass_whose_dict_gives,
+    metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
 )
 
@@ -145,6 +147,18 @@ def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_
             self.label = "roof"
 
     with pytest.raises(TypeError, match=dict_shadowing_refusal("Meter")):
+        scan(Meter)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+) -> None:
+    class Meter(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {"label": None})):
+        def __init__(self) -> None:
+            self.label = "roof"
+
+    with pytest.raises(TypeError, match=dict_intercepting_refusal("Meter")):
         scan(Meter)
 
 

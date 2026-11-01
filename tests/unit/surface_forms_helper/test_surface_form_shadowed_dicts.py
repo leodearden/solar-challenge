@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's surface_form for a class whose metaclass shadows __dict__, as a metaclass that defines __dict__ as a property does, and for an object of such a class, one per test.
+"""The rules of tests/_surface_forms.py's surface_form for a class whose metaclass shadows __dict__, as a metaclass that defines __dict__ as a property does, or whose metaclass defines __getattribute__, through which it may give another __dict__, and for an object of such a class, one per test.
 
 The classes and the function above the first test are defined at module level, where
 their qualified names carry no '<locals>' and a parametrize decorator can reach them.
@@ -16,8 +16,10 @@ from tests.unit.surface_forms_helper._fixtures import (
     class_whose_init_is,
     class_whose_metaclass_call_is,
     class_whose_new_is,
+    dict_intercepting_refusal,
     dict_shadowing_refusal,
     metaclass_whose_dict_gives,
+    metaclass_whose_getattribute_gives_dict,
 )
 
 
@@ -179,6 +181,95 @@ class Kept(Initialised, metaclass=InstanceDictMeta):
     """An Initialised of InstanceDictMeta."""
 
 
+class InterceptedPartialCalling(
+    Rating, metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {})
+):
+    """A Rating whose own __call__ is a functools.partial, which the __dict__ its metaclass's __getattribute__ gives, giving nothing, hides."""
+
+    __call__ = functools.partial(_settle)
+
+
+class InterceptedNoneCalling(
+    Rating, metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {"__call__": None})
+):
+    """A Rating whose own __call__ is defined with def, and whose metaclass's __getattribute__ gives a __dict__ giving None as __call__."""
+
+    def __call__(self, share: str) -> None: ...
+
+
+class InterceptedNewClaimed(
+    Initialised,
+    Made,
+    metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {"__new__": None}),
+):
+    """A class of Initialised and then Made whose metaclass's __getattribute__ gives a __dict__ giving None as __new__."""
+
+
+class InterceptedInitHidden(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {})):
+    """A class whose own __init__, defined with def, the __dict__ its metaclass's __getattribute__ gives, giving nothing, hides."""
+
+    def __init__(self, rate: int) -> None: ...
+
+
+class InterceptedTransparent(
+    Initialised,
+    metaclass=metaclass_whose_getattribute_gives_dict(
+        lambda cls: type.__dict__["__dict__"].__get__(cls)
+    ),
+):
+    """An Initialised whose metaclass's __getattribute__ gives as __dict__ the very namespace the class holds."""
+
+
+class PassingThrough(type):
+    """A metaclass whose __getattribute__ gives what type's gives, for every name."""
+
+    def __getattribute__(cls, name: str) -> object:
+        return super().__getattribute__(name)
+
+
+class InterceptingSubclass(metaclass_whose_getattribute_gives_dict(lambda cls: {})):
+    """A subclass of a metaclass that defines __getattribute__, defining nothing itself."""
+
+
+class GetattributeMixin:
+    """A plain class whose __getattribute__ gives what the next one in its MRO gives, for every name."""
+
+    def __getattribute__(self, name: str) -> object:
+        return super().__getattribute__(name)
+
+
+class MixedIntercepting(GetattributeMixin, type):
+    """A metaclass whose MRO holds GetattributeMixin, and then type."""
+
+
+class OverPassingThrough(Initialised, metaclass=PassingThrough):
+    """An Initialised of PassingThrough."""
+
+
+class OverInterceptingSubclass(Initialised, metaclass=InterceptingSubclass):
+    """An Initialised of InterceptingSubclass."""
+
+
+class OverMixedIntercepting(Initialised, metaclass=MixedIntercepting):
+    """An Initialised of MixedIntercepting."""
+
+
+class CallingIntercepting(metaclass_whose_getattribute_gives_dict(lambda cls: {})):
+    """A metaclass whose __call__ is defined with def and whose __getattribute__ gives, for each class of it, a __dict__ giving nothing."""
+
+    def __call__(cls, rate: int) -> None: ...
+
+
+class InterceptedCalled(Initialised, metaclass=CallingIntercepting):
+    """An Initialised of CallingIntercepting, whose __call__ inspect reads in place of its __new__ and __init__."""
+
+
+class InterceptedCarrying(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {})):
+    """A class whose metaclass's __getattribute__ gives a __dict__ giving nothing, and that carries the signature of Initialised."""
+
+    __signature__ = inspect.signature(Initialised)
+
+
 @pytest.mark.parametrize(
     ("build", "name"),
     [
@@ -302,3 +393,97 @@ def test_a_class_whose_metaclass_shadows_dict_is_spelled_by_the_metaclass_call_i
 
 def test_a_class_whose_metaclass_mro_holds_a_class_whose_own_dict_is_the_one_cpython_made_for_it_is_spelled_by_its_constructor() -> None:
     assert surface_form(Kept) == "(rate: int) -> None"
+
+
+@pytest.mark.parametrize(
+    ("build", "name"),
+    [
+        pytest.param(
+            lambda: class_whose_init_is(InterceptedPartialCalling()),
+            "InterceptedPartialCalling",
+            id="getattribute-hiding-a-partial-call",
+        ),
+        pytest.param(
+            lambda: class_whose_init_is(InterceptedNoneCalling()),
+            "InterceptedNoneCalling",
+            id="getattribute-giving-none-as-call",
+        ),
+        pytest.param(
+            lambda: functools.partial(InterceptedNoneCalling()),
+            "InterceptedNoneCalling",
+            id="partial-of-it",
+        ),
+    ],
+)
+def test_an_object_whose_types_metaclass_defines_getattribute_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it(
+    build: Callable[[], object], name: str
+) -> None:
+    with pytest.raises(TypeError, match=dict_intercepting_refusal(name)):
+        surface_form(build())
+
+
+@pytest.mark.parametrize(
+    ("cls", "name"),
+    [
+        pytest.param(InterceptedNewClaimed, "InterceptedNewClaimed", id="getattribute-giving-new"),
+        pytest.param(
+            InterceptedInitHidden, "InterceptedInitHidden", id="getattribute-hiding-init"
+        ),
+        pytest.param(
+            InterceptedTransparent,
+            "InterceptedTransparent",
+            id="getattribute-giving-the-namespace-the-class-holds",
+        ),
+    ],
+)
+def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init(
+    cls: type, name: str
+) -> None:
+    with pytest.raises(TypeError, match=dict_intercepting_refusal(name)):
+        surface_form(cls)
+
+
+@pytest.mark.parametrize(
+    ("cls", "refusal"),
+    [
+        pytest.param(
+            OverPassingThrough,
+            r"\.OverPassingThrough has the metaclass \S*\.PassingThrough, whose MRO holds "
+            r"\S*\.PassingThrough\.__getattribute__, in place of the __getattribute__ type "
+            "gives each class",
+            id="getattribute-giving-what-types-gives",
+        ),
+        pytest.param(
+            OverInterceptingSubclass,
+            r"\.OverInterceptingSubclass has the metaclass \S*\.InterceptingSubclass, whose "
+            r"MRO holds \S*\.Intercepting\.__getattribute__, in place of the __getattribute__ "
+            "type gives each class",
+            id="subclass-of-a-metaclass-defining-getattribute",
+        ),
+        pytest.param(
+            OverMixedIntercepting,
+            r"\.OverMixedIntercepting has the metaclass \S*\.MixedIntercepting, whose MRO "
+            r"holds \S*\.GetattributeMixin\.__getattribute__, in place of the "
+            "__getattribute__ type gives each class",
+            id="base-before-type",
+        ),
+    ],
+)
+def test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives(
+    cls: type, refusal: str
+) -> None:
+    with pytest.raises(TypeError, match=refusal):
+        surface_form(cls)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        pytest.param(InterceptedCalled, id="metaclass-call"),
+        pytest.param(InterceptedCarrying, id="carried-signature"),
+    ],
+)
+def test_a_class_whose_metaclass_defines_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
+    cls: type,
+) -> None:
+    assert surface_form(cls) == "(rate: int) -> None"

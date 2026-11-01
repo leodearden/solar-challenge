@@ -211,6 +211,25 @@ def dict_shadowing_refusal(name: str) -> str:
     )
 
 
+def metaclass_whose_getattribute_gives_dict(namespace: Callable[[type], object]) -> type:
+    """A metaclass whose __getattribute__ gives, for each class of it, what *namespace* gives for that class as its __dict__; it holds no __dict__ itself, so by inspect's rule it shadows none."""
+
+    class Intercepting(type):
+        def __getattribute__(cls, name: str) -> object:
+            return namespace(cls) if name == "__dict__" else super().__getattribute__(name)
+
+    return Intercepting
+
+
+def dict_intercepting_refusal(name: str) -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass is one metaclass_whose_getattribute_gives_dict makes."""
+    return (
+        rf"\.{name} has the metaclass \S*\.Intercepting, whose MRO holds "
+        r"\S*\.Intercepting\.__getattribute__, in place of the __getattribute__ type gives "
+        "each class"
+    )
+
+
 def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
     """*function*, carrying the string '(receiver, rate)' as its __signature__."""
     function.__signature__ = "(receiver, rate)"
