@@ -450,11 +450,11 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         assert homes[0].load_config.household_occupants == occupants
 
     def test_an_ev_hour_is_truncated(self) -> None:
-        """An arrival hour of 4 times a 4.6 kW PV capacity is 18.4, which the EV takes as 18."""
+        """An arrival hour of 4 times a 4.7 kW PV capacity is 18.8, which the EV takes as 18, not the 19 rounding gives."""
         fleet = parse_fleet_distribution_config(
             {
                 "n_homes": 1,
-                "pv": {"capacity_kw": 4.6},
+                "pv": {"capacity_kw": 4.7},
                 "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to_pv(multiplier=4.0)},
             }
         )
