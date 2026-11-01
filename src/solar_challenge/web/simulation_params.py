@@ -23,6 +23,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
+    refuse_unencodable_text,
     refuse_unrecognised_keys,
     require_json_object,
     resolve_location,
@@ -338,7 +339,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             dispatch_strategy) are read, and refused, whatever battery_kwh
             is; a null setting reads as unset. A null system_losses also
             reads as unset, leaving PVConfig's default, and a sent one
-            outside PVConfig's range raises PVConfig's own refusal.
+            outside PVConfig's range raises PVConfig's own refusal. A name
+            sent as text holding a lone surrogate is refused with
+            require_encodable_text's refusal, naming name; a name that is
+            not text is not checked here.
     """
     data = require_json_object(data, _HOME_CONFIG)
     refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
@@ -360,6 +364,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     occupants = as_whole_number(params["occupants"], "occupants")
     stochastic = bool(params["stochastic"])
     name = params["name"]
+    refuse_unencodable_text(name, "name")
 
     # Parse date range using shared helper
     start, end = parse_date_range(data)
