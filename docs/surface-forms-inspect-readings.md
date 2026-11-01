@@ -19,7 +19,7 @@ on every minor (§2). `named_classes`, which gives the classes a form names, rea
 string annotation in the module that spells it, and raises `TypeError` where that module
 could differ by minor (4.2). `member_forms`, which spells the public members a class's own
 body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Both
-raise `TypeError` for a class whose metaclass shadows `__dict__` or defines
+raise `TypeError` for a class whose metaclass shadows `__dict__` or overrides `type`'s
 `__getattribute__` (4.8). `member_forms` also raises `TypeError` for a named tuple whose
 `_fields` holder holds anything but a tuple of strings (4.9), though every minor reads
 such a class alike. Each entry says how each minor reads its objects, and names the rule
@@ -142,9 +142,9 @@ metaclass `__call__`. Held as `__new__`, it reads as `() -> None`.
 `surface_form`, `named_classes`, `member_forms` and `undeclared_attributes` read every
 MRO as the recorded one, and each namespace along it as the class holds it, which
 `type.__dict__['__dict__']` gives for it; 4.8 says how they refuse a class whose
-metaclass shadows `__dict__` or defines `__getattribute__` instead. So 4.4's refusal of
-a base defining `__call__` in C, 4.6's of a partial whose type takes `__get__` from
-another class, and 4.7's of a `classmethod` wrapping an object whose type defines
+metaclass shadows `__dict__` or overrides `type`'s `__getattribute__` instead. So 4.4's
+refusal of a base defining `__call__` in C, 4.6's of a partial whose type takes `__get__`
+from another class, and 4.7's of a `classmethod` wrapping an object whose type defines
 `__get__` follow the recorded MRO too. Measured: hidden by `__mro__`, a
 `sqlite3.Connection` base still makes 3.13 and 3.14 read `(sql, /)`, where 3.11 and
 3.12 read the subclass's `__call__`. A hidden `GetMixin` base still makes 3.11 and 3.12
@@ -763,7 +763,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_signature_over_a_classmethod_call_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
 
-### 4.8 A class whose metaclass shadows `__dict__` or defines `__getattribute__`
+### 4.8 A class whose metaclass shadows `__dict__` or overrides `type`'s `__getattribute__`
 
 A metaclass can hold `__dict__` itself: as a property, as a plain value, or as type's own
 descriptor, `type.__dict__['__dict__']`. On every minor, `inspect.getattr_static` then
@@ -827,11 +827,20 @@ of `Initialised` and then `Made` reads as `(share: str) -> 'Made'`. With
 3.11, 3.12 and 3.13, and `y` on 3.14. The helper does not call a `__getattribute__` to
 learn what it gives. So `surface_form`, `named_classes`, `member_forms` and
 `undeclared_attributes` refuse such a class, as they refuse a shadow, wherever they read
-its namespace, whatever the `__getattribute__` gives. A class counts as such when a class
-in its metaclass's MRO other than `type` and `object` holds a `__getattribute__`. The
-`TypeError` names the class, its metaclass and the class holding that
-`__getattribute__`. A metaclass `__call__` or a carried signature lifts `surface_form`'s
-refusal, as for a shadow.
+its namespace, whatever the `__getattribute__` gives. A class counts as such when the
+first class in its metaclass's MRO that holds a `__getattribute__` holds one other than
+`type`'s own, since that is the one attribute lookup calls. The `TypeError` names the
+class, its metaclass and the class holding that `__getattribute__`. A metaclass
+`__call__` or a carried signature lifts `surface_form`'s refusal, as for a shadow.
+
+Attribute lookup never calls a `__getattribute__` that only a class after `type` in a
+metaclass's MRO holds, as a plain class listed after `type` among a metaclass's bases
+holds one. A metaclass whose body binds `type.__getattribute__` holds `type`'s own, so it
+overrides nothing either. On every minor, `inspect` reads a class of such a metaclass as
+it reads any other: a class of `Initialised` reads as `(rate: int) -> None`, and one that
+carries a signature reads as that signature, whatever that later `__getattribute__` would
+give. So `surface_form` spells it by its constructor, and `named_classes` reads the
+signature it carries.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_an_object_whose_types_metaclass_shadows_dict_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it`
@@ -844,8 +853,10 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init`
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives`
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_defines_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_mro_first_holds_types_own_getattribute_is_spelled_by_its_constructor`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_shadows_dict_raises_a_type_error_naming_that_class_and_its_metaclass`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_defines_getattribute_raises_the_signature_rules_type_error_naming_that_class_and_its_metaclass`
+- `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_whose_metaclass_mro_first_holds_types_own_getattribute_names_the_classes_its_own_signature_names`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_that_dict_gives`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_its_dict_gives`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes`
