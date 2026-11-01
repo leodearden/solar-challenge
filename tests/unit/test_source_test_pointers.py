@@ -649,7 +649,9 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/test_pointed_at.py-TestGroup::TestNested.test_deep\n"
         "# tests/unit/test_pointed_at.py.bak\n"
         "# tests/unit/test_absent.py.TestGroup\n"
-        "# tests/unit/test_pointed_at.py.TestGroup-based\n",
+        "# tests/unit/test_pointed_at.py.TestGroup-based\n"
+        "# tests/unit/test_pointed_at.py.TestGroup-based::test_member\n"
+        "# tests/unit/test_pointed_at.py-.TestGroup\n",
     )
     checkout = _Checkout(project)
 
@@ -679,6 +681,10 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "src/pkg/module.py:13: tests/unit/test_absent.py.TestGroup:"
         " tests/unit/test_absent.py.TestGroup does not exist, or git ignores it",
         "src/pkg/module.py:14: tests/unit/test_pointed_at.py.TestGroup-based:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
+        "src/pkg/module.py:15: tests/unit/test_pointed_at.py.TestGroup-based::test_member:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
+        "src/pkg/module.py:16: tests/unit/test_pointed_at.py-.TestGroup:"
         " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
     ]
 
@@ -852,7 +858,9 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         " nor does a throwaway test_gamma.py.\n"
         "# Nor do backups such as test_pointed_at.py.bak and unit/test_pointed_at.py-old.\n"
         "# test_pointed_at.py.TestGroup-based ends its names at a hyphen that joins a word naming no test,\n"
-        "# as test_pointed_at.py-TestRenamed-old does, but test_pointed_at.py-test_twin.py joins a test-like word.\n",
+        "# as test_pointed_at.py-TestRenamed-old does, but test_pointed_at.py-test_twin.py joins a test-like word.\n"
+        "# test_pointed_at.py.TestGroup-based::test_member drops the name written after the path with its tail,\n"
+        "# and test_pointed_at.py-.TestGroup has no tail, as its hyphen joins no word.\n",
     )
     checkout = _Checkout(project)
 
@@ -880,6 +888,10 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestRenamed"]),
         "src/pkg/module.py:12: test_pointed_at.py-test_twin.py: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::test_twin::py"]),
+        "src/pkg/module.py:13: test_pointed_at.py.TestGroup-based::test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:14: test_pointed_at.py-.TestGroup: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
     ]
 
 
