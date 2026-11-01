@@ -431,12 +431,17 @@ refused before any is bound. The other readings are:
   where it reads the first such link's if the class carries that link's very
   `inspect.Signature` object, compared by identity, alike with the constructor held as a
   metaclass `__call__` or as an `__init__`. Otherwise it raises `TypeError` naming the
-  class, that link and the string, as for a function given a signature that wraps a link
-  carrying one of its own. Where it reads that link's, it refuses what it refuses for
-  that link: a string raises `TypeError` naming the link and the string where the link
-  records no module, as `functools.partial(object.__init__)` given a `__signature__`
-  records none, or is a function given a signature that wraps a link carrying one of its
-  own. An annotation that is a class, not a string, names that class.
+  class holding the signature, that link and the string, as for a function given a
+  signature that wraps a link carrying one of its own. The object compared is the one
+  the class holding the signature holds in its own namespace, which is what `inspect`
+  reads for the class. That holds even where the metaclass of the class holding it gives
+  that class another `__signature__`, as a property does once a metaclass of the class
+  being read shadows it with a plain attribute. Where `named_classes` reads that link's,
+  it refuses what it refuses for that link: a string raises `TypeError` naming the link
+  and the string where the link records no module, as
+  `functools.partial(object.__init__)` given a `__signature__` records none, or is a
+  function given a signature that wraps a link carrying one of its own. An annotation
+  that is a class, not a string, names that class.
 - A descriptor whose type defines `__get__` in Python but neither `__set__` nor
   `__delete__`, at the end of the chain from a constructor whose binding gives a
   callable: the binding gives such a descriptor that is callable, or a wrapper that
@@ -617,6 +622,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain_carries_over_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_link_given_it_is_spelled`
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain_carries_over_a_callable_defined_in_c_raises_type_error_for_a_string_annotation_naming_that_link_if_it_records_no_module_or_wraps_a_link_carrying_a_signature_of_its_own`
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_signature_a_class_carries_over_a_constructor_whose_chain_holds_a_link_carrying_a_signature_of_its_own_over_a_callable_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_class_the_link_the_string_and_that_it_may_be_a_copy`
+- `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain_carries_over_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_link_given_it_is_spelled_though_the_metaclass_of_the_class_holding_it_gives_that_class_another_signature`
+- `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_a_signature_of_its_own_over_a_constructor_whose_chain_holds_a_link_carrying_one_over_a_callable_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_class_holding_it_the_link_the_string_and_that_it_may_be_a_copy_though_the_metaclass_of_that_class_gives_it_the_signature_of_that_link`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_raises_the_type_error_naming_the_constructor_inspect_reads_in_its_place_which_a_base_holds`
 - `tests/unit/surface_forms_helper/test_surface_form_skipped_constructors.py::test_a_class_of_which_inspect_reads_no_constructor_raises_a_type_error_naming_it_and_the_constructor_inspect_skips`
