@@ -4,6 +4,7 @@ import dataclasses
 import datetime
 import logging
 import math
+import re
 from collections.abc import Sequence
 from typing import NoReturn
 
@@ -12,6 +13,7 @@ import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.load import (
+    ELEXON_PROFILE_CLASS_1,
     DaySimulator,
     HouseholdModel,
     LoadConfig,
@@ -23,7 +25,31 @@ from solar_challenge.load import (
     richardsonpy_household,
     scale_profile_to_energy,
 )
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+
+def _window(
+    first: str,
+    last: str,
+    *,
+    cadence: datetime.timedelta = ONE_MINUTE,
+    timezone: str = "Europe/London",
+) -> SimulationWindow:
+    """The window from the ISO date first to the ISO date last, both counted, at cadence on timezone's clock."""
+    return SimulationWindow(
+        datetime.date.fromisoformat(first), datetime.date.fromisoformat(last), cadence, timezone
+    )
+
+
+def _seasonal_energy_kwh(annual_kwh: float, day: datetime.date) -> float:
+    """The household's energy on day, E_d of docs/prds/load-composition-and-calendar-days.md decision 6, with the seasonal factors summed date by date over day's calendar year."""
+    new_years_day = datetime.date(day.year, 1, 1)
+    year_dates = [
+        new_years_day + datetime.timedelta(days=offset)
+        for offset in range((datetime.date(day.year + 1, 1, 1) - new_years_day).days)
+    ]
+    return annual_kwh * SEASONAL_FACTORS[day.month] / sum(SEASONAL_FACTORS[date.month] for date in year_dates)
 
 
 class TestLoadConfigBasics:
@@ -218,9 +244,7 @@ class TestGenerateLoadProfile:
 
     def test_returns_series_with_minute_index(self, config):
         """Output has 1-minute frequency DatetimeIndex."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
 
         assert isinstance(profile, pd.Series)
         assert isinstance(profile.index, pd.DatetimeIndex)
@@ -229,9 +253,7 @@ class TestGenerateLoadProfile:
 
     def test_output_in_kw(self, config):
         """Output values are power in kW."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
 
         # Typical UK domestic peak is around 5-10 kW
         assert profile.max() < 15.0  # Reasonable upper bound
@@ -239,25 +261,21 @@ class TestGenerateLoadProfile:
 
     def test_no_negative_values(self, config):
         """Output has no negative values."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
 
         assert (profile >= 0).all()
 
     def test_timezone_aware_index(self, config):
         """Output index is timezone-aware."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
-        profile = generate_load_profile(config, start, end, timezone="Europe/London")
+        profile = generate_load_profile(
+            config, _window("2024-06-21", "2024-06-21", timezone="Europe/London")
+        )
 
         assert profile.index.tz is not None
 
     def test_multi_day_profile(self, config):
         """Generates profile for multiple days."""
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")  # 3 days
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-23"))  # 3 days
 
         # 3 days = 3 * 1440 minutes
         assert len(profile) == 3 * 1440
@@ -266,9 +284,7 @@ class TestGenerateLoadProfile:
         """Week profile scales approximately to annual target (Elexon profile)."""
         # Use Elexon profile explicitly for deterministic seasonal scaling test
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
-        start = pd.Timestamp("2024-06-01")
-        end = pd.Timestamp("2024-06-07")  # 7 days
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-01", "2024-06-07"))  # 7 days
 
         # Calculate consumption for this week
         weekly_kwh = energy_kwh(profile)
@@ -290,21 +306,13 @@ class TestElexonProfileShape:
     def summer_profile(self) -> pd.Series:
         """Summer day profile (Elexon)."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
-        return generate_load_profile(
-            config,
-            pd.Timestamp("2024-06-21"),
-            pd.Timestamp("2024-06-21"),
-        )
+        return generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
 
     @pytest.fixture
     def winter_profile(self) -> pd.Series:
         """Winter day profile (Elexon)."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
-        return generate_load_profile(
-            config,
-            pd.Timestamp("2024-01-15"),
-            pd.Timestamp("2024-01-15"),
-        )
+        return generate_load_profile(config, _window("2024-01-15", "2024-01-15"))
 
     def test_evening_peak_higher_than_overnight(self, summer_profile):
         """Evening peak is higher than overnight baseline."""
@@ -423,11 +431,10 @@ class TestHouseholdSizeParameter:
         config_small = LoadConfig(household_occupants=1, use_stochastic=False)
         config_large = LoadConfig(household_occupants=5, use_stochastic=False)
 
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
+        window = _window("2024-06-21", "2024-06-21")
 
-        profile_small = generate_load_profile(config_small, start, end)
-        profile_large = generate_load_profile(config_large, start, end)
+        profile_small = generate_load_profile(config_small, window)
+        profile_large = generate_load_profile(config_large, window)
 
         total_small = energy_kwh(profile_small)
         total_large = energy_kwh(profile_large)
@@ -449,10 +456,8 @@ class TestRichardsonpyIntegration:
             annual_consumption_kwh=3400.0,
             use_stochastic=False,
         )
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
 
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
         assert isinstance(profile, pd.Series)
         assert len(profile) == 1440
 
@@ -463,10 +468,8 @@ class TestRichardsonpyIntegration:
             household_occupants=3,
             use_stochastic=True,
         )
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
 
-        profile = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, _window("2024-06-21", "2024-06-21"))
 
         assert isinstance(profile, pd.Series)
         assert len(profile) == 1440
@@ -478,16 +481,17 @@ def _raise_simulated_richardsonpy_failure(*_: object) -> NoReturn:
     raise RuntimeError("Simulated richardsonpy internal failure")
 
 
-class _RecordingRichardsonpyHousehold:
-    """richardsonpy's household model, recording each window it builds a household for and each date that household simulates."""
+class _RecordingHousehold:
+    """A household model, richardsonpy's unless another is given, recording each window it builds a household for and each date that household simulates."""
 
-    def __init__(self) -> None:
+    def __init__(self, household_model: HouseholdModel = richardsonpy_household) -> None:
+        self._household_model = household_model
         self.windows: list[list[datetime.date]] = []
         self.days_simulated: list[datetime.date] = []
 
     def __call__(self, config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
         self.windows.append(list(days))
-        simulate_day = richardsonpy_household(config, days)
+        simulate_day = self._household_model(config, days)
 
         def simulate_and_record_day(day: datetime.date) -> np.ndarray:
             self.days_simulated.append(day)
@@ -501,27 +505,43 @@ def _household_of_days(day_watts: DaySimulator) -> HouseholdModel:
     return lambda config, days: day_watts
 
 
+def _day_of_year_watts(day: datetime.date) -> np.ndarray:
+    """A day at as many W as its day of the year, all day: 95 W on 4 April 2024."""
+    return np.full(1440, float(day.timetuple().tm_yday))
+
+
+def _minute_of_day_watts(day: datetime.date) -> np.ndarray:
+    """A day at one W more each minute of its wall clock: 1 W at 00:00, 1,440 W at 23:59."""
+    return 1.0 + np.arange(1440, dtype=np.float64)
+
+
+_DETERMINISTIC_LOAD = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
+_STOCHASTIC_LOAD = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
+_EACH_PATH = [
+    pytest.param(_DETERMINISTIC_LOAD, id="deterministic"),
+    pytest.param(_STOCHASTIC_LOAD, id="stochastic"),
+]
+
+
 class TestWindowedStochasticGeneration:
     """Test windowed stochastic generation (task #13 FIX windowing)."""
 
     def test_a_one_day_window_builds_one_household_and_simulates_its_one_day(self) -> None:
         """Only the window's day is simulated, not the full year richardsonpy's ElectricLoad simulates."""
-        household = _RecordingRichardsonpyHousehold()
+        household = _RecordingHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        day = pd.Timestamp("2024-06-21")
 
-        generate_load_profile(config, day, day, household_model=household)
+        generate_load_profile(config, _window("2024-06-21", "2024-06-21"), household_model=household)
 
         assert household.windows == [[datetime.date(2024, 6, 21)]]
         assert household.days_simulated == [datetime.date(2024, 6, 21)]
 
     def test_a_three_day_window_simulates_each_of_its_days_once_in_order(self) -> None:
-        household = _RecordingRichardsonpyHousehold()
+        household = _RecordingHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-23")  # 3 days, no DST transition
+        window = _window("2024-06-21", "2024-06-23")  # 3 days, no DST transition
 
-        profile = generate_load_profile(config, start, end, household_model=household)
+        profile = generate_load_profile(config, window, household_model=household)
 
         june_days = [datetime.date(2024, 6, day) for day in (21, 22, 23)]
         assert household.windows == [june_days]
@@ -547,8 +567,8 @@ class TestWindowedStochasticGeneration:
         the output so its total equals the annual demand (~3400 kWh/day instead
         of ~7-8 kWh/day).
 
-        Both stochastic and Elexon paths target the same seasonal daily energy:
-          annual/365 × SEASONAL_FACTORS[June=0.80] ≈ 7.45 kWh
+        Both stochastic and Elexon paths target the same seasonal daily energy, E_d:
+          annual × SEASONAL_FACTORS[June=0.80] / the factors summed over 2024's days ≈ 7.59 kWh
         so they should be within 35% of each other, and both within [2, 30] kWh.
         """
         config_stochastic = LoadConfig(
@@ -557,11 +577,10 @@ class TestWindowedStochasticGeneration:
         config_elexon = LoadConfig(
             annual_consumption_kwh=3400.0, use_stochastic=False
         )
-        start = pd.Timestamp("2024-06-21")
-        end = pd.Timestamp("2024-06-21")
+        window = _window("2024-06-21", "2024-06-21")
 
-        profile_stochastic = generate_load_profile(config_stochastic, start, end)
-        profile_elexon = generate_load_profile(config_elexon, start, end)
+        profile_stochastic = generate_load_profile(config_stochastic, window)
+        profile_elexon = generate_load_profile(config_elexon, window)
 
         stochastic_kwh = energy_kwh(profile_stochastic)
         elexon_kwh = energy_kwh(profile_elexon)
@@ -586,13 +605,10 @@ class TestWindowedStochasticGeneration:
     ):
         """The stochastic shape is scaled to the Elexon path's seasonal energy, each day at its own month's factor."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = pd.Timestamp("2024-06-29")
-        end = pd.Timestamp("2024-07-02")  # June and July days; no clock change
+        window = _window("2024-06-29", "2024-07-02")  # June and July days; no clock change
 
-        stochastic = generate_load_profile(config, start, end)
-        elexon = generate_load_profile(
-            dataclasses.replace(config, use_stochastic=False), start, end
-        )
+        stochastic = generate_load_profile(config, window)
+        elexon = generate_load_profile(dataclasses.replace(config, use_stochastic=False), window)
 
         assert not stochastic.equals(elexon)
         assert energy_kwh(stochastic) == pytest.approx(energy_kwh(elexon), rel=1e-9)
@@ -601,13 +617,13 @@ class TestWindowedStochasticGeneration:
         self,
     ) -> None:
         """The window's first and last midnights are 47 hours apart, since the clocks go forward on 2024-03-31, yet it holds three calendar days."""
-        household = _RecordingRichardsonpyHousehold()
+        household = _RecordingHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = pd.Timestamp("2024-03-30")
-        end = pd.Timestamp("2024-04-01")
 
         profile = generate_load_profile(
-            config, start, end, timezone="Europe/London", household_model=household
+            config,
+            _window("2024-03-30", "2024-04-01", timezone="Europe/London"),
+            household_model=household,
         )
 
         assert household.days_simulated == [
@@ -626,14 +642,13 @@ class TestWindowedStochasticGeneration:
 
         profile = generate_load_profile(
             config,
-            pd.Timestamp("2024-10-26"),
-            pd.Timestamp("2024-11-02"),
-            timezone="Europe/London",
+            _window("2024-10-26", "2024-11-02", timezone="Europe/London"),
             household_model=_household_of_days(lambda day: np.ones(1440)),
         )
 
         assert energy_kwh(profile) == pytest.approx(
-            3400.0 / 365.0 * (6 * SEASONAL_FACTORS[10] + 2 * SEASONAL_FACTORS[11]), rel=1e-9
+            sum(_seasonal_energy_kwh(3400.0, day) for day in pd.date_range("2024-10-26", "2024-11-02").date),
+            rel=1e-9,
         )
 
     @pytest.mark.parametrize(
@@ -647,14 +662,14 @@ class TestWindowedStochasticGeneration:
         self, household_model: HouseholdModel, caplog: pytest.LogCaptureFixture
     ) -> None:
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        day = pd.Timestamp("2024-06-21")
+        window = _window("2024-06-21", "2024-06-21")
 
         with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
-            profile = generate_load_profile(config, day, day, household_model=household_model)
+            profile = generate_load_profile(config, window, household_model=household_model)
 
         pd.testing.assert_series_equal(
             profile,
-            generate_load_profile(dataclasses.replace(config, use_stochastic=False), day, day),
+            generate_load_profile(dataclasses.replace(config, use_stochastic=False), window),
         )
         assert [
             record.getMessage()
@@ -670,7 +685,6 @@ class TestWindowedStochasticGeneration:
     ) -> None:
         """Scaling a window is the project's own step, not the household model's, so its refusal of a window with no energy propagates, and no warning announces a fallback."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        day = pd.Timestamp("2024-06-21")
 
         with (
             caplog.at_level(logging.WARNING, logger="solar_challenge.load"),
@@ -678,8 +692,7 @@ class TestWindowedStochasticGeneration:
         ):
             generate_load_profile(
                 config,
-                day,
-                day,
+                _window("2024-06-21", "2024-06-21"),
                 household_model=_household_of_days(lambda day: np.zeros(1440)),
             )
 
@@ -690,11 +703,10 @@ class TestHouseholdModelSeam:
     """generate_load_profile builds one household per stochastic window and simulates each of its dates once, in order, placing each day's W; richardsonpy_household simulates only its window's dates."""
 
     def test_no_household_is_built_for_a_profile_that_is_not_stochastic(self) -> None:
-        household = _RecordingRichardsonpyHousehold()
+        household = _RecordingHousehold()
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
-        day = pd.Timestamp("2024-06-21")
 
-        generate_load_profile(config, day, day, household_model=household)
+        generate_load_profile(config, _window("2024-06-21", "2024-06-21"), household_model=household)
 
         assert household.windows == []
         assert household.days_simulated == []
@@ -704,8 +716,7 @@ class TestHouseholdModelSeam:
 
         profile = generate_load_profile(
             config,
-            pd.Timestamp("2024-06-21"),
-            pd.Timestamp("2024-06-23"),
+            _window("2024-06-21", "2024-06-23"),
             household_model=_household_of_days(lambda day: np.full(1440, float(day.day))),
         )
 
@@ -717,16 +728,16 @@ class TestHouseholdModelSeam:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        day = pd.Timestamp("2024-06-21")
+        window = _window("2024-06-21", "2024-06-21")
 
         with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
             profile = generate_load_profile(
-                config, day, day, household_model=_household_of_days(lambda _: np.ones(1439))
+                config, window, household_model=_household_of_days(lambda _: np.ones(1439))
             )
 
         pd.testing.assert_series_equal(
             profile,
-            generate_load_profile(dataclasses.replace(config, use_stochastic=False), day, day),
+            generate_load_profile(dataclasses.replace(config, use_stochastic=False), window),
         )
         assert [
             record.getMessage()
@@ -750,3 +761,157 @@ class TestHouseholdModelSeam:
             "richardsonpy_household was built for 2024-06-21 to 2024-06-21; "
             "it cannot simulate 2024-06-22"
         )
+
+
+_ACROSS_THE_SPRING_CHANGE = pytest.param("2024-03-30", "2024-04-01", id="across-the-spring-change")
+_ACROSS_THE_AUTUMN_CHANGE = pytest.param("2024-10-26", "2024-10-28", id="across-the-autumn-change")
+
+
+class TestHouseholdOnLocalDays:
+    """The household is built on its window's local calendar days by wall clock, so a day's profile depends only on its date and config, and a calendar year delivers annual_consumption_kwh.
+
+    docs/prds/load-composition-and-calendar-days.md decisions 5 and 6, boundary tests B2 and B3.
+    """
+
+    def test_a_deterministic_days_profile_is_the_same_whatever_window_holds_it(self) -> None:
+        """4 April 2024 follows the spring clock change in a window from 25 March and not in one from 3 April, and both give it one profile, first peaking at 17:30 BST."""
+        from_march = generate_load_profile(_DETERMINISTIC_LOAD, _window("2024-03-25", "2024-04-05"))
+        from_april = generate_load_profile(_DETERMINISTIC_LOAD, _window("2024-04-03", "2024-04-05"))
+
+        april_4th = from_march.loc["2024-04-04"]
+        assert april_4th.equals(from_april.loc["2024-04-04"])
+        assert april_4th.idxmax() == pd.Timestamp("2024-04-04 17:30", tz="Europe/London")
+
+    @pytest.mark.parametrize("load_config", _EACH_PATH)
+    @pytest.mark.parametrize(
+        ("first", "last", "last_row"),
+        [
+            pytest.param("2024-03-30", "2024-03-31", "2024-03-31 23:59+01:00", id="ending-on-the-spring-change"),
+            pytest.param("2024-10-26", "2024-10-27", "2024-10-27 23:59+00:00", id="ending-on-the-autumn-change"),
+        ],
+    )
+    def test_a_profile_runs_on_its_windows_rows_to_the_last_minute_of_its_last_day(
+        self, load_config: LoadConfig, first: str, last: str, last_row: str
+    ) -> None:
+        window = _window(first, last)
+
+        profile = generate_load_profile(
+            load_config, window, household_model=_household_of_days(_day_of_year_watts)
+        )
+
+        assert profile.index.equals(window.rows())
+        assert profile.index[-1] == pd.Timestamp(last_row)
+
+    @pytest.mark.parametrize(("first", "last"), [_ACROSS_THE_SPRING_CHANGE, _ACROSS_THE_AUTUMN_CHANGE])
+    def test_each_deterministic_row_is_the_elexon_shape_at_its_wall_clock_minute(
+        self, first: str, last: str
+    ) -> None:
+        """Each day is the Elexon shape at each row's local minute of the day, at one scale for the day: the spring day lacks 01:00-01:59, and the autumn day plays it twice."""
+        window = _window(first, last)
+        minute_shape = np.repeat(ELEXON_PROFILE_CLASS_1, 30)
+
+        profile = generate_load_profile(_DETERMINISTIC_LOAD, window)
+
+        for day in window.local_days():
+            scale = profile.loc[day.rows].to_numpy() / minute_shape[day.minute_of_day()]
+            assert scale == pytest.approx(np.full(len(day.rows), scale[0]), rel=1e-12), day.date
+
+    @pytest.mark.parametrize(
+        ("first", "last"),
+        [
+            _ACROSS_THE_SPRING_CHANGE,
+            _ACROSS_THE_AUTUMN_CHANGE,
+            pytest.param("2023-12-30", "2024-01-02", id="across-new-year"),
+        ],
+    )
+    def test_each_deterministic_day_delivers_its_seasonal_energy(self, first: str, last: str) -> None:
+        """A 23- or 25-hour day keeps its seasonal share, and across New Year each day takes its own year's weights."""
+        window = _window(first, last)
+
+        profile = generate_load_profile(_DETERMINISTIC_LOAD, window)
+
+        days = list(window.local_days())
+        assert [window.energy_kwh(profile.loc[day.rows]) for day in days] == pytest.approx(
+            [_seasonal_energy_kwh(3400.0, day.date) for day in days], rel=1e-9
+        )
+
+    @pytest.mark.parametrize("load_config", _EACH_PATH)
+    @pytest.mark.parametrize("year", [2023, 2024])
+    def test_a_calendar_year_delivers_the_annual_consumption(self, load_config: LoadConfig, year: int) -> None:
+        """2023 has 365 days and 2024 has 366; each delivers annual_consumption_kwh."""
+        window = _window(f"{year}-01-01", f"{year}-12-31")
+
+        profile = generate_load_profile(
+            load_config, window, household_model=_household_of_days(_day_of_year_watts)
+        )
+
+        assert window.energy_kwh(profile) == pytest.approx(3400.0, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("first", "last"),
+        [pytest.param("2024-04-03", "2024-04-05", id="after-the-spring-change"), _ACROSS_THE_SPRING_CHANGE],
+    )
+    def test_each_stochastic_row_carries_the_simulated_day_of_its_own_local_date(
+        self, first: str, last: str
+    ) -> None:
+        """The household simulates the window's dates once each, in order, and every row carries its own local date's day, 00:00-00:59 BST included: every row of 4 April 2024 carries day 95, and every row of 1 April day 92."""
+        household = _RecordingHousehold(_household_of_days(_day_of_year_watts))
+
+        profile = generate_load_profile(_STOCHASTIC_LOAD, _window(first, last), household_model=household)
+
+        dates = list(pd.date_range(first, last).date)
+        assert household.windows == [dates]
+        assert household.days_simulated == dates
+        day_of_year = profile.index.dayofyear.to_numpy()
+        assert (profile / profile.iloc[0]).to_numpy() == pytest.approx(day_of_year / day_of_year[0], rel=1e-12)
+
+    @pytest.mark.parametrize(("first", "last"), [_ACROSS_THE_SPRING_CHANGE, _ACROSS_THE_AUTUMN_CHANGE])
+    def test_each_stochastic_minute_lands_on_the_rows_whose_wall_clock_reads_it(
+        self, first: str, last: str
+    ) -> None:
+        """A day at 1 + m W in its minute m gives every row 1 + its local minute of the day, at one scale for the window."""
+        profile = generate_load_profile(
+            _STOCHASTIC_LOAD, _window(first, last), household_model=_household_of_days(_minute_of_day_watts)
+        )
+
+        wall_clock_minute = (profile.index.hour * 60 + profile.index.minute).to_numpy()
+        assert (profile / profile.iloc[0]).to_numpy() == pytest.approx(1 + wall_clock_minute, rel=1e-12)
+
+    def test_a_half_hourly_deterministic_profile_is_the_one_minute_profile_at_each_half_hour(self) -> None:
+        """Each row is the mean of the minutes it spans, and Elexon's shape holds each half hour's value at each of its minutes, so a half-hourly row is the one-minute profile at its start, and each day still delivers its seasonal energy."""
+        half_hourly_window = _window("2024-03-30", "2024-04-01", cadence=datetime.timedelta(minutes=30))
+
+        half_hourly = generate_load_profile(_DETERMINISTIC_LOAD, half_hourly_window)
+
+        one_minute = generate_load_profile(_DETERMINISTIC_LOAD, _window("2024-03-30", "2024-04-01"))
+        assert half_hourly.index.equals(half_hourly_window.rows())
+        assert half_hourly.to_numpy() == pytest.approx(one_minute.loc[half_hourly.index].to_numpy(), rel=1e-12)
+        days = list(half_hourly_window.local_days())
+        assert [half_hourly_window.energy_kwh(half_hourly.loc[day.rows]) for day in days] == pytest.approx(
+            [_seasonal_energy_kwh(3400.0, day.date) for day in days], rel=1e-9
+        )
+
+    def test_a_half_hourly_stochastic_row_is_the_mean_of_the_minutes_it_spans(self) -> None:
+        """A day at 1 + m W in its minute m gives the row from minute t its mean, 15.5 + t, at one scale for the window."""
+        profile = generate_load_profile(
+            _STOCHASTIC_LOAD,
+            _window("2024-03-30", "2024-04-01", cadence=datetime.timedelta(minutes=30)),
+            household_model=_household_of_days(_minute_of_day_watts),
+        )
+
+        wall_clock_minute = (profile.index.hour * 60 + profile.index.minute).to_numpy()
+        assert (profile / profile.iloc[0]).to_numpy() == pytest.approx(
+            (15.5 + wall_clock_minute) / 15.5, rel=1e-12
+        )
+
+    @pytest.mark.parametrize("load_config", _EACH_PATH)
+    def test_a_cadence_of_part_of_a_minute_is_refused_before_any_household_is_built(
+        self, load_config: LoadConfig
+    ) -> None:
+        household = _RecordingHousehold(_household_of_days(_day_of_year_watts))
+        window = _window("2024-06-21", "2024-06-21", cadence=datetime.timedelta(seconds=30))
+
+        with pytest.raises(ValueError, match=re.escape(f"cadence={datetime.timedelta(seconds=30)!r}")):
+            generate_load_profile(load_config, window, household_model=household)
+
+        assert household.windows == []

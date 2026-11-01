@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
 
+import datetime
 import os
 import re
 import subprocess
@@ -14,6 +15,7 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, WeatherCache
 from tests._network_guard import refusing_network
 from tests._seeded_tmy import ClearJuneDays
@@ -79,8 +81,10 @@ def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
     """The saved day's demand sums to the expected load's day, which the annual consumption fixes whatever the random profile."""
     saved = _saved_minutes(tmp_path, *consumption_options)
 
-    day = pd.Timestamp(_DAY)
-    expected_demand = generate_load_profile(expected_load, day, day)
+    day = datetime.date.fromisoformat(_DAY)
+    expected_demand = generate_load_profile(
+        expected_load, SimulationWindow(day, day, ONE_MINUTE, Location.bristol().timezone)
+    )
     assert saved["demand_kw"].sum() == pytest.approx(expected_demand.sum())
 
 

@@ -16,6 +16,14 @@ import pandas as pd
 import pytest
 
 from solar_challenge.load import DaySimulator, HouseholdModel, LoadConfig, generate_load_profile
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+
+
+def _june_2024(first_day: int, last_day: int) -> SimulationWindow:
+    """The window from first_day to last_day of June 2024, both counted, at one minute on London's clock."""
+    return SimulationWindow(
+        datetime.date(2024, 6, first_day), datetime.date(2024, 6, last_day), ONE_MINUTE, "Europe/London"
+    )
 
 
 def _stochastic(seed: int | None) -> LoadConfig:
@@ -54,8 +62,8 @@ def _numpy_state() -> tuple[object, ...]:
 
 
 def test_seeded_profiles_generated_on_two_threads_at_once_equal_their_serial_profiles() -> None:
-    start, end = pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-07")
-    references = {seed: generate_load_profile(_stochastic(seed), start, end) for seed in (42, 43)}
+    window = _june_2024(1, 7)
+    references = {seed: generate_load_profile(_stochastic(seed), window) for seed in (42, 43)}
     assert not references[42].equals(references[43]), (
         "seeds 42 and 43 gave one profile, so neither profile is stochastic"
     )
@@ -64,7 +72,7 @@ def test_seeded_profiles_generated_on_two_threads_at_once_equal_their_serial_pro
     for trial in range(5):
         with ThreadPoolExecutor(max_workers=2) as pool:
             profiles = {
-                seed: pool.submit(generate_load_profile, _stochastic(seed), start, end)
+                seed: pool.submit(generate_load_profile, _stochastic(seed), window)
                 for seed in (42, 43)
             }
         differing += [
@@ -78,9 +86,8 @@ def test_seeded_profiles_generated_on_two_threads_at_once_equal_their_serial_pro
 
 def test_a_seed_from_0_to_2_to_the_32_seeds_the_generators_as_random_seed_and_numpy_random_seed_do() -> None:
     household = _GlobalDrawsHousehold()
-    day = pd.Timestamp("2024-06-01")
 
-    generate_load_profile(_stochastic(42), day, day, household_model=household)
+    generate_load_profile(_stochastic(42), _june_2024(1, 1), household_model=household)
 
     assert household.first_draws == [
         (random.Random(42).random(), np.random.RandomState(42).random_sample())
@@ -89,13 +96,13 @@ def test_a_seed_from_0_to_2_to_the_32_seeds_the_generators_as_random_seed_and_nu
 
 def test_unseeded_profiles_generated_right_after_the_same_seeded_profile_differ() -> None:
     household = _GlobalDrawsHousehold()
-    start, end = pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-02")
+    window = _june_2024(1, 2)
 
     seeded, unseeded = [], []
     for _ in range(2):
-        seeded.append(generate_load_profile(_stochastic(5), start, end, household_model=household))
+        seeded.append(generate_load_profile(_stochastic(5), window, household_model=household))
         unseeded.append(
-            generate_load_profile(_stochastic(None), start, end, household_model=household)
+            generate_load_profile(_stochastic(None), window, household_model=household)
         )
 
     assert seeded[0].equals(seeded[1])
@@ -113,9 +120,8 @@ def test_a_profile_leaves_the_module_level_generators_as_it_found_them(
     household_model: HouseholdModel,
 ) -> None:
     random_state, numpy_state = random.getstate(), _numpy_state()
-    day = pd.Timestamp("2024-06-01")
 
-    generate_load_profile(_stochastic(7), day, day, household_model=household_model)
+    generate_load_profile(_stochastic(7), _june_2024(1, 1), household_model=household_model)
 
     assert random.getstate() == random_state
     assert _numpy_state() == numpy_state
@@ -126,14 +132,14 @@ def test_an_int_seed_outside_0_to_2_to_the_32_gives_a_reproducible_stochastic_pr
     seed: int, caplog: pytest.LogCaptureFixture
 ) -> None:
     config = _stochastic(seed)
-    start, end = pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-02")
+    window = _june_2024(1, 2)
 
     with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
-        profile = generate_load_profile(config, start, end)
-        again = generate_load_profile(config, start, end)
+        profile = generate_load_profile(config, window)
+        again = generate_load_profile(config, window)
 
     assert not profile.equals(
-        generate_load_profile(replace(config, use_stochastic=False), start, end)
+        generate_load_profile(replace(config, use_stochastic=False), window)
     )
     assert again.equals(profile)
     assert [
@@ -145,10 +151,10 @@ def test_an_int_seed_outside_0_to_2_to_the_32_gives_a_reproducible_stochastic_pr
 
 @pytest.mark.parametrize("seed", [1, 2**32])
 def test_a_negative_seed_and_its_absolute_value_give_different_profiles(seed: int) -> None:
-    start, end = pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-02")
+    window = _june_2024(1, 2)
 
-    negative = generate_load_profile(_stochastic(-seed), start, end)
-    positive = generate_load_profile(_stochastic(seed), start, end)
+    negative = generate_load_profile(_stochastic(-seed), window)
+    positive = generate_load_profile(_stochastic(seed), window)
 
     assert not negative.equals(positive)
 
@@ -166,16 +172,15 @@ _ignores_the_multi_threaded_fork_warning = pytest.mark.filterwarnings(
 
 def _generate_the_seed_42_profile_of_21_june_2024_expecting(expected: pd.Series) -> None:
     """A forked child's work: it fails unless its seed-42 profile of 21 June 2024 is expected."""
-    day = pd.Timestamp("2024-06-21")
-    if not generate_load_profile(_stochastic(42), day, day).equals(expected):
+    if not generate_load_profile(_stochastic(42), _june_2024(21, 21)).equals(expected):
         raise AssertionError("the forked child's seed-42 profile differs from its parent's")
 
 
 @_needs_fork
 @_ignores_the_multi_threaded_fork_warning
 def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_profile() -> None:
-    day = pd.Timestamp("2024-06-21")
-    expected = generate_load_profile(_stochastic(42), day, day)
+    window = _june_2024(21, 21)
+    expected = generate_load_profile(_stochastic(42), window)
     entered, release = threading.Event(), threading.Event()
 
     def blocking(config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
@@ -185,7 +190,7 @@ def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_prof
 
     holder = threading.Thread(
         target=generate_load_profile,
-        args=(_stochastic(7), day, day),
+        args=(_stochastic(7), window),
         kwargs={"household_model": blocking},
         daemon=True,
     )
@@ -213,22 +218,22 @@ def test_a_child_forked_while_a_thread_holds_the_window_runs_its_own_seeded_prof
 
 def _generate_a_profile_inside_a_household_model() -> None:
     """A forked child's work: it fails unless a profile generated inside a household model is the Elexon profile, logged with the one warning that names the rule."""
-    day = pd.Timestamp("2024-06-21")
+    window = _june_2024(21, 21)
     profiles_inside: list[pd.Series] = []
 
     def household_that_generates_a_profile(
         config: LoadConfig, days: Sequence[datetime.date]
     ) -> DaySimulator:
-        profiles_inside.append(generate_load_profile(config, day, day))
+        profiles_inside.append(generate_load_profile(config, window))
         return lambda _: np.ones(1440)
 
     logged = logging.handlers.BufferingHandler(capacity=10)
     logging.getLogger("solar_challenge.load").addHandler(logged)
     generate_load_profile(
-        _stochastic(7), day, day, household_model=household_that_generates_a_profile
+        _stochastic(7), window, household_model=household_that_generates_a_profile
     )
 
-    elexon = generate_load_profile(replace(_stochastic(7), use_stochastic=False), day, day)
+    elexon = generate_load_profile(replace(_stochastic(7), use_stochastic=False), window)
     if not (len(profiles_inside) == 1 and profiles_inside[0].equals(elexon)):
         raise AssertionError("the profile generated inside the household model is not the Elexon profile")
     messages = [record.getMessage() for record in logged.buffer]
