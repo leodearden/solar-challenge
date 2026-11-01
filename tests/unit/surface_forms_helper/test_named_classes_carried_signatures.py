@@ -378,6 +378,47 @@ def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever
     assert named_classes(lookup_users.Shadowed) == {decimal.Decimal}
 
 
+def test_a_class_whose_metaclass_mro_first_holds_types_own_getattribute_names_the_classes_its_own_signature_names(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "late_lookup_metas",
+        "import inspect\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "signature = inspect.Signature(\n"
+        "    [inspect.Parameter('meta', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class SigningMixin:\n"
+        "    def __getattribute__(self, name):\n"
+        "        if name == '__signature__':\n"
+        "            return signature\n"
+        "        return super().__getattribute__(name)\n"
+        "\n"
+        "class TypeFirst(type, SigningMixin):\n"
+        "    pass\n",
+    )
+    late_lookup_users = imported_module(
+        tmp_path,
+        monkeypatch,
+        "late_lookup_users",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from late_lookup_metas import TypeFirst\n"
+        "\n"
+        "class Signed(dict, metaclass=TypeFirst):\n"
+        "    __signature__ = inspect.Signature(\n"
+        "        [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        "    )\n",
+    )
+
+    assert named_classes(late_lookup_users.Signed) == {decimal.Decimal}
+
+
 @pytest.mark.parametrize(
     "describing_base",
     [
