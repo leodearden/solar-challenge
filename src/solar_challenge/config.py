@@ -337,7 +337,7 @@ class FleetDistributionConfig:
 
 #: The default shuffle order: every random order shuffles the pools it does not shuffle first
 #: component by component in this order, each component's keys in its table's fleet order. It
-#: is not the order in which a home draws them, which is _HOME_DRAW_ORDER.
+#: is not the order in which a home draws them, which is _generated_home's.
 _DEFAULT_SHUFFLE_ORDER: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
 
 
@@ -378,12 +378,12 @@ def _component_draws(config: FleetDistributionConfig) -> Iterator[tuple[str, "Fl
     Components come in _DEFAULT_SHUFFLE_ORDER and each component's keys in its table's fleet
     order, never in the order its draws mapping lists them.
     """
-    tables = dict(_HOME_DRAW_ORDER)
+    components = _fleet_components(config)
     for name in _DEFAULT_SHUFFLE_ORDER:
-        component: Optional[ComponentDistribution] = getattr(config, name)
+        block, component = components[name]
         if component is None:
             continue
-        for key, row in tables[name].fleet.items():
+        for key, row in block.fleet.items():
             if key in component.draws:
                 yield f"{name}.{key}", row, component.draws[key]
 
@@ -410,8 +410,7 @@ def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> Non
 
 def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) -> None:
     """Refuse *config* when a presence field's fixed value is one its table's presence rule refuses, e.g. a negative battery capacity; draws are checked as drawn."""
-    for name, block in _HOME_DRAW_ORDER:
-        component: Optional[ComponentDistribution] = getattr(config, name)
+    for name, (block, component) in _fleet_components(config).items():
         if component is None or block.presence is None:
             continue
         spec = component.draws.get(block.presence)
@@ -1046,15 +1045,17 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
 )
 
 
-#: The order in which a home draws its components, each with its table (T3): it draws each
-#: component's keys in its table's fleet order before it draws the next component.
-_HOME_DRAW_ORDER: tuple[tuple[str, ComponentBlock[Any]], ...] = (
-    ("pv", PV_BLOCK),
-    ("battery", BATTERY_BLOCK),
-    ("load", LOAD_BLOCK),
-    ("heat_pump", HEAT_PUMP_BLOCK),
-    ("ev", EV_BLOCK),
-)
+def _fleet_components(
+    config: FleetDistributionConfig,
+) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
+    """Each component of *config* by name, with its table and its distribution, None for a component the fleet gives no home."""
+    return {
+        "pv": (PV_BLOCK, config.pv),
+        "battery": (BATTERY_BLOCK, config.battery),
+        "load": (LOAD_BLOCK, config.load),
+        "heat_pump": (HEAT_PUMP_BLOCK, config.heat_pump),
+        "ev": (EV_BLOCK, config.ev),
+    }
 
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
@@ -1773,6 +1774,9 @@ class _DistributionSampler:
         return value
 
 
+_NOTHING_GIVEN: Mapping[str, object] = MappingProxyType({})
+
+
 def _drawn_component(
     name: str,
     block: ComponentBlock[_Component],
@@ -1780,7 +1784,8 @@ def _drawn_component(
     sampler: _DistributionSampler,
     drawn: dict[str, SpecValue],
     home_number: int,
-    given: Mapping[str, object],
+    *,
+    given: Mapping[str, object] = _NOTHING_GIVEN,
 ) -> Optional[_Component]:
     """Draw home *home_number*'s *name* component by *block*'s fleet rows, and build it; None when the home has none.
 
@@ -1817,6 +1822,30 @@ def _drawn_component(
         raise ConfigurationError(f"fleet_distribution.{name}, home {home_number}: {refusal}") from refusal
 
 
+def _drawn_component_every_home_has(
+    name: str,
+    block: ComponentBlock[_Component],
+    component: ComponentDistribution,
+    sampler: _DistributionSampler,
+    drawn: dict[str, SpecValue],
+    home_number: int,
+    *,
+    given: Mapping[str, object] = _NOTHING_GIVEN,
+) -> _Component:
+    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component every home has.
+
+    Every home has a PV and a load: HomeConfig's pv_config and load_config are not Optional.
+
+    Raises:
+        ConfigurationError: As _drawn_component does; or if the home is given no *name*
+            component, naming the component and the home.
+    """
+    built = _drawn_component(name, block, component, sampler, drawn, home_number, given=given)
+    if built is None:
+        raise ConfigurationError(f"fleet_distribution.{name} gave home {home_number} no {name}, which every home needs")
+    return built
+
+
 def _generated_home(
     config: FleetDistributionConfig,
     sampler: _DistributionSampler,
@@ -1824,23 +1853,33 @@ def _generated_home(
     location: Location,
     fleet_tariff: Optional[TariffConfig],
 ) -> HomeConfig:
-    """The fleet's home at *index*, each component drawn in _HOME_DRAW_ORDER by _drawn_component.
+    """The fleet's home at *index*: it draws its PV, battery, load, heat pump and EV in that order (T3), each by its table's fleet rows.
 
-    The generator gives each load the fleet's seed plus the home's index, when the fleet has a
-    seed.
+    Each load is given the fleet's seed plus the home's index, when the fleet has a seed.
     """
+    home_number = index + 1
     drawn: dict[str, SpecValue] = {}
-    given: dict[str, Mapping[str, object]] = {} if config.seed is None else {"load": {"seed": config.seed + index}}
-    components: dict[str, Any] = {
-        f"{name}_config": _drawn_component(
-            name, block, getattr(config, name), sampler, drawn, index + 1, given.get(name, {})
-        )
-        for name, block in _HOME_DRAW_ORDER
-    }
+    pv = _drawn_component_every_home_has("pv", PV_BLOCK, config.pv, sampler, drawn, home_number)
+    battery = _drawn_component("battery", BATTERY_BLOCK, config.battery, sampler, drawn, home_number)
+    load = _drawn_component_every_home_has(
+        "load",
+        LOAD_BLOCK,
+        config.load,
+        sampler,
+        drawn,
+        home_number,
+        given={} if config.seed is None else {"seed": config.seed + index},
+    )
+    heat_pump = _drawn_component("heat_pump", HEAT_PUMP_BLOCK, config.heat_pump, sampler, drawn, home_number)
+    ev = _drawn_component("ev", EV_BLOCK, config.ev, sampler, drawn, home_number)
     return HomeConfig(
-        **components,
+        pv_config=pv,
+        battery_config=battery,
+        load_config=load,
+        heat_pump_config=heat_pump,
+        ev_config=ev,
         location=location,
-        name=f"Home {index + 1}",
+        name=f"Home {home_number}",
         tariff_config=fleet_tariff,
         dispatch_strategy=config.dispatch_strategy or "greedy",
     )
@@ -1854,8 +1893,8 @@ def generate_homes_from_distribution(
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
-    Each home draws its components in _HOME_DRAW_ORDER, each component's keys in its table's
-    fleet order, through one sampler (_DistributionSampler) and _drawn_component.
+    Each home draws its components in _generated_home's order, each component's keys in its
+    table's fleet order, through one sampler (_DistributionSampler).
 
     Args:
         config: Fleet distribution configuration
@@ -1875,8 +1914,10 @@ def generate_homes_from_distribution(
             spec's min to its max, an EV hour that is an infinity or a NaN); if a
             required field draws null, naming its path and the home; if a presence
             rule refuses a draw, as battery.has_battery refuses a negative or
-            non-finite battery capacity; or as a component's dataclass refuses what it
-            is built from, naming the component and the home.
+            non-finite battery capacity; if the fleet gives a home no PV or no load,
+            which every home needs, naming the component and the home; or as a
+            component's dataclass refuses what it is built from, naming the component
+            and the home.
     """
     _refuse_pools_not_sized_to_the_fleet(config)
     sampler = _DistributionSampler(config)
