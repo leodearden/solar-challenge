@@ -152,12 +152,11 @@ def member_forms(cls: type) -> dict[str, str]:
     string annotation is read as named_classes reads one, so a name its module does not
     bind raises NameError, a module inspect reads no source for raises TypeError, and a
     module another of the same name has replaced in sys.modules raises LookupError. A
-    class whose metaclass shadows __dict__, or whose metaclass's MRO holds a
-    __getattribute__ other than type's and object's, raises the TypeError own_namespace
-    raises for it. A public member that no member rule spells and that is a routine
-    whose signature inspect cannot read, as surface_form describes one, or a
-    functools.partial, raises TypeError naming *cls*, the member and its kind or
-    binding.
+    class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
+    the TypeError own_namespace raises for it. A public member that no member rule
+    spells and that is a routine whose signature inspect cannot read, as surface_form
+    describes one, or a functools.partial, raises TypeError naming *cls*, the member and
+    its kind or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -212,12 +211,12 @@ def named_classes(obj: object) -> set[type]:
     A class's signature, an Enum's aside, is spelled where its constructor is, the
     __call__ its metaclass resolves if inspect reads that, as spelling_modules in
     tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives, or
-    one carried by a class whose metaclass shadows __dict__, or whose metaclass's MRO
-    holds a __getattribute__ other than type's and object's, raises TypeError. A
-    signature the class carries in the constructor's place is spelled there too, except
-    over a constructor whose chain, as inspect reads and binds it, ends at a callable
-    defined in C, which spells no annotation: that signature is read where the class
-    holding it is spelled, as spelling_modules says.
+    one carried by a class whose metaclass shadows __dict__ or overrides type's
+    __getattribute__, raises TypeError. A signature the class carries in the
+    constructor's place is spelled there too, except over a constructor whose chain, as
+    inspect reads and binds it, ends at a callable defined in C, which spells no
+    annotation: that signature is read where the class holding it is spelled, as
+    spelling_modules says.
     Where a link of that chain carries a signature of its own, which the class's may
     copy, the class's is read where that link's is if the class holds that very
     signature; otherwise a string in it raises TypeError naming the class, the link
@@ -267,8 +266,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     An immutable type raises TypeError naming it before anything else is read, and a
     class with no class statement inspect can read, such as ast.AST or _json.Scanner,
     raises TypeError naming it when its source is read. A class whose metaclass shadows
-    __dict__, or whose metaclass's MRO holds a __getattribute__ other than type's and
-    object's, raises the TypeError own_namespace raises for it.
+    __dict__ or overrides type's __getattribute__ raises the TypeError own_namespace
+    raises for it.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
