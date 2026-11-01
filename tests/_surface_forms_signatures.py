@@ -1182,13 +1182,13 @@ def _generated_constructor_modules(
 
 
 def _signature_holder(cls: type) -> type:
-    """The class in *cls*'s MRO whose own namespace holds, as an inspect.Signature, the __signature__ *cls* carries.
+    """The class in *cls*'s MRO whose own namespace holds the __signature__ *cls* carries: the very inspect.Signature inspect reads for *cls*.
 
     No module is known to spell a signature that comes from anywhere else. So TypeError
     names *cls* and its metaclass where _metaclass_may_provide_signature(*cls*); and
     where the first class in *cls*'s MRO that holds a __signature__ holds a descriptor
-    that gives one, not an inspect.Signature, TypeError names *cls*, that class and the
-    descriptor's type.
+    that gives one, an object whose type defines __get__ as _type_defines_get finds, an
+    inspect.Signature or not, TypeError names *cls*, that class and the descriptor's type.
     """
     if _metaclass_may_provide_signature(cls):
         raise TypeError(
@@ -1199,13 +1199,19 @@ def _signature_holder(cls: type) -> type:
         )
     holder = next(namespace_holders(recorded_mro(cls), "__signature__"))
     held = own_namespace(holder)["__signature__"]
-    if not isinstance(held, inspect.Signature):
+    if not isinstance(held, inspect.Signature) or _type_defines_get(held):
         raise TypeError(
             f"{label_of(cls)} carries the signature a {label_of(type(held))} descriptor gives "
             f"as {label_of(holder)}.__signature__, so no module is known to spell it: make "
-            "the name private, or set __signature__ to an inspect.Signature"
+            "the name private, or set __signature__ to an inspect.Signature whose type "
+            "defines no __get__"
         )
     return holder
+
+
+def _type_defines_get(obj: object) -> bool:
+    """Whether a class in the MRO *obj*'s type records holds __get__ in its own namespace, as CPython's attribute lookup asks; a class whose namespace holds *obj* then gives, through attribute lookup and so to inspect, what that __get__ gives in place of *obj*."""
+    return next(namespace_holders(recorded_mro(type(obj)), "__get__"), None) is not None
 
 
 def _metaclass_may_provide_signature(cls: type) -> bool:
