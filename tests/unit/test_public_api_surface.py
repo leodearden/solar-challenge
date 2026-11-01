@@ -36,14 +36,19 @@ Relationship to T3 (tests/unit/test_init_lazy_surface.py):
 """
 
 import abc
+import ast
 import enum
 import functools
 import inspect
+import json
 import subprocess
 import sys
 import types
 import typing
 from collections.abc import Mapping
+from pathlib import Path
+
+import pytest
 
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
@@ -685,6 +690,89 @@ def test_every_name_resolves_to_expected_kind() -> None:
                 f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
                 f"got kind={actual_kind!r} (type={type(obj).__name__})"
             )
+
+
+# ---------------------------------------------------------------------------
+# The runtime tables agree at import: importing the package refuses __all__,
+# _SYMBOL_MODULE and _SOURCE_NAME when they disagree, naming each offender
+# ---------------------------------------------------------------------------
+
+_IMPORT_PROBE = """\
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+try:
+    import solar_challenge
+except RuntimeError as refusal:
+    print(json.dumps(str(refusal)))
+else:
+    print(json.dumps(None))
+"""
+
+
+def _source_with_entry(source: str, table: str, entry: str) -> str:
+    """Return *source* with *entry* written first inside the literal its module-level annotated assignment to *table* holds."""
+    literals = [
+        statement.value
+        for statement in ast.parse(source).body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.target.id == table
+        and statement.value is not None
+    ]
+    assert len(literals) == 1, (
+        f"the source holds {len(literals)} module-level annotated assignments to {table}, not one"
+    )
+    (literal,) = literals
+    lines = source.encode("utf-8").split(b"\n")
+    row, column = literal.lineno - 1, literal.col_offset + 1
+    lines[row] = lines[row][:column] + entry.encode("utf-8") + lines[row][column:]
+    return b"\n".join(lines).decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("table", "entry", "offender"),
+    [
+        pytest.param("__all__", '"Battery", ', "Battery", id="a-name-listed-twice"),
+        pytest.param(
+            "_SOURCE_NAME", '"Ghost": "TariffPeriod", ', "Ghost", id="an-alias-of-no-exported-name"
+        ),
+        pytest.param("__all__", '"Ghost", ', "Ghost", id="an-exported-name-with-no-origin-module"),
+        pytest.param(
+            "_SYMBOL_MODULE", '"Ghost": "battery", ', "Ghost", id="an-origin-module-for-no-exported-name"
+        ),
+    ],
+)
+def test_importing_the_package_refuses_tables_that_disagree(
+    tmp_path: Path, table: str, entry: str, offender: str
+) -> None:
+    """Importing a copy of the package whose *table* starts with *entry* raises RuntimeError naming *offender*.
+
+    The copy runs under -O, so an assert could not stand in for the check.  A copy of
+    __init__.py alone suffices, because the package imports only importlib and typing at
+    runtime.
+    """
+    package = tmp_path / "solar_challenge"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        _source_with_entry(Path(solar_challenge.__file__).read_text(encoding="utf-8"), table, entry),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-O", "-c", _IMPORT_PROBE, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, f"the import probe failed:\n{result.stderr}"
+    refusal = json.loads(result.stdout)
+    assert refusal is not None and repr(offender) in refusal, (
+        f"With {entry!r} written first in {table}, importing the package should raise "
+        f"RuntimeError naming {offender!r}; it "
+        + ("imported" if refusal is None else f"raised RuntimeError: {refusal}")
+    )
 
 
 # ---------------------------------------------------------------------------
