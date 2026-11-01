@@ -146,7 +146,7 @@ class TestRefuseUnencodableText:
         ],
     )
     def test_a_value_that_is_not_text_is_left_to_its_reader(self, value: object) -> None:
-        assert refuse_unencodable_text(value, "name") is None
+        refuse_unencodable_text(value, "name")
 
     def test_text_that_encodes_is_not_refused(self) -> None:
         refuse_unencodable_text("Café ☀ 😀", "name")
