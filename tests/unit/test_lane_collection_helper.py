@@ -339,7 +339,7 @@ def test_every_test_matching_reaches_each_directory_and_test_module_under_tests_
     """Naming tests/ alone would miss the suite collect_ignore names, and so would naming tests/ beside it.
 
     pytest drops a path argument that an ancestor argument's ignore rules
-    exclude. tests/data holds no test module, and reaching it is harmless.
+    exclude. <project>/tests/data holds no test module, and reaching it is harmless.
     """
     project_root = _project_with_a_suite(tmp_path, conftest='collect_ignore = ["suite"]\n')
     (project_root / "tests" / "data").mkdir()

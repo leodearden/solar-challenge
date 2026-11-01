@@ -6,7 +6,7 @@ asserted through the public loader: a run stored before runs carried a format ve
 refused naming format.json's format_version; a current run whose summary.json lacks a required
 field, or holds a key no field has, is refused naming the run id, the document and the field;
 and a current run loads. Each test saves a run as a finished job saves it, or installs a
-legacy fixture of tests/_stored_run_fixtures, edits one of its documents, and loads it.
+legacy fixture of tests/_stored_run_fixtures.py, edits one of its documents, and loads it.
 
 The refusal's field is the dotted path in the document, with [i] for an item, or the column of
 a time series' refused series; None means the document as a whole.

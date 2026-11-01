@@ -37,14 +37,14 @@ def _type_checking_imports() -> dict[str, tuple[str, str]]:
 
 # ---------------------------------------------------------------------------
 # Step-1 gate: structural __all__ checks (no duplicates, no CLI names).
-# T4 (test_public_api_surface.py) pins the exact names, and so their count.
+# T4 (tests/unit/test_public_api_surface.py) pins the exact names, and so their count.
 # ---------------------------------------------------------------------------
 
 
 def test_all_has_no_duplicates_and_no_cli_names() -> None:
     """__all__ has no duplicates and excludes CLI names.
 
-    T4 (test_public_api_surface.py) is the authoritative surface-lock that pins
+    T4 (tests/unit/test_public_api_surface.py) is the authoritative surface-lock that pins
     the exact set of names. This test checks only structural properties T3 owns.
     """
     assert hasattr(solar_challenge, "__all__"), "__all__ not defined on package"

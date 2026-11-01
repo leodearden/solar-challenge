@@ -6,7 +6,7 @@ dark-factory-orchestrator.yaml's git.offline_lane_commands, and each job runs a
 suite the per-task verify never runs. These tests pin the git settings that
 start the lane, and the contracts every job keeps, with one row per job in
 LANE_JOBS, so a new lane job adds one row. A test only one job needs stays in
-that job's module, as in test_pvgis_lane.py and test_interpreter_matrix_lane.py.
+that job's module, as in tests/unit/test_pvgis_lane.py and tests/unit/test_interpreter_matrix_lane.py.
 One test checks that every slow test runs in some LANE_JOBS job, unless
 SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
@@ -84,7 +84,7 @@ class LaneJob:
 
 
 LANE_JOBS: tuple[LaneJob, ...] = (
-    # test_interpreter_matrix_lane.py checks its COLLECTS_ONLY_ITS_SUITE more strictly: one case per off-pin minor.
+    # tests/unit/test_interpreter_matrix_lane.py checks its COLLECTS_ONLY_ITS_SUITE more strictly: one case per off-pin minor.
     LaneJob(
         "interpreter-matrix",
         "tests/interpreter_matrix",

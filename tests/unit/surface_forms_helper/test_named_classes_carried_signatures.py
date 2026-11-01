@@ -2,7 +2,7 @@
 """The rules of tests/_surface_forms.py's named_classes for a class that carries an inspect.Signature, for the module the strings that signature names are read in, whether that of the end of its constructor's chain, of the class holding the signature or of the link of that chain given it, and for the TypeError raised where no module is known to spell them, one per test.
 
 The constructor that spells the signature of a class that carries none has its rules in
-test_named_classes_constructors.py.
+tests/unit/surface_forms_helper/test_named_classes_constructors.py.
 """
 
 import decimal

@@ -559,7 +559,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
     The Optional[GridServicesAtEvents] param renders the line inside the existing
     flex-value block.
     """
-    # Build a minimal synthetic BillDistribution (mirrors test_flex_timeshift pattern)
+    # Build a minimal synthetic BillDistribution (mirrors tests/integration/test_flex_timeshift.py's pattern)
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0
     ex_ratio = 1800.0 / 4000.0

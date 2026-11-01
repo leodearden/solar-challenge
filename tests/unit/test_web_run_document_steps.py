@@ -2,7 +2,7 @@
 """The run-document steps, each of which brings a stored run's documents one format version forward (contract C5).
 
 The generic tests run every step in RUN_DOCUMENT_STEPS over every committed legacy fixture of
-tests/_stored_run_fixtures: the steps' versions ascend to RUN_FORMAT_VERSION, each step is
+tests/_stored_run_fixtures.py: the steps' versions ascend to RUN_FORMAT_VERSION, each step is
 idempotent on every fixture, and each step changes at least one fixture's documents, so a new
 step (contract C10) ships with a fixture that exercises it.
 
@@ -271,7 +271,7 @@ def test_v2_reports_each_dropped_value_of_each_document_of_a_fleet_run() -> None
 _EVERY_SHAPE_RUN = "every-shape"
 
 _EVERY_SHAPE_CONFIG = json.loads(json.dumps(dataclasses.asdict(home_of_every_field_shape())))
-"""home_of_every_field_shape()'s config document: its field tree in JSON, as a save writes it (test_web_storage_roundtrip.py's TestPersistedJson)."""
+"""home_of_every_field_shape()'s config document: its field tree in JSON, as a save writes it (tests/unit/test_web_storage_roundtrip.py::TestPersistedJson)."""
 
 _A_DICT_FIELD: Keys = ("pv_config", "custom_module_params")
 """The one object of that document that is a dict field's, whose keys are its own rather than fields."""

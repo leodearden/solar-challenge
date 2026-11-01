@@ -439,7 +439,7 @@ class TestParseHomeConfigName:
 
 
 class TestParseSegTariff:
-    """parse_seg_tariff adapts config.parse_seg_rate; config/test_tariff_blocks.py::TestScenarioSegBlock covers that grammar case by case."""
+    """parse_seg_tariff adapts config.parse_seg_rate; tests/unit/config/test_tariff_blocks.py::TestScenarioSegBlock covers that grammar case by case."""
 
     def test_absent_seg_is_no_tariff(self) -> None:
         """A null seg value, like an absent one, means no SEG."""

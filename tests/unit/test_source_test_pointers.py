@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every pointer into tests/ from a scanned file resolves, and names a test only by its node-id.
 
-The scanned files are those git lists outside the _UNSCANNED directories, which hold the tests themselves and records
-that name tests as they were when written, such as the PRDs and research notes under docs/.
+The scanned files are those git lists outside RECORD_DIRECTORIES, the records, which name tests as they were when
+written, such as the PRDs and research notes under docs/.
 
 A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
 names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for in a file's whole text, comments,
@@ -11,8 +11,8 @@ statements, such as docstrings, since its other strings are its tests' data, suc
 file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
 so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
 a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
-repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
-A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused,
+repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
+reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused,
 naming the path to write. One that ends no file of tests/ names another tree's or a throwaway project's file, so it is
 no pointer.
 
@@ -45,8 +45,6 @@ from tests._synthetic_checkout import synthetic_checkout, write_file
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _TESTS = PurePosixPath("tests")
-
-_UNSCANNED = (_TESTS, *RECORD_DIRECTORIES)
 
 _POINTER = re.compile(
     r"""
@@ -218,19 +216,38 @@ def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tup
     """
     if source.suffix != ".py" or not source.is_relative_to(_TESTS):
         return [(1, text)]
-    strings = [
-        (statement.value.lineno, segment)
-        for statement in ast.walk(_parsed_source(checkout, source))
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
-        if isinstance(statement.value.value, str)
-        if (segment := ast.get_source_segment(text, statement.value)) is not None
-    ]
+    strings = _string_statements(_parsed_source(checkout, source), text)
     comments = [
         (token.start[0], token.string)
         for token in tokenize.generate_tokens(io.StringIO(text).readline)
         if token.type == tokenize.COMMENT
     ]
     return sorted([*strings, *comments], key=lambda passage: passage[0])
+
+
+def _string_statements(module: ast.Module, text: str) -> list[tuple[int, str]]:
+    """Return each string the *module* parsed from *text* writes as a statement, as its raw text after its line's number.
+
+    The raw text is sliced from *text*'s UTF-8 bytes at the string's line and byte columns, as ast.get_source_segment
+    slices it, but over line starts found once for the module rather than once for each string.
+    """
+    data = text.encode()
+    line_starts = [0, *(line_break.end() for line_break in re.finditer(rb"\r\n|\r|\n", data))]
+    strings: list[tuple[int, str]] = []
+    for statement in ast.walk(module):
+        match statement:
+            case ast.Expr(
+                value=ast.Constant(
+                    value=str(),
+                    lineno=line,
+                    col_offset=column,
+                    end_lineno=int() as end_line,
+                    end_col_offset=int() as end_column,
+                )
+            ):
+                raw = data[line_starts[line - 1] + column : line_starts[end_line - 1] + end_column]
+                strings.append((line, raw.decode()))
+    return strings
 
 
 def _pointer(
@@ -406,6 +423,11 @@ def _node_ids_defined(prefix: str, body: list[ast.stmt]) -> Iterator[tuple[str, 
             yield from _node_ids_defined(node_id, definition.body)
 
 
+def _sources(root: Path) -> list[PurePosixPath]:
+    """Return the files the gate scans in the checkout at *root*: those git lists outside the records."""
+    return scanned_files(root, RECORD_DIRECTORIES)
+
+
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
     checkout = _Checkout(project_root)
     pointers = _pointers(checkout, _sources(project_root))
@@ -422,7 +444,9 @@ def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: 
             *dangling,
             "A renamed or moved test's pointers must follow it. Point at a test by its node-id from the project root,"
             " tests/<file>.py::<test> or tests/<file>.py::<Class>::<test>, which this gate resolves and pytest runs"
-            " as written.",
+            " as written. A path in another repository, or in a throwaway checkout a test builds, is written from"
+            " that tree's name, as in reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted"
+            " at tests/.",
         ]
     )
 

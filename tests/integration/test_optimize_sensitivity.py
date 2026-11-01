@@ -759,6 +759,6 @@ def test_each_home_a_simulate_stand_in_answers_is_a_year_of_hourly_steps() -> No
     }
     assert steps_per_home == {name: [24 * 365] for name in answers}, (
         f"Steps per home: {steps_per_home}, not a year of hourly steps ({24 * 365}). "
-        "Build the stand-ins' results with tests/_finance_builders.make_sim_results, "
+        "Build the stand-ins' results with tests/_finance_builders.py::make_sim_results, "
         "whose docstring says why its hourly steps give exact totals."
     )

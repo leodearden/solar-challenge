@@ -1079,7 +1079,7 @@ class TestCbsOwnUseKwhHelper:
 class TestPhysicsColumnPremises:
     """Guard for the no-debt premise docs/cost-recovery-finance-model.md §7.6 states.
 
-    θ's TestCalibrationPhysicsColumn and CR6's TestPhysicsReconciliationColumn both
+    θ's tests/integration/test_finance_calibration.py::TestCalibrationPhysicsColumn and CR6's TestPhysicsReconciliationColumn both
     simulate make_physics_column_scenario's fixture, and both assert only their
     solution's structure.  So the premise (the [FIN] grant covers the fixture's capex,
     so it carries no debt) is asserted here.
@@ -1110,7 +1110,7 @@ class TestPhysicsReconciliationColumn:
     are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as Bristol's TMY.  Its
     numbers are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation);
     see docs/cost-recovery-finance-model.md §7.6.
-    θ's TestCalibrationPhysicsColumn simulates the same fixture, make_physics_column_scenario's.
+    θ's tests/integration/test_finance_calibration.py::TestCalibrationPhysicsColumn simulates the same fixture, make_physics_column_scenario's.
     """
 
     def test_physics_path_reported(self) -> None:

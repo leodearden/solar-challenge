@@ -86,7 +86,7 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
     newest playwright wheel, which nothing else fetches.
     """
     project = copy_working_tree(PROJECT_ROOT, tmp_path / "project")
-    # So the suite's tests that list the tree's files with git, such as test_external_install.py's, run.
+    # So the suite's tests that list the tree's files with git, such as tests/integration/test_external_install.py's, run.
     init_hermetic_checkout(project)
 
     pinned = _locked_releases(project)
