@@ -795,7 +795,8 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "# unit/test_gone.py::TestGroup.test_member\n"
         "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n"
         "# test_pointed_at.py.TestGroup.test_member joins its names to the file's with dots,\n"
-        "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n",
+        "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n"
+        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n",
     )
     checkout = _Checkout(project)
 
@@ -808,6 +809,9 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "src/pkg/module.py:4: test_member: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
         "src/pkg/module.py:5: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:6: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:6: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
     ]
 
 
