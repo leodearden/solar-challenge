@@ -134,6 +134,17 @@ class OverDictShadowingSubclass(Initialised, metaclass=DictShadowingSubclass):
     """An Initialised of DictShadowingSubclass."""
 
 
+class InterceptingShadowing(
+    metaclass_whose_getattribute_gives_dict(lambda cls: {}),
+    metaclass_whose_dict_gives(lambda cls: {}),
+):
+    """A metaclass whose MRO holds a metaclass that defines __getattribute__, and then one that defines __dict__ as a property."""
+
+
+class OverInterceptingShadowing(Initialised, metaclass=InterceptingShadowing):
+    """An Initialised of InterceptingShadowing."""
+
+
 class HiddenGetterPartial(functools.partial, metaclass=metaclass_whose_dict_gives(lambda cls: {})):
     """A functools.partial whose own __get__, giving the partial itself, its __dict__, giving nothing, hides."""
 
@@ -346,10 +357,13 @@ def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_
         ),
         pytest.param(
             OverDictShadowingSubclass,
-            r"\.OverDictShadowingSubclass has the metaclass \S*\.DictShadowingSubclass, whose "
-            r"MRO holds \S*\.DictShadowing\.__dict__, a builtins\.property, in place of the "
-            "__dict__ type gives each class",
+            dict_shadowing_refusal("OverDictShadowingSubclass", "DictShadowingSubclass"),
             id="subclass-of-a-shadowing-metaclass",
+        ),
+        pytest.param(
+            OverInterceptingShadowing,
+            dict_shadowing_refusal("OverInterceptingShadowing", "InterceptingShadowing"),
+            id="getattribute-held-before-the-dict",
         ),
     ],
 )

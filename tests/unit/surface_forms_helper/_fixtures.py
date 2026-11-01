@@ -202,10 +202,10 @@ def metaclass_whose_dict_gives(namespace: Callable[[type], object]) -> type:
     return DictShadowing
 
 
-def dict_shadowing_refusal(name: str) -> str:
-    """The pattern of the TypeError for the class *name*, whose metaclass is one metaclass_whose_dict_gives makes."""
+def dict_shadowing_refusal(name: str, metaclass: str = "DictShadowing") -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO a metaclass metaclass_whose_dict_gives makes, holding a __dict__ that is a property; by default, *metaclass* is that one."""
     return (
-        rf"\.{name} has the metaclass \S*\.DictShadowing, whose MRO holds "
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
         r"\S*\.DictShadowing\.__dict__, a builtins\.property, in place of the __dict__ type "
         "gives each class"
     )
