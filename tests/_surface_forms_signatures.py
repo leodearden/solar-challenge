@@ -1006,9 +1006,14 @@ def _signature_author(carrier: object) -> object:
     return author
 
 
-def _holds_signature_of(carrier: object, source: object) -> bool:
-    """Whether *carrier* holds *source*'s signature by reference, the same __signature__ object, as functools.wraps copies it along with __dict__ and as a class body that assigns another callable's __signature__ holds it; never by equality, since equal signatures given to two objects can be spelled in two modules."""
-    return getattr(carrier, "__signature__", None) is getattr(source, "__signature__", _ABSENT)
+def _holds_signature_of(wrapper: object, wrapped: object) -> bool:
+    """Whether the __signature__ *wrapper* gives through attribute lookup is *wrapped*'s, as _is_signature_of compares them."""
+    return _is_signature_of(getattr(wrapper, "__signature__", None), wrapped)
+
+
+def _is_signature_of(signature: object, source: object) -> bool:
+    """Whether *signature* is *source*'s by reference, the very __signature__ object *source* gives, as functools.wraps copies it along with __dict__ and as a class body that assigns another callable's __signature__ holds it; never by equality, since equal signatures given to two objects can be spelled in two modules."""
+    return signature is getattr(source, "__signature__", _ABSENT)
 
 
 def _annotations_author(routine: object) -> object:
@@ -1076,11 +1081,17 @@ def _spelling_modules_over(
 
 
 def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspelled:
-    """Where the signature *holder* holds, carried over *constructor*, whose chain ends at a callable defined in C, is spelled: *holder*'s module if _signed_link finds no link of that chain that carries an inspect.Signature; where _carried_signature_module finds that link's spelled if *holder* holds that very signature; else _MayCopyAConstructorLink, as *holder*'s may be a copy of that link's."""
+    """Where the signature *holder* holds, carried over *constructor*, whose chain ends at a callable defined in C, is spelled: *holder*'s module if _signed_link finds no link of that chain that carries an inspect.Signature; where _carried_signature_module finds that link's spelled if *holder*'s own namespace, as own_namespace reads it, holds that very signature; else _MayCopyAConstructorLink, as *holder*'s may be a copy of that link's.
+
+    What *holder*'s own namespace holds is the signature inspect reads, alike on every
+    minor, for a class _signature_holder found *holder* for, whatever *holder*'s
+    metaclass gives *holder* itself: the metaclass of the class read can shadow, with a
+    plain attribute, a property __signature__ that gives *holder* another.
+    """
     link = _signed_link(constructor)
     if link is None:
         return defining_module(holder)
-    if _holds_signature_of(holder, link):
+    if _is_signature_of(own_namespace(holder)["__signature__"], link):
         return _carried_signature_module(link)
     return _MayCopyAConstructorLink(holder, link)
 
