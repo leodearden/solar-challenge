@@ -127,8 +127,9 @@ _FLEET_FORM_WITHOUT_A_POOL: dict[str, Any] = {**_FLEET_FORM, "battery": _ANOTHER
 #: The form each key's change is made to, where _FLEET_FORM cannot take that change alone.
 _FORM_TO_CHANGE_BY_KEY: dict[str, dict[str, Any]] = {"days": _FLEET_FORM_BY_DAYS, "n_homes": _FLEET_FORM_WITHOUT_A_POOL}
 
-#: A value parse_fleet_form refuses for each key it reads after the fleet's distributions and location: the tariff, dispatch strategy and SEG overlays, and the window.
-_A_REFUSED_VALUE_OF_EACH_OVERLAY_AND_WINDOW_KEY: dict[str, Any] = {
+#: A value parse_fleet_form refuses for each key it reads after the fleet's distributions: the location, the tariff, dispatch strategy and SEG overlays, and the window.
+_A_REFUSED_VALUE_OF_EACH_KEY_READ_AFTER_THE_DISTRIBUTIONS: dict[str, Any] = {
+    "location": "atlantis",
     "tariff": {"type": "flat_rate"},
     "dispatch_strategy": {"strategy_type": "turbo"},
     "seg": {},
@@ -204,19 +205,19 @@ class TestParseFleetFormName:
 
 
 class TestParseFleetFormRefusalOrder:
-    """Which refusal parse_fleet_form gives a form it refuses for more than one value: it reads every value before it generates any home."""
+    """Which refusal parse_fleet_form gives a form it refuses for more than one value: a value one of its readers refuses is refused before any home is generated."""
 
     @pytest.mark.parametrize(
         ("form", "key", "value"),
         [
             pytest.param(_FORM_TO_CHANGE_BY_KEY.get(key, _FLEET_FORM), key, value, id=key)
-            for key, value in _A_REFUSED_VALUE_OF_EACH_OVERLAY_AND_WINDOW_KEY.items()
+            for key, value in _A_REFUSED_VALUE_OF_EACH_KEY_READ_AFTER_THE_DISTRIBUTIONS.items()
         ],
     )
-    def test_a_refused_overlay_or_window_is_refused_before_any_home_is_generated(
+    def test_a_value_read_after_the_distributions_is_refused_before_any_home_is_generated(
         self, form: dict[str, Any], key: str, value: Any
     ) -> None:
-        """A form whose pv capacity of 0 only the generation of its homes refuses gets the refusal its tariff, dispatch strategy, SEG or window gets on a fleet that generates, so such a refusal costs no home generation."""
+        """A form whose pv capacity of 0 only the generation of its homes refuses gets the refusal its location, tariff, dispatch strategy, SEG or window gets on a fleet that generates, so such a refusal costs no home generation."""
         ungeneratable = {**form, "pv": {"capacity_kw": 0}}
         with pytest.raises(ConfigurationError, match="capacity_kw must be greater than 0"):
             parse_fleet_form(ungeneratable)

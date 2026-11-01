@@ -103,7 +103,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     value with the same message.  A form with a top-level key the fleet form does not have
     is refused, naming it, before any value is read.  The values are read in the order
     Raises lists them, the name first, and every one before any home is generated, so a
-    refused value costs no home generation.
+    value a reader refuses costs no home generation.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
