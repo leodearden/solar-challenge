@@ -221,11 +221,13 @@ def metaclass_whose_getattribute_gives_dict(namespace: Callable[[type], object])
     return Intercepting
 
 
-def dict_intercepting_refusal(name: str) -> str:
-    """The pattern of the TypeError for the class *name*, whose metaclass is one metaclass_whose_getattribute_gives_dict makes."""
+def dict_intercepting_refusal(
+    name: str, metaclass: str = "Intercepting", holder: str = "Intercepting"
+) -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO the class *holder*, holding a __getattribute__; by default, both are the metaclass metaclass_whose_getattribute_gives_dict makes."""
     return (
-        rf"\.{name} has the metaclass \S*\.Intercepting, whose MRO holds "
-        r"\S*\.Intercepting\.__getattribute__, in place of the __getattribute__ type gives "
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
+        rf"\S*\.{holder}\.__getattribute__, in place of the __getattribute__ type gives "
         "each class"
     )
 

@@ -444,35 +444,35 @@ def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming
 
 
 @pytest.mark.parametrize(
-    ("cls", "refusal"),
+    ("cls", "name", "metaclass", "holder"),
     [
         pytest.param(
             OverPassingThrough,
-            r"\.OverPassingThrough has the metaclass \S*\.PassingThrough, whose MRO holds "
-            r"\S*\.PassingThrough\.__getattribute__, in place of the __getattribute__ type "
-            "gives each class",
+            "OverPassingThrough",
+            "PassingThrough",
+            "PassingThrough",
             id="getattribute-giving-what-types-gives",
         ),
         pytest.param(
             OverInterceptingSubclass,
-            r"\.OverInterceptingSubclass has the metaclass \S*\.InterceptingSubclass, whose "
-            r"MRO holds \S*\.Intercepting\.__getattribute__, in place of the __getattribute__ "
-            "type gives each class",
+            "OverInterceptingSubclass",
+            "InterceptingSubclass",
+            "Intercepting",
             id="subclass-of-a-metaclass-defining-getattribute",
         ),
         pytest.param(
             OverMixedIntercepting,
-            r"\.OverMixedIntercepting has the metaclass \S*\.MixedIntercepting, whose MRO "
-            r"holds \S*\.GetattributeMixin\.__getattribute__, in place of the "
-            "__getattribute__ type gives each class",
+            "OverMixedIntercepting",
+            "MixedIntercepting",
+            "GetattributeMixin",
             id="base-before-type",
         ),
     ],
 )
 def test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives(
-    cls: type, refusal: str
+    cls: type, name: str, metaclass: str, holder: str
 ) -> None:
-    with pytest.raises(TypeError, match=refusal):
+    with pytest.raises(TypeError, match=dict_intercepting_refusal(name, metaclass, holder)):
         surface_form(cls)
 
 
