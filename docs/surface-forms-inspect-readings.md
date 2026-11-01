@@ -19,10 +19,10 @@ on every minor (§2). `named_classes`, which gives the classes a form names, rea
 string annotation in the module that spells it, and raises `TypeError` where that module
 could differ by minor (4.2). `member_forms`, which spells the public members a class's own
 body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Both
-raise `TypeError` for a class whose metaclass shadows `__dict__` (4.8). Each
-entry says how each minor reads its objects, and names the rule tests that pin what
-`surface_form`, `member_forms` and `named_classes` do. Each `TypeError` also states its
-own case's reading.
+raise `TypeError` for a class whose metaclass shadows `__dict__` or defines
+`__getattribute__` (4.8). Each entry says how each minor reads its objects, and names
+the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do. Each
+`TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -46,8 +46,9 @@ in text-signature form, were measured on those releases on 2026-10-30. 3.4's rea
 a class whose metaclass gives a `__mro__` other than the MRO the class records, 4.5's
 reading of such a class's constructor, and 4.8's readings, of a class whose metaclass
 shadows `__dict__`, were measured on CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4
-on 2026-10-31. A new refusal gets its rule test first, then
-its entry here.
+on 2026-10-31, and 4.8's readings of a class whose metaclass defines `__getattribute__`
+on those releases on 2026-11-01. A new refusal gets its rule test first, then its entry
+here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -806,6 +807,28 @@ refuses that signature: it reads the namespace of the class holding it. A metacl
 MRO holds a class whose own `__dict__` is the descriptor CPython made for it, as a plain
 class listed before `type` among a metaclass's bases holds one, shadows nothing.
 
+A metaclass can instead give another `__dict__` through a `__getattribute__` it defines.
+It holds no `__dict__` itself, so `inspect` counts no shadow. `inspect.getattr_static`,
+and `inspect`'s choice between a class's `__new__` and `__init__`, then read the
+`__dict__` that `__getattribute__` gives. So does `inspect.get_annotations` on 3.11, 3.12
+and 3.13; on 3.14 it reads the namespace the class holds. From 3.13, `inspect.getsource`
+finds a class's statement by the `__firstlineno__` that `__dict__` gives, for a shadow
+too, where 3.11 and 3.12 find it by its qualified name. With that `__dict__` giving `{}`
+over `Rating` and a body's own `__call__ = functools.partial(...)`, an object of the
+class held as `__init__` reads as `(rate: int) -> None` on every minor: `inspect` skips
+the partial the class holds and reads `Rating`'s. With `{'__call__': None}` over a body's
+own `def __call__`, every minor raises `ValueError`. Under `{'__new__': None}`, a class
+of `Initialised` and then `Made` reads as `(share: str) -> 'Made'`. With
+`{'__annotations__': {'x': int}}` over `y: str`, `inspect.get_annotations` reads `x` on
+3.11, 3.12 and 3.13, and `y` on 3.14. The helper does not call a `__getattribute__` to
+learn what it gives. So `surface_form`, `named_classes`, `member_forms` and
+`undeclared_attributes` refuse such a class, as they refuse a shadow, wherever they read
+its namespace, whatever the `__getattribute__` gives. A class counts as such when a class
+in its metaclass's MRO other than `type` and `object` holds a `__getattribute__`. The
+`TypeError` names the class, its metaclass and the class holding that
+`__getattribute__`. A metaclass `__call__` or a carried signature lifts `surface_form`'s
+refusal, as for a shadow.
+
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_an_object_whose_types_metaclass_shadows_dict_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it`
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init`
@@ -813,9 +836,15 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_partial_or_a_classmethod_wrapped_object_whose_types_metaclass_shadows_dict_raises_the_type_error_naming_that_type_and_its_metaclass`
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_shadows_dict_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries`
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_mro_holds_a_class_whose_own_dict_is_the_one_cpython_made_for_it_is_spelled_by_its_constructor`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_an_object_whose_types_metaclass_defines_getattribute_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives`
+- `tests/unit/surface_forms_helper/test_surface_form_shadowed_dicts.py::test_a_class_whose_metaclass_defines_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_shadows_dict_raises_a_type_error_naming_that_class_and_its_metaclass`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_that_dict_gives`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_its_dict_gives`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes`
 
 ## 5. When the Admitted Minors Change
 
@@ -834,9 +863,10 @@ on 3.11, 3.12 and 3.14, and as `()` on 3.13. The warning 3.3 ignores rests on 3.
 4.6's refusal where a partial is bound rests on no minor: it names a binding no rule
 reads. 4.5's refusal of a class whose metaclass gives another `__mro__` rests on no
 minor either: it names a choice no rule reads. 4.8's refusal rests on 3.11 and 3.12 where
-it meets 4.6's or 4.7's reading, and on 3.14 where `inspect.get_annotations` reads the
-namespace the class holds; otherwise it rests on no minor: it names readings no rule
-reads. Whether to lift one is for the task that changes `requires-python`.
+it meets 4.6's or 4.7's reading, on 3.14 where `inspect.get_annotations` reads the
+namespace the class holds, and on 3.13 and 3.14 where `inspect.getsource` finds a class's
+statement by what its `__dict__` gives; otherwise it rests on no minor: it names readings
+no rule reads. Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 
