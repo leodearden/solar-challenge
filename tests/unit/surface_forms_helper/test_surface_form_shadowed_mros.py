@@ -86,7 +86,7 @@ class Hidden(Initialised, metaclass=metaclass_whose_mro_gives(lambda cls: (cls,)
 class CallingHidden(metaclass_whose_mro_gives(lambda cls: (cls,))):
     """A metaclass whose __call__ is defined with def and whose __mro__ gives, for each class of it, only that class."""
 
-    def __call__(cls, rate: int) -> None: ...
+    def __call__(cls, share: str) -> None: ...
 
 
 class Called(Initialised, metaclass=CallingHidden):
@@ -215,17 +215,21 @@ def test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raise
 
 
 @pytest.mark.parametrize(
-    "cls",
+    ("cls", "form"),
     [
-        pytest.param(Called, id="metaclass-call"),
-        pytest.param(Recorded, id="mro-giving-the-one-the-class-records"),
-        pytest.param(CopiedRecorded, id="mro-giving-a-copy-of-the-one-the-class-records"),
+        pytest.param(Called, "(share: str) -> None", id="metaclass-call"),
+        pytest.param(Recorded, "(rate: int) -> None", id="mro-giving-the-one-the-class-records"),
+        pytest.param(
+            CopiedRecorded,
+            "(rate: int) -> None",
+            id="mro-giving-a-copy-of-the-one-the-class-records",
+        ),
     ],
 )
 def test_a_class_whose_metaclass_defines_mro_is_spelled_by_the_constructor_inspect_reads_where_it_chooses_none_by_a_mro_other_than_the_one_the_class_records(
-    cls: type,
+    cls: type, form: str
 ) -> None:
-    assert surface_form(cls) == "(rate: int) -> None"
+    assert surface_form(cls) == form
 
 
 def test_a_class_whose_metaclass_gives_a_mro_other_than_the_one_it_records_is_spelled_by_the_signature_it_carries() -> None:

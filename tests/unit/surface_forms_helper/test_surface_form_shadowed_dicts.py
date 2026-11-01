@@ -167,7 +167,7 @@ class HiddenGiver(metaclass=metaclass_whose_dict_gives(lambda cls: {})):
 class CallingShadowing(metaclass_whose_dict_gives(lambda cls: {})):
     """A metaclass whose __call__ is defined with def and whose __dict__ gives, for each class of it, nothing."""
 
-    def __call__(cls, rate: int) -> None: ...
+    def __call__(cls, share: str) -> None: ...
 
 
 class Called(Initialised, metaclass=CallingShadowing):
@@ -268,7 +268,7 @@ class OverMixedIntercepting(Initialised, metaclass=MixedIntercepting):
 class CallingIntercepting(metaclass_whose_getattribute_gives_dict(lambda cls: {})):
     """A metaclass whose __call__ is defined with def and whose __getattribute__ gives, for each class of it, a __dict__ giving nothing."""
 
-    def __call__(cls, rate: int) -> None: ...
+    def __call__(cls, share: str) -> None: ...
 
 
 class InterceptedCalled(Initialised, metaclass=CallingIntercepting):
@@ -393,16 +393,16 @@ def test_a_partial_or_a_classmethod_wrapped_object_whose_types_metaclass_shadows
 
 
 @pytest.mark.parametrize(
-    "cls",
+    ("cls", "form"),
     [
-        pytest.param(Called, id="metaclass-call"),
-        pytest.param(Carrying, id="carried-signature"),
+        pytest.param(Called, "(share: str) -> None", id="metaclass-call"),
+        pytest.param(Carrying, "(rate: int) -> None", id="carried-signature"),
     ],
 )
 def test_a_class_whose_metaclass_shadows_dict_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
-    cls: type,
+    cls: type, form: str
 ) -> None:
-    assert surface_form(cls) == "(rate: int) -> None"
+    assert surface_form(cls) == form
 
 
 def test_a_class_whose_metaclass_mro_holds_a_class_whose_own_dict_is_the_one_cpython_made_for_it_is_spelled_by_its_constructor() -> None:
@@ -491,13 +491,13 @@ def test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the
 
 
 @pytest.mark.parametrize(
-    "cls",
+    ("cls", "form"),
     [
-        pytest.param(InterceptedCalled, id="metaclass-call"),
-        pytest.param(InterceptedCarrying, id="carried-signature"),
+        pytest.param(InterceptedCalled, "(share: str) -> None", id="metaclass-call"),
+        pytest.param(InterceptedCarrying, "(rate: int) -> None", id="carried-signature"),
     ],
 )
 def test_a_class_whose_metaclass_defines_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
-    cls: type,
+    cls: type, form: str
 ) -> None:
-    assert surface_form(cls) == "(rate: int) -> None"
+    assert surface_form(cls) == form
