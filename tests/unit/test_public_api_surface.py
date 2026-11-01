@@ -14,7 +14,7 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
   resolve to the kind their spelling misleads about.
 - The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
-- The package imports without pvlib and loads a submodule on first touch.
+- The package imports without pvlib.
 """
 
 import abc
@@ -860,43 +860,29 @@ def test_importing_the_package_refuses_tables_that_disagree(
 
 
 # ===========================================================================
-# The package imports without pvlib and loads a submodule on first touch
+# The package imports without pvlib
 #
-# Each test runs a fresh interpreter, since the test process has already
-# imported pvlib.
+# Whether the first access of a name loads pvlib is checked, for each submodule
+# the lazy loader maps names to, by
+# tests/unit/test_lazy_pvlib_submodules.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules
 # ===========================================================================
 
 
 def test_import_is_pvlib_free() -> None:
-    """`import solar_challenge` alone leaves pvlib out of sys.modules."""
+    """`import solar_challenge` alone leaves pvlib out of sys.modules.
+
+    It runs in a fresh interpreter, since the test process has already imported pvlib.
+    """
     code = (
         "import sys, solar_challenge; "
         "sys.exit(0 if 'pvlib' not in sys.modules else 1)"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-I", "-c", code],
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode == 0, (
         f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
-    )
-
-
-def test_touching_pvconfig_imports_pvlib() -> None:
-    """Touching `solar_challenge.PVConfig` loads its submodule, pv.py, and with it pvlib."""
-    code = (
-        "import sys, solar_challenge; "
-        "solar_challenge.PVConfig; "
-        "sys.exit(0 if 'pvlib' in sys.modules else 1)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, (
-        f"pvlib was NOT imported after touching solar_challenge.PVConfig.\nstderr: {result.stderr}"
     )
