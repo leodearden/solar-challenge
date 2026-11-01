@@ -272,7 +272,8 @@ class ComponentDistribution:
 
     *draws* maps each key a home draws to its spec, and *settings* each SETTING key to the value
     every home is given. A key in neither takes its dataclass's default. Both are held as
-    read-only copies.
+    read-only copies; a ComponentDistribution pickles and deep-copies, but dataclasses.asdict
+    of one raises TypeError.
     """
 
     draws: Mapping[str, DistributionSpec]
@@ -281,6 +282,12 @@ class ComponentDistribution:
     def __post_init__(self) -> None:
         object.__setattr__(self, "draws", MappingProxyType(dict(self.draws)))
         object.__setattr__(self, "settings", MappingProxyType(dict(self.settings)))
+
+    def __reduce__(
+        self,
+    ) -> tuple[type["ComponentDistribution"], tuple[dict[str, DistributionSpec], dict[str, SettingValue]]]:
+        """Rebuild through the constructor from dicts of the draws and settings, since a mappingproxy does not pickle."""
+        return (type(self), (dict(self.draws), dict(self.settings)))
 
 
 @dataclass

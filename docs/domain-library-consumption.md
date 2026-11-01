@@ -881,7 +881,11 @@ fleet no heat pump. Only such fleets' generated homes change.
 `LoadDistributionConfig`, `HeatPumpDistributionConfig` and `EVDistributionConfig`
 are replaced by one `ComponentDistribution(draws, settings)`; none was in
 `__all__` or the frozen surface, and `FleetDistributionConfig` keeps its field
-names, its `load` now defaulting to an empty distribution. The component tables
+names, its `load` now defaulting to an empty distribution. A
+`ComponentDistribution` holds its draws and settings read-only, and pickles and
+deep-copies as the classes it replaces did, but `dataclasses.asdict` of a
+`FleetDistributionConfig` holding one raises `TypeError`, where the tag's classes
+allow it. The component tables
 (`PV_BLOCK` … `EV_BLOCK`) state each block's fleet keys, so a block accepts every
 key of its component's home block except `name` (and the load's `seed`, the
 fleet's seed plus the home's index): the PV's `temperature_coefficient`,
