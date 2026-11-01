@@ -14,13 +14,13 @@ a pointer naming a test in a Python file that is not UTF-8 text, or that does no
 repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path names its test file up
 to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in test_<name>.py.<Class>, each word
-after the .py then being a name; otherwise it names its file whole, so a backup's test_<name>.py.bak names the backup.
-A path rooted at tests/ is read so only where git lists its test file and the tree holds nothing by the whole path, as
-in tests/<file>.py.<Class>, and is then refused, naming the node-id to write. A path not rooted at tests/ whose file
-ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py does, is refused the same way. One whose file
-ends no file of tests/ is assumed to name another tree's or a throwaway project's file, so it is no pointer, but each
-test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name
-given alone, as below.
+after the .py then being a name, up to a hyphen that joins one that is not, as in <Class>-based; otherwise it names its
+file whole, so a backup's test_<name>.py.bak names the backup. A path rooted at tests/ is read so only where git lists
+its test file and the tree holds nothing by the whole path, as in tests/<file>.py.<Class>, and is then refused, naming
+the node-id to write. A path not rooted at tests/ whose file ends a test file tests/ holds, as test_<name>.py or
+<dir>/test_<name>.py does, is refused the same way. One whose file ends no file of tests/ is assumed to name another
+tree's or a throwaway project's file, so it is no pointer, but each test_<name> or Test<Name> after its .py, as in
+test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined other than with :: to a node-id's
@@ -62,6 +62,8 @@ def _is_python_file_under_tests(path: PurePosixPath) -> bool:
 _TEST_LIKE_NAME = re.compile(r"test_\w+|Test[A-Z]\w*")
 
 _TEST_FILE_PATH = re.compile(r"(?P<up_to_py>(?:[\w.-]+/)*test_\w+\.py)(?P<after_py>(?:[\w.-]*\w)?)")
+
+_HYPHEN_TAIL = re.compile(rf"-(?=\w)(?!{_TEST_LIKE_NAME.pattern})")
 
 _POINTER = re.compile(
     rf"""
@@ -328,13 +330,16 @@ def _file_and_names(
     The path is *up_to_py*, which ends at the .py of a test file, then *after_py*, the text joined after that .py. The
     *names_after_path* are the names written after the whole path, with :: and then with dots. The first word joined
     after the .py tells which file the path names. A test-like one is a name, as in test_<name>.py.<Class>, so the file
-    ends at the .py and each word after the .py is a name, ahead of the *names_after_path*. Any other is part of the
-    file's name, as bak is of a backup's test_<name>.py.bak, so the file is the whole path and its names are the
-    *names_after_path*.
+    ends at the .py and each word after the .py is a name, up to a hyphen that joins a word that is not test-like, as in
+    <Class>-based. Such a hyphen ends the names, the *names_after_path* with them, and without one the names go on into
+    the *names_after_path*. Any other first word is part of the file's name, as bak is of a backup's test_<name>.py.bak,
+    so the file is the whole path and its names are the *names_after_path*.
     """
-    words = _words(after_py)
+    joined, *hyphen_tail = _HYPHEN_TAIL.split(after_py, maxsplit=1)
+    words = _words(joined)
     if words and _TEST_LIKE_NAME.fullmatch(words[0]):
-        return PurePosixPath(up_to_py), (*words, *names_after_path)
+        names = words if hyphen_tail else (*words, *names_after_path)
+        return PurePosixPath(up_to_py), names
     return PurePosixPath(up_to_py + after_py), names_after_path
 
 
