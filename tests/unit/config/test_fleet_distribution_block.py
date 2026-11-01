@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for a fleet_distribution: block and the distribution specs that vary each home's parameters."""
 
+import copy
+import pickle
 from collections.abc import Callable
 from typing import Any
 
@@ -40,6 +42,12 @@ def _charger_type_value_refusal(value: object) -> str:
         f"Invalid fleet_distribution.ev.charger_type value {value!r}; "
         "valid values: null or one of ['3.6kW', '7kW', '22kW']"
     )
+
+
+def _pickle_round_trip(fleet: FleetDistributionConfig) -> FleetDistributionConfig:
+    """*fleet* restored from its pickle."""
+    clone: FleetDistributionConfig = pickle.loads(pickle.dumps(fleet))
+    return clone
 
 
 _TWO_VALUE_POOL: dict[str, Any] = {"type": "shuffled_pool", "values": [1.0, 2.0], "counts": [1, 1]}
@@ -645,3 +653,53 @@ class TestANullSettingReadsAsAbsent:
         with_null = _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: {**block, setting: None}})
 
         assert with_null == _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: block})
+
+
+class TestAFleetDistributionPicklesAndDeepCopies:
+    """A pickled or deep-copied fleet distribution rebuilds each ComponentDistribution through its constructor, so the copy equals the fleet and its components hold their draws and settings read-only."""
+
+    _FLEET = _parsed_fleet_distribution(
+        2,
+        seed=7,
+        pv={"capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": [1, 1]}, "tilt": 30},
+        load={"annual_consumption_kwh": 3400, "use_stochastic": False},
+        battery={
+            "capacity_kwh": 5.0,
+            "grid_charging": {"target_soc_fraction": 0.9},
+            "dispatch_strategy": {"strategy_type": "self_consumption"},
+        },
+        heat_pump={"heat_pump_type": {"type": "weighted_discrete", "values": ["ASHP", None], "weights": [1, 1]}},
+        ev={"charger_type": "7kW", "arrival_hour": 18},
+    )
+    """Every component, drawing pooled, fixed and chosen values, with bool, grid-charging and dispatch-strategy settings."""
+
+    @pytest.mark.parametrize("copied", [_pickle_round_trip, copy.deepcopy], ids=["pickled", "deep-copied"])
+    def test_the_copy_equals_the_fleet(
+        self, copied: Callable[[FleetDistributionConfig], FleetDistributionConfig]
+    ) -> None:
+        assert copied(self._FLEET) == self._FLEET
+
+    @pytest.mark.parametrize("copied", [_pickle_round_trip, copy.deepcopy], ids=["pickled", "deep-copied"])
+    @pytest.mark.parametrize(
+        "component_of",
+        [
+            pytest.param(lambda fleet: fleet.pv, id="pv"),
+            pytest.param(lambda fleet: fleet.load, id="load"),
+            pytest.param(lambda fleet: fleet.battery, id="battery"),
+            pytest.param(lambda fleet: fleet.heat_pump, id="heat_pump"),
+            pytest.param(lambda fleet: fleet.ev, id="ev"),
+        ],
+    )
+    def test_each_component_of_the_copy_holds_its_draws_and_settings_read_only(
+        self,
+        copied: Callable[[FleetDistributionConfig], FleetDistributionConfig],
+        component_of: Callable[[FleetDistributionConfig], ComponentDistribution | None],
+    ) -> None:
+        """Assigning a key in the copied component's draws, or in its settings, raises TypeError."""
+        component = component_of(copied(self._FLEET))
+
+        assert component is not None
+        with pytest.raises(TypeError):
+            component.draws["added"] = None
+        with pytest.raises(TypeError):
+            component.settings["added"] = None
