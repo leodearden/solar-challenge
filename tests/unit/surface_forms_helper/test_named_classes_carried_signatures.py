@@ -446,27 +446,21 @@ def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_
         "    __signature__ = carried\n",
     )
 
-    with pytest.raises(TypeError) as own:
-        named_classes(described.Described)
-    with pytest.raises(TypeError) as inherited:
-        named_classes(described.Redescribed)
-    with pytest.raises(TypeError) as defined:
-        named_classes(described.DefinedDescribed)
-
-    assert "described.Described" in str(own.value)
-    assert "describing.Describing" in str(own.value)
-    assert "builtins.type" not in str(own.value)
-    assert "described.Redescribed" in str(inherited.value)
-    assert "described.Described" in str(inherited.value)
-    assert "describing.Describing" in str(inherited.value)
-    assert "described.DefinedDescribed" in str(defined.value)
-    assert "describing.Describing" in str(defined.value)
-    for name in ("BoundDescribed", "PlainDescribed", "LinkDescribed"):
+    holder_of = {
+        "Described": "Described",
+        "Redescribed": "Described",
+        "DefinedDescribed": "DefinedDescribed",
+        "BoundDescribed": "BoundDescribed",
+        "PlainDescribed": "PlainDescribed",
+        "LinkDescribed": "LinkDescribed",
+    }
+    for name, holder in holder_of.items():
         with pytest.raises(TypeError) as raised:
             named_classes(getattr(described, name))
 
-        assert f"described.{name}" in str(raised.value)
-        assert "describing.Describing" in str(raised.value)
+        for text in (f"described.{name}", f"described.{holder}", "describing.Describing"):
+            assert text in str(raised.value)
+        assert "builtins.type" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
