@@ -20,7 +20,8 @@ its test file and the tree holds nothing by the whole path, as in tests/<file>.p
 the node-id to write. A path not rooted at tests/ whose file ends a test file tests/ holds, as test_<name>.py or
 <dir>/test_<name>.py does, is refused the same way. One whose file ends no file of tests/ is assumed to name another
 tree's or a throwaway project's file, so it is no pointer, but each test_<name> or Test<Name> after its .py, as in
-test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name given alone, as below.
+test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name given alone, as below. A path rooted at tests/ that
+the tree holds nothing by is refused as missing, however its names are joined, unless it is read at a test file's .py.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined other than with :: to a node-id's
@@ -482,11 +483,13 @@ def _unresolved(checkout: _Checkout, pointer: _Pointer) -> str | None:
 
 
 def _misjoined_node_id(checkout: _Checkout, pointer: _Pointer) -> str | None:
-    """Return the node-id *pointer* means, or None if it joins each of its names with :: already.
+    """Return the node-id *pointer* means, or None if it joins each of its names with :: already or its path is missing.
 
-    A name is joined with a dot to the last name, as in ::<Class>.<test>, or with a dot or hyphen to the .py of a test
-    file git lists, as in tests/<file>.py.<Class>, where the *checkout* holds nothing by the path as written. The path
-    is then read at its .py, as _file_and_names reads a path not rooted at tests/.
+    A name is joined with a dot to the last name, as in ::<Class>.<test>, where the *checkout* holds the path, or with a
+    dot or hyphen to the .py of a test file git lists, as in tests/<file>.py.<Class>, where it holds nothing by the path
+    as written. The path is then read at its .py, as _file_and_names reads a path not rooted at tests/. Any other path
+    the checkout holds nothing by is missing, however its names are joined, since a node-id into a file that is not
+    there would cost the writer a round trip.
     """
     names_after_path = (*pointer.names, *pointer.dotted_names)
     split = _TEST_FILE_PATH.fullmatch(str(pointer.path))
@@ -494,7 +497,7 @@ def _misjoined_node_id(checkout: _Checkout, pointer: _Pointer) -> str | None:
         file, names = _file_and_names(split["up_to_py"], split["after_py"], names_after_path)
         if file in checkout.paths.files:
             return "::".join((str(file), *names))
-    if pointer.dotted_names:
+    if pointer.dotted_names and checkout.paths.holds(pointer.path):
         return "::".join((str(pointer.path), *names_after_path))
     return None
 
@@ -651,7 +654,8 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/test_absent.py.TestGroup\n"
         "# tests/unit/test_pointed_at.py.TestGroup-based\n"
         "# tests/unit/test_pointed_at.py.TestGroup-based::test_member\n"
-        "# tests/unit/test_pointed_at.py-.TestGroup\n",
+        "# tests/unit/test_pointed_at.py-.TestGroup\n"
+        "# tests/unit/test_absent.py.TestGroup::TestNested.test_deep\n",
     )
     checkout = _Checkout(project)
 
@@ -686,6 +690,8 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
         "src/pkg/module.py:16: tests/unit/test_pointed_at.py-.TestGroup:"
         " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
+        "src/pkg/module.py:17: tests/unit/test_absent.py.TestGroup::TestNested.test_deep:"
+        " tests/unit/test_absent.py.TestGroup does not exist, or git ignores it",
     ]
 
 
