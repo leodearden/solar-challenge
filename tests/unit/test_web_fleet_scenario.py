@@ -260,6 +260,14 @@ class TestScenarioFromFleetForm:
         with pytest.raises((ValueError, ConfigurationError), match=reason):
             scenario_from_fleet_form(form)
 
+    def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
+        """No YAML is written for a name the simulate endpoint refuses."""
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(chr(0xD800), "name")
+        with pytest.raises(ValueError) as refusal:
+            scenario_from_fleet_form({**_FLEET_FORM, "name": chr(0xD800)})
+        assert str(refusal.value) == str(expected.value)
+
 
 _BRISTOL_LIKE_SCENARIO_YAML = """\
 name: Bristol Phase 1
@@ -701,6 +709,16 @@ class TestFleetFormFromScenario:
             ),
         ):
             fleet_form_from_scenario(document)
+
+    def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
+        """YAML's \\u escape can write a lone surrogate into a scenario's name, a form the page could not run, so the scenario is not loaded."""
+        name = yaml.safe_load(r'"\ud800"')
+        assert name == chr(0xD800), "premise: YAML reads the escape as a lone surrogate"
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(name, "name")
+        with pytest.raises(ValueError) as refusal:
+            fleet_form_from_scenario({**_FLEET_SCENARIO, "name": name})
+        assert str(refusal.value) == str(expected.value)
 
     @pytest.mark.parametrize(
         "counts",
