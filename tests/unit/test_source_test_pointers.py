@@ -408,11 +408,11 @@ def _node_ids_defined(prefix: str, body: list[ast.stmt]) -> Iterator[tuple[str, 
 
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
     checkout = _Checkout(project_root)
-    pointers = _pointers(checkout, scanned_files(project_root, _UNSCANNED))
-    unscanned = ", ".join(f"{directory}/" for directory in _UNSCANNED)
+    pointers = _pointers(checkout, _sources(project_root))
+    records = ", ".join(f"{directory}/" for directory in RECORD_DIRECTORIES)
     assert pointers, (
-        f"found no pointer into tests/ in any file git lists outside the unscanned directories ({unscanned}), so this"
-        " gate would pass vacuously; fix the listing or the grammar"
+        f"found no pointer into tests/ in any file git lists outside the records ({records}), so this gate would pass"
+        " vacuously; fix the listing or the grammar"
     )
 
     dangling = _dangling(checkout, pointers)
@@ -445,7 +445,7 @@ def project(tmp_path: Path) -> Path:
     )
 
 
-def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: Path) -> None:
+def test_scans_every_file_git_lists_outside_the_records(project: Path) -> None:
     scanned = {
         "CLAUDE.md",
         "docs/guide.md",
@@ -453,12 +453,15 @@ def test_scans_every_file_git_lists_outside_the_unscanned_directories(project: P
         "scenarios/fleet.yaml",
         "scripts/measure.py",
         "src/pkg/module.py",
+        "tests/fixtures/schema.sql",
+        "tests/unit/test_module.py",
     }
     unscanned = ["docs/prds/record.md", "docs/research/survey.md", "plans/plan.md", "review/briefing.yaml"]
     for source in [*scanned, *unscanned]:
         write_file(project, source, "")
+    project_fixture_files = ["tests/unit/notes.txt", "tests/unit/test_pointed_at.py"]
 
-    assert set(scanned_files(project, _UNSCANNED)) == {PurePosixPath(source) for source in scanned}
+    assert set(_sources(project)) == {PurePosixPath(source) for source in [*scanned, *project_fixture_files]}
 
 
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:
