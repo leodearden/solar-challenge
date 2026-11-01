@@ -247,7 +247,7 @@ def _string_statements(module: ast.Module, text: str) -> list[tuple[int, str]]:
     data = text.encode()
     line_starts = [0, *(line_break.end() for line_break in re.finditer(rb"\r\n|\r|\n", data))]
     strings: list[tuple[int, str]] = []
-    for statement in ast.walk(module):
+    for statement in _statements(module):
         match statement:
             case ast.Expr(
                 value=ast.Constant(
@@ -261,6 +261,19 @@ def _string_statements(module: ast.Module, text: str) -> list[tuple[int, str]]:
                 raw = data[line_starts[line - 1] + column : line_starts[end_line - 1] + end_column]
                 strings.append((line, raw.decode()))
     return strings
+
+
+def _statements(node: ast.AST) -> Iterator[ast.stmt]:
+    """Yield each statement written in *node*'s syntax tree, at any depth, in text order.
+
+    A statement is written only in a module, another statement, an except handler or a match case, so the walk never
+    looks into an expression.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.stmt):
+            yield child
+        if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+            yield from _statements(child)
 
 
 def _pointers_given(
