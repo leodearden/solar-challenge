@@ -329,19 +329,32 @@ def _file_and_names(
     """Return the file a path names, and each name written after that file, in text order.
 
     The path is *up_to_py*, which ends at the .py of a test file, then *after_py*, the text joined after that .py. The
-    *names_after_path* are the names written after the whole path, with :: and then with dots. The first word joined
-    after the .py tells which file the path names. A test-like one is a name, as in test_<name>.py.<Class>, so the file
-    ends at the .py and each word after the .py is a name, up to a hyphen that joins a word that is not test-like, as in
-    <Class>-based. Such a hyphen ends the names, the *names_after_path* with them, and without one the names go on into
-    the *names_after_path*. Any other first word is part of the file's name, as bak is of a backup's test_<name>.py.bak,
-    so the file is the whole path and its names are the *names_after_path*.
+    *names_after_path* are the names written after the whole path, with :: and then with dots. If _names_joined_after_py
+    reads any name there, as in test_<name>.py.<Class>, the file ends at the .py and those are its names. Otherwise the
+    first word joined after the .py is part of the file's name, as bak is of a backup's test_<name>.py.bak, so the file
+    is the whole path and its names are the *names_after_path*.
+    """
+    names = _names_joined_after_py(after_py, names_after_path)
+    if names:
+        return PurePosixPath(up_to_py), names
+    return PurePosixPath(up_to_py + after_py), names_after_path
+
+
+def _names_joined_after_py(after_py: str, names_after_path: tuple[str, ...]) -> tuple[str, ...]:
+    """Return each name a test file's path joins after its .py, in text order, or () if it joins none.
+
+    The path's *after_py* is the text joined after its .py, and *names_after_path* are the names written after the whole
+    path, with :: and then with dots. The first word joined after the .py tells whether it joins any: a test-like one is
+    a name, as in test_<name>.py.<Class>, and so is each word after it, up to a hyphen that joins a word that is not
+    test-like, as in <Class>-based. Such a hyphen ends the names, the *names_after_path* with them, and without one the
+    names go on into the *names_after_path*. Any other first word joins none, being part of the file's name, as bak is
+    of a backup's test_<name>.py.bak.
     """
     joined, *hyphen_tail = _HYPHEN_TAIL.split(after_py, maxsplit=1)
     words = _words(joined)
     if words and _TEST_LIKE_NAME.fullmatch(words[0]):
-        names = words if hyphen_tail else (*words, *names_after_path)
-        return PurePosixPath(up_to_py), names
-    return PurePosixPath(up_to_py + after_py), names_after_path
+        return words if hyphen_tail else (*words, *names_after_path)
+    return ()
 
 
 def _words(text: str) -> tuple[str, ...]:
@@ -485,20 +498,22 @@ def _unresolved(checkout: _Checkout, pointer: _Pointer) -> str | None:
 def _misjoined_node_id(checkout: _Checkout, pointer: _Pointer) -> str | None:
     """Return the node-id *pointer* means, or None if it joins each of its names with :: already or its path is missing.
 
-    A name is joined with a dot to the last name, as in ::<Class>.<test>, where the *checkout* holds the path, or with a
-    dot or hyphen to the .py of a test file git lists, as in tests/<file>.py.<Class>, where it holds nothing by the path
-    as written. The path is then read at its .py, as _file_and_names reads a path not rooted at tests/. Any other path
-    the checkout holds nothing by is missing, however its names are joined, since a node-id into a file that is not
-    there would cost the writer a round trip.
+    A pointer to a path the *checkout* holds is misjoined if a name is joined with a dot to its last name, as in
+    ::<Class>.<test>. One to a path the checkout holds nothing by is misjoined if the path joins a name with a dot or
+    hyphen to the .py of a test file git lists, as in tests/<file>.py.<Class>: _names_joined_after_py reads the path at
+    its .py, as _file_and_names reads a path not rooted at tests/. Any other pointer to such a path is to a missing one,
+    however its names are joined, since a node-id into a file that is not there would cost the writer a round trip.
     """
     names_after_path = (*pointer.names, *pointer.dotted_names)
-    split = _TEST_FILE_PATH.fullmatch(str(pointer.path))
-    if split is not None and not checkout.paths.holds(pointer.path):
-        file, names = _file_and_names(split["up_to_py"], split["after_py"], names_after_path)
-        if file in checkout.paths.files:
-            return "::".join((str(file), *names))
-    if pointer.dotted_names and checkout.paths.holds(pointer.path):
-        return "::".join((str(pointer.path), *names_after_path))
+    if checkout.paths.holds(pointer.path):
+        return "::".join((str(pointer.path), *names_after_path)) if pointer.dotted_names else None
+    test_file_path = _TEST_FILE_PATH.fullmatch(str(pointer.path))
+    if test_file_path is None:
+        return None
+    test_file = PurePosixPath(test_file_path["up_to_py"])
+    names = _names_joined_after_py(test_file_path["after_py"], names_after_path)
+    if names and test_file in checkout.paths.files:
+        return "::".join((str(test_file), *names))
     return None
 
 
