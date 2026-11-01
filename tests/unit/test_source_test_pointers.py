@@ -616,7 +616,13 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/test_pointed_at.py::TestGroup.test_absent\n"
         "# tests/unit/test_pointed_at.py::test_top::test_inner\n"
         "# tests/unit/notes.txt::test_top\n"
-        "# tests/unit::test_top\n",
+        "# tests/unit::test_top\n"
+        "# tests/unit/test_pointed_at.py.TestRenamed\n"
+        "# tests/unit/test_pointed_at.py.TestGroup\n"
+        "# tests/unit/test_pointed_at.py.TestGroup.test_member\n"
+        "# tests/unit/test_pointed_at.py-TestGroup::TestNested.test_deep\n"
+        "# tests/unit/test_pointed_at.py.bak\n"
+        "# tests/unit/test_absent.py.TestGroup\n",
     )
     checkout = _Checkout(project)
 
@@ -633,6 +639,18 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "src/pkg/module.py:6: tests/unit/notes.txt::test_top:"
         " tests/unit/notes.txt is not a Python file, so it defines no test_top",
         "src/pkg/module.py:7: tests/unit::test_top: tests/unit is not a Python file, so it defines no test_top",
+        "src/pkg/module.py:8: tests/unit/test_pointed_at.py.TestRenamed:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestRenamed",
+        "src/pkg/module.py:9: tests/unit/test_pointed_at.py.TestGroup:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
+        "src/pkg/module.py:10: tests/unit/test_pointed_at.py.TestGroup.test_member:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup::test_member",
+        "src/pkg/module.py:11: tests/unit/test_pointed_at.py-TestGroup::TestNested.test_deep:"
+        " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep",
+        "src/pkg/module.py:12: tests/unit/test_pointed_at.py.bak:"
+        " tests/unit/test_pointed_at.py.bak does not exist, or git ignores it",
+        "src/pkg/module.py:13: tests/unit/test_absent.py.TestGroup:"
+        " tests/unit/test_absent.py.TestGroup does not exist, or git ignores it",
     ]
 
 
