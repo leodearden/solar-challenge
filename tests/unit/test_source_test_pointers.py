@@ -13,10 +13,12 @@ so a file git ignores is not there to point at. Its names are looked up in the s
 a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
 repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/
-that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused, naming the path to write.
-One that ends no file of tests/ is assumed to name another tree's or a throwaway project's file, so it is no pointer,
-but each test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a
-name given alone, as below.
+names its file up to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in
+test_<name>.py.<Class>, each word after the .py then being a name; otherwise it names its file whole, so a backup's
+test_<name>.py.bak names the backup. One whose file ends a test file tests/ holds, as test_<name>.py or
+<dir>/test_<name>.py does, is refused, naming the node-id to write. One whose file ends no file of tests/ is assumed to
+name another tree's or a throwaway project's file, so it is no pointer, but each test_<name> or Test<Name> after its
+.py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
@@ -63,7 +65,7 @@ _POINTER = re.compile(
     (?:
         (?:
             (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
-          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?P<after_py>(?:[\w.-]*\w)?))
+          | (?P<relative>(?P<up_to_py>(?:[\w.-]+/)*test_\w+\.py)(?P<after_py>(?:[\w.-]*\w)?))
         )
         (?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
       | (?<!def\ )(?<!class\ )(?P<bare>{_TEST_LIKE_NAME.pattern})
@@ -292,24 +294,50 @@ def _pointers_given(
 ) -> Sequence[_Pointer | _UnrootedPointer]:
     """Return the pointers *match* gives on *line* of the file *source* in the *checkout*, in text order.
 
-    A path rooted at tests/ gives one, and so does a path not rooted there that ends a file of tests/. A test-like name
-    given alone, and each test-like name after the .py of any other path, is read by _pointers_named_alone with
-    *own_names*.
+    A path rooted at tests/ gives one, and so does a path not rooted there whose file, as _unrooted_file_and_names reads
+    it, ends a file of tests/. A test-like name given alone, and each test-like name after the .py of any other path, is
+    read by _pointers_named_alone with *own_names*.
     """
     if match["bare"] is not None:
         return _pointers_named_alone(checkout, source, line, [match["bare"]], own_names)
-    names = tuple(match["names"].split("::")[1:])
-    dotted_names = tuple(match["dotted_names"].split(".")[1:])
     if match["path"] is not None:
+        names = tuple(match["names"].split("::")[1:])
+        dotted_names = tuple(match["dotted_names"].split(".")[1:])
         path = PurePosixPath(match["path"])
         return [_Pointer(source=source, line=line, path=path, names=names, dotted_names=dotted_names)]
-    files = checkout.test_files_ending(PurePosixPath(match["relative"]))
+    file, names_after_file = _unrooted_file_and_names(match)
+    files = checkout.test_files_ending(file)
     if files:
-        node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
+        node_ids = tuple("::".join((str(found), *names_after_file)) for found in files)
         return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
-    words_after_py = re.findall(r"\w+", match["after_py"] + match["names"] + match["dotted_names"])
-    test_like_names = [word for word in words_after_py if _TEST_LIKE_NAME.fullmatch(word)]
+    words_joined_after_py, names_after_path = _words_after_py(match)
+    test_like_names = [word for word in (*words_joined_after_py, *names_after_path) if _TEST_LIKE_NAME.fullmatch(word)]
     return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
+
+
+def _unrooted_file_and_names(match: re.Match[str]) -> tuple[PurePosixPath, tuple[str, ...]]:
+    """Return the file *match*'s path not rooted at tests/ names, and each name written after that file, in text order.
+
+    The first word joined after the path's .py tells which. A test-like one is a name, as in test_<name>.py.<Class>, so
+    the file ends at the .py and each word after the .py is a name. Any other is part of the file's name, as bak is of a
+    backup's test_<name>.py.bak, so the file is the whole path and its names are the :: and dotted names after it.
+    """
+    words_joined_after_py, names_after_path = _words_after_py(match)
+    if words_joined_after_py and _TEST_LIKE_NAME.fullmatch(words_joined_after_py[0]):
+        return PurePosixPath(match["up_to_py"]), (*words_joined_after_py, *names_after_path)
+    return PurePosixPath(match["relative"]), names_after_path
+
+
+def _words_after_py(match: re.Match[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the words joined after the .py of the path *match* gives, then the names written after that path.
+
+    The path is one not rooted at tests/. Its names are those joined with :: and then those joined with a dot. The two
+    parts together are every word after the .py, in text order.
+    """
+    return (
+        tuple(re.findall(r"\w+", match["after_py"])),
+        tuple(re.findall(r"\w+", match["names"] + match["dotted_names"])),
+    )
 
 
 def _pointers_named_alone(
@@ -769,6 +797,10 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         "# unit/test_pointed_at.py::TestGroup::test_member\n"
         "# test_pointed_at.py::TestGroup.test_member\n"
         "# test_twin.py\n"
+        "# test_pointed_at.py.TestRenamed and test_twin.py.TestRenamed join a name tests/ no longer holds with a dot,\n"
+        "# test_pointed_at.py.TestGroup.test_renamed a class and a member it no longer holds,\n"
+        "# unit/test_pointed_at.py-TestGroup::TestNested.test_deep a hyphen, then :: and a dot.\n"
+        "# test_pointed_at.py.TestGroup.helper keeps a word that names no test, as each word after the .py is a name.\n"
         "# config/test_pointed_at.py and lib/test_pointed_at.py end no file of tests/,"
         " nor does a throwaway test_gamma.py.\n"
         "# Nor do backups such as test_pointed_at.py.bak and unit/test_pointed_at.py-old.\n",
@@ -783,6 +815,16 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
         "src/pkg/module.py:4: test_twin.py: "
         + _named_without_its_path(["tests/e2e/test_twin.py", "tests/unit/test_twin.py"]),
+        "src/pkg/module.py:5: test_pointed_at.py.TestRenamed: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestRenamed"]),
+        "src/pkg/module.py:5: test_twin.py.TestRenamed: "
+        + _named_without_its_path(["tests/e2e/test_twin.py::TestRenamed", "tests/unit/test_twin.py::TestRenamed"]),
+        "src/pkg/module.py:6: test_pointed_at.py.TestGroup.test_renamed: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_renamed"]),
+        "src/pkg/module.py:7: unit/test_pointed_at.py-TestGroup::TestNested.test_deep: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep"]),
+        "src/pkg/module.py:8: test_pointed_at.py.TestGroup.helper: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::helper"]),
     ]
 
 
@@ -794,9 +836,11 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "# test_gone.py::TestGroup covers it.\n"
         "# unit/test_gone.py::TestGroup.test_member\n"
         "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n"
-        "# test_pointed_at.py.TestGroup.test_member joins its names to the file's with dots,\n"
+        "# test_gone.py.TestGroup.test_member joins its names to the file's with dots,\n"
         "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n"
-        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n",
+        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n"
+        "# test_pointed_at.py.bak.TestGroup names a backup first, so the name after it is read alone.\n"
+        "# test_gone.py.TestRenamed joins a name tests/ holds nothing by, so read alone it is no pointer.\n",
     )
     checkout = _Checkout(project)
 
@@ -812,6 +856,7 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "src/pkg/module.py:6: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
         "src/pkg/module.py:6: test_member: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:7: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
     ]
 
 
