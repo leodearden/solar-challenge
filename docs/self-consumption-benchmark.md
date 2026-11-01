@@ -174,6 +174,11 @@ This is a dated record. Re-measure before relying on it.
   - the Elexon PV-only ratio and every battery ratio read above Home all day: 25% PV
     only, and 52% at ≥3.1 <4.1 kWh, the default battery's column.
 
+**[Amended 2026-11-01, task 894: since task 894 the 2023 run demands 3,400.0 kWh, not
+3,325.0, because a calendar year now delivers its `annual_consumption_kwh`, and each day's
+load is placed on its own wall clock across the clock changes. The ratios above predate
+it; re-measure before comparing.]**
+
 ## 5. When to Revisit
 
 - MCS publishes a new MGD 003 issue or spreadsheet, or MIS 3002 stops requiring it.

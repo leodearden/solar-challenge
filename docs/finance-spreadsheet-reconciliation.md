@@ -148,7 +148,9 @@ calibration scenario's homes demand 3,400 kWh/yr (England's 2022 mean domestic
 electricity consumption per household, rounded: 3,399.87 kWh in DESNZ's *Subnational
 electricity consumption statistics 2005 to 2024*;
 `scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
-demand).  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
+demand). Since task 894 a simulated calendar year of a calibration home delivers exactly
+that demand; before it, the seasonal weights delivered 3,336.2 kWh over the scenario's
+2024, 2.2% short.  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
 15 p own-use rate instead of the 6 p export rate credits
 642.5 × (15 − 6) / 100 = £57.825/home/yr (£5,782.50/yr for 100 homes).
 
@@ -192,6 +194,12 @@ NOCT-SAM cell temperature, from the module's own NOCT and efficiency
 1,008.6 per wired kWp; without them 6,583.6 kWh, 1,197.0 and 1,174.4. The losses take
 929.6 kWh of its 2024. The five-home solve under the 0.70 override reads 2.20 p/kWh
 without the losses and 3.77 with them.]**
+
+**[Amended 2026-11-01, task 894: every figure above was measured with each home demanding
+3,336.2 kWh over the scenario's 2024, the seasonal weights' 2.2% shortfall; since task 894
+the year delivers the 3,400 kWh of §4.1. The specific yields do not read demand, but the
+five-home solves do, through the 0.70 override's cap of own-use at each home's demand. They
+are not re-measured here.]**
 
 ---
 
