@@ -23,7 +23,7 @@ Concerns:
                       test_reviewed_computed_name_writes_name_only_pinned_classes)
   H2 kind          — EXPECTED_KIND pins the introspected kind of each name
                      (test_expected_kind_keys_match_frozen_set,
-                      test_every_name_resolves_to_expected_kind)
+                      test_every_expected_kind_name_resolves_to_its_kind)
   H3 laziness      — pvlib is absent after bare import; present after touching PVConfig
                      (test_import_is_pvlib_free, test_touching_pvconfig_imports_pvlib)
   H4 collision     — DispatchTariffPeriod / TariffPeriod are distinct objects pointing
@@ -720,22 +720,8 @@ def test_dir_returns_sorted_all() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 kind: targeted gotcha-guard for names whose kind would be WRONG if
-# inferred from naming convention alone.
-#
-# The full surface is pinned by FROZEN_SURFACE above.  This table supplements
-# it with explicit kind checks only for the non-obvious entries:
-#   • FlatRateTariff  — CamelCase looks like a class; it is a factory function
-#   • GRID_SERVICES_RATE_BANDS — UPPER_CASE looks like a plain constant; it is
-#     a frozen-dataclass instance (still "constant" in our taxonomy, but the
-#     distinction is worth pinning)
-#   • DispatchTariffPeriod — Enum alias; verifies it resolves to a class, not
-#     to a string/sentinel from a botched re-export
-#
-# taxonomy (for reference):
-#   class    → inspect.isclass  (covers dataclasses, Enums, ABCs)
-#   function → inspect.isroutine (covers all def functions / factory callables)
-#   constant → neither           (dicts, tuples, lists, frozen-dataclass instances)
+# The kind each name below resolves to, where its spelling suggests another:
+# 'class', 'function' or 'constant', as _kind classifies it
 # ---------------------------------------------------------------------------
 EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
@@ -767,23 +753,12 @@ def test_expected_kind_keys_match_frozen_set() -> None:
     )
 
 
-def test_every_name_resolves_to_expected_kind() -> None:
-    """H2: all public names resolve via the PEP-562 lazy loader; gotcha kinds are correct.
+def test_every_expected_kind_name_resolves_to_its_kind() -> None:
+    """Each EXPECTED_KIND name resolves to an object of the kind EXPECTED_KIND pins for it.
 
-    Iterates every name in FROZEN_SET — exercises solar_challenge.__getattr__
-    and must not raise AttributeError for any name.
-
-    For the small subset named in EXPECTED_KIND (the gotcha entries where naming
-    convention would mislead), additionally asserts the introspected kind is correct.
+    On a failure, pytest's diff of the two dicts names each name whose kind has drifted.
     """
-    for name in sorted(FROZEN_SET):
-        obj = getattr(solar_challenge, name)  # triggers lazy loader; must not raise
-        if name in EXPECTED_KIND:
-            actual_kind = _kind(obj)
-            assert actual_kind == EXPECTED_KIND[name], (
-                f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
-                f"got kind={actual_kind!r} (type={type(obj).__name__})"
-            )
+    assert {name: _kind(getattr(solar_challenge, name)) for name in EXPECTED_KIND} == EXPECTED_KIND
 
 
 # ---------------------------------------------------------------------------
