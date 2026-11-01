@@ -16,6 +16,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.test import TestResponse
 
+from solar_challenge.web.request_boundary import require_encodable_text
 from tests._config_preset_rows import insert_saved_home_preset, saved_preset_names
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -180,6 +181,19 @@ class TestSavePreset:
             json={"name": "   ", "pv_kw": 4.0},
         )
         assert resp.status_code == 400
+
+    def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any database access."""
+        name = chr(0xD800)
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(name, "name")
+
+        resp = client.post("/api/presets", json={"name": name, "pv_kw": 4.0})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
 
     @pytest.mark.parametrize(
         ("preset_type", "error"),
