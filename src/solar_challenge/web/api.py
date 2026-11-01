@@ -722,7 +722,7 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
 def _refuse_unencodable_labels(labels: Mapping[RunLabel, object]) -> None:
     """Refuse *labels*, the run labels a PATCH body sends, when one is text require_encodable_text refuses.
 
-    A label that is not text is left to update_run_labels.
+    A label that is not text is not checked here.
 
     Raises:
         ValueError: From require_encodable_text, naming the label.
