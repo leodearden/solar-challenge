@@ -658,26 +658,28 @@ class TestANullSettingReadsAsAbsent:
 class TestAFleetDistributionPicklesAndDeepCopies:
     """A pickled or deep-copied fleet distribution rebuilds each ComponentDistribution through its constructor, so the copy equals the fleet and its components hold their draws and settings read-only."""
 
-    _FLEET = _parsed_fleet_distribution(
-        2,
-        seed=7,
-        pv={"capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": [1, 1]}, "tilt": 30},
-        load={"annual_consumption_kwh": 3400, "use_stochastic": False},
-        battery={
-            "capacity_kwh": 5.0,
-            "grid_charging": {"target_soc_fraction": 0.9},
-            "dispatch_strategy": {"strategy_type": "self_consumption"},
-        },
-        heat_pump={"heat_pump_type": {"type": "weighted_discrete", "values": ["ASHP", None], "weights": [1, 1]}},
-        ev={"charger_type": "7kW", "arrival_hour": 18},
-    )
-    """Every component, drawing pooled, fixed and chosen values, with bool, grid-charging and dispatch-strategy settings."""
+    @pytest.fixture
+    def fleet(self) -> FleetDistributionConfig:
+        """Every component, drawing pooled, fixed and chosen values, with bool, grid-charging and dispatch-strategy settings."""
+        return _parsed_fleet_distribution(
+            2,
+            seed=7,
+            pv={"capacity_kw": {"type": "shuffled_pool", "values": [3.0, 4.0], "counts": [1, 1]}, "tilt": 30},
+            load={"annual_consumption_kwh": 3400, "use_stochastic": False},
+            battery={
+                "capacity_kwh": 5.0,
+                "grid_charging": {"target_soc_fraction": 0.9},
+                "dispatch_strategy": {"strategy_type": "self_consumption"},
+            },
+            heat_pump={"heat_pump_type": {"type": "weighted_discrete", "values": ["ASHP", None], "weights": [1, 1]}},
+            ev={"charger_type": "7kW", "arrival_hour": 18},
+        )
 
     @pytest.mark.parametrize("copied", [_pickle_round_trip, copy.deepcopy], ids=["pickled", "deep-copied"])
     def test_the_copy_equals_the_fleet(
-        self, copied: Callable[[FleetDistributionConfig], FleetDistributionConfig]
+        self, fleet: FleetDistributionConfig, copied: Callable[[FleetDistributionConfig], FleetDistributionConfig]
     ) -> None:
-        assert copied(self._FLEET) == self._FLEET
+        assert copied(fleet) == fleet
 
     @pytest.mark.parametrize("copied", [_pickle_round_trip, copy.deepcopy], ids=["pickled", "deep-copied"])
     @pytest.mark.parametrize(
@@ -692,11 +694,12 @@ class TestAFleetDistributionPicklesAndDeepCopies:
     )
     def test_each_component_of_the_copy_holds_its_draws_and_settings_read_only(
         self,
+        fleet: FleetDistributionConfig,
         copied: Callable[[FleetDistributionConfig], FleetDistributionConfig],
         component_of: Callable[[FleetDistributionConfig], ComponentDistribution | None],
     ) -> None:
         """Assigning a key in the copied component's draws, or in its settings, raises TypeError."""
-        component = component_of(copied(self._FLEET))
+        component = component_of(copied(fleet))
 
         assert component is not None
         with pytest.raises(TypeError):
