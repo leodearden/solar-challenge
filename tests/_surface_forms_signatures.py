@@ -24,6 +24,7 @@ from tests._surface_forms_module_lookup import (
     is_get_delete_descriptor,
     is_routine,
     label_of,
+    overriding_getattribute_holder,
     own_annotations,
     own_namespace,
     recorded_mro,
@@ -1215,14 +1216,10 @@ def _type_defines_get(obj: object) -> bool:
 
 
 def _metaclass_may_provide_signature(cls: type) -> bool:
-    """Whether *cls*'s metaclass provides the __signature__ type.__getattribute__ gives inspect for *cls*, or may: a class in the metaclass's MRO other than type and object defines __getattribute__; the first one there that holds a __signature__ holds a data descriptor, which outranks *cls*'s own; or no class in *cls*'s MRO holds one, so a metaclass attribute, descriptor or __getattr__ provides it."""
-    metaclass_mro = recorded_mro(type(cls))
-    metaclass_holder = next(namespace_holders(metaclass_mro, "__signature__"), None)
-    getattribute_holders = namespace_holders(
-        (meta for meta in metaclass_mro if meta not in (type, object)), "__getattribute__"
-    )
+    """Whether *cls*'s metaclass provides the __signature__ type.__getattribute__ gives inspect for *cls*, or may: overriding_getattribute_holder finds a __getattribute__ in the metaclass's MRO; the first class there that holds a __signature__ holds a data descriptor, which outranks *cls*'s own; or no class in *cls*'s MRO holds one, so a metaclass attribute, descriptor or __getattr__ provides it."""
+    metaclass_holder = next(namespace_holders(recorded_mro(type(cls)), "__signature__"), None)
     return (
-        next(getattribute_holders, None) is not None
+        overriding_getattribute_holder(type(cls)) is not None
         or (
             metaclass_holder is not None
             and inspect.isdatadescriptor(own_namespace(metaclass_holder)["__signature__"])
