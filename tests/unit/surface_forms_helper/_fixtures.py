@@ -202,12 +202,33 @@ def metaclass_whose_dict_gives(namespace: Callable[[type], object]) -> type:
     return DictShadowing
 
 
-def dict_shadowing_refusal(name: str) -> str:
-    """The pattern of the TypeError for the class *name*, whose metaclass is one metaclass_whose_dict_gives makes."""
+def dict_shadowing_refusal(name: str, metaclass: str = "DictShadowing") -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO a metaclass metaclass_whose_dict_gives makes, holding a __dict__ that is a property; by default, *metaclass* is that one."""
     return (
-        rf"\.{name} has the metaclass \S*\.DictShadowing, whose MRO holds "
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
         r"\S*\.DictShadowing\.__dict__, a builtins\.property, in place of the __dict__ type "
         "gives each class"
+    )
+
+
+def metaclass_whose_getattribute_gives_dict(namespace: Callable[[type], object]) -> type:
+    """A metaclass whose __getattribute__ gives, for each class of it, what *namespace* gives for that class as its __dict__; it holds no __dict__ itself, so by inspect's rule it shadows none."""
+
+    class Intercepting(type):
+        def __getattribute__(cls, name: str) -> object:
+            return namespace(cls) if name == "__dict__" else super().__getattribute__(name)
+
+    return Intercepting
+
+
+def dict_intercepting_refusal(
+    name: str, metaclass: str = "Intercepting", holder: str = "Intercepting"
+) -> str:
+    """The pattern of the TypeError for the class *name*, whose metaclass *metaclass* has in its MRO the class *holder*, holding a __getattribute__; by default, both are the metaclass metaclass_whose_getattribute_gives_dict makes."""
+    return (
+        rf"\.{name} has the metaclass \S*\.{metaclass}, whose MRO holds "
+        rf"\S*\.{holder}\.__getattribute__, in place of the __getattribute__ type gives "
+        "each class"
     )
 
 

@@ -154,10 +154,11 @@ def member_forms(cls: type) -> dict[str, str]:
     string annotation is read as named_classes reads one, so a name its module does not
     bind raises NameError, a module inspect reads no source for raises TypeError, and a
     module another of the same name has replaced in sys.modules raises LookupError. A
-    class whose metaclass shadows __dict__ raises the TypeError own_namespace raises for
-    it. A public member that no member rule spells and that is a routine whose signature
-    inspect cannot read, as surface_form describes one, or a functools.partial, raises
-    TypeError naming *cls*, the member and its kind or binding.
+    class whose metaclass shadows __dict__ or defines __getattribute__ raises the
+    TypeError own_namespace raises for it. A public member that no member rule spells
+    and that is a routine whose signature inspect cannot read, as surface_form describes
+    one, or a functools.partial, raises TypeError naming *cls*, the member and its kind
+    or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -266,7 +267,7 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     An immutable type raises TypeError naming it before anything else is read, and a
     class with no class statement inspect can read, such as ast.AST or _json.Scanner,
     raises TypeError naming it when its source is read. A class whose metaclass shadows
-    __dict__ raises the TypeError own_namespace raises for it.
+    __dict__ or defines __getattribute__ raises the TypeError own_namespace raises for it.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming

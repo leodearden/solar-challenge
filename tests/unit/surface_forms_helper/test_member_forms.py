@@ -31,9 +31,11 @@ from tests.unit.surface_forms_helper._fixtures import (
     GetterPartial,
     Preset,
     SettableGetterPartial,
+    dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
     metaclass_whose_dict_gives,
+    metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
 )
 
@@ -678,6 +680,28 @@ def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_
         def settle(self, rate: int) -> None: ...
 
     with pytest.raises(TypeError, match=dict_shadowing_refusal("Meter")):
+        member_forms(Meter)
+
+
+@pytest.mark.parametrize(
+    "intercepted",
+    [
+        pytest.param({"rate": 1}, id="getattribute-giving-a-member-the-body-never-defines"),
+        pytest.param(
+            {"__annotations__": {"x": int}},
+            id="getattribute-giving-annotations-the-body-never-wrote",
+        ),
+    ],
+)
+def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_its_dict_gives(
+    intercepted: object,
+) -> None:
+    class Meter(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: intercepted)):
+        y: str
+
+        def settle(self, rate: int) -> None: ...
+
+    with pytest.raises(TypeError, match=dict_intercepting_refusal("Meter")):
         member_forms(Meter)
 
 
