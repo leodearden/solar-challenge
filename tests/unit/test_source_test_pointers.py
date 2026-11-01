@@ -790,6 +790,7 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         "# test_pointed_at.py.TestRenamed and test_twin.py.TestRenamed join a name tests/ no longer holds with a dot,\n"
         "# test_pointed_at.py.TestGroup.test_renamed a class and a member it no longer holds,\n"
         "# unit/test_pointed_at.py-TestGroup::TestNested.test_deep a hyphen, then :: and a dot.\n"
+        "# test_pointed_at.py.TestGroup.helper keeps a word that names no test, as each word after the .py is a name.\n"
         "# config/test_pointed_at.py and lib/test_pointed_at.py end no file of tests/,"
         " nor does a throwaway test_gamma.py.\n"
         "# Nor do backups such as test_pointed_at.py.bak and unit/test_pointed_at.py-old.\n",
@@ -812,6 +813,8 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_renamed"]),
         "src/pkg/module.py:7: unit/test_pointed_at.py-TestGroup::TestNested.test_deep: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep"]),
+        "src/pkg/module.py:8: test_pointed_at.py.TestGroup.helper: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::helper"]),
     ]
 
 
@@ -826,7 +829,8 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "# test_gone.py.TestGroup.test_member joins its names to the file's with dots,\n"
         "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n"
         "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n"
-        "# test_pointed_at.py.bak.TestGroup names a backup first, so the name after it is read alone.\n",
+        "# test_pointed_at.py.bak.TestGroup names a backup first, so the name after it is read alone.\n"
+        "# test_gone.py.TestRenamed joins a name tests/ holds nothing by, so read alone it is no pointer.\n",
     )
     checkout = _Checkout(project)
 
