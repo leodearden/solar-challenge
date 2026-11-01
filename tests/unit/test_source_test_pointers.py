@@ -11,18 +11,21 @@ so a file git ignores is not there to point at. Its names are looked up in the s
 a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
 repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
 
-A test function or class named any other way is refused: as test_<name> or Test<Name>, alone or next to its file in
-prose, or joined to a node-id's last name with a dot, as in ::<Class>.<test>. So is a test file named by its file name
-alone, as test_<name>.py. The settled form is the node-id, which pytest runs as written and this gate resolves. A name
-a file uses itself is no pointer: a name the Python module's own code uses, such as a parameter called test_config, or
-a key of the YAML file's own mappings, such as test_command. In any other file, such a key is written in words, as in
-"the verify's test command". Nor, outside a node-id, is a name written straight after a dot, so a third-party name
-that reads as a test, such as Werkzeug's TestResponse, is written after its module: werkzeug.test.TestResponse.
+A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
+test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
+dot, as in ::<Class>.<test>, and a test file by its file name or its stem alone, as test_<name>.py or test_<name>. The
+settled form is the node-id, which pytest runs as written and this gate resolves. A name given alone is a pointer only
+if tests/ holds a test, test class or test file by that name, so a name tests/ holds nothing by is none, such as a
+config key, a third-party class or a throwaway project's test. Nor is a name the file uses itself, in its Python code or
+as a key of its YAML mappings; a name written straight after def or class, as an example defines it; or, outside a
+node-id, a name written straight after a dot.
 """
 
 import ast
+import functools
 import re
-from collections.abc import Iterable, Iterator
+from collections import defaultdict
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -34,22 +37,19 @@ from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
 from tests._synthetic_checkout import synthetic_checkout, write_file
 from tests._working_tree import WorkingTreePaths, working_tree_paths
 
-_UNSCANNED = (PurePosixPath("tests"), *RECORD_DIRECTORIES)
+_TESTS = PurePosixPath("tests")
+
+_UNSCANNED = (_TESTS, *RECORD_DIRECTORIES)
 
 _POINTER = re.compile(
     r"""
     (?<![\w./-])
     (?:
         (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)(?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
-      | (?P<bare>test_\w+|Test[A-Z]\w*)
+      | (?<!def\ )(?<!class\ )(?P<bare>test_\w+|Test[A-Z]\w*)
     )
     """,
     re.VERBOSE,
-)
-
-_NAMED_WITHOUT_ITS_NODE_ID = (
-    "names a test or test file without its path: point at it from the project root, by its path tests/<file>.py"
-    " or its node-id tests/<file>.py::[<Class>::]<name>"
 )
 
 _OWN_NAMES_UNREADABLE = "does not parse, so the names it uses itself cannot be told from pointers"
@@ -57,22 +57,36 @@ _OWN_NAMES_UNREADABLE = "does not parse, so the names it uses itself cannot be t
 
 @dataclass(frozen=True)
 class _Pointer:
-    """A pointer into tests/: the file holding it, relative to the project root, its line, and the path and names it gives.
+    """A pointer into tests/ from the project root: the file holding it, its line, and the path and names it gives.
 
-    A test named without its file has no path, and its name is the one name. The dotted names follow the last name with
-    a dot, as in <Class>.<test>, and a node-id has none.
+    The dotted names follow the last name with a dot, as in <Class>.<test>, and a node-id has none.
     """
 
     source: PurePosixPath
     line: int
-    path: PurePosixPath | None
+    path: PurePosixPath
     names: tuple[str, ...]
     dotted_names: tuple[str, ...]
 
     def __str__(self) -> str:
-        parts = self.names if self.path is None else (str(self.path), *self.names)
         dotted = "".join(f".{name}" for name in self.dotted_names)
-        return f"{self.source}:{self.line}: {'::'.join(parts)}{dotted}"
+        return f"{self.source}:{self.line}: {'::'.join((str(self.path), *self.names))}{dotted}"
+
+
+@dataclass(frozen=True)
+class _UnrootedPointer:
+    """A pointer into tests/ written without its path from the project root: the file holding it, its line, its text.
+
+    Its node-ids are those of what it names, one for each test, test class or test file tests/ holds by it, sorted.
+    """
+
+    source: PurePosixPath
+    line: int
+    written: str
+    node_ids: tuple[str, ...]
+
+    def __str__(self) -> str:
+        return f"{self.source}:{self.line}: {self.written}"
 
 
 class _NoSyntaxTree(Enum):
@@ -111,6 +125,28 @@ class _Checkout:
             self._syntax_trees[path] = _syntax_tree(self.text(path))
         return self._syntax_trees[path]
 
+    def node_ids_named(self, name: str) -> tuple[str, ...]:
+        """Return the node-ids, sorted, of each def, class and test file the Python files under tests/ hold by *name*.
+
+        A def or class counts where a node-id resolves to it, as _undefined resolves one, and a test file goes by its
+        stem, as test_<name>, its node-id being its path. A file that is not UTF-8 text or does not parse adds no def.
+        """
+        return self._node_ids_by_name.get(name, ())
+
+    @functools.cached_property
+    def _node_ids_by_name(self) -> Mapping[str, tuple[str, ...]]:
+        node_ids: defaultdict[str, list[str]] = defaultdict(list)
+        for path in self.paths.files:
+            if path.suffix != ".py" or not path.is_relative_to(_TESTS):
+                continue
+            if path.name.startswith("test_"):
+                node_ids[path.stem].append(str(path))
+            module = self.syntax_tree(path)
+            if isinstance(module, ast.Module):
+                for name, node_id in _node_ids_defined(str(path), module.body):
+                    node_ids[name].append(node_id)
+        return {name: tuple(sorted(named)) for name, named in node_ids.items()}
+
 
 def _syntax_tree(text: str | None) -> ast.Module | _NoSyntaxTree:
     """Return the syntax tree of the Python module whose text, as utf8_text reads it, is *text*, or why it has none."""
@@ -122,9 +158,9 @@ def _syntax_tree(text: str | None) -> ast.Module | _NoSyntaxTree:
         return _NoSyntaxTree.DOES_NOT_PARSE
 
 
-def _pointers(checkout: _Checkout, sources: Iterable[PurePosixPath]) -> list[_Pointer]:
+def _pointers(checkout: _Checkout, sources: Iterable[PurePosixPath]) -> list[_Pointer | _UnrootedPointer]:
     """Return every pointer in the *sources*, paths relative to the *checkout*'s root, file by file and in text order."""
-    pointers: list[_Pointer] = []
+    pointers: list[_Pointer | _UnrootedPointer] = []
     for source in sources:
         text = checkout.text(source)
         if text is not None:
@@ -132,26 +168,31 @@ def _pointers(checkout: _Checkout, sources: Iterable[PurePosixPath]) -> list[_Po
     return pointers
 
 
-def _pointers_in(checkout: _Checkout, source: PurePosixPath, text: str) -> list[_Pointer]:
+def _pointers_in(checkout: _Checkout, source: PurePosixPath, text: str) -> list[_Pointer | _UnrootedPointer]:
     """Return the pointers in *text*, the text of the file *source* in the *checkout*, in text order.
 
-    A test name given alone that the file uses itself, as a Python module's identifier or a YAML file's key, is not one.
+    The names the file uses itself, as a Python module's identifiers or a YAML file's keys, are read only if a test-like
+    name is given alone in it.
     """
     matches = list(_POINTER.finditer(text))
     has_bare_name = any(match["bare"] is not None for match in matches)
     own_names = _own_names(checkout, source, text) if has_bare_name else frozenset()
-    return [
-        _pointer(source, text, match)
-        for match in matches
-        if match["bare"] is None or match["bare"] not in own_names
-    ]
+    found = (_pointer(checkout, source, text.count("\n", 0, match.start()) + 1, match, own_names) for match in matches)
+    return [pointer for pointer in found if pointer is not None]
 
 
-def _pointer(source: PurePosixPath, text: str, match: re.Match[str]) -> _Pointer:
-    """Return the pointer *match* found in *text*, the text of the file *source*."""
-    line = text.count("\n", 0, match.start()) + 1
+def _pointer(
+    checkout: _Checkout, source: PurePosixPath, line: int, match: re.Match[str], own_names: frozenset[str]
+) -> _Pointer | _UnrootedPointer | None:
+    """Return the pointer *match* gives on *line* of the file *source* in the *checkout*, or None if it gives none.
+
+    A test-like name given alone gives one only if it is not among *own_names*, those the file uses itself, and tests/
+    holds a test, test class or test file by it.
+    """
     if match["bare"] is not None:
-        return _Pointer(source=source, line=line, path=None, names=(match["bare"],), dotted_names=())
+        name = match["bare"]
+        node_ids = () if name in own_names else checkout.node_ids_named(name)
+        return _UnrootedPointer(source=source, line=line, written=name, node_ids=node_ids) if node_ids else None
     return _Pointer(
         source=source,
         line=line,
@@ -225,19 +266,34 @@ def _mapping_keys(node: yaml.Node) -> Iterator[str]:
                 yield from _mapping_keys(item)
 
 
-def _dangling(checkout: _Checkout, pointers: Iterable[_Pointer]) -> list[str]:
+def _dangling(checkout: _Checkout, pointers: Iterable[_Pointer | _UnrootedPointer]) -> list[str]:
     """Return "<pointer>: <reason>" for each of the *pointers* that does not resolve in the *checkout*, in their order."""
-    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _unresolved(checkout, pointer)) is not None]
+    return [f"{pointer}: {reason}" for pointer in pointers if (reason := _refusal(checkout, pointer)) is not None]
+
+
+def _refusal(checkout: _Checkout, pointer: _Pointer | _UnrootedPointer) -> str | None:
+    """Return why *pointer* does not resolve in the *checkout*, or None if it resolves.
+
+    One written without its path from the project root never resolves, and its reason names the node-ids to write.
+    """
+    match pointer:
+        case _UnrootedPointer(node_ids=node_ids):
+            return _named_without_its_path(node_ids)
+        case _Pointer():
+            return _unresolved(checkout, pointer)
+
+
+def _named_without_its_path(node_ids: Iterable[str]) -> str:
+    """Return the reason that refuses a pointer written without its path from the project root, naming *node_ids*."""
+    return f"names a test or test file without its path from the project root, so write {' or '.join(node_ids)}"
 
 
 def _unresolved(checkout: _Checkout, pointer: _Pointer) -> str | None:
     """Return why *pointer* leads to no file, directory or test in the *checkout*, or None if it leads to one.
 
-    It must give a path, with its names joined by ::, and the checkout's paths must hold that path. Its names are looked
-    up in the syntax tree of the Python file there, and the file is never imported.
+    Its names must be joined by ::, and the checkout's paths must hold its path. Its names are looked up in the syntax
+    tree of the Python file there, and the file is never imported.
     """
-    if pointer.path is None:
-        return _NAMED_WITHOUT_ITS_NODE_ID
     if pointer.dotted_names:
         node_id = "::".join((str(pointer.path), *pointer.names, *pointer.dotted_names))
         return f"a node-id joins its names with ::, so write {node_id}"
@@ -280,6 +336,15 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
         for statement in body
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
+
+
+def _node_ids_defined(prefix: str, body: list[ast.stmt]) -> Iterator[tuple[str, str]]:
+    """Yield the name and node-id, <prefix>::<name>, of each _definitions entry of *body*, and of each class's, nested."""
+    for name, definition in _definitions(body).items():
+        node_id = f"{prefix}::{name}"
+        yield name, node_id
+        if isinstance(definition, ast.ClassDef):
+            yield from _node_ids_defined(node_id, definition.body)
 
 
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
