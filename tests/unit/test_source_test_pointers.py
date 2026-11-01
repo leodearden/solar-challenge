@@ -14,9 +14,9 @@ a pointer naming a test in a Python file that is not UTF-8 text, or that does no
 repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/
 that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused, naming the path to write.
-One that ends no file of tests/ names another tree's or a throwaway project's file, so it is no pointer, but each
-test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name
-given alone, as below.
+One that ends no file of tests/ is assumed to name another tree's or a throwaway project's file, so it is no pointer,
+but each test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a
+name given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
