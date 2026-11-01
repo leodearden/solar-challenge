@@ -155,7 +155,13 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
         "        return super().__call__(*args, **kwargs)\n"
         "\n"
         "class Counted(metaclass=Counting):\n"
-        "    __signature__ = signature\n",
+        "    __signature__ = signature\n"
+        "\n"
+        "class SettingSignature(inspect.Signature):\n"
+        "    def __set__(self, instance, value): ...\n"
+        "\n"
+        "class SetRated(dict):\n"
+        "    __signature__ = SettingSignature(signature.parameters.values())\n",
     )
     rerates = imported_module(
         tmp_path,
@@ -173,6 +179,7 @@ def test_a_class_constructed_by_object_or_in_c_names_the_classes_its_signature_n
     assert named_classes(rates.Ordered) == {fractions.Fraction}
     assert named_classes(rates.Plain) == {fractions.Fraction}
     assert named_classes(rates.Counted) == {fractions.Fraction}
+    assert named_classes(rates.SetRated) == {fractions.Fraction}
     assert named_classes(functools.partial(rates.Rated)) == {fractions.Fraction}
     assert named_classes(rerates.Rerated) == {fractions.Fraction}
 
@@ -371,8 +378,15 @@ def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever
     assert named_classes(lookup_users.Shadowed) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "describing_base",
+    [
+        pytest.param("object", id="plain-class"),
+        pytest.param("inspect.Signature", id="inspect-signature-subclass"),
+    ],
+)
 def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_the_class_holding_that_descriptor_and_its_type_whatever_its_constructor(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, describing_base: str
 ) -> None:
     imported_module(
         tmp_path,
@@ -385,7 +399,7 @@ def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_
         "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
         ")\n"
         "\n"
-        "class Describing:\n"
+        f"class Describing({describing_base}):\n"
         "    def __get__(self, instance, owner):\n"
         "        return signature\n",
     )
@@ -393,6 +407,7 @@ def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_
         tmp_path,
         monkeypatch,
         "described",
+        "import functools\n"
         "from decimal import Decimal as Share\n"
         "\n"
         "from describing import Describing\n"
@@ -406,24 +421,46 @@ def test_a_class_whose_signature_a_descriptor_gives_raises_type_error_naming_it_
         "class DefinedDescribed:\n"
         "    __signature__ = Describing()\n"
         "\n"
-        "    def __init__(self, share: 'Share') -> None: ...\n",
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Bound:\n"
+        "    __init__ = staticmethod(object().__init__)\n"
+        "\n"
+        "class BoundDescribed(Bound):\n"
+        "    __signature__ = Describing()\n"
+        "\n"
+        "class PlainDescribed:\n"
+        "    __signature__ = Describing()\n"
+        "\n"
+        "carried = Describing()\n"
+        "\n"
+        "def _relayed(receiver: 'Share', rate: int) -> None: ...\n"
+        "\n"
+        "relay = functools.wraps(object.__init__)(_relayed)\n"
+        "relay.__signature__ = carried\n"
+        "\n"
+        "class Relayed:\n"
+        "    __init__ = relay\n"
+        "\n"
+        "class LinkDescribed(Relayed):\n"
+        "    __signature__ = carried\n",
     )
 
-    with pytest.raises(TypeError) as own:
-        named_classes(described.Described)
-    with pytest.raises(TypeError) as inherited:
-        named_classes(described.Redescribed)
-    with pytest.raises(TypeError) as defined:
-        named_classes(described.DefinedDescribed)
+    holder_of = {
+        "Described": "Described",
+        "Redescribed": "Described",
+        "DefinedDescribed": "DefinedDescribed",
+        "BoundDescribed": "BoundDescribed",
+        "PlainDescribed": "PlainDescribed",
+        "LinkDescribed": "LinkDescribed",
+    }
+    for name, holder in holder_of.items():
+        with pytest.raises(TypeError) as raised:
+            named_classes(getattr(described, name))
 
-    assert "described.Described" in str(own.value)
-    assert "describing.Describing" in str(own.value)
-    assert "builtins.type" not in str(own.value)
-    assert "described.Redescribed" in str(inherited.value)
-    assert "described.Described" in str(inherited.value)
-    assert "describing.Describing" in str(inherited.value)
-    assert "described.DefinedDescribed" in str(defined.value)
-    assert "describing.Describing" in str(defined.value)
+        for text in (f"described.{name}", f"described.{holder}", "describing.Describing"):
+            assert text in str(raised.value)
+        assert "builtins.type" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
