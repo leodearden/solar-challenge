@@ -106,7 +106,6 @@ __all__: list[str] = [
 
 # ---------------------------------------------------------------------------
 # Internal mapping: public name → origin submodule
-# Invariant: set(_SYMBOL_MODULE.keys()) == set(__all__)
 # ---------------------------------------------------------------------------
 _SYMBOL_MODULE: dict[str, str] = {
     # finance
@@ -196,21 +195,31 @@ _SYMBOL_MODULE: dict[str, str] = {
     "Location": "location",
 }
 
-# Sanity check at import time: every __all__ name must have a mapping.
-# Uses an explicit RuntimeError (not bare assert) so the check survives -O/-OO.
-if set(_SYMBOL_MODULE) != set(__all__):
-    raise RuntimeError(
-        f"_SYMBOL_MODULE / __all__ mismatch: "
-        f"extra={set(_SYMBOL_MODULE)-set(__all__)}, "
-        f"missing={set(__all__)-set(_SYMBOL_MODULE)}"
-    )
-
 # ---------------------------------------------------------------------------
 # Alias resolution: public name differs from the symbol name in the origin module
 # ---------------------------------------------------------------------------
 _SOURCE_NAME: dict[str, str] = {
     "DispatchTariffPeriod": "TariffPeriod",   # dispatch.TariffPeriod (Enum) — collision-renamed
 }
+
+# ---------------------------------------------------------------------------
+# Import-time agreement check of the tables above
+# ---------------------------------------------------------------------------
+def _refuse_disagreeing_tables() -> None:
+    """Raise RuntimeError naming each name on which __all__, _SYMBOL_MODULE and _SOURCE_NAME disagree."""
+    exported = set(__all__)
+    offenders_by_rule = {
+        "names listed more than once in __all__": {name for name in __all__ if __all__.count(name) > 1},
+        "names in __all__ with no _SYMBOL_MODULE entry": exported - _SYMBOL_MODULE.keys(),
+        "names in _SYMBOL_MODULE but not in __all__": _SYMBOL_MODULE.keys() - exported,
+        "names aliased in _SOURCE_NAME but not in __all__": _SOURCE_NAME.keys() - exported,
+    }
+    broken = [f"{rule}: {sorted(names)}" for rule, names in offenders_by_rule.items() if names]
+    if broken:
+        raise RuntimeError(f"__all__, _SYMBOL_MODULE and _SOURCE_NAME disagree: {'; '.join(broken)}")
+
+
+_refuse_disagreeing_tables()
 
 # ---------------------------------------------------------------------------
 # PEP-562 lazy attribute loader
