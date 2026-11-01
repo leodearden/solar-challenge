@@ -924,21 +924,21 @@ moves. A row takes the mean of the minutes it spans, and a cadence that is not
 whole minutes raises `ValueError` naming it. Each day's energy is the annual
 consumption × `SEASONAL_FACTORS[month]` / the factors summed over the days of
 its calendar year, so a whole calendar year delivers `annual_consumption_kwh`
-exactly, on both paths: demand rises about 2.2%, to 3,400.0 kWh for 2023 (tag
-3,325.0) and 3,400.0 for 2024 (tag 3,336.2). `simulate_home`'s rows run from
-its first local date's midnight to the midnight after its last, at one minute
-on the location's clock; a tz-aware date in another zone is read as its date on
-that clock, and a naive one as already on it. So a run whose last day is the
-March change day ends at 23:59 on it, and its `SimulationResults.window` ends
-that day, where the tag's ends the day after. `calculate_summary` still counts
-`simulation_days` from the rows' span, so a run whose last day is the October
-change day now counts one day more than its window holds, 3 for 2024-10-26..27
-where the tag counts 2, as the tag already does for a run past that day. The
-stochastic fallback to the Elexon profile fires only when the
-household model raises or gives a day that is not 1,440 minutes long; a window
-whose simulated days have no energy now raises `ValueError`, where the tag
-gives the Elexon profile with a warning. Consumers re-baseline demand figures
-when they re-pin.
+exactly, on both paths: demand rises to 3,400.0 kWh for 2023, 2.3% above the
+tag's 3,325.0, and to 3,400.0 for 2024, 1.9% above the tag's 3,336.2.
+`simulate_home`'s rows run from its first local date's midnight to the midnight
+after its last, at one minute on the location's clock; a tz-aware date in
+another zone is read as its date on that clock, and a naive one as already on
+it. So a run whose last day is the March change day ends at 23:59 on it, and
+its `SimulationResults.window` ends that day, where the tag's ends the day
+after. `calculate_summary` still counts `simulation_days` from the rows' span,
+so a run whose last day is the October change day now counts one day more than
+its window holds, 3 for 2024-10-26..27 where the tag counts 2, as the tag
+already does for a run past that day. The stochastic fallback to the Elexon
+profile fires only when the household model raises or gives a day that is not
+1,440 minutes long; a window whose simulated days have no energy now raises
+`ValueError`, where the tag gives the Elexon profile with a warning. Consumers
+re-baseline demand figures when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

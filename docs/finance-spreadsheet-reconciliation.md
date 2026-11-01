@@ -150,7 +150,7 @@ electricity consumption statistics 2005 to 2024*;
 `scenarios/bristol-fin-calibration.yaml`; §1's transcribed cells carry no household
 demand). Since task 894 a simulated calendar year of a calibration home delivers exactly
 that demand; before it, the seasonal weights delivered 3,336.2 kWh over the scenario's
-2024, 2.2% short.  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
+2024, 1.9% short.  So 642.5 kWh/home is own-use no household consumes, and pricing it at the
 15 p own-use rate instead of the 6 p export rate credits
 642.5 × (15 − 6) / 100 = £57.825/home/yr (£5,782.50/yr for 100 homes).
 
@@ -196,7 +196,7 @@ NOCT-SAM cell temperature, from the module's own NOCT and efficiency
 without the losses and 3.77 with them.]**
 
 **[Amended 2026-11-01, task 894: every figure above was measured with each home demanding
-3,336.2 kWh over the scenario's 2024, the seasonal weights' 2.2% shortfall; since task 894
+3,336.2 kWh over the scenario's 2024, the seasonal weights' 1.9% shortfall; since task 894
 the year delivers the 3,400 kWh of §4.1. The specific yields do not read demand, but the
 five-home solves do, through the 0.70 override's cap of own-use at each home's demand. They
 are not re-measured here.]**
