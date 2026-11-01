@@ -100,26 +100,27 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     Each value is read once, as given, by the reader the loaders read it with, so the
     simulate endpoint and the export, which both read the form here, refuse it at the same
     value with the same message.  A form with a top-level key the fleet form does not have
-    is refused, naming it, before any value is read.
+    is refused, naming it, before any value is read.  The name is read first, so a name
+    holding a lone surrogate is refused before any home is generated.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
             listing the fleet form's keys.
-        ValueError, TypeError: From the form's distribution conversion, location, SEG or
-            date range, or for a date that does not parse.
         ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
+        ValueError, TypeError: From the form's distribution conversion, location, SEG or
+            date range, or for a date that does not parse.
         ConfigurationError: For a block the loaders refuse, or homes they cannot generate.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
+    sent_name = form.get("name")
+    refuse_unencodable_text(sent_name, "name")
+    name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(dict(form))
     fleet = parse_fleet_distribution_config(distribution)
     location = _fleet_form_location(form)
     homes = _with_fleet_overlay(generate_homes_from_distribution(fleet, location), form)
     start, end = parse_date_range(form)
-    sent_name = form.get("name")
-    refuse_unencodable_text(sent_name, "name")
-    name = sent_name if is_run_name(sent_name) else None
     return ParsedFleetForm(
         name=name,
         homes=tuple(homes),

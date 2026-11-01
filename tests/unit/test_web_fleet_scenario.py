@@ -174,13 +174,21 @@ class TestParseFleetForm:
 
 
 class TestParseFleetFormName:
-    """The name parse_fleet_form reads: refused when it is text that does not encode as UTF-8."""
+    """The name parse_fleet_form reads: refused when it is text that does not encode as UTF-8, before the fleet is read."""
 
     def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
         with pytest.raises(ValueError) as expected:
             require_encodable_text(chr(0xD800), "name")
         with pytest.raises(ValueError) as refusal:
             parse_fleet_form({**_FLEET_FORM, "name": chr(0xD800)})
+        assert str(refusal.value) == str(expected.value)
+
+    def test_a_name_holding_a_lone_surrogate_is_refused_before_the_fleet_is_read(self) -> None:
+        """A form whose pv distribution is refused too gets the name's refusal, so a refused name costs no home generation."""
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(chr(0xD800), "name")
+        with pytest.raises(ValueError) as refusal:
+            parse_fleet_form({**_without(_FLEET_FORM, "pv"), "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
 
 
