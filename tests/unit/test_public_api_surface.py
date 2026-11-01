@@ -774,12 +774,19 @@ def test_every_expected_kind_name_resolves_to_its_kind() -> None:
 # ===========================================================================
 
 _IMPORT_PROBE = """\
+import importlib.util
 import json
 import sys
+from pathlib import Path
 
-sys.path.insert(0, sys.argv[1])
+package = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "solar_challenge", package / "__init__.py", submodule_search_locations=[str(package)]
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["solar_challenge"] = module
 try:
-    import solar_challenge
+    spec.loader.exec_module(module)
 except RuntimeError as refusal:
     print(json.dumps(str(refusal)))
 else:
@@ -825,9 +832,10 @@ def test_importing_the_package_refuses_tables_that_disagree(
 ) -> None:
     """Importing a copy of the package whose *table* starts with *entry* raises RuntimeError naming *offender*.
 
-    The copy runs under -O, so an assert could not stand in for the check.  A copy of
-    __init__.py alone suffices, because the package imports only importlib and typing at
-    runtime.
+    The copy runs under -O, so an assert could not stand in for the check.  The probe
+    loads the copy by its path, not by a search of sys.path, so no installed
+    solar_challenge can be imported in its place.  A copy of __init__.py alone suffices,
+    because the package imports only importlib and typing at runtime.
     """
     package = tmp_path / "solar_challenge"
     package.mkdir()
@@ -836,7 +844,7 @@ def test_importing_the_package_refuses_tables_that_disagree(
         encoding="utf-8",
     )
     result = subprocess.run(
-        [sys.executable, "-I", "-O", "-c", _IMPORT_PROBE, str(tmp_path)],
+        [sys.executable, "-I", "-O", "-c", _IMPORT_PROBE, str(package)],
         capture_output=True,
         text=True,
         check=False,
