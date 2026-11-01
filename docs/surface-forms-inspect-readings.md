@@ -873,6 +873,9 @@ for such a class, as for any class `member_forms` refuses. `member_forms`' docst
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_type_error_naming_it_that_holder_and_the_type_of_what_it_holds`
+- `tests/unit/surface_forms_helper/test_named_classes_grammar.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it`
+- `tests/unit/surface_forms_helper/test_unset_attributes.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it`
+- `tests/unit/surface_forms_helper/test_signature_closure.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it`
 
 ## 5. When the Admitted Minors Change
 
