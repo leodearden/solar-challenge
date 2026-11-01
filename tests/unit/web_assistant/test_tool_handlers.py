@@ -1056,6 +1056,21 @@ class TestRunFleetSimulation:
             resolve_location("Cardiff")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
+    def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:
+        """A fleet name the model sends holding a lone surrogate, which the run store cannot bind, is returned as require_encodable_text's refusal naming name, never a fleet; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_fleet_simulation(
+            3,
+            {"pv_kw": 4, "days": 7, "location": "bristol", "name": chr(0xD800)},
+            jm,
+            _results_url_for_test,
+        )
+
+        jm.submit_fleet_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
 
 _REAL_JOB_DAYS = web_job_days(count=1)
 bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
