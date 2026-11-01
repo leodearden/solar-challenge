@@ -273,14 +273,15 @@ def _definitions(body: list[ast.stmt]) -> dict[str, ast.FunctionDef | ast.AsyncF
 
 
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
-    pointers = _pointers(project_root, scanned_files(project_root, _UNSCANNED))
+    checkout = _Checkout(project_root)
+    pointers = _pointers(checkout, scanned_files(project_root, _UNSCANNED))
     unscanned = ", ".join(f"{directory}/" for directory in _UNSCANNED)
     assert pointers, (
         f"found no pointer into tests/ in any file git lists outside the unscanned directories ({unscanned}), so this"
         " gate would pass vacuously; fix the listing or the grammar"
     )
 
-    dangling = _dangling(project_root, pointers)
+    dangling = _dangling(checkout, pointers)
 
     assert dangling == [], "\n".join(
         [
@@ -340,8 +341,9 @@ def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path)
         "# Not rooted at tests/: src/tests/test_gone.py, https://example.org/pvlib/tests/test_gone.py,\n"
         "# unittests/test_gone.py, my-tests/test_gone.py and site.tests/test_gone.py\n",
     )
+    checkout = _Checkout(project)
 
-    pointers = _pointers(project, [source])
+    pointers = _pointers(checkout, [source])
 
     assert [str(pointer) for pointer in pointers] == [
         "src/pkg/module.py:1: tests/unit/test_pointed_at.py",
@@ -352,7 +354,7 @@ def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path)
         "src/pkg/module.py:6: tests/unit/test_pointed_at.py::TestGroup::test_member",
         "src/pkg/module.py:7: tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep",
     ]
-    assert _dangling(project, pointers) == []
+    assert _dangling(checkout, pointers) == []
 
 
 def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -> None:
@@ -367,8 +369,9 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/notes.txt::test_top\n"
         "# tests/unit::test_top\n",
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         "src/pkg/module.py:1: tests/unit/test_absent.py:"
         " tests/unit/test_absent.py does not exist, or git ignores it",
         "src/pkg/module.py:2: tests/unit/test_pointed_at.py::test_member:"
@@ -390,8 +393,9 @@ def test_a_file_or_directory_git_ignores_does_not_resolve(project: Path) -> None
     source = write_file(
         project, "src/pkg/module.py", "# tests/unit/generated/test_made.py::test_made\n# tests/unit/generated\n"
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         "src/pkg/module.py:1: tests/unit/generated/test_made.py::test_made:"
         " tests/unit/generated/test_made.py does not exist, or git ignores it",
         "src/pkg/module.py:2: tests/unit/generated: tests/unit/generated does not exist, or git ignores it",
@@ -407,8 +411,9 @@ def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: 
         "# tests/unit/test_latin1.py::TestGroup::test_member\n"
         "# tests/unit/test_latin1.py names no test\n",
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         "src/pkg/module.py:1: tests/unit/test_latin1.py::test_top:"
         " tests/unit/test_latin1.py is not UTF-8 text, so it defines no test_top",
         "src/pkg/module.py:2: tests/unit/test_latin1.py::TestGroup::test_member:"
@@ -425,8 +430,9 @@ def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Pa
         "# tests/unit/test_broken.py::TestGroup::test_member\n"
         "# tests/unit/test_broken.py names no test\n",
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         "src/pkg/module.py:1: tests/unit/test_broken.py::test_top:"
         " tests/unit/test_broken.py does not parse, so it defines no test_top",
         "src/pkg/module.py:2: tests/unit/test_broken.py::TestGroup::test_member:"
@@ -441,8 +447,9 @@ def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mar
         "src/pkg/module.py",
         "# tests/unit/test_marked.py::test_top\n# tests/unit/test_marked.py::test_absent\n",
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         "src/pkg/module.py:2: tests/unit/test_marked.py::test_absent:"
         " tests/unit/test_marked.py defines no test_absent at its top level",
     ]
@@ -450,11 +457,12 @@ def test_resolves_a_pointer_into_a_python_file_that_starts_with_a_byte_order_mar
 
 def test_skips_a_file_that_is_not_utf8_text(project: Path) -> None:
     logo = write_file(project, "src/pkg/logo.png", b"\x89PNG\xff\xfe tests/unit/test_absent.py")
+    checkout = _Checkout(project)
 
-    pointers = _pointers(project, [logo])
+    pointers = _pointers(checkout, [logo])
 
     assert pointers == []
-    assert _dangling(project, pointers) == []
+    assert _dangling(checkout, pointers) == []
 
 
 def test_reads_the_pointers_in_a_python_source_that_starts_with_a_byte_order_mark(project: Path) -> None:
@@ -463,8 +471,9 @@ def test_reads_the_pointers_in_a_python_source_that_starts_with_a_byte_order_mar
         "src/pkg/marked.py",
         "# pinned by test_top\ndef build(test_config=None):\n    return test_config\n".encode("utf-8-sig"),
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         f"src/pkg/marked.py:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
 
@@ -482,8 +491,9 @@ def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Pa
         "// Not a test name: src/tests/test_gone.py or pre-test_gone\n"
         "// test_pointed_at.py holds them.\n",
     )
+    checkout = _Checkout(project)
 
-    assert _dangling(project, _pointers(project, [source])) == [
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
         f"src/pkg/script.js:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:2: TestGroup: {_NAMED_WITHOUT_ITS_NODE_ID}",
         f"src/pkg/script.js:3: test_member: {_NAMED_WITHOUT_ITS_NODE_ID}",
@@ -504,9 +514,10 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
         "    return test_config\n",
     )
     naming = write_file(project, "src/pkg/other.py", "# Set test_config first.\ndef build():\n    return None\n")
+    checkout = _Checkout(project)
 
-    assert _pointers(project, [using]) == []
-    assert _dangling(project, _pointers(project, [naming])) == [
+    assert _pointers(checkout, [using]) == []
+    assert _dangling(checkout, _pointers(checkout, [naming])) == [
         f"src/pkg/other.py:1: test_config: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
 
@@ -522,17 +533,19 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix
         "    test_timeout: 60  # test_timeout bounds the job\n",
     )
     naming = write_file(project, f"other{suffix}", "# Set test_command first.\nname: lint\n")
+    checkout = _Checkout(project)
 
-    assert _pointers(project, [using]) == []
-    assert _dangling(project, _pointers(project, [naming])) == [
+    assert _pointers(checkout, [using]) == []
+    assert _dangling(checkout, _pointers(checkout, [naming])) == [
         f"other{suffix}:1: test_command: {_NAMED_WITHOUT_ITS_NODE_ID}"
     ]
 
 
 def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under_any_tag(project: Path) -> None:
     using = write_file(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
+    checkout = _Checkout(project)
 
-    assert _pointers(project, [using]) == []
+    assert _pointers(checkout, [using]) == []
 
 
 @pytest.mark.parametrize(
@@ -542,6 +555,7 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under
 )
 def test_reports_a_python_or_yaml_file_that_does_not_parse_by_its_path(project: Path, source: str, text: str) -> None:
     broken = write_file(project, source, text)
+    checkout = _Checkout(project)
 
     with pytest.raises(ValueError, match=f"^{re.escape(source)} does not parse"):
-        _pointers(project, [broken])
+        _pointers(checkout, [broken])
