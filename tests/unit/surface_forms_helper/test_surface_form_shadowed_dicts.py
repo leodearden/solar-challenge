@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's surface_form for a class whose metaclass shadows __dict__, as a metaclass that defines __dict__ as a property does, or whose metaclass defines __getattribute__, through which it may give another __dict__, and for an object of such a class, one per test.
+"""The rules of tests/_surface_forms.py's surface_form for a class whose metaclass shadows __dict__, as a metaclass that defines __dict__ as a property does, or whose metaclass's MRO holds a __getattribute__ that tests/_surface_forms_class_reads.py's overriding_getattribute_holder finds, which may give another __dict__, and for an object of such a class, one per test.
 
 The classes and the function above the first test are defined at module level, where
 their qualified names carry no '<locals>' and a parametrize decorator can reach them.
