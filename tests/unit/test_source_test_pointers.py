@@ -608,7 +608,8 @@ def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: 
         "src/pkg/module.py",
         "# tests/unit/test_latin1.py::test_top\n"
         "# tests/unit/test_latin1.py::TestGroup::test_member\n"
-        "# tests/unit/test_latin1.py names no test\n",
+        "# tests/unit/test_latin1.py names no test\n"
+        "# pinned by test_top\n",
     )
     checkout = _Checkout(project)
 
@@ -617,6 +618,7 @@ def test_reports_each_pointer_into_a_python_file_that_is_not_utf8_text(project: 
         " tests/unit/test_latin1.py is not UTF-8 text, so it defines no test_top",
         "src/pkg/module.py:2: tests/unit/test_latin1.py::TestGroup::test_member:"
         " tests/unit/test_latin1.py is not UTF-8 text, so it defines no TestGroup",
+        "src/pkg/module.py:4: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
     ]
 
 
@@ -627,7 +629,8 @@ def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Pa
         "src/pkg/module.py",
         "# tests/unit/test_broken.py::test_top\n"
         "# tests/unit/test_broken.py::TestGroup::test_member\n"
-        "# tests/unit/test_broken.py names no test\n",
+        "# tests/unit/test_broken.py names no test\n"
+        "# pinned by test_top\n",
     )
     checkout = _Checkout(project)
 
@@ -636,6 +639,7 @@ def test_reports_each_pointer_into_a_python_file_that_does_not_parse(project: Pa
         " tests/unit/test_broken.py does not parse, so it defines no test_top",
         "src/pkg/module.py:2: tests/unit/test_broken.py::TestGroup::test_member:"
         " tests/unit/test_broken.py does not parse, so it defines no TestGroup",
+        "src/pkg/module.py:4: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
     ]
 
 
@@ -785,32 +789,48 @@ def test_a_pointer_written_without_its_path_names_a_node_id_to_write() -> None:
 
 
 @pytest.mark.parametrize(
-    ("source", "lines_and_letters"),
+    ("source", "line_break", "lines_and_letters"),
     [
-        ("tests/unit/test_prose.py", [(1, "a"), (2, "b"), (3, "c"), (6, "d"), (11, "e"), (12, "f")]),
-        ("src/pkg/prose.py", [(1, "a"), (2, "b"), (3, "x"), (3, "c"), (6, "d"), (8, "y"), (11, "e"), (12, "f")]),
+        (
+            "tests/unit/test_prose.py",
+            "\n",
+            [(1, "a"), (2, "b"), (3, "c"), (6, "d"), (11, "e"), (12, "f"), (13, "g"), (16, "h")],
+        ),
+        (
+            "tests/unit/test_prose.py",
+            "\r\n",
+            [(1, "a"), (2, "b"), (3, "c"), (6, "d"), (11, "e"), (12, "f"), (13, "g"), (16, "h")],
+        ),
+        (
+            "src/pkg/prose.py",
+            "\n",
+            [(1, "a"), (2, "b"), (3, "x"), (3, "c"), (6, "d"), (8, "y"), (11, "e"), (12, "f"), (13, "g"), (16, "h")],
+        ),
     ],
-    ids=["under-tests", "outside-tests"],
+    ids=["under-tests", "under-tests-crlf", "outside-tests"],
 )
 def test_reads_a_test_module_only_in_its_comments_and_string_statements(
-    project: Path, source: str, lines_and_letters: list[tuple[int, str]]
+    project: Path, source: str, line_break: str, lines_and_letters: list[tuple[int, str]]
 ) -> None:
-    prose = write_file(
-        project,
-        source,
-        '"""Prose naming tests/unit/test_absent_a.py."""\n'
-        "# tests/unit/test_absent_b.py says why.\n"
-        'FORM = "tests/unit/test_absent_x.py"  # tests/unit/test_absent_c.py\n'
-        "def test_case():\n"
-        '    """Check the case.\n'
-        "    tests/unit/test_absent_d.py pins it.\n"
-        '    """\n'
-        '    assert check("tests/unit/test_absent_y.py")\n'
-        "class TestCase:\n"
-        "    FIELDS = {}\n"
-        '    """tests/unit/test_absent_e.py lists them."""\n'
-        '"tests/unit/test_absent_f.py is named in a string statement that is no docstring."\n',
-    )
+    lines = [
+        '"""Prose naming tests/unit/test_absent_a.py."""',
+        "# tests/unit/test_absent_b.py says why.",
+        'FORM = "tests/unit/test_absent_x.py"  # tests/unit/test_absent_c.py',
+        "def test_case():",
+        '    """Check the case.',
+        "    tests/unit/test_absent_d.py pins it.",
+        '    """',
+        '    assert check("tests/unit/test_absent_y.py")',
+        "class TestCase:",
+        "    FIELDS = {}",
+        '    """tests/unit/test_absent_e.py lists them."""',
+        '"tests/unit/test_absent_f.py is named in a string statement that is no docstring."',
+        'ANGLE = "θé"; "tests/unit/test_absent_g.py follows text that is not ASCII on its line."',
+        "def test_angle():",
+        '    """Check θ, the angle § 2 gives —',
+        '    tests/unit/test_absent_h.py pins it."""',
+    ]
+    prose = write_file(project, source, "".join(f"{line}{line_break}" for line in lines))
     checkout = _Checkout(project)
 
     assert _dangling(checkout, _pointers(checkout, [prose])) == [
