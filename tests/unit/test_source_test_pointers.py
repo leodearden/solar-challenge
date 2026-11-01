@@ -4,21 +4,24 @@
 The scanned files are those git lists outside the _UNSCANNED directories, which hold the tests themselves and records
 that name tests as they were when written, such as the PRDs and research notes under docs/.
 
-A pointer is a path rooted at tests/, optionally followed by the ::<Class> and ::<test> names of a pytest node-id, as in
-tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments, docstrings and code alike. A
-file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
-so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
-a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
-repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
+A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
+names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments,
+docstrings and code alike. A file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a
+fresh clone would hold them, so a file git ignores is not there to point at. Its names are looked up in the syntax tree
+of the Python file there, so a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is
+reported. A path in another repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so
+it is not rooted at tests/. A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or
+<dir>/test_<name>.py, is refused, naming the path to write. One that ends no file of tests/ names another tree's or a
+throwaway project's file, so it is no pointer.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
-dot, as in ::<Class>.<test>, and a test file by its file name or its stem alone, as test_<name>.py or test_<name>. The
-settled form is the node-id, which pytest runs as written and this gate resolves. A name given alone is a pointer only
-if tests/ holds a test, test class or test file by that name, so a name tests/ holds nothing by is none, such as a
-config key, a third-party class or a throwaway project's test. Nor is a name the file uses itself, in its Python code or
-as a key of its YAML mappings; a name written straight after def or class, as an example defines it; or, outside a
-node-id, a name written straight after a dot.
+dot, as in ::<Class>.<test>, and a test file by its stem alone, as test_<name>. The settled form is the node-id, which
+pytest runs as written and this gate resolves. A name given alone is a pointer only if tests/ holds a test, test class
+or test file by that name, so a name tests/ holds nothing by is none, such as a config key, a third-party class or a
+throwaway project's test. Nor is a name the file uses itself, in its Python code or as a key of its YAML mappings; a
+name written straight after def or class, as an example defines it; or, outside a node-id, a name written straight
+after a dot.
 """
 
 import ast
@@ -45,7 +48,11 @@ _POINTER = re.compile(
     r"""
     (?<![\w./-])
     (?:
-        (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)(?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
+        (?:
+            (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
+          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?!\w))
+        )
+        (?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
       | (?<!def\ )(?<!class\ )(?P<bare>test_\w+|Test[A-Z]\w*)
     )
     """,
@@ -147,6 +154,19 @@ class _Checkout:
                     node_ids[name].append(node_id)
         return {name: tuple(sorted(named)) for name, named in node_ids.items()}
 
+    def test_files_ending(self, relative: PurePosixPath) -> tuple[PurePosixPath, ...]:
+        """Return the files under tests/ whose last parts are all the parts of the *relative* path, sorted."""
+        candidates = self._tests_files_by_name.get(relative.name, ())
+        return tuple(sorted(path for path in candidates if path.parts[-len(relative.parts) :] == relative.parts))
+
+    @functools.cached_property
+    def _tests_files_by_name(self) -> Mapping[str, tuple[PurePosixPath, ...]]:
+        files: defaultdict[str, list[PurePosixPath]] = defaultdict(list)
+        for path in self.paths.files:
+            if path.is_relative_to(_TESTS):
+                files[path.name].append(path)
+        return {name: tuple(named) for name, named in files.items()}
+
 
 def _syntax_tree(text: str | None) -> ast.Module | _NoSyntaxTree:
     """Return the syntax tree of the Python module whose text, as utf8_text reads it, is *text*, or why it has none."""
@@ -186,20 +206,22 @@ def _pointer(
 ) -> _Pointer | _UnrootedPointer | None:
     """Return the pointer *match* gives on *line* of the file *source* in the *checkout*, or None if it gives none.
 
-    A test-like name given alone gives one only if it is not among *own_names*, those the file uses itself, and tests/
-    holds a test, test class or test file by it.
+    A path not rooted at tests/ gives one only if it ends a file of tests/. A test-like name given alone gives one only
+    if it is not among *own_names*, those the file uses itself, and tests/ holds a test, test class or test file by it.
     """
     if match["bare"] is not None:
         name = match["bare"]
         node_ids = () if name in own_names else checkout.node_ids_named(name)
         return _UnrootedPointer(source=source, line=line, written=name, node_ids=node_ids) if node_ids else None
-    return _Pointer(
-        source=source,
-        line=line,
-        path=PurePosixPath(match["path"]),
-        names=tuple(match["names"].split("::")[1:]),
-        dotted_names=tuple(match["dotted_names"].split(".")[1:]),
-    )
+    names = tuple(match["names"].split("::")[1:])
+    dotted_names = tuple(match["dotted_names"].split(".")[1:])
+    if match["path"] is not None:
+        return _Pointer(
+            source=source, line=line, path=PurePosixPath(match["path"]), names=names, dotted_names=dotted_names
+        )
+    files = checkout.test_files_ending(PurePosixPath(match["relative"]))
+    node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
+    return _UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids) if node_ids else None
 
 
 def _own_names(checkout: _Checkout, source: PurePosixPath, text: str) -> frozenset[str]:
