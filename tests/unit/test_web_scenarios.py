@@ -29,11 +29,11 @@ from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.request_boundary import LOCATION_PRESETS
+from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
 from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
-from tests._config_preset_rows import insert_saved_fleet_preset
+from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
@@ -449,6 +449,19 @@ class TestScenarioAPI:
             json={"config": {"n_homes": 10}},
         )
         assert response.status_code == 400
+
+    def test_save_of_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_saves_nothing(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any database access."""
+        name = chr(0xD800)
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(name, "name")
+
+        response = client.post("/api/scenarios/save", json={"name": name, "config": {"n_homes": 9}})
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        assert saved_preset_names(database_of(app)) == []
 
     def test_save_under_a_name_a_saved_home_preset_holds_returns_409_and_changes_nothing(
         self, client: FlaskClient

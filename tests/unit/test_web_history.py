@@ -34,7 +34,7 @@ from solar_challenge.web.charts import (
     comparison_radar,
 )
 from solar_challenge.web.database import Database
-from solar_challenge.web.request_boundary import LOCATION_PRESETS
+from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
 from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
@@ -661,6 +661,28 @@ class TestPatchAPI:
         assert response.status_code == 400
         assert response.get_json()["error"].startswith("name is ")
         run = client.get("/api/history/runs/keep-my-name").get_json()
+        assert (run["name"], run["notes"]) == ("Old Name", None)
+
+    @pytest.mark.parametrize(
+        ("body", "label"),
+        [
+            pytest.param({"name": chr(0xD800)}, "name", id="name"),
+            pytest.param({"notes": chr(0xD800)}, "notes", id="notes"),
+            pytest.param({"name": "New Name", "notes": chr(0xD800)}, "notes", id="notes-beside-a-name"),
+        ],
+    )
+    def test_api_patch_of_a_label_holding_a_lone_surrogate_is_400_naming_it_and_writes_no_label(
+        self, app: Flask, client: FlaskClient, body: dict[str, str], label: str
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which sqlite3 cannot bind, so the label is refused as require_encodable_text refuses it and the run keeps its name and notes."""
+        _insert_test_run(app, run_id="keep-my-labels", name="Old Name")
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(body[label], label)
+
+        response = client.patch("/api/history/runs/keep-my-labels", json=body)
+
+        assert (response.status_code, response.get_json()) == (400, {"error": str(refusal.value)})
+        run = client.get("/api/history/runs/keep-my-labels").get_json()
         assert (run["name"], run["notes"]) == ("Old Name", None)
 
 

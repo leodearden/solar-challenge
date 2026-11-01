@@ -41,11 +41,16 @@ from solar_challenge.web.presets import (
     saved_fleet_preset_named,
     saved_fleet_presets,
 )
-from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object, require_json_object
+from solar_challenge.web.request_boundary import (
+    NotAJsonObject,
+    request_json_object,
+    require_encodable_text,
+    require_json_object,
+)
 from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
-from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunQuery, RunRecord, headline_figures
+from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from solar_challenge.web.text_options import one_of
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
@@ -252,9 +257,15 @@ def _answer_preset_save(name: str, preset_type: PresetType, config: Mapping[str,
     """Save *config* as the *preset_type* preset *name*, answering as both preset save endpoints do.
 
     Returns:
-        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 409 for a
-        name another preset holds, HTTP 500 for a database fault.
+        JSON with the preset name and id, HTTP 201; or the ``error``: HTTP 400, before
+        any database access, for a name holding a lone surrogate, which
+        require_encodable_text refuses; HTTP 409 for a name another preset holds,
+        HTTP 500 for a database fault.
     """
+    try:
+        require_encodable_text(name, "name")
+    except ValueError as refusal:
+        return jsonify({"error": str(refusal)}), 400
     try:
         preset_id = save_config_preset(get_database(), name, preset_type, config)
     except PresetNameTaken as taken:
@@ -272,8 +283,8 @@ def save_preset() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with the preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name or a type other than 'home', HTTP 409 for a name a built-in
-        home preset or a saved fleet preset holds.
+        HTTP 400 for an empty name, a name holding a lone surrogate or a type other than
+        'home', HTTP 409 for a name a built-in home preset or a saved fleet preset holds.
     """
     data = request_json_object()
     name = data.get("name", "").strip()
@@ -708,6 +719,19 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
 
+def _refuse_unencodable_labels(labels: Mapping[RunLabel, object]) -> None:
+    """Refuse *labels*, the run labels a PATCH body sends, when one is text require_encodable_text refuses.
+
+    A label that is not text is not checked here.
+
+    Raises:
+        ValueError: From require_encodable_text, naming the label.
+    """
+    for label, value in labels.items():
+        if isinstance(value, str):
+            require_encodable_text(value, label)
+
+
 @api_bp.route("/history/runs/<run_id>", methods=["PATCH"])
 def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
     """Update a run's name and/or notes.
@@ -719,7 +743,9 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
 
     Returns:
         JSON response with updated run data, or 404 if not found. 400 with the refusal as
-        ``error``, naming ``name``, for a null or blank name, which update_run_labels refuses.
+        ``error``, naming ``name``, for a null or blank name, which update_run_labels refuses;
+        and naming the label, for a name or notes holding a lone surrogate, refused before
+        any label is written.
     """
     data = request_json_object()
     storage = get_storage()
@@ -732,6 +758,7 @@ def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
         return jsonify({"error": "No fields to update"}), 400
 
     try:
+        _refuse_unencodable_labels(labels)
         updated = storage.update_run_labels(run_id, labels)
     except ValueError as refusal:
         return jsonify({"error": str(refusal)}), 400
@@ -861,7 +888,8 @@ def scenarios_save_scenario() -> tuple[Response, int]:
 
     Returns:
         JSON confirmation with preset name and id, HTTP 201 on success; or the ``error``:
-        HTTP 400 for an empty name, HTTP 409 for a name a saved home preset holds.
+        HTTP 400 for an empty name or a name holding a lone surrogate, HTTP 409 for a name
+        a saved home preset holds.
     """
     data = request_json_object()
     name = str(data.get("name", "")).strip()
