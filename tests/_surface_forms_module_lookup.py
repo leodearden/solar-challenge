@@ -2,12 +2,12 @@
 """The module that defined an object, as sys.modules holds it, checked to be that object's own, and a string annotation evaluated there as a type checker reads it.
 
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
-is_immutable_type and spelled_function, a class's own namespace through own_namespace,
-which walks its metaclass's MRO through recorded_mro and overriding_getattribute_holder,
-and names it in errors through label_of: the helper's other modules read and name objects
-through them too, and read a class's own annotations through own_annotations, which
-refuses each class own_namespace refuses. This module imports no other module of the
-helper, as tests/unit/test_surface_forms_layers.py checks.
+is_immutable_type and spelled_function, and a class's own namespace through own_namespace,
+which walks its metaclass's MRO through recorded_mro and overriding_getattribute_holder:
+the helper's other modules read objects through them too, and read a class's own
+annotations through own_annotations, which refuses each class own_namespace refuses. Of
+the helper, this module imports only the modules below it in
+tests/unit/test_surface_forms_layers.py's LAYERS, which checks that.
 """
 
 import ast
@@ -18,6 +18,8 @@ import types
 import typing
 import weakref
 from collections.abc import Callable, Mapping
+
+from tests._surface_forms_labels import label_of
 
 
 def is_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
@@ -55,12 +57,6 @@ def _module_named(name: str, obj: object) -> types.ModuleType:
             "no module under that name: read each module's objects while sys.modules holds it"
         )
     return module
-
-
-def label_of(obj: object) -> str:
-    """The name this helper's errors give *obj*: its module's name and its qualified name, dotted; its repr if it records no qualified name, as a type variable does not."""
-    qualified_name = getattr(obj, "__qualname__", None)
-    return repr(obj) if qualified_name is None else f"{obj.__module__}.{qualified_name}"
 
 
 def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
