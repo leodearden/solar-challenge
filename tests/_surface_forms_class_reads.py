@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or its metaclass's MRO holds a __getattribute__ other than type's and object's, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
+"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or overrides type's __getattribute__, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
 
 The helper's other modules read classes through own_namespace, own_annotations,
 recorded_mro and overriding_getattribute_holder. Of the helper, this module imports only
@@ -40,15 +40,21 @@ def own_annotations(cls: type) -> Mapping[str, object]:
 
 
 def overriding_getattribute_holder(metaclass: type) -> type | None:
-    """The first class in the MRO *metaclass* records, type and object aside, whose own namespace, read unchecked as attribute lookup reads it, holds __getattribute__; None if none does. Attribute lookup on a class of *metaclass* may then call that __getattribute__ for every name, __dict__ and __signature__ among them."""
-    return next(
-        (
-            holder
-            for holder in recorded_mro(metaclass)
-            if holder not in (type, object) and "__getattribute__" in _held_namespace(holder)
-        ),
-        None,
+    """The class whose own __getattribute__ attribute lookup calls on each class of *metaclass* in place of type's; None if what it calls is type's own.
+
+    That class is the first in the MRO *metaclass* records whose own namespace, read
+    unchecked as attribute lookup reads it, holds __getattribute__, or type if none does.
+    What it holds is type's own when it is type, as when a class holds one only after type
+    in that MRO, or when its body binds type.__getattribute__. Attribute lookup on a class
+    of *metaclass* calls the __getattribute__ of the class returned for every name,
+    __dict__ and __signature__ among them.
+    """
+    holder = next(
+        (base for base in recorded_mro(metaclass) if "__getattribute__" in _held_namespace(base)),
+        type,
     )
+    held = _held_namespace(holder)["__getattribute__"]
+    return None if held is type.__dict__["__getattribute__"] else holder
 
 
 def _refuse_dict_other_than_held(cls: type) -> None:
