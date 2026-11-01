@@ -48,6 +48,12 @@ from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _TESTS = PurePosixPath("tests")
 
+
+def _is_python_file_under_tests(path: PurePosixPath) -> bool:
+    """Return whether *path*, relative to the checkout's root, names a Python file under tests/."""
+    return path.suffix == ".py" and path.is_relative_to(_TESTS)
+
+
 _TEST_LIKE_NAME = re.compile(r"test_\w+|Test[A-Z]\w*")
 
 _POINTER = re.compile(
@@ -155,7 +161,7 @@ class _Checkout:
     def _node_ids_by_name(self) -> Mapping[str, tuple[str, ...]]:
         node_ids: defaultdict[str, list[str]] = defaultdict(list)
         for path in self.paths.files:
-            if path.suffix != ".py" or not path.is_relative_to(_TESTS):
+            if not _is_python_file_under_tests(path):
                 continue
             if path.name.startswith("test_"):
                 node_ids[path.stem].append(str(path))
@@ -227,7 +233,7 @@ def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tup
     string statement before a comment on a line they share. They are read from its raw text, so a line counted within a
     passage is a line of the file. Any other file gives its whole text.
     """
-    if source.suffix != ".py" or not source.is_relative_to(_TESTS):
+    if not _is_python_file_under_tests(source):
         return [(1, text)]
     strings = _string_statements(_parsed_source(checkout, source), text)
     comments = [
