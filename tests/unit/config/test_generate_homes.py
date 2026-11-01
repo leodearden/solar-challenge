@@ -1259,3 +1259,17 @@ class TestAComponentsRefusalNamesItsHome:
             generate_homes_from_distribution(fleet, Location.bristol())
 
         assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but home 1 drew null"
+
+
+class TestEveryHomeHasAPVAndALoad:
+    """Every home needs a PV and a load, since HomeConfig's pv_config and load_config are not optional, so a fleet giving a home either one as None is refused when generated, naming the component and the home."""
+
+    @pytest.mark.parametrize("component", ["pv", "load"])
+    def test_a_fleet_giving_a_home_no_such_component_is_refused_naming_it_and_the_home(self, component: str) -> None:
+        """FleetDistributionConfig checks no types, so it accepts a None pv or load; the first home is refused as it is generated."""
+        fleet = FleetDistributionConfig(n_homes=2, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), component: None})
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == f"fleet_distribution.{component} gave home 1 no {component}, which every home needs"
