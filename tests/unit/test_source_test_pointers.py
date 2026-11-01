@@ -15,7 +15,8 @@ repository, or in a throwaway checkout a test builds, is written from that tree'
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/
 that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused, naming the path to write.
 One that ends no file of tests/ names another tree's or a throwaway project's file, so it is no pointer, but each
-test_<name> or Test<Name> after it, as in test_<name>.py::<Class>, is read as a name given alone, as below.
+test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name
+given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
@@ -62,7 +63,7 @@ _POINTER = re.compile(
     (?:
         (?:
             (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
-          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?:[\w.-]*\w)?)
+          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?P<after_py>(?:[\w.-]*\w)?))
         )
         (?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
       | (?<!def\ )(?<!class\ )(?P<bare>{_TEST_LIKE_NAME.pattern})
@@ -292,7 +293,8 @@ def _pointers_given(
     """Return the pointers *match* gives on *line* of the file *source* in the *checkout*, in text order.
 
     A path rooted at tests/ gives one, and so does a path not rooted there that ends a file of tests/. A test-like name
-    given alone, and each test-like name after any other path, is read by _pointers_named_alone with *own_names*.
+    given alone, and each test-like name after the .py of any other path, is read by _pointers_named_alone with
+    *own_names*.
     """
     if match["bare"] is not None:
         return _pointers_named_alone(checkout, source, line, [match["bare"]], own_names)
@@ -305,7 +307,8 @@ def _pointers_given(
     if files:
         node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
         return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
-    test_like_names = [name for name in (*names, *dotted_names) if _TEST_LIKE_NAME.fullmatch(name)]
+    words_after_py = re.findall(r"\w+", match["after_py"])
+    test_like_names = [name for name in (*words_after_py, *names, *dotted_names) if _TEST_LIKE_NAME.fullmatch(name)]
     return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
 
 
