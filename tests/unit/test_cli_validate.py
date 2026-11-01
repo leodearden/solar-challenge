@@ -340,12 +340,12 @@ home:
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
-                "tilt must be between 0 and 90, got 100.0",
+                "fleet_distribution.pv, home 1: tilt must be between 0 and 90, got 100.0",
                 id="fleet-distribution",
             ),
             pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
-                "max_charge_kw must be greater than 0, got -1.0",
+                "fleet_distribution.battery, home 1: max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",
             ),
             pytest.param(
@@ -762,5 +762,8 @@ home:
         )
 
         assert result.exit_code == 1
-        assert "ERROR tilt must be between 0 and 90, got 100.0" in table_text(result.stdout)
+        assert (
+            "ERROR fleet_distribution.pv, home 1: tilt must be between 0 and 90, got 100.0"
+            in table_text(result.stdout)
+        )
         assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)

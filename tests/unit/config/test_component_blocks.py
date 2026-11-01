@@ -3,11 +3,11 @@
 
 import dataclasses
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import pytest
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import BatteryConfig, has_battery
 from solar_challenge.config import (
     BATTERY_BLOCK,
     EV_BLOCK,
@@ -16,6 +16,8 @@ from solar_challenge.config import (
     LOCATION_BLOCK,
     PV_BLOCK,
     ComponentBlock,
+    FieldKind,
+    FleetField,
     parse_home_block,
     parse_location_block,
 )
@@ -26,8 +28,8 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVConfig
-from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.ev import CHARGER_TYPES, EVConfig
+from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -48,11 +50,16 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
     """Each way *block* fails to place its dataclass's fields, naming the field; empty when it places every one.
 
     Every field is either one of the block's keys or outside its grammar, never both; the keys
-    follow field order; and every sub-block and when-omitted entry is one of the keys.
+    follow field order; and every sub-block and when-omitted entry is one of the keys. Every key
+    is either drawn by the fleet or outside it, never both; the fleet keys follow key order; the
+    presence field is the first of them, since a home draws nothing of a component before
+    learning whether it has one; and a sub-block the fleet carries is a SETTING.
     """
     field_names = [field.name for field in dataclasses.fields(block.config_type)]
     keys = set(block.keys)
     outside = set(block.outside_grammar)
+    fleet = set(block.fleet)
+    not_in_fleet = set(block.not_in_fleet)
     return [
         *(f"{name} is both a key and outside the grammar" for name in field_names if name in keys & outside),
         *(f"{name} is neither a key nor outside the grammar" for name in field_names if name not in keys | outside),
@@ -64,6 +71,28 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
         ),
         *(f"sub-block {key} is not a key" for key in block.sub_blocks if key not in keys),
         *(f"when_omitted {key} is not a key" for key in block.when_omitted if key not in keys),
+        *(f"{key} is both drawn by the fleet and outside it" for key in block.keys if key in fleet & not_in_fleet),
+        *(
+            f"{key} is a key but neither drawn by the fleet nor outside it"
+            for key in block.keys
+            if key not in fleet | not_in_fleet
+        ),
+        *(f"{key} is placed in the fleet but is not a key" for key in sorted((fleet | not_in_fleet) - keys)),
+        *(
+            [f"fleet keys {list(block.fleet)} do not follow key order {list(block.keys)}"]
+            if list(block.fleet) != [key for key in block.keys if key in fleet]
+            else []
+        ),
+        *(
+            [f"presence {block.presence} is not the first fleet key of {list(block.fleet)}"]
+            if block.presence is not None and list(block.fleet)[:1] != [block.presence]
+            else []
+        ),
+        *(
+            f"sub-block {key} is not a SETTING in the fleet"
+            for key in block.sub_blocks
+            if key in block.fleet and block.fleet[key].kind is not FieldKind.SETTING
+        ),
     ]
 
 
@@ -84,6 +113,41 @@ def test_a_field_added_to_the_dataclass_fails_until_its_table_places_it() -> Non
     faults = _placement_faults(dataclasses.replace(PV_BLOCK, config_type=widened))
 
     assert faults == ["bifacial_gain is neither a key nor outside the grammar"]
+
+
+def test_a_key_added_to_the_table_fails_until_its_fleet_rows_place_it() -> None:
+    """T1's fleet half is not a tautology: PV_BLOCK's table over a widened PVConfig, the new field one of its keys, reports that the fleet does not place it."""
+    widened = dataclasses.make_dataclass(
+        "WidenedPVConfig", [("bifacial_gain", float, 0.0)], bases=(PVConfig,), frozen=True
+    )
+
+    faults = _placement_faults(
+        dataclasses.replace(PV_BLOCK, config_type=widened, keys=(*PV_BLOCK.keys, "bifacial_gain"))
+    )
+
+    assert faults == ["bifacial_gain is a key but neither drawn by the fleet nor outside it"]
+
+
+@pytest.mark.parametrize(
+    ("block", "fault"),
+    [
+        pytest.param(
+            dataclasses.replace(BATTERY_BLOCK, presence="max_charge_kw"),
+            f"presence max_charge_kw is not the first fleet key of {list(BATTERY_BLOCK.fleet)}",
+            id="presence-after-another-fleet-key",
+        ),
+        pytest.param(
+            dataclasses.replace(
+                BATTERY_BLOCK, fleet={**BATTERY_BLOCK.fleet, "grid_charging": FleetField(FieldKind.NUMBER)}
+            ),
+            "sub-block grid_charging is not a SETTING in the fleet",
+            id="sub-block-drawn",
+        ),
+    ],
+)
+def test_a_presence_or_sub_block_the_fleet_misplaces_is_reported(block: ComponentBlock[Any], fault: str) -> None:
+    """T1 reports a presence field a home would draw after another fleet field, and a sub-block the fleet would draw."""
+    assert _placement_faults(block) == [fault]
 
 
 def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() -> None:
@@ -145,6 +209,97 @@ def test_each_table_holds_its_rows(
     assert set(block.keys) == field_names - outside_grammar
     assert tuple(block.sub_blocks) == sub_blocks
     assert dict(block.when_omitted) == when_omitted
+
+
+_NUMBER = FleetField(FieldKind.NUMBER)
+_COUNT = FleetField(FieldKind.COUNT)
+_SETTING = FleetField(FieldKind.SETTING)
+
+
+@pytest.mark.parametrize(
+    ("block", "rows", "other_rows", "not_in_fleet", "presence"),
+    [
+        pytest.param(
+            PV_BLOCK, {"capacity_kw": FleetField(FieldKind.NUMBER, required=True)}, _NUMBER, {"name"}, None,
+            id="PVConfig",
+        ),
+        pytest.param(
+            BATTERY_BLOCK,
+            {
+                "capacity_kwh": FleetField(FieldKind.NUMBER, required=True),
+                "dispatch_strategy": _SETTING,
+                "grid_charging": _SETTING,
+            },
+            _NUMBER,
+            {"name"},
+            "capacity_kwh",
+            id="BatteryConfig",
+        ),
+        pytest.param(
+            LOAD_BLOCK,
+            {"annual_consumption_kwh": _NUMBER, "household_occupants": _COUNT, "use_stochastic": _SETTING},
+            None,
+            {"name", "seed"},
+            None,
+            id="LoadConfig",
+        ),
+        pytest.param(
+            HEAT_PUMP_BLOCK,
+            {"heat_pump_type": FleetField(FieldKind.CHOICE, choices=HEAT_PUMP_TYPES)},
+            _NUMBER,
+            {"name"},
+            "heat_pump_type",
+            id="HeatPumpConfig",
+        ),
+        pytest.param(
+            EV_BLOCK,
+            {
+                "charger_type": FleetField(FieldKind.CHOICE, choices=CHARGER_TYPES, required=True),
+                "arrival_hour": _COUNT,
+                "departure_hour": _COUNT,
+                "smart_charging_mode": _SETTING,
+            },
+            _NUMBER,
+            {"name"},
+            "charger_type",
+            id="EVConfig",
+        ),
+        pytest.param(LOCATION_BLOCK, {}, None, set(LOCATION_BLOCK.keys), None, id="Location"),
+    ],
+)
+def test_each_table_holds_its_fleet_rows(
+    block: ComponentBlock[Any],
+    rows: dict[str, FleetField],
+    other_rows: Optional[FleetField],
+    not_in_fleet: set[str],
+    presence: Optional[str],
+) -> None:
+    """T2: each key outside the fleet has its reason, and every other key is drawn with its row, *rows*' or else *other_rows*; then the presence field."""
+    assert set(block.not_in_fleet) == not_in_fleet
+    assert all(reason.strip() for reason in block.not_in_fleet.values())
+    assert dict(block.fleet) == {key: rows.get(key, other_rows) for key in block.keys if key not in not_in_fleet}
+    assert block.presence == presence
+
+
+def test_a_battery_is_present_as_has_battery_says() -> None:
+    """The battery's presence rule is battery.has_battery, so a 0 capacity is no battery here as it is in a home: block."""
+    assert BATTERY_BLOCK.asks_for_component is has_battery
+
+
+@pytest.mark.parametrize(
+    ("kind", "choices"),
+    [
+        pytest.param(FieldKind.CHOICE, (), id="a-choice-listing-none"),
+        pytest.param(FieldKind.NUMBER, ("a",), id="a-number-listing-one"),
+    ],
+)
+def test_choices_belong_to_a_choice_field_alone(kind: FieldKind, choices: tuple[str, ...]) -> None:
+    """A CHOICE field lists the values it may take, and a field of any other kind lists none."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        FleetField(kind, choices=choices)
+
+    assert kind.name in str(exc_info.value)
+    assert repr(choices) in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

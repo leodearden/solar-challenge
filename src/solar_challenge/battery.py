@@ -77,7 +77,7 @@ CAPACITY_SETTING_KWH: Final = NON_NEGATIVE
 """The battery capacity settings, in kWh, that require_valid_capacity_setting admits, where 0 means no battery; BatteryConfig.capacity_kwh, a battery's own capacity, is above 0."""
 
 
-def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> float:
+def require_valid_capacity_setting(capacity_kwh: object, setting: str) -> float:
     """Return a battery capacity setting read as a finite number CAPACITY_SETTING_KWH admits; 0 means no battery.
 
     Raises:
@@ -87,7 +87,7 @@ def require_valid_capacity_setting(capacity_kwh: float, setting: str) -> float:
     return as_finite_float(capacity_kwh, setting, CAPACITY_SETTING_KWH)
 
 
-def has_battery(capacity_kwh: float, setting: str) -> bool:
+def has_battery(capacity_kwh: object, setting: str) -> bool:
     """Whether a battery capacity setting, read by require_valid_capacity_setting, asks for a battery (> 0); an invalid one is refused."""
     return require_valid_capacity_setting(capacity_kwh, setting) > 0
 

@@ -616,6 +616,65 @@ fleet_distribution:
             self._load_fleet(tmp_path, dispatch_strategy)
 
 
+class TestFleetHeatPumpTypePools:
+    """A fleet_distribution.heat_pump.heat_pump_type pool gives each home the type it draws, a null being no heat pump."""
+
+    @pytest.mark.parametrize("random_order", ["default", "bristol_legacy"])
+    def test_a_heat_pump_type_pool_gives_its_homes_its_types_in_its_counts(
+        self, tmp_path: Path, random_order: str
+    ) -> None:
+        path = tmp_path / "fleet.yaml"
+        path.write_text(f"""
+name: Heat Pump Type Pool Test
+fleet_distribution:
+  n_homes: 10
+  seed: 1
+  random_order: {random_order}
+  pv:
+    capacity_kw: 4.0
+  load:
+    annual_consumption_kwh: 3400
+    use_stochastic: false
+  heat_pump:
+    heat_pump_type:
+      type: shuffled_pool
+      values: [ASHP, null]
+      counts: [5, 5]
+""")
+
+        heat_pumps = [home.heat_pump_config for home in load_fleet_config(path).homes]
+
+        assert [heat_pump.heat_pump_type for heat_pump in heat_pumps if heat_pump is not None] == ["ASHP"] * 5
+        assert heat_pumps.count(None) == 5
+
+
+class TestFleetKeysBeyondTheOldDistributionClasses:
+    """A fleet file may draw any key of a component's table, not only those the old distribution classes listed (D3)."""
+
+    def test_a_pv_temperature_coefficient_and_a_battery_min_soc_fraction_reach_every_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "fleet.yaml"
+        path.write_text("""
+name: Fleet Keys Test
+fleet_distribution:
+  n_homes: 3
+  seed: 1
+  pv:
+    capacity_kw: 4.0
+    temperature_coefficient: -0.0035
+  battery:
+    capacity_kwh: 5.0
+    min_soc_fraction: 0.2
+  load:
+    annual_consumption_kwh: 3400
+    use_stochastic: false
+""")
+
+        homes = load_fleet_config(path).homes
+
+        assert [home.pv_config.temperature_coefficient for home in homes] == [-0.0035] * 3
+        assert [home.battery_config and home.battery_config.min_soc_fraction for home in homes] == [0.2] * 3
+
+
 _PV_KW = 4.0
 
 _ECONOMY_7 = {"type": "economy_7", "off_peak_rate": 0.09, "peak_rate": 0.25}

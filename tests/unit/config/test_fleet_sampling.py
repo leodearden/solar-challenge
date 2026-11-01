@@ -2,6 +2,7 @@
 """How generate_homes_from_distribution draws a fleet's settings: each stateless spec draws itself, each setting keeps its own pool and pre-sampled draws, and each random order draws ahead in the order it documents."""
 
 import dataclasses
+import math
 import random
 from collections.abc import Callable, Sequence
 from typing import Any, Optional
@@ -9,10 +10,9 @@ from typing import Any, Optional
 import pytest
 
 from solar_challenge.config import (
+    ComponentDistribution,
     FleetDistributionConfig,
-    LoadDistributionConfig,
     NormalDistribution,
-    PVDistributionConfig,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
@@ -54,7 +54,7 @@ class TestAStatelessSpecDrawsItself:
         The fleet's pv.tilt is the only setting it draws from its RNG.
         """
         fleet = FleetDistributionConfig(
-            n_homes=8, pv=PVDistributionConfig(capacity_kw=4.0, tilt=spec), load=LoadDistributionConfig(), seed=17
+            n_homes=8, pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": spec}), seed=17
         )
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
@@ -140,8 +140,7 @@ class TestOneSpecObjectOnTwoSettings:
         pool = ShuffledPoolDistribution(values=(30.0, 60.0), counts=(2, 2))
         fleet = FleetDistributionConfig(
             n_homes=4,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=pool, azimuth=pool),
-            load=LoadDistributionConfig(),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": pool, "azimuth": pool}),
             seed=1,
             random_order=random_order,
         )
@@ -156,8 +155,8 @@ class TestOneSpecObjectOnTwoSettings:
         normal = NormalDistribution(mean=45.0, std=10.0, min=10.0, max=80.0)
         fleet = FleetDistributionConfig(
             n_homes=4,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=normal),
-            load=LoadDistributionConfig(annual_consumption_kwh=normal),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": normal}),
+            load=ComponentDistribution({"annual_consumption_kwh": normal}),
             seed=1,
             random_order="bristol_legacy",
         )
@@ -213,8 +212,8 @@ def _shuffled(pool: ShuffledPoolDistribution, rng: random.Random) -> list[Any]:
 
 
 def _drawn_settings(home: HomeConfig) -> dict[str, object]:
-    """Return what a home of the fleet of 12 homes holds for each setting it draws, but its heat pump's."""
-    assert home.battery_config is not None and home.ev_config is not None
+    """Return what a home of the fleet of 12 homes holds for each setting it draws."""
+    assert home.battery_config is not None and home.heat_pump_config is not None and home.ev_config is not None
     return {
         "pv.capacity_kw": home.pv_config.capacity_kw,
         "pv.tilt": home.pv_config.tilt,
@@ -222,6 +221,7 @@ def _drawn_settings(home: HomeConfig) -> dict[str, object]:
         "load.household_occupants": home.load_config.household_occupants,
         "battery.capacity_kwh": home.battery_config.capacity_kwh,
         "battery.max_charge_kw": home.battery_config.max_charge_kw,
+        "heat_pump.heat_pump_type": home.heat_pump_config.heat_pump_type,
         "ev.charger_type": home.ev_config.charger_type,
         "ev.departure_hour": home.ev_config.departure_hour,
     }
@@ -236,6 +236,7 @@ def _modelled_settings(pools: dict[str, list[Any]], consumptions: Sequence[Optio
         "load.household_occupants": int(pools["load.household_occupants"][index]),
         "battery.capacity_kwh": pools["battery.capacity_kwh"][index],
         "battery.max_charge_kw": pools["battery.max_charge_kw"][index],
+        "heat_pump.heat_pump_type": pools["heat_pump.heat_pump_type"][index],
         "ev.charger_type": pools["ev.charger_type"][index],
         "ev.departure_hour": int(pools["ev.departure_hour"][index]),
     }
@@ -285,8 +286,8 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
         """The homes hold what a model of the documented order draws from an RNG seeded alike.
 
         The model draws the consumptions the order draws ahead, shuffles every pool in the order's sequence, and then
-        draws the other consumptions, one per home: a home of this fleet draws nothing else afresh. Its heat pumps go
-        unread: the heat_pump_type pool takes its place in the sequence, but no home draws from it.
+        draws the other consumptions, one per home: a home of this fleet draws nothing else afresh. Every home draws
+        its heat pump's type from the heat_pump_type pool, which takes its place in the sequence as every pool does.
         """
         homes = generate_homes_from_distribution(_fleet_of_12_pools(random_order), Location.bristol())
 
@@ -307,8 +308,7 @@ class TestEachRandomOrderDrawsAheadInTheOrderItDocuments:
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(
                 n_homes=1,
-                pv=PVDistributionConfig(capacity_kw=4.0),
-                load=LoadDistributionConfig(),
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
                 random_order=random_order,
             )
 
@@ -336,8 +336,7 @@ class TestASettingDrawnPastItsValuesIsRefused:
         """The third of the fleet's 3 homes finds the pool's 2 values drawn, and its draw is refused."""
         fleet = FleetDistributionConfig(
             n_homes=3,
-            pv=PVDistributionConfig(capacity_kw=4.0, tilt=_PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))),
-            load=LoadDistributionConfig(),
+            pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": _PoolShortOfItsCounts(values=(30.0, 40.0), counts=(2, 1))}),
         )
 
         with pytest.raises(ConfigurationError) as refusal:
@@ -346,18 +345,46 @@ class TestASettingDrawnPastItsValuesIsRefused:
         assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
 
 
-class TestASpecTheSamplerCannotDrawIsRefusedNamingTheSetting:
-    """A spec the sampler cannot draw for a setting is refused, naming the setting and the spec."""
+def _fleet_with_tilt(tilt: dict[str, Any], **sections: Any) -> FleetDistributionConfig:
+    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*, beside *sections*."""
+    return parse_fleet_distribution_config(
+        {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}, **sections}
+    )
 
-    def test_a_proportional_to_drawn_without_its_source_is_refused(self) -> None:
-        """The generator hands a proportional_to its source's value for battery and heat pump settings, never for pv.tilt."""
+
+class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
+    """A proportional_to scales the value its home drew earlier for its source, and is refused, naming its path and its source, when the home has drawn no number for it."""
+
+    def test_a_source_drawn_earlier_in_the_same_component_is_scaled(self) -> None:
+        """Each home draws its PV capacity before its tilt, so a tilt of 5 times the capacity is 20 degrees."""
+        fleet = _fleet_with_tilt({"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 5})
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
+
+    def test_a_source_drawn_by_a_later_component_is_refused(self) -> None:
+        """A home draws its battery after its PV, so its tilt cannot be proportional_to its battery capacity."""
+        fleet = _fleet_with_tilt(
+            {"type": "proportional_to", "source": "battery.capacity_kwh"}, battery={"capacity_kwh": 5.0}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "pv.tilt is proportional_to battery.capacity_kwh, which no earlier field of the home drew"
+        )
+
+    def test_a_source_that_drew_a_choice_is_refused(self) -> None:
+        """A heat pump's type is a choice, not a number, so its thermal capacity cannot be proportional_to it."""
         fleet = parse_fleet_distribution_config(
             {
-                "n_homes": 2,
-                "seed": 1,
-                "pv": {
-                    "capacity_kw": 4.0,
-                    "tilt": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": 5},
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "heat_pump": {
+                    "heat_pump_type": "ASHP",
+                    "thermal_capacity_kw": {"type": "proportional_to", "source": "heat_pump.heat_pump_type"},
                 },
             }
         )
@@ -366,5 +393,93 @@ class TestASpecTheSamplerCannotDrawIsRefusedNamingTheSetting:
             generate_homes_from_distribution(fleet, Location.bristol())
 
         assert str(refusal.value) == (
-            "pv.tilt cannot be drawn from ProportionalDistribution(source='pv.capacity_kw', multiplier=5.0, offset=0.0)"
+            "heat_pump.thermal_capacity_kw is proportional_to heat_pump.heat_pump_type, which drew 'ASHP', not a number"
         )
+
+    def test_a_field_of_a_component_every_home_has_is_scaled(self) -> None:
+        """Every home has a battery charging at 2 kW, so a heat pump of 3 times that charge rate is 6 kW."""
+        homes = generate_homes_from_distribution(_fleet_with_heat_pump_sized_by_battery(5.0), Location.bristol())
+
+        assert [home.heat_pump_config.thermal_capacity_kw for home in homes] == [6.0, 6.0]
+
+    def test_a_field_of_a_component_a_home_lacks_is_refused(self) -> None:
+        """One of the 2 homes draws no battery, so it draws no charge rate either: whether a fleet is refused depends on its draws."""
+        fleet = _fleet_with_heat_pump_sized_by_battery({"type": "shuffled_pool", "values": [5.0, None], "counts": [1, 1]})
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "heat_pump.thermal_capacity_kw is proportional_to battery.max_charge_kw, which no earlier field of the home drew"
+        )
+
+
+def _fleet_with_heat_pump_sized_by_battery(capacity_kwh: object) -> FleetDistributionConfig:
+    """Parse a fleet of 2 homes whose batteries of *capacity_kwh* charge at 2 kW, and whose heat pumps are 3 times that."""
+    return parse_fleet_distribution_config(
+        {
+            "n_homes": 2,
+            "seed": 1,
+            "pv": {"capacity_kw": 4.0},
+            "battery": {"capacity_kwh": capacity_kwh, "max_charge_kw": 2.0},
+            "heat_pump": {
+                "heat_pump_type": "ASHP",
+                "thermal_capacity_kw": {"type": "proportional_to", "source": "battery.max_charge_kw", "multiplier": 3},
+            },
+        }
+    )
+
+
+def _proportional_to_pv(**spec: float) -> dict[str, Any]:
+    """A proportional_to spec whose source is pv.capacity_kw, with *spec*'s multiplier or offset."""
+    return {"type": "proportional_to", "source": "pv.capacity_kw", **spec}
+
+
+class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
+    """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count is rounded, as a normal's draw is, and an EV hour truncated, as its other specs' draws are."""
+
+    @pytest.mark.parametrize(("capacity_kw", "occupants"), [(2.4, 2), (2.5, 3), (2.6, 3)])
+    def test_an_occupant_count_is_the_whole_number_nearest_its_value(self, capacity_kw: float, occupants: int) -> None:
+        """Occupants equal to the home's PV capacity in kW are that capacity rounded, a half rounding up."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": capacity_kw}, "load": {"household_occupants": _proportional_to_pv()}}
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].load_config.household_occupants == occupants
+
+    def test_an_ev_hour_is_truncated(self) -> None:
+        """An arrival hour of 4 times a 4.7 kW PV capacity is 18.8, which the EV takes as 18, not the 19 rounding gives."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.7},
+                "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to_pv(multiplier=4.0)},
+            }
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].ev_config.arrival_hour == 18
+
+    @pytest.mark.parametrize(
+        ("component", "key", "block"),
+        [
+            pytest.param("load", "household_occupants", {}, id="load.household_occupants"),
+            pytest.param("ev", "arrival_hour", {"charger_type": "7kW"}, id="ev.arrival_hour"),
+        ],
+    )
+    @pytest.mark.parametrize("offset", [math.inf, -math.inf, math.nan], ids=["inf", "-inf", "nan"])
+    def test_a_count_that_is_not_finite_is_refused_naming_its_path(
+        self, component: str, key: str, block: dict[str, Any], offset: float
+    ) -> None:
+        """No whole number is nearest an infinity or a NaN, so the count is refused naming its path and its value."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": 4.0}, component: {**block, key: _proportional_to_pv(offset=offset)}}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == f"{component}.{key} must be a finite number, got {4.0 + offset!r}"

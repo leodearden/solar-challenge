@@ -754,7 +754,7 @@ class TestBuilderScenarioYaml:
         _, document = _preview_document(client, form)
 
         fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-        assert getattr(getattr(fleet_distribution, component), grammar_key) == expected
+        assert getattr(fleet_distribution, component).draws[grammar_key] == expected
 
     @pytest.mark.parametrize(
         ("rate_field", "block"),

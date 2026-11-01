@@ -107,7 +107,7 @@ def _parsed_distribution_spec(spec: object) -> DistributionSpec:
         {"n_homes": 1, "pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": spec}}
     )
     assert fleet.battery is not None
-    return fleet.battery.capacity_kwh
+    return fleet.battery.draws["capacity_kwh"]
 
 
 def _spec_lacking(spec: dict[str, Any], key: str) -> dict[str, Any]:

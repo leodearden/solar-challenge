@@ -30,6 +30,9 @@ class EVChargerType(str, Enum):
     RAPID = "22kW"
 
 
+CHARGER_TYPES: tuple[str, ...] = tuple(charger.value for charger in EVChargerType)
+
+
 class SmartChargingMode(str, Enum):
     """Smart charging scheduling strategies.
 
@@ -86,12 +89,9 @@ class EVConfig:
         read_field(self, "departure_hour", as_whole_number, _HOUR_OF_DAY)
         read_field(self, "required_charge_kwh", as_finite_float, Interval(0, 100, low_open=True))
 
-        # Validate charger_type
-        valid_charger_types = ["3.6kW", "7kW", "22kW"]
-        if self.charger_type not in valid_charger_types:
+        if self.charger_type not in CHARGER_TYPES:
             raise ConfigurationError(
-                f"Charger type must be one of {valid_charger_types}, "
-                f"got '{self.charger_type}'"
+                f"Charger type must be one of {list(CHARGER_TYPES)}, got '{self.charger_type}'"
             )
 
         # Validate smart_charging_mode

@@ -225,7 +225,7 @@ class TestScenarioFromFleetForm:
                         "capacity_kw": {"type": "weighted_discrete", "values": [{"value": 0, "weight": 1}]}
                     },
                 },
-                "PV capacity must be positive",
+                "capacity_kw must be greater than 0",
                 id="pv-capacity-zero",
             ),
         ],

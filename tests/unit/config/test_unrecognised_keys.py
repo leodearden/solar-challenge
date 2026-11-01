@@ -14,15 +14,16 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    BatteryDistributionConfig,
-    EVDistributionConfig,
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    PV_BLOCK,
+    ComponentDistribution,
     FleetDistributionConfig,
-    HeatPumpDistributionConfig,
-    LoadDistributionConfig,
     NormalDistribution,
     OutputConfig,
     ProportionalDistribution,
-    PVDistributionConfig,
     ShuffledPoolDistribution,
     SimulationPeriod,
     SweepSpec,
@@ -708,7 +709,7 @@ class TestFleetDistributionBlockKeys:
             _parsed_fleet_distribution(**sections)
 
     def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A block setting every key of every component block, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
+        """A block setting every fleet key of every component's table, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
         fleet_distribution: dict[str, Any] = {
             "n_homes": 2,
             "seed": 42,
@@ -719,9 +720,12 @@ class TestFleetDistributionBlockKeys:
                 "azimuth": {"type": "uniform", "min": 170.0, "max": 190.0},
                 "tilt": {"type": "fixed", "value": 30.0},
                 "module_efficiency": {"type": "weighted_discrete", "values": [0.2, 0.22], "weights": [3, 1]},
+                "temperature_coefficient": -0.0035,
                 "inverter_efficiency": 0.97,
+                "inverter_capacity_kw": 3.68,
                 "system_age_years": 1.0,
                 "degradation_rate_per_year": 0.006,
+                "system_losses": 0.12,
             },
             "battery": {
                 "capacity_kwh": {
@@ -732,8 +736,18 @@ class TestFleetDistributionBlockKeys:
                 },
                 "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
                 "max_discharge_kw": 3.0,
-                "grid_charging": {"target_soc_fraction": 0.8},
                 "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
+                "grid_charging": {"target_soc_fraction": 0.8},
+                "min_soc_fraction": 0.15,
+                "max_soc_fraction": 0.95,
+                "charge_efficiency": 0.96,
+                "discharge_efficiency": 0.96,
+                "efficiency": 0.92,
+                "system_age_years": 2.0,
+                "calendar_fade_rate_per_year": 0.015,
+                "cycle_fade_per_equivalent_full_cycle": 4e-05,
+                "soh_floor": 0.6,
+                "soh": 0.98,
             },
             "load": {"annual_consumption_kwh": 3400.0, "household_occupants": 2, "use_stochastic": False},
             "heat_pump": {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.0, "annual_heat_demand_kwh": 9000.0},
@@ -745,46 +759,69 @@ class TestFleetDistributionBlockKeys:
                 "smart_charging_mode": "solar",
             },
         }
+        tables = {"pv": PV_BLOCK, "battery": BATTERY_BLOCK, "load": LOAD_BLOCK, "heat_pump": HEAT_PUMP_BLOCK, "ev": EV_BLOCK}
 
         expected = FleetDistributionConfig(
             n_homes=2,
-            pv=PVDistributionConfig(
-                capacity_kw=NormalDistribution(mean=4.0, std=1.0, min=2.0, max=6.0),
-                azimuth=UniformDistribution(min=170.0, max=190.0),
-                tilt=30.0,
-                module_efficiency=WeightedDiscreteDistribution(values=(0.2, 0.22), weights=(3.0, 1.0)),
-                inverter_efficiency=0.97,
-                system_age_years=1.0,
-                degradation_rate_per_year=0.006,
+            pv=ComponentDistribution({
+                "capacity_kw": NormalDistribution(mean=4.0, std=1.0, min=2.0, max=6.0),
+                "azimuth": UniformDistribution(min=170.0, max=190.0),
+                "tilt": 30.0,
+                "module_efficiency": WeightedDiscreteDistribution(values=(0.2, 0.22), weights=(3.0, 1.0)),
+                "temperature_coefficient": -0.0035,
+                "inverter_efficiency": 0.97,
+                "inverter_capacity_kw": 3.68,
+                "system_age_years": 1.0,
+                "degradation_rate_per_year": 0.006,
+                "system_losses": 0.12,
+            }),
+            load=ComponentDistribution(
+                {"annual_consumption_kwh": 3400.0, "household_occupants": 2.0}, settings={"use_stochastic": False}
             ),
-            load=LoadDistributionConfig(
-                annual_consumption_kwh=3400.0, household_occupants=2.0, use_stochastic=False
+            battery=ComponentDistribution(
+                {
+                    "capacity_kwh": ProportionalDistribution(
+                        source="pv.capacity_kw",
+                        multiplier=SweepSpec(min=0.5, max=2.0, steps=3, mode="linear"),
+                        offset=0.5,
+                    ),
+                    "max_charge_kw": ShuffledPoolDistribution(values=(2.5, 3.0), counts=(1, 1)),
+                    "max_discharge_kw": 3.0,
+                    "min_soc_fraction": 0.15,
+                    "max_soc_fraction": 0.95,
+                    "charge_efficiency": 0.96,
+                    "discharge_efficiency": 0.96,
+                    "efficiency": 0.92,
+                    "system_age_years": 2.0,
+                    "calendar_fade_rate_per_year": 0.015,
+                    "cycle_fade_per_equivalent_full_cycle": 4e-05,
+                    "soh_floor": 0.6,
+                    "soh": 0.98,
+                },
+                settings={
+                    "dispatch_strategy": TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+                    "grid_charging": GridChargeConfig(target_soc_fraction=0.8),
+                },
             ),
-            battery=BatteryDistributionConfig(
-                capacity_kwh=ProportionalDistribution(
-                    source="pv.capacity_kw",
-                    multiplier=SweepSpec(min=0.5, max=2.0, steps=3, mode="linear"),
-                    offset=0.5,
-                ),
-                max_charge_kw=ShuffledPoolDistribution(values=(2.5, 3.0), counts=(1, 1)),
-                max_discharge_kw=3.0,
-                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+            heat_pump=ComponentDistribution(
+                {"heat_pump_type": "GSHP", "thermal_capacity_kw": 6.0, "annual_heat_demand_kwh": 9000.0}
             ),
-            heat_pump=HeatPumpDistributionConfig(
-                heat_pump_type="GSHP", thermal_capacity_kw=6.0, annual_heat_demand_kwh=9000.0
-            ),
-            ev=EVDistributionConfig(
-                charger_type=WeightedDiscreteDistribution(values=("7kW",), weights=(1.0,)),
-                arrival_hour=19.0,
-                departure_hour=6.0,
-                required_charge_kwh=30.0,
-                smart_charging_mode="solar",
+            ev=ComponentDistribution(
+                {
+                    "charger_type": WeightedDiscreteDistribution(values=("7kW",), weights=(1.0,)),
+                    "arrival_hour": 19.0,
+                    "departure_hour": 6.0,
+                    "required_charge_kwh": 30.0,
+                },
+                settings={"smart_charging_mode": "solar"},
             ),
             seed=42,
             random_order="bristol_legacy",
             dispatch_strategy="tou_optimized",
         )
+        assert {component: set(fleet_distribution[component]) for component in tables} == {
+            component: set(table.fleet) for component, table in tables.items()
+        }
         assert parse_fleet_distribution_config(fleet_distribution) == expected
         _assert_blocks_recognise_exactly_their_keys(
             parse_fleet_distribution_config, fleet_distribution, "fleet_distribution"
