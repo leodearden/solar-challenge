@@ -1052,7 +1052,7 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config == tariff
 
     def test_battery_grid_charging_reaches_every_battery(self) -> None:
-        """BatteryDistributionConfig.grid_charging is the grid charging of every generated battery."""
+        """A battery's grid_charging setting is the grid charging of every generated battery."""
         gc = GridChargeConfig(target_soc_fraction=0.9)
         homes = generate_homes_from_distribution(
             self._base_config(grid_charging=gc), Location.bristol()
