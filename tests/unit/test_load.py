@@ -665,31 +665,25 @@ class TestWindowedStochasticGeneration:
             "deterministic profile: RuntimeError: Simulated richardsonpy internal failure"
         ]
 
-    def test_a_household_whose_days_have_no_energy_gives_the_elexon_profile_with_a_warning(
+    def test_a_window_whose_simulated_days_have_no_energy_raises_instead_of_falling_back(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """A window whose days are all zeros cannot be scaled to its seasonal energy, so the Elexon profile replaces it and a warning names the cause."""
+        """Scaling a window is the project's own step, not the household model's, so its refusal of a window with no energy propagates, and no warning announces a fallback."""
         config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=True, seed=42)
-        start = end = pd.Timestamp("2024-06-21")
+        day = pd.Timestamp("2024-06-21")
 
-        with caplog.at_level(logging.WARNING, logger="solar_challenge.load"):
-            profile = generate_load_profile(
+        with (
+            caplog.at_level(logging.WARNING, logger="solar_challenge.load"),
+            pytest.raises(ValueError, match="zero consumption"),
+        ):
+            generate_load_profile(
                 config,
-                start,
-                end,
+                day,
+                day,
                 household_model=_household_of_days(lambda day: np.zeros(1440)),
             )
 
-        elexon = generate_load_profile(
-            dataclasses.replace(config, use_stochastic=False), start, end
-        )
-        pd.testing.assert_series_equal(profile, elexon)
-        assert [
-            record.levelno
-            for record in caplog.records
-            if record.name == "solar_challenge.load"
-            and "zero consumption" in record.getMessage()
-        ] == [logging.WARNING]
+        assert [record for record in caplog.records if record.name == "solar_challenge.load"] == []
 
 
 class TestHouseholdModelSeam:
