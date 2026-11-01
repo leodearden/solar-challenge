@@ -310,8 +310,8 @@ def _pointers_given(
     if files:
         node_ids = tuple("::".join((str(found), *names_after_file)) for found in files)
         return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
-    words_after_py = re.findall(r"\w+", match["after_py"] + match["names"] + match["dotted_names"])
-    test_like_names = [word for word in words_after_py if _TEST_LIKE_NAME.fullmatch(word)]
+    words_joined_after_py, names_after_path = _words_after_py(match)
+    test_like_names = [word for word in (*words_joined_after_py, *names_after_path) if _TEST_LIKE_NAME.fullmatch(word)]
     return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
 
 
@@ -322,12 +322,22 @@ def _unrooted_file_and_names(match: re.Match[str]) -> tuple[PurePosixPath, tuple
     the file ends at the .py and each word after the .py is a name. Any other is part of the file's name, as bak is of a
     backup's test_<name>.py.bak, so the file is the whole path and its names are the :: and dotted names after it.
     """
-    words_joined_after_py = re.findall(r"\w+", match["after_py"])
+    words_joined_after_py, names_after_path = _words_after_py(match)
     if words_joined_after_py and _TEST_LIKE_NAME.fullmatch(words_joined_after_py[0]):
-        file, names_text = match["up_to_py"], match["after_py"] + match["names"] + match["dotted_names"]
-    else:
-        file, names_text = match["relative"], match["names"] + match["dotted_names"]
-    return PurePosixPath(file), tuple(re.findall(r"\w+", names_text))
+        return PurePosixPath(match["up_to_py"]), (*words_joined_after_py, *names_after_path)
+    return PurePosixPath(match["relative"]), names_after_path
+
+
+def _words_after_py(match: re.Match[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the words joined after the .py of the path *match* gives, then the names written after that path.
+
+    The path is one not rooted at tests/. Its names are those joined with :: and then those joined with a dot. The two
+    parts together are every word after the .py, in text order.
+    """
+    return (
+        tuple(re.findall(r"\w+", match["after_py"])),
+        tuple(re.findall(r"\w+", match["names"] + match["dotted_names"])),
+    )
 
 
 def _pointers_named_alone(
