@@ -484,7 +484,7 @@ def test_reads_the_pointers_in_a_python_source_that_starts_with_a_byte_order_mar
     checkout = _Checkout(project)
 
     assert _dangling(checkout, _pointers(checkout, [source])) == [
-        f"src/pkg/marked.py:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}"
+        "src/pkg/marked.py:1: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"])
     ]
 
 
@@ -499,20 +499,53 @@ def test_reports_a_test_its_class_or_its_file_named_without_its_path(project: Pa
         "// Testing it needs pytest_configure and build_test_app, then app.test_client().\n"
         "// Its response is a werkzeug.test.TestResponse.\n"
         "// Not a test name: src/tests/test_gone.py or pre-test_gone\n"
-        "// test_pointed_at.py holds them.\n",
+        "// test_pointed_at holds them.\n",
     )
     checkout = _Checkout(project)
 
     assert _dangling(checkout, _pointers(checkout, [source])) == [
-        f"src/pkg/script.js:1: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
-        f"src/pkg/script.js:2: TestGroup: {_NAMED_WITHOUT_ITS_NODE_ID}",
-        f"src/pkg/script.js:3: test_member: {_NAMED_WITHOUT_ITS_NODE_ID}",
-        f"src/pkg/script.js:4: test_top: {_NAMED_WITHOUT_ITS_NODE_ID}",
-        f"src/pkg/script.js:8: test_pointed_at: {_NAMED_WITHOUT_ITS_NODE_ID}",
+        "src/pkg/script.js:1: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
+        "src/pkg/script.js:2: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/script.js:3: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/script.js:4: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
+        "src/pkg/script.js:8: test_pointed_at: " + _named_without_its_path(["tests/unit/test_pointed_at.py"]),
     ]
 
 
+def test_reports_a_name_tests_defines_twice_naming_both_node_ids(project: Path) -> None:
+    write_file(project, "tests/e2e/test_other.py", "def test_top(): pass\n")
+    source = write_file(project, "src/pkg/script.js", "// pinned by test_top\n")
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
+        "src/pkg/script.js:1: test_top: names a test or test file without its path from the project root, so write"
+        " tests/e2e/test_other.py::test_top or tests/unit/test_pointed_at.py::test_top"
+    ]
+
+
+def test_a_test_like_name_tests_holds_nothing_by_is_no_pointer(project: Path) -> None:
+    source = write_file(
+        project,
+        "src/pkg/script.js",
+        "// Flask reads test_config; Werkzeug's TestResponse; a throwaway project's test_gamma.\n",
+    )
+    checkout = _Checkout(project)
+
+    assert _pointers(checkout, [source]) == []
+
+
+def test_a_name_written_straight_after_def_or_class_is_no_pointer(project: Path) -> None:
+    example = write_file(
+        project, "docs/example.md", "    def test_top():\n    class TestGroup:\n    async def test_member(self):\n"
+    )
+    checkout = _Checkout(project)
+
+    assert _pointers(checkout, [example]) == []
+
+
 def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: Path) -> None:
+    write_file(project, "tests/unit/test_app.py", "def test_config(): pass\n")
     using = write_file(
         project,
         "src/pkg/app.py",
@@ -528,12 +561,13 @@ def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: P
 
     assert _pointers(checkout, [using]) == []
     assert _dangling(checkout, _pointers(checkout, [naming])) == [
-        f"src/pkg/other.py:1: test_config: {_NAMED_WITHOUT_ITS_NODE_ID}"
+        "src/pkg/other.py:1: test_config: " + _named_without_its_path(["tests/unit/test_app.py::test_config"])
     ]
 
 
 @pytest.mark.parametrize("suffix", [".yaml", ".yml"])
 def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix: str) -> None:
+    write_file(project, "tests/unit/test_pipeline.py", "def test_command(): pass\ndef test_timeout(): pass\n")
     using = write_file(
         project,
         f"pipeline{suffix}",
@@ -547,11 +581,12 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own(project: Path, suffix
 
     assert _pointers(checkout, [using]) == []
     assert _dangling(checkout, _pointers(checkout, [naming])) == [
-        f"other{suffix}:1: test_command: {_NAMED_WITHOUT_ITS_NODE_ID}"
+        f"other{suffix}:1: test_command: " + _named_without_its_path(["tests/unit/test_pipeline.py::test_command"])
     ]
 
 
 def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under_any_tag(project: Path) -> None:
+    write_file(project, "tests/unit/test_pipeline.py", "def test_command(): pass\ndef test_timeout(): pass\n")
     using = write_file(project, "pipeline.yaml", "test_command: pytest\n---\njob: !job\n  test_timeout: 60\n")
     checkout = _Checkout(project)
 
