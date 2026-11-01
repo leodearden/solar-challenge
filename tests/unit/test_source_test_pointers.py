@@ -657,6 +657,73 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
     ]
 
 
+@pytest.mark.parametrize(
+    ("source", "lines_and_letters"),
+    [
+        ("tests/unit/test_prose.py", [(1, "a"), (2, "b"), (3, "c"), (6, "d"), (11, "e"), (12, "f")]),
+        ("src/pkg/prose.py", [(1, "a"), (2, "b"), (3, "x"), (3, "c"), (6, "d"), (8, "y"), (11, "e"), (12, "f")]),
+    ],
+    ids=["under-tests", "outside-tests"],
+)
+def test_reads_a_test_module_only_in_its_comments_and_string_statements(
+    project: Path, source: str, lines_and_letters: list[tuple[int, str]]
+) -> None:
+    prose = write_file(
+        project,
+        source,
+        '"""Prose naming tests/unit/test_absent_a.py."""\n'
+        "# tests/unit/test_absent_b.py says why.\n"
+        'FORM = "tests/unit/test_absent_x.py"  # tests/unit/test_absent_c.py\n'
+        "def test_case():\n"
+        '    """Check the case.\n'
+        "    tests/unit/test_absent_d.py pins it.\n"
+        '    """\n'
+        '    assert check("tests/unit/test_absent_y.py")\n'
+        "class TestCase:\n"
+        "    FIELDS = {}\n"
+        '    """tests/unit/test_absent_e.py lists them."""\n'
+        '"tests/unit/test_absent_f.py is named in a string statement that is no docstring."\n',
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [prose])) == [
+        f"{source}:{line}: tests/unit/test_absent_{letter}.py:"
+        f" tests/unit/test_absent_{letter}.py does not exist, or git ignores it"
+        for line, letter in lines_and_letters
+    ]
+
+
+def test_reads_a_file_under_tests_that_is_not_python_whole(project: Path) -> None:
+    schema = write_file(project, "tests/fixtures/schema.sql", "-- tests/unit/test_absent_g.py writes it.\n")
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [schema])) == [
+        "tests/fixtures/schema.sql:1: tests/unit/test_absent_g.py:"
+        " tests/unit/test_absent_g.py does not exist, or git ignores it"
+    ]
+
+
+def test_a_test_module_names_tests_of_its_own_and_of_its_throwaway_projects_freely(project: Path) -> None:
+    mentions = write_file(
+        project,
+        "tests/unit/test_mentions.py",
+        "def test_here():\n"
+        '    """Unlike test_top, test_here reads a throwaway project\'s test_gamma."""\n'
+        "# test_pointed_at.py and test_pointed_at hold test_top.\n",
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [mentions])) == [
+        "tests/unit/test_mentions.py:2: test_top: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
+        "tests/unit/test_mentions.py:3: test_pointed_at.py: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py"]),
+        "tests/unit/test_mentions.py:3: test_pointed_at: " + _named_without_its_path(["tests/unit/test_pointed_at.py"]),
+        "tests/unit/test_mentions.py:3: test_top: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
+    ]
+
+
 def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: Path) -> None:
     write_file(project, "tests/unit/test_app.py", "def test_config(): pass\n")
     using = write_file(
@@ -708,8 +775,12 @@ def test_a_yaml_file_may_use_test_prefixed_keys_of_its_own_in_any_document_under
 
 @pytest.mark.parametrize(
     ("source", "text"),
-    [("src/pkg/app.py", "def build(test_config:\n"), ("pipeline.yaml", "test_command: [pytest\n")],
-    ids=["python", "yaml"],
+    [
+        ("src/pkg/app.py", "def build(test_config:\n"),
+        ("pipeline.yaml", "test_command: [pytest\n"),
+        ("tests/unit/test_unparsed.py", "def test_x(:\n"),
+    ],
+    ids=["python", "yaml", "python-under-tests"],
 )
 def test_reports_a_python_or_yaml_file_that_does_not_parse_by_its_path(project: Path, source: str, text: str) -> None:
     broken = write_file(project, source, text)
