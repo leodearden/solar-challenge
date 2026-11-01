@@ -141,15 +141,15 @@ metaclass `__call__`. Held as `__new__`, it reads as `() -> None`.
 `surface_form`, `named_classes`, `member_forms` and `undeclared_attributes` read every
 MRO as the recorded one, and each namespace along it as the class holds it, which
 `type.__dict__['__dict__']` gives for it; 4.8 says how they refuse a class whose
-metaclass shadows `__dict__` instead. So 4.4's refusal of a base defining `__call__` in C, 4.6's of a
-partial whose type takes `__get__` from another class, and 4.7's of a `classmethod`
-wrapping an object whose type defines `__get__` follow the recorded MRO too. Measured:
-hidden by `__mro__`, a `sqlite3.Connection` base still makes 3.13 and 3.14 read
-`(sql, /)`, where 3.11 and 3.12 read the subclass's `__call__`. A hidden `GetMixin` base
-still makes 3.11 and 3.12 raise `ValueError` for such a partial, which 3.13 and 3.14
-read through its `func`. A carried signature's holder is found the same way, the
-metaclass's included. `inspect` chooses a class's own constructor by `__mro__` instead,
-as 4.5 says.
+metaclass shadows `__dict__` or defines `__getattribute__` instead. So 4.4's refusal of
+a base defining `__call__` in C, 4.6's of a partial whose type takes `__get__` from
+another class, and 4.7's of a `classmethod` wrapping an object whose type defines
+`__get__` follow the recorded MRO too. Measured: hidden by `__mro__`, a
+`sqlite3.Connection` base still makes 3.13 and 3.14 read `(sql, /)`, where 3.11 and
+3.12 read the subclass's `__call__`. A hidden `GetMixin` base still makes 3.11 and 3.12
+raise `ValueError` for such a partial, which 3.13 and 3.14 read through its `func`. A
+carried signature's holder is found the same way, the metaclass's included. `inspect`
+chooses a class's own constructor by `__mro__` instead, as 4.5 says.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_surface_form_shadowed_mros.py::test_an_object_whose_types_metaclass_gives_a_mro_other_than_the_one_its_type_records_is_read_through_the_call_that_mro_resolves`
@@ -762,7 +762,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
 - `tests/unit/surface_forms_helper/test_named_classes_routine_chains.py::test_a_routine_whose_chain_ends_at_an_object_that_carries_a_signature_over_a_classmethod_call_whose_binding_differs_by_minor_names_the_classes_that_signature_names`
 
-### 4.8 A class whose metaclass shadows `__dict__`
+### 4.8 A class whose metaclass shadows `__dict__` or defines `__getattribute__`
 
 A metaclass can hold `__dict__` itself: as a property, as a plain value, or as type's own
 descriptor, `type.__dict__['__dict__']`. On every minor, `inspect.getattr_static` then
