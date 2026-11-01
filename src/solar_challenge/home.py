@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Single home simulation combining PV, battery, and load."""
 
+import datetime
 import warnings
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
@@ -18,7 +19,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import SimulationWindow
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.weather import WeatherProvider, align_tmy_to_index
 
 
@@ -339,15 +340,9 @@ def _heat_pump_load(
     )
 
 
-def _demand(config: HomeConfig, weather: pd.DataFrame, start_date: pd.Timestamp, end_date: pd.Timestamp) -> _Demand:
-    """The home's demand from start_date to end_date, on its location's clock, with any heat pump run on weather."""
-    household_kw = generate_load_profile(
-        config.load_config,
-        start_date,
-        end_date,
-        timezone=config.location.timezone,
-        ev_config=config.ev_config,
-    )
+def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow) -> _Demand:
+    """The home's demand on window's rows, with any heat pump run on weather."""
+    household_kw = generate_load_profile(config.load_config, window, ev_config=config.ev_config)
     if config.heat_pump_config is None:
         return _Demand(household_kw, None)
     heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)
@@ -538,6 +533,22 @@ def _results(
     )
 
 
+def _local_date(moment: pd.Timestamp, timezone: str) -> datetime.date:
+    """moment's date on timezone's clock; a naive moment is read as already on it."""
+    local_date: datetime.date = (moment if moment.tz is None else moment.tz_convert(timezone)).date()
+    return local_date
+
+
+def _run_window(location: Location, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationWindow:
+    """The run's window: the dates of start_date and end_date on location's clock, both counted, at one minute."""
+    return SimulationWindow(
+        _local_date(start_date, location.timezone),
+        _local_date(end_date, location.timezone),
+        ONE_MINUTE,
+        location.timezone,
+    )
+
+
 def simulate_home(
     config: HomeConfig,
     start_date: pd.Timestamp,
@@ -551,8 +562,9 @@ def simulate_home(
 
     Args:
         config: Home configuration with PV, load, and optional battery
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
+        start_date: The run's first day: its date on config.location's clock,
+            a naive date read as already on that clock
+        end_date: The run's last day, counted, read as start_date is
         validate_balance: Whether to validate energy balance each timestep
         weather: Supplies the hourly weather at config.location, which
             simulate_home asks it for once. A heat pump's
@@ -568,22 +580,25 @@ def simulate_home(
             strategy_name is its name.
 
     Returns:
-        SimulationResults with all time series at 1-minute resolution
+        SimulationResults with every time series on the run's window's rows:
+        one a minute on config.location's clock, from the first day's local
+        midnight up to the midnight after the last day
 
     Raises:
-        ValueError: If a heat pump is configured and the weather is not one
-            year of hourly rows.
+        ValueError: If end_date's date is before start_date's, naming both;
+            or if a heat pump is configured and the weather is not one year
+            of hourly rows.
         LookupError: If weather holds none for config.location, as a
             PrefetchedWeather refuses it. Whatever else weather.get raises,
             e.g. PvgisTmy's WeatherDataError, propagates too.
     """
+    window = _run_window(config.location, start_date, end_date)
+    rows = window.rows()
     hourly_weather = _hourly_weather(config, weather)
     minute_generation = interpolate_to_minute_resolution(
         simulate_pv_output(config.pv_config, config.location, hourly_weather)
     )
-    demand = _demand(config, hourly_weather, start_date, end_date)
-    rows = demand.total_kw.index
-    window = SimulationWindow.of_index(rows)
+    demand = _demand(config, hourly_weather, window)
     generation_kw = align_tmy_to_index(minute_generation, rows)
     dispatch = _dispatch_path(config, window.step_minutes, strategy)
     flows = _row_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
