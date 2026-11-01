@@ -28,11 +28,6 @@ Concerns:
                      (test_import_is_pvlib_free, test_touching_pvconfig_imports_pvlib)
   H4 collision     — DispatchTariffPeriod / TariffPeriod are distinct objects pointing
                      to different origin classes (test_tariffperiod_collision_resolved)
-
-Relationship to T3 (tests/unit/test_init_lazy_surface.py):
-  T3 owns structural checks (no-dup / no-CLI / lazy resolution / __dir__ /
-  TYPE_CHECKING sync).  T3 defers exact-name pinning to T4.  Bounded overlap in H3 / H4
-  is deliberate — this file must stand alone as the complete executable contract.
 """
 
 import abc
