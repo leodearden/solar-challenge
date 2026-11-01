@@ -15,6 +15,7 @@ from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
+    FLEET_FORM_REFUSALS,
     ImportedFleetForm,
     ParsedFleetForm,
     fleet_form_from_scenario,
@@ -126,6 +127,16 @@ _FLEET_FORM_WITHOUT_A_POOL: dict[str, Any] = {**_FLEET_FORM, "battery": _ANOTHER
 #: The form each key's change is made to, where _FLEET_FORM cannot take that change alone.
 _FORM_TO_CHANGE_BY_KEY: dict[str, dict[str, Any]] = {"days": _FLEET_FORM_BY_DAYS, "n_homes": _FLEET_FORM_WITHOUT_A_POOL}
 
+#: A value parse_fleet_form refuses for each key it reads after the fleet's distributions and location: the tariff, dispatch strategy and SEG overlays, and the window.
+_A_REFUSED_VALUE_OF_EACH_OVERLAY_AND_WINDOW_KEY: dict[str, Any] = {
+    "tariff": {"type": "flat_rate"},
+    "dispatch_strategy": {"strategy_type": "turbo"},
+    "seg": {},
+    "start": "not-a-date",
+    "end": "not-a-date",
+    "days": 2.5,
+}
+
 
 def _run(fleet: ParsedFleetForm) -> tuple[Any, ...]:
     """The run of the parsed *fleet*: the name, homes and dates the simulate endpoint submits."""
@@ -190,6 +201,30 @@ class TestParseFleetFormName:
         with pytest.raises(ValueError) as refusal:
             parse_fleet_form({**_without(_FLEET_FORM, "pv"), "name": chr(0xD800)})
         assert str(refusal.value) == str(expected.value)
+
+
+class TestParseFleetFormRefusalOrder:
+    """Which refusal parse_fleet_form gives a form it refuses for more than one value: it reads every value before it generates any home."""
+
+    @pytest.mark.parametrize(
+        ("form", "key", "value"),
+        [
+            pytest.param(_FORM_TO_CHANGE_BY_KEY.get(key, _FLEET_FORM), key, value, id=key)
+            for key, value in _A_REFUSED_VALUE_OF_EACH_OVERLAY_AND_WINDOW_KEY.items()
+        ],
+    )
+    def test_a_refused_overlay_or_window_is_refused_before_any_home_is_generated(
+        self, form: dict[str, Any], key: str, value: Any
+    ) -> None:
+        """A form whose pv capacity of 0 only the generation of its homes refuses gets the refusal its tariff, dispatch strategy, SEG or window gets on a fleet that generates, so such a refusal costs no home generation."""
+        ungeneratable = {**form, "pv": {"capacity_kw": 0}}
+        with pytest.raises(ConfigurationError, match="capacity_kw must be greater than 0"):
+            parse_fleet_form(ungeneratable)
+        with pytest.raises(FLEET_FORM_REFUSALS) as expected:
+            parse_fleet_form({**form, key: value})
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form({**ungeneratable, key: value})
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
 class TestScenarioFromFleetForm:
