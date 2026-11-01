@@ -21,7 +21,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.request_boundary import resolve_location
+from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -171,6 +171,17 @@ class TestParseFleetForm:
 
         assert _run(changed) != _run(given)
         assert changed.scenario != given.scenario
+
+
+class TestParseFleetFormName:
+    """The name parse_fleet_form reads: refused when it is text that does not encode as UTF-8."""
+
+    def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(chr(0xD800), "name")
+        with pytest.raises(ValueError) as refusal:
+            parse_fleet_form({**_FLEET_FORM, "name": chr(0xD800)})
+        assert str(refusal.value) == str(expected.value)
 
 
 class TestScenarioFromFleetForm:
