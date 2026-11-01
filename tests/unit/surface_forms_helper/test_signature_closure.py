@@ -13,7 +13,11 @@ from typing import NewType, TypeVar
 import pytest
 
 from tests._surface_forms import signature_closure
-from tests.unit.surface_forms_helper._fixtures import REFUSED_ROUTINE_AND_PARTIAL_MEMBERS, Preset
+from tests.unit.surface_forms_helper._fixtures import (
+    REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
+    Preset,
+    Relabelled,
+)
 
 
 @dataclass(frozen=True)
@@ -71,3 +75,10 @@ def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member
 
     with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
         signature_closure([Meter], "tests")
+
+
+def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it() -> None:
+    with pytest.raises(
+        TypeError, match=r"\.Relabelled\b.*\._Labelled\._fields\b.*\bbuiltins\.property\b"
+    ):
+        signature_closure([Relabelled], "tests")

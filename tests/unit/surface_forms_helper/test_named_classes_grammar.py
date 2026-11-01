@@ -40,6 +40,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     Outer,
     Preset,
+    Relabelled,
     imported_module,
 )
 
@@ -214,6 +215,13 @@ def test_a_class_with_a_member_member_forms_refuses_raises_the_type_error_member
 
     with pytest.raises(TypeError, match=rf"\.Meter\.half\b.*\b{re.escape(kind)}\b"):
         named_classes(Meter)
+
+
+def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it() -> None:
+    with pytest.raises(
+        TypeError, match=r"\.Relabelled\b.*\._Labelled\._fields\b.*\bbuiltins\.property\b"
+    ):
+        named_classes(Relabelled)
 
 
 def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
