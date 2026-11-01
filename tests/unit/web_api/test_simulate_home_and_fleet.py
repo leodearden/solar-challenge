@@ -424,6 +424,18 @@ class TestSimulateFleetAPI:
         assert resp.status_code == 201
         assert mock_job_manager.submit_fleet_job.call_args.kwargs["name"] is None
 
+    def test_a_fleet_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """The fleet's own name is refused as request_boundary.require_encodable_text refuses it, before any job is submitted; the payload's homes carry no name, so it is the one value refused."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post("/api/simulate/fleet", json={**VALID_FLEET_PAYLOAD, "name": chr(0xD800)})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
 
 class TestParseHomeConfigErrorPaths:
     """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, a location they cannot resolve, and a name holding a lone surrogate."""
