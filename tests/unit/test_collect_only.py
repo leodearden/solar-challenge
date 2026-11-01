@@ -9,7 +9,7 @@ collection with its skip reason, and a run that wrote no report never reads as a
 nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
 command's stderr, and the output of a command that failed before pytest started.
 That no process a hung collect started outlives it is pinned with every other probe's,
-in test_command_runner_helper.py's test_no_process_a_hung_probe_started_outlives_it.
+in tests/unit/test_command_runner_helper.py::test_no_process_a_hung_probe_started_outlives_it.
 """
 
 import os
@@ -138,7 +138,7 @@ def test_by_default_the_command_runs_in_this_process_environment(
 def test_a_given_environment_replaces_this_process_environment(
     project_echoing_its_environment: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """It is not merged over this process's, so a caller can drop a variable, as test_per_task_verify.py drops VIRTUAL_ENV."""
+    """It is not merged over this process's, so a caller can drop a variable, as tests/unit/test_per_task_verify.py drops VIRTUAL_ENV."""
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
     environment = {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 

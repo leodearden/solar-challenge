@@ -180,7 +180,7 @@ def test_finance_report_renders_flex_value_block() -> None:
 
     Additive: default None → output bit-identical (no flex block).
     """
-    # Build a minimal synthetic summary (mirrors _make_summary in test_finance_bill.py)
+    # Build a minimal synthetic summary (mirrors tests/integration/test_finance_bill.py::_make_summary)
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0
     ex_ratio = 1800.0 / 4000.0

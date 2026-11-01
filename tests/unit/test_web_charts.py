@@ -2,7 +2,7 @@
 """Tests for solar_challenge.web.charts's chart builders, called directly.
 
 An invariant that every chart shares is tested in a module of its own beside this one:
-test_web_chart_colours.py, test_web_chart_downsampling.py and test_web_chart_energy_flows.py.
+tests/unit/test_web_chart_colours.py, tests/unit/test_web_chart_downsampling.py and tests/unit/test_web_chart_energy_flows.py.
 """
 
 import dataclasses

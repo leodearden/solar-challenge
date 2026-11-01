@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run a pytest command verbatim in collect-only mode, for the orchestrator contract tests.
 
-The command is a tests/_command_runner.Command, such as an OrchestratorCommand,
+The command is a tests/_command_runner.py::Command, such as an OrchestratorCommand,
 or a ShellCommand for one no dark-factory-orchestrator.yaml names, and it starts
-through tests/_command_runner.run_command. collect() reads what the command
+through tests/_command_runner.py::run_command. collect() reads what the command
 collected from the collection-report plugin, never from the command's output.
 It loads the plugin by its name, COLLECTION_REPORT_PLUGIN, given to -p, from
 COLLECTION_REPORT_PLUGIN_DIRECTORY (tests/_pytest_plugins) on PYTHONPATH. The

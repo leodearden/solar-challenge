@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the demand simulate_home dispatches a home against.
 
-The heat pump's share of that demand is tested in test_home_heat_pump.py.
+The heat pump's share of that demand is tested in tests/unit/test_home_heat_pump.py.
 """
 
 import pandas as pd

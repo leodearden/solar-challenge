@@ -4,7 +4,7 @@ theme token file, static/src/theme-tokens.json, which charts.py loads into COLOU
 a token edit reaches every chart colour a chart draws; the palette holds only colours a
 chart draws, so it reads as the list of them; and no chart draws Plotly's default template's
 bar outline, a colour outside the palette. That no other web source writes out a chart
-colour is test_web_theme_tokens.py's to guard.
+colour is tests/unit/test_web_theme_tokens.py's to guard.
 
 The charts take their colours from COLOUR_PALETTE as strings, which Plotly needs. Four
 checks enforce the invariants:

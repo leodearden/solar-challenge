@@ -660,8 +660,8 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     """The YAML previewed for the builder's default form loads through load_fleet_config.
 
     The page previews its default form as soon as it opens, so this pins the real
-    payload of getFormData(), which tests/unit/test_web_scenarios.py's
-    TestBuilderScenarioYaml._DEFAULT_FORM mirrors.
+    payload of getFormData(), which
+    tests/unit/test_web_scenarios.py::TestBuilderScenarioYaml's _DEFAULT_FORM mirrors.
     """
     response = open_builder(page, live_server)
     assert response.status == 200

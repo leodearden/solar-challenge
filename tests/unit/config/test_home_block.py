@@ -241,7 +241,7 @@ class TestOmittedAndNullKeys:
     """A block gives its dataclass only the keys it sets, and so does the home block, to HomeConfig.
 
     An omitted key takes the dataclass's declared default, or the table's when-omitted value where
-    the dataclass declares none, and a key written as null reads as absent; test_component_blocks.py
+    the dataclass declares none, and a key written as null reads as absent; tests/unit/config/test_component_blocks.py
     sweeps every key of every table. Two nulls are kept gaps, each owned by a task: a null home
     dispatch_strategy is held as None (task 787), and a null grid_charging target_soc_fraction is
     refused by GridChargeConfig itself (task 866).

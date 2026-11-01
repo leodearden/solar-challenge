@@ -8,7 +8,7 @@ defines under the role's name, such as ``primary``. A group is a JSON object of 
 as ``status``, whose palettes Tailwind names ``<group>-<role>``, such as ``status-running``;
 tests/_dashboard_sources.py's tailwind_role_palettes reads every role under that name.
 Tailwind emits no rule for a palette that no utility applies, so editing its role changes
-nothing, yet it reads as the home of a colour. test_web_compiled_css.py guards the other
+nothing, yet it reads as the home of a colour. tests/unit/test_web_compiled_css.py guards the other
 direction: a utility naming a palette the theme does not define has no rule.
 
 A template or script applies a role as ``<utility>-<role>-<shade>``, and a grouped role as

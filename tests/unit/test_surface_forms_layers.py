@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The layers of the surface-forms helper, whose modules are tests/_surface_forms*.py.
+"""The layers of the surface-forms helper, tests/_surface_forms.py and the _surface_forms_*.py modules beside it.
 
 LAYERS lists the helper's modules bottom first. Of the helper, each imports only the
 modules listed before it, and only at module level, so each reads alone: no reach-back,

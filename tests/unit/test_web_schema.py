@@ -12,14 +12,14 @@ the table, the row's id and the column, and leaves the store as it was; so do ta
 cannot rebuild, naming the fault. Both refuse a file that is not a database with a
 StoreUnreadable naming it, and leave it as it is. MIGRATIONS' versions
 run from 1 without a gap, and SCHEMA_VERSION is the last of them (contract C5). A new store's
-schema is the one committed for its version as tests/fixtures/databases/schema_v<N>.sql, and
+schema is the one committed for its version as schema_v<N>.sql in tests/fixtures/databases, and
 version 1's step leaves a legacy store at the one committed for version 1, so a change to a
 table's schema cannot ship without its migration step (contract C10).
 
 Each run-document step of the stored-run format is carried by the migration step of its
 version, so the format cannot pass the schema (D-S19-2). Version 2's carries the first:
 migrate_store brings each run of a store at version 1, the legacy fixtures of
-tests/_stored_run_fixtures among them, to the stored-run format, in its files and its runs row
+tests/_stored_run_fixtures.py among them, to the stored-run format, in its files and its runs row
 alike, so each then loads (D-S19-5). It rewrites only the documents the step changes, then
 writes the run's format.json, and reports each value it drops that is not null. A run whose
 documents it cannot migrate, or cannot read, is left as it was and reported by id, document and
@@ -178,7 +178,7 @@ def _create_statements(path: Path) -> str:
 
 
 def _store_of_the_committed_schema(version: int, path: Path) -> Path:
-    """A new database file at *path* holding the schema committed for *version*, tests/fixtures/databases/schema_v<version>.sql."""
+    """A new database file at *path* holding the schema committed for *version*, schema_v<version>.sql in tests/fixtures/databases."""
     with closing(sqlite3.connect(path)) as conn:
         conn.executescript((FIXTURES_DIR / f"schema_v{version}.sql").read_text())
     return path

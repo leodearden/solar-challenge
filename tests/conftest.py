@@ -66,7 +66,7 @@ def uv_probe_environment(tmp_path: Path) -> dict[str, str]:
     """Return an isolated_uv_env whose uv project environment is the probe's own, fresh under *tmp_path* and never shared.
 
     It is for a probe whose commands must never sync into an environment another
-    probe reads, as test_stale_uv_lock.py's stale project must not. Every other
+    probe reads, as tests/unit/test_stale_uv_lock.py's stale project must not. Every other
     probe takes its environment from shared_uv_probe_environments.
     """
     return isolated_uv_env(tmp_path / "venv")

@@ -3,7 +3,7 @@
 
 Each test runs a throwaway project's test_command, plain sh, with no uv and no mocks.
 That no process a hung suite started outlives it is pinned with every other probe's,
-in test_command_runner_helper.py's test_no_process_a_hung_probe_started_outlives_it.
+in tests/unit/test_command_runner_helper.py::test_no_process_a_hung_probe_started_outlives_it.
 """
 
 import os

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for PVConfig's settings, from their defaults and domains to the module and inverter parameters a built system takes from them.
 
-test_pv_module_settings.py tests module_efficiency and temperature_coefficient.
+tests/unit/test_pv_module_settings.py tests module_efficiency and temperature_coefficient.
 """
 
 import dataclasses
