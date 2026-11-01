@@ -314,6 +314,12 @@ def _is_own_dict_descriptor(holder: type, held: object) -> bool:
     )
 
 
+_DICT_READINGS_BY_MINOR = (
+    "inspect also reads its annotations by that __dict__ before Python 3.14, and finds its "
+    "source by it from 3.13"
+)
+
+
 def _dict_shadowed_error(cls: type, holder: type, held: object) -> TypeError:
     """The error for *cls*, whose metaclass's MRO holds *holder*, whose own namespace holds *held* as __dict__ in place of the descriptor CPython made for it."""
     return TypeError(
@@ -321,9 +327,9 @@ def _dict_shadowed_error(cls: type, holder: type, held: object) -> TypeError:
         f"{label_of(holder)}.__dict__, a {label_of(type(held))}, in place of the __dict__ "
         "type gives each class: inspect.getattr_static skips a class whose metaclass so "
         "shadows __dict__, attribute lookup reads the namespace the class holds, and inspect "
-        "chooses which of its __new__ and __init__ it reads, and before Python 3.14 reads its "
-        "annotations, by what that __dict__ gives, readings no rule of this helper reads: "
-        "make the name private, or leave __dict__ to type"
+        "chooses which of its __new__ and __init__ it reads by what that __dict__ gives; "
+        f"{_DICT_READINGS_BY_MINOR}; these are readings no rule of this helper reads: make "
+        "the name private, or leave __dict__ to type"
     )
 
 
@@ -334,10 +340,9 @@ def _dict_intercepted_error(cls: type, holder: type) -> TypeError:
         f"{label_of(holder)}.__getattribute__, in place of the __getattribute__ type gives "
         "each class: inspect.getattr_static, and inspect's choice of which of the class's "
         "__new__ and __init__ it reads, read its __dict__ through that __getattribute__, "
-        "which may give another namespace than the one the class holds; inspect also reads "
-        "its annotations by that __dict__ before Python 3.14, and finds its source by it "
-        "from 3.13; these are readings no rule of this helper reads: make the name private, "
-        "or leave __getattribute__ to type"
+        "which may give another namespace than the one the class holds; "
+        f"{_DICT_READINGS_BY_MINOR}; these are readings no rule of this helper reads: make "
+        "the name private, or leave __getattribute__ to type"
     )
 
 
