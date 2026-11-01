@@ -5,8 +5,8 @@ This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
 specification that future maintainers must update when the public surface changes.
 
 Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 72 public
-                     names (test_all_equals_frozen_set)
+  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the public names
+                     (test_all_equals_frozen_set)
   H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
                      routine's signature, a dataclass's following its kind, e.g.
                      'dataclass[eq, frozen] (...)'; an Enum's members; a constant's type
@@ -59,7 +59,7 @@ from tests._surface_forms import (
 
 
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the exact 72 public names, each with its frozen surface form
+# H2 surface-lock: the public names, each with its frozen surface form
 #
 # The keys mirror docs/prds/domain-library-extraction.md §3.1, grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
@@ -161,23 +161,16 @@ FROZEN_SET: frozenset[str] = frozenset(FROZEN_SURFACE)
 
 
 def test_all_equals_frozen_set() -> None:
-    """H2 surface-lock: solar_challenge.__all__ must equal FROZEN_SET exactly.
+    """__all__ lists exactly FROZEN_SURFACE's names; the message names each name only one of them lists.
 
-    Fails on any add/remove to __all__ without updating FROZEN_SET.
-    The symmetric-difference message names the exact drifted symbol(s).
-
-    Also asserts len==72 explicitly — a bare set-compare would silently pass
-    if __all__ contained a duplicate entry (set collapses duplicates).
+    A set comparison needs no count, because importing the package refuses a name
+    __all__ lists twice (test_importing_the_package_refuses_tables_that_disagree).
     """
     actual = set(solar_challenge.__all__)
     diff = actual.symmetric_difference(FROZEN_SET)
     assert actual == FROZEN_SET, (
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
-    )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 72, (
-        f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 72 each)"
     )
 
 
