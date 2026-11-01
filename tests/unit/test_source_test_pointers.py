@@ -12,9 +12,10 @@ file that is not UTF-8 text holds none. The path is looked up in the files git l
 so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
 a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
 repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
-reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused,
-naming the path to write. One that ends no file of tests/ names another tree's or a throwaway project's file, so it is
-no pointer.
+reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/
+that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused, naming the path to write.
+One that ends no file of tests/ names another tree's or a throwaway project's file, so it is no pointer, but each
+test_<name> or Test<Name> after it, as in test_<name>.py::<Class>, is read as a name given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
@@ -32,10 +33,11 @@ import io
 import re
 import tokenize
 from collections import defaultdict
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
+from typing import assert_never
 
 import pytest
 import yaml
@@ -46,16 +48,18 @@ from tests._working_tree import WorkingTreePaths, working_tree_paths
 
 _TESTS = PurePosixPath("tests")
 
+_TEST_LIKE_NAME = re.compile(r"test_\w+|Test[A-Z]\w*")
+
 _POINTER = re.compile(
-    r"""
+    rf"""
     (?<![\w./-])
     (?:
         (?:
             (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
-          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?!\w))
+          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?:[\w.-]*\w)?)
         )
         (?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
-      | (?<!def\ )(?<!class\ )(?P<bare>test_\w+|Test[A-Z]\w*)
+      | (?<!def\ )(?<!class\ )(?P<bare>{_TEST_LIKE_NAME.pattern})
     )
     """,
     re.VERBOSE,
@@ -86,13 +90,18 @@ class _Pointer:
 class _UnrootedPointer:
     """A pointer into tests/ written without its path from the project root: the file holding it, its line, its text.
 
-    Its node-ids are those of what it names, one for each test, test class or test file tests/ holds by it, sorted.
+    Its node-ids are those of what it names, one for each test, test class or test file tests/ holds by it, sorted. Its
+    refusal names them for the writer to choose from, so it has at least one, and one built with none raises ValueError.
     """
 
     source: PurePosixPath
     line: int
     written: str
     node_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.node_ids:
+            raise ValueError(f"{self} names no node-id to write, so it is no pointer")
 
     def __str__(self) -> str:
         return f"{self.source}:{self.line}: {self.written}"
@@ -194,17 +203,21 @@ def _pointers_in(checkout: _Checkout, source: PurePosixPath, text: str) -> list[
     """Return the pointers in *text*, the text of the file *source* in the *checkout*, in text order.
 
     The names the file uses itself, as a Python module's identifiers or a YAML file's keys, are read only if a test-like
-    name is given alone in it.
+    name is read as given alone in it.
     """
-    located = [
-        (first_line + passage.count("\n", 0, match.start()), match)
+
+    @functools.cache
+    def own_names() -> frozenset[str]:
+        return _own_names(checkout, source, text)
+
+    return [
+        pointer
         for first_line, passage in _passages(checkout, source, text)
         for match in _POINTER.finditer(passage)
+        for pointer in _pointers_given(
+            checkout, source, first_line + passage.count("\n", 0, match.start()), match, own_names
+        )
     ]
-    has_bare_name = any(match["bare"] is not None for _, match in located)
-    own_names = _own_names(checkout, source, text) if has_bare_name else frozenset()
-    found = (_pointer(checkout, source, line, match, own_names) for line, match in located)
-    return [pointer for pointer in found if pointer is not None]
 
 
 def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tuple[int, str]]:
@@ -250,27 +263,50 @@ def _string_statements(module: ast.Module, text: str) -> list[tuple[int, str]]:
     return strings
 
 
-def _pointer(
-    checkout: _Checkout, source: PurePosixPath, line: int, match: re.Match[str], own_names: frozenset[str]
-) -> _Pointer | _UnrootedPointer | None:
-    """Return the pointer *match* gives on *line* of the file *source* in the *checkout*, or None if it gives none.
+def _pointers_given(
+    checkout: _Checkout,
+    source: PurePosixPath,
+    line: int,
+    match: re.Match[str],
+    own_names: Callable[[], frozenset[str]],
+) -> Sequence[_Pointer | _UnrootedPointer]:
+    """Return the pointers *match* gives on *line* of the file *source* in the *checkout*, in text order.
 
-    A path not rooted at tests/ gives one only if it ends a file of tests/. A test-like name given alone gives one only
-    if it is not among *own_names*, those the file uses itself, and tests/ holds a test, test class or test file by it.
+    A path rooted at tests/ gives one, and so does a path not rooted there that ends a file of tests/. A test-like name
+    given alone, and each test-like name after any other path, is read by _pointers_named_alone with *own_names*.
     """
     if match["bare"] is not None:
-        name = match["bare"]
-        node_ids = () if name in own_names else checkout.node_ids_named(name)
-        return _UnrootedPointer(source=source, line=line, written=name, node_ids=node_ids) if node_ids else None
+        return _pointers_named_alone(checkout, source, line, [match["bare"]], own_names)
     names = tuple(match["names"].split("::")[1:])
     dotted_names = tuple(match["dotted_names"].split(".")[1:])
     if match["path"] is not None:
-        return _Pointer(
-            source=source, line=line, path=PurePosixPath(match["path"]), names=names, dotted_names=dotted_names
-        )
+        path = PurePosixPath(match["path"])
+        return [_Pointer(source=source, line=line, path=path, names=names, dotted_names=dotted_names)]
     files = checkout.test_files_ending(PurePosixPath(match["relative"]))
-    node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
-    return _UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids) if node_ids else None
+    if files:
+        node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
+        return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
+    test_like_names = [name for name in (*names, *dotted_names) if _TEST_LIKE_NAME.fullmatch(name)]
+    return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
+
+
+def _pointers_named_alone(
+    checkout: _Checkout,
+    source: PurePosixPath,
+    line: int,
+    names: Iterable[str],
+    own_names: Callable[[], frozenset[str]],
+) -> list[_UnrootedPointer]:
+    """Return a pointer for each of the test-like *names* read as given alone on *line* of the file *source*, in order.
+
+    A name gives one only if it is not among *own_names*, those the file uses itself, and the *checkout*'s tests/ holds a
+    test, test class or test file by it.
+    """
+    return [
+        _UnrootedPointer(source=source, line=line, written=name, node_ids=node_ids)
+        for name in names
+        if name not in own_names() and (node_ids := checkout.node_ids_named(name))
+    ]
 
 
 def _own_names(checkout: _Checkout, source: PurePosixPath, text: str) -> frozenset[str]:
@@ -357,6 +393,8 @@ def _refusal(checkout: _Checkout, pointer: _Pointer | _UnrootedPointer) -> str |
             return _named_without_its_path(node_ids)
         case _Pointer():
             return _unresolved(checkout, pointer)
+        case _:
+            assert_never(pointer)
 
 
 def _named_without_its_path(node_ids: Iterable[str]) -> str:
@@ -706,7 +744,8 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         "# test_pointed_at.py::TestGroup.test_member\n"
         "# test_twin.py\n"
         "# config/test_pointed_at.py and lib/test_pointed_at.py end no file of tests/,"
-        " nor does a throwaway test_gamma.py.\n",
+        " nor does a throwaway test_gamma.py.\n"
+        "# Nor do backups such as test_pointed_at.py.bak and unit/test_pointed_at.py-old.\n",
     )
     checkout = _Checkout(project)
 
@@ -719,6 +758,30 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         "src/pkg/module.py:4: test_twin.py: "
         + _named_without_its_path(["tests/e2e/test_twin.py", "tests/unit/test_twin.py"]),
     ]
+
+
+def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_given_alone(project: Path) -> None:
+    write_file(project, "tests/unit/_cases.py", "def make_case(): pass\n")
+    source = write_file(
+        project,
+        "src/pkg/module.py",
+        "# test_gone.py::TestGroup covers it.\n"
+        "# unit/test_gone.py::TestGroup.test_member\n"
+        "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n",
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
+        "src/pkg/module.py:1: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:2: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:2: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+    ]
+
+
+def test_a_pointer_written_without_its_path_names_a_node_id_to_write() -> None:
+    with pytest.raises(ValueError, match=r"^src/pkg/module\.py:3: test_gone names no node-id to write"):
+        _UnrootedPointer(source=PurePosixPath("src/pkg/module.py"), line=3, written="test_gone", node_ids=())
 
 
 @pytest.mark.parametrize(
