@@ -16,7 +16,12 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.request_boundary import LOCATION_PRESETS, NotAJsonObject, resolve_location
+from solar_challenge.web.request_boundary import (
+    LOCATION_PRESETS,
+    NotAJsonObject,
+    require_encodable_text,
+    resolve_location,
+)
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
     FULL_YEAR_END,
@@ -422,7 +427,7 @@ class TestParseHomeConfigKeys:
 
 
 class TestParseHomeConfigName:
-    """The name parse_home_config reads: the body's, and none of its own."""
+    """The name parse_home_config reads: the body's, and none of its own; refused when it is text that does not encode as UTF-8."""
 
     def test_a_body_that_sends_a_name_names_the_home_and_the_run_with_it(self) -> None:
         home_config, _start, _end, name = parse_home_config(VALID_HOME_PAYLOAD)
@@ -436,6 +441,13 @@ class TestParseHomeConfigName:
         home_config, _start, _end, name = parse_home_config(nameless_body)
 
         assert (home_config.name, name) == ("", None)
+
+    def test_a_name_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(chr(0xD800), "name")
+        with pytest.raises(ValueError) as refusal:
+            parse_home_config({**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
+        assert str(refusal.value) == str(expected.value)
 
 
 class TestParseSegTariff:

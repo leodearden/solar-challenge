@@ -11,7 +11,7 @@ pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.request_boundary import resolve_location
+from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
 from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
@@ -301,6 +301,18 @@ class TestSimulateHomeAPI:
         assert resp.get_json() == {"error": message}
         mock_job_manager.submit_home_job.assert_not_called()
 
+    def test_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which the run store cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any job is submitted."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "name": chr(0xD800)})
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_home_job.assert_not_called()
+
 
 class TestSimulateFleetAPI:
     """Tests for POST /api/simulate/fleet."""
@@ -414,7 +426,7 @@ class TestSimulateFleetAPI:
 
 
 class TestParseHomeConfigErrorPaths:
-    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, and a location they cannot resolve."""
+    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, a location they cannot resolve, and a name holding a lone surrogate."""
 
     def test_invalid_tariff_returns_400(
         self, client: FlaskClient
@@ -659,6 +671,35 @@ class TestParseHomeConfigErrorPaths:
         with pytest.raises(ValueError) as refusal:
             resolve_location(location)
         assert str(refusal.value) in resp.get_json()["error"]
+
+    @pytest.mark.parametrize(
+        ("url", "body"),
+        [
+            pytest.param(
+                "/api/simulate/fleet",
+                {"homes": [VALID_HOME_PAYLOAD, {**VALID_HOME_PAYLOAD, "name": chr(0xD800)}]},
+                id="fleet-later-home",
+            ),
+            pytest.param(
+                "/api/simulate/sweep",
+                {"min": 1, "max": 5, "steps": 2, "base_config": {"name": chr(0xD800)}},
+                id="sweep",
+            ),
+        ],
+    )
+    def test_name_holding_a_lone_surrogate_returns_400_carrying_the_refusal_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, url: str, body: dict
+    ) -> None:
+        """A home config's name that require_encodable_text refuses is a 400 carrying its refusal, which the sweep prefixes with its point, never a home named with a lone surrogate; nothing is submitted."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post(url, json=body)
+
+        assert resp.status_code == 400
+        assert str(refusal.value) in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
 
 class TestParseHomeConfigPVAge:
