@@ -15,7 +15,13 @@ from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parents[1]
 
-LAYERS = ("_surface_forms_module_lookup", "_surface_forms_signatures", "_surface_forms")
+LAYERS = (
+    "_surface_forms_labels",
+    "_surface_forms_class_reads",
+    "_surface_forms_module_lookup",
+    "_surface_forms_signatures",
+    "_surface_forms",
+)
 
 _DOCUMENTED = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 

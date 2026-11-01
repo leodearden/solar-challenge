@@ -2,10 +2,9 @@
 """The signature inspect reads for a class or a routine, refused where inspect reads it differently by minor or cannot read it, and the module that spells each annotation it gives.
 
 Both follow the chain and the constructor inspect follows. Of the helper, this module
-imports only tests/_surface_forms_module_lookup.py, as
-tests/unit/test_surface_forms_layers.py checks. docs/surface-forms-inspect-readings.md
-says how each minor reads what this module refuses: a new refusal gets a rule test, then
-an entry there.
+imports only the modules below it in tests/unit/test_surface_forms_layers.py's LAYERS,
+which checks that. docs/surface-forms-inspect-readings.md says how each minor reads what
+this module refuses: a new refusal gets a rule test, then an entry there.
 """
 
 import abc
@@ -19,15 +18,17 @@ import typing
 import warnings
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
-from tests._surface_forms_module_lookup import (
-    defining_module,
-    is_get_delete_descriptor,
-    is_routine,
-    label_of,
+from tests._surface_forms_class_reads import (
     overriding_getattribute_holder,
     own_annotations,
     own_namespace,
     recorded_mro,
+)
+from tests._surface_forms_labels import label_of
+from tests._surface_forms_module_lookup import (
+    defining_module,
+    is_get_delete_descriptor,
+    is_routine,
 )
 
 

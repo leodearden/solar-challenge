@@ -11,8 +11,8 @@ declares against those its own __init__ and __post_init__ set on self.
 
 tests/unit/surface_forms_helper/ pins each function's rules, one rule per test; its
 __init__.py says which module holds which. This module reads signatures through
-tests/_surface_forms_signatures.py, and both look modules up through
-tests/_surface_forms_module_lookup.py.
+tests/_surface_forms_signatures.py; tests/unit/test_surface_forms_layers.py's LAYERS lists
+every module of the helper, bottom first.
 
 Usage::
 
@@ -47,15 +47,13 @@ import types
 import typing
 from collections.abc import Callable, Collection, Iterable, Iterator
 
+from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
+from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     defining_module,
     evaluated_in,
     is_immutable_type,
     is_routine,
-    label_of,
-    own_annotations,
-    own_namespace,
-    recorded_mro,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
