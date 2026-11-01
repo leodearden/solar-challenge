@@ -22,7 +22,7 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
     sample_distribution,
 )
-from solar_challenge.web.request_boundary import resolve_location
+from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -427,6 +427,20 @@ class TestFleetFromDistribution:
         with pytest.raises(ValueError) as refusal:
             resolve_location(location)
         assert resp.get_json() == {"error": str(refusal.value)}
+
+    def test_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A JSON string can escape a lone surrogate, which the run store cannot bind, so such a name is refused as request_boundary.require_encodable_text refuses it, before any fleet is queued."""
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
+
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution", json={**self._VALID_BODY, "name": chr(0xD800)}
+        )
+
+        assert (resp.status_code, resp.get_json()) == (400, {"error": str(refusal.value)})
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
         ("key", "value"),

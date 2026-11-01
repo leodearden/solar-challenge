@@ -43,6 +43,7 @@ from solar_challenge.web.presets import (
 )
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
+    refuse_unencodable_text,
     request_json_object,
     require_encodable_text,
     require_json_object,
@@ -127,12 +128,14 @@ def simulate_fleet_api() -> tuple[Response, int]:
         JSON with job_id, run_id and results_url, HTTP 201 on success.
     """
     data = request_json_object()
+    name = data.get("name")
     homes_data = data.get("homes", [])
     if not isinstance(homes_data, list):
         return jsonify({"error": f"homes must be a JSON array, got {type(homes_data).__name__}"}), 400
     if not homes_data:
         return jsonify({"error": "Fleet requires at least one home config in 'homes' array"}), 400
     try:
+        refuse_unencodable_text(name, "name")
         configs = []
         # Use first home's date config for the fleet
         first_config, start_date, end_date, _ = parse_home_config(homes_data[0])
@@ -150,7 +153,7 @@ def simulate_fleet_api() -> tuple[Response, int]:
         configs=configs,
         start_date=start_date,
         end_date=end_date,
-        name=data.get("name"),
+        name=name,
     )
 
     return _submitted_job_answer(job_id, run_id)
@@ -722,14 +725,11 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
 def _refuse_unencodable_labels(labels: Mapping[RunLabel, object]) -> None:
     """Refuse *labels*, the run labels a PATCH body sends, when one is text require_encodable_text refuses.
 
-    A label that is not text is not checked here.
-
     Raises:
-        ValueError: From require_encodable_text, naming the label.
+        ValueError: From refuse_unencodable_text, naming the label.
     """
     for label, value in labels.items():
-        if isinstance(value, str):
-            require_encodable_text(value, label)
+        refuse_unencodable_text(value, label)
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["PATCH"])

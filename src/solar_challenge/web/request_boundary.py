@@ -78,6 +78,17 @@ def require_encodable_text(text: str, what: str) -> str:
     return text
 
 
+def refuse_unencodable_text(value: object, what: str) -> None:
+    """Refuse *value*, a request's *what*, when it is text require_encodable_text refuses, and leave any other value to its reader.
+
+    Raises:
+        ValueError: From require_encodable_text, naming *what* and *value*, for text holding
+            a lone surrogate.
+    """
+    if isinstance(value, str):
+        require_encodable_text(value, what)
+
+
 LOCATION_PRESETS: dict[str, Location] = {
     "bristol": Location(latitude=51.45, longitude=-2.58, altitude=11.0, name="Bristol, UK"),
     "london": Location(latitude=51.51, longitude=-0.13, altitude=11.0, name="London, UK"),
