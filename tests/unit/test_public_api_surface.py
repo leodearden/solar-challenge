@@ -1,14 +1,18 @@
 """The contract of solar_challenge's public surface: what `import solar_challenge` serves, and the frozen forms a consumer builds against.
 
-Its sections, in order:
+Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
-- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, and the locks
-  holding the package to them.  A surface change edits their rows, and adds its
-  'Unreleased on main' line to docs/domain-library-consumption.md in the same commit.
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
+  the package to them, and the member guards, which accept the writes to self that
+  REVIEWED_COMPUTED_NAME_WRITES lists.  A surface change edits the frozen tables' rows,
+  and adds its 'Unreleased on main' line to docs/domain-library-consumption.md in the
+  same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms.
-- Every exported name resolves to its typed import, the object the package's
-  `if TYPE_CHECKING:` block imports under that name.
+- Name resolution: every exported name resolves to its typed import, the object the
+  package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
+  names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
+  resolve to the kind their spelling misleads about.
 - The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
 - The package imports without pvlib and loads a submodule on first touch.
 """
@@ -41,8 +45,13 @@ from tests._surface_forms import (
 )
 
 
+# ===========================================================================
+# The frozen forms, and the locks holding the package to them
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
-# The frozen forms: the public names, each with its frozen surface form
+# The public names, each with its frozen surface form
 #
 # The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
@@ -566,10 +575,10 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # The drift report: each path whose current form differs from its frozen one,
 # printed with both forms, the current one ready to paste
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 
 def _drift_message(
@@ -608,6 +617,11 @@ def _drifted(
         for path in [*current, *missing]
         if current.get(path) != frozen.get(path)
     }
+
+
+# ===========================================================================
+# Name resolution: what the package resolves each name to, and what dir() lists
+# ===========================================================================
 
 
 # ---------------------------------------------------------------------------
@@ -696,6 +710,11 @@ def test_tariffperiod_collision_resolved() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# dir() lists the exported names, and an unknown name raises AttributeError
+# ---------------------------------------------------------------------------
+
+
 def test_unknown_attribute_raises() -> None:
     """Accessing an undefined attribute raises AttributeError."""
     with pytest.raises(AttributeError):
@@ -749,10 +768,10 @@ def test_every_expected_kind_name_resolves_to_its_kind() -> None:
     assert {name: _kind(getattr(solar_challenge, name)) for name in EXPECTED_KIND} == EXPECTED_KIND
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # The runtime tables agree at import: importing the package refuses __all__,
 # _SYMBOL_MODULE and _SOURCE_NAME when they disagree, naming each offender
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 _IMPORT_PROBE = """\
 import json
@@ -832,12 +851,12 @@ def test_importing_the_package_refuses_tables_that_disagree(
     )
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # The package imports without pvlib and loads a submodule on first touch
 #
 # Each test runs a fresh interpreter, since the test process has already
 # imported pvlib.
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 
 def test_import_is_pvlib_free() -> None:
