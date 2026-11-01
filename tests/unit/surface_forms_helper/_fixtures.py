@@ -327,6 +327,9 @@ class Relabelled(_Labelled):
     """A named tuple whose own body binds nothing and whose _fields holder, its base _Labelled, binds _fields to a property giving ("x",) over _Point, a typing.NamedTuple whose one field is x: its instances read ("x",), while the holder holds the property itself."""
 
 
+RELABELLED_REFUSAL = r"\.Relabelled\b.*\._Labelled\._fields\b.*\bbuiltins\.property\b"
+
+
 def imported_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, source: str
 ) -> types.ModuleType:

@@ -26,6 +26,7 @@ from tests._surface_forms import (
     unset_attributes,
 )
 from tests.unit.surface_forms_helper._fixtures import (
+    RELABELLED_REFUSAL,
     UNREADABLE_ROUTINES,
     CallableGetter,
     GetterPartial,
@@ -759,7 +760,7 @@ def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_type
         _fields = (1,)
 
     assert Relabelled(1)._fields == ("x",)
-    with pytest.raises(TypeError, match=r"\.Relabelled\b.*\._Labelled\._fields\b.*\bproperty\b"):
+    with pytest.raises(TypeError, match=RELABELLED_REFUSAL):
         member_forms(Relabelled)
     with pytest.raises(TypeError, match=r"\.Listed\b.*\.Listed\._fields\b.*\blist\b"):
         member_forms(Listed)
