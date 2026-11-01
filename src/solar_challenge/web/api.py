@@ -43,6 +43,7 @@ from solar_challenge.web.presets import (
 )
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
+    refuse_unencodable_text,
     request_json_object,
     require_encodable_text,
     require_json_object,
@@ -722,14 +723,11 @@ def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
 def _refuse_unencodable_labels(labels: Mapping[RunLabel, object]) -> None:
     """Refuse *labels*, the run labels a PATCH body sends, when one is text require_encodable_text refuses.
 
-    A label that is not text is not checked here.
-
     Raises:
-        ValueError: From require_encodable_text, naming the label.
+        ValueError: From refuse_unencodable_text, naming the label.
     """
     for label, value in labels.items():
-        if isinstance(value, str):
-            require_encodable_text(value, label)
+        refuse_unencodable_text(value, label)
 
 
 @api_bp.route("/history/runs/<run_id>", methods=["PATCH"])
