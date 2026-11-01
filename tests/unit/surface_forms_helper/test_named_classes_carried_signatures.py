@@ -715,6 +715,108 @@ def test_a_signature_a_class_carries_over_a_constructor_whose_chain_holds_a_link
     assert named_classes(getattr(linksigning, classed)) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("CopiedCalled", id="metaclass-call"),
+        pytest.param("CopiedInitialised", id="init"),
+    ],
+)
+def test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain_carries_over_a_callable_defined_in_c_names_the_classes_that_signature_names_read_where_the_link_given_it_is_spelled_though_the_metaclass_of_the_class_holding_it_gives_that_class_another_signature(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(tmp_path, monkeypatch, "linkcalling", _LINKCALLING_SOURCE)
+    linksigning = imported_module(
+        tmp_path,
+        monkeypatch,
+        "linksigning",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from linkcalling import LinkCalling, LinkInitialised, wrapper\n"
+        "\n"
+        "own = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class OwnSigning(type):\n"
+        "    @property\n"
+        "    def __signature__(cls):\n"
+        "        return own\n"
+        "\n"
+        "class OwnSigningCalling(OwnSigning, LinkCalling):\n"
+        "    pass\n"
+        "\n"
+        "class CopiedCalled(metaclass=OwnSigningCalling):\n"
+        "    __signature__ = wrapper.__signature__\n"
+        "\n"
+        "class CopiedInitialised(LinkInitialised, metaclass=OwnSigning):\n"
+        "    __signature__ = wrapper.__signature__\n",
+    )
+    holder = getattr(linksigning, name)
+
+    class Unsigning(type(holder)):
+        __signature__ = None
+
+    class Shadowing(holder, metaclass=Unsigning):
+        pass
+
+    assert named_classes(Shadowing) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("OwnCalled", id="metaclass-call"),
+        pytest.param("OwnInitialised", id="init"),
+    ],
+)
+def test_a_class_that_carries_a_signature_of_its_own_over_a_constructor_whose_chain_holds_a_link_carrying_one_over_a_callable_defined_in_c_raises_type_error_for_a_string_annotation_naming_the_class_holding_it_the_link_the_string_and_that_it_may_be_a_copy_though_the_metaclass_of_that_class_gives_it_the_signature_of_that_link(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(tmp_path, monkeypatch, "linkcalling", _LINKCALLING_SOURCE)
+    linksigning = imported_module(
+        tmp_path,
+        monkeypatch,
+        "linksigning",
+        "import inspect\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from linkcalling import LinkCalling, LinkInitialised, wrapper\n"
+        "\n"
+        "own = inspect.Signature(\n"
+        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+        ")\n"
+        "\n"
+        "class LinkSigning(type):\n"
+        "    @property\n"
+        "    def __signature__(cls):\n"
+        "        return wrapper.__signature__\n"
+        "\n"
+        "class LinkSigningCalling(LinkSigning, LinkCalling):\n"
+        "    pass\n"
+        "\n"
+        "class OwnCalled(metaclass=LinkSigningCalling):\n"
+        "    __signature__ = own\n"
+        "\n"
+        "class OwnInitialised(LinkInitialised, metaclass=LinkSigning):\n"
+        "    __signature__ = own\n",
+    )
+    holder = getattr(linksigning, name)
+
+    class Unsigning(type(holder)):
+        __signature__ = None
+
+    class Shadowing(holder, metaclass=Unsigning):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=rf"\blinksigning\.{name}\b.*'Share'.*\blinkcalling\.object\.__init__\b.*\bmay be a copy\b",
+    ):
+        named_classes(Shadowing)
+
+
 @pytest.mark.parametrize("wrap", CLASSMETHOD_WRAPPEES_BOUND_BY_MINOR)
 def test_a_class_that_carries_a_signature_over_a_classmethod_constructor_whose_binding_differs_by_minor_names_the_classes_that_signature_names(
     wrap: Callable[[Callable[..., object]], object],
