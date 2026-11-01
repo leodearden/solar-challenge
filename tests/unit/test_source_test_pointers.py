@@ -609,6 +609,32 @@ def test_a_name_written_straight_after_def_or_class_is_no_pointer(project: Path)
     assert _pointers(checkout, [example]) == []
 
 
+def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path(project: Path) -> None:
+    write_file(project, "tests/unit/test_twin.py", "")
+    write_file(project, "tests/e2e/test_twin.py", "")
+    source = write_file(
+        project,
+        "src/pkg/module.py",
+        "# test_pointed_at.py says why.\n"
+        "# unit/test_pointed_at.py::TestGroup::test_member\n"
+        "# test_pointed_at.py::TestGroup.test_member\n"
+        "# test_twin.py\n"
+        "# config/test_pointed_at.py and lib/test_pointed_at.py end no file of tests/,"
+        " nor does a throwaway test_gamma.py.\n",
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [source])) == [
+        "src/pkg/module.py:1: test_pointed_at.py: " + _named_without_its_path(["tests/unit/test_pointed_at.py"]),
+        "src/pkg/module.py:2: unit/test_pointed_at.py::TestGroup::test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:3: test_pointed_at.py::TestGroup.test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:4: test_twin.py: "
+        + _named_without_its_path(["tests/e2e/test_twin.py", "tests/unit/test_twin.py"]),
+    ]
+
+
 def test_a_python_module_may_use_test_prefixed_identifiers_of_its_own(project: Path) -> None:
     write_file(project, "tests/unit/test_app.py", "def test_config(): pass\n")
     using = write_file(
