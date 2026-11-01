@@ -42,6 +42,45 @@ _LINKCALLING_SOURCE = (
     "    __init__ = wrapper\n"
 )
 
+_METASIGNING_SOURCE = (
+    "import inspect\n"
+    "from decimal import Decimal as Share\n"
+    "\n"
+    "from linkcalling import LinkCalling, LinkInitialised, wrapper\n"
+    "\n"
+    "own = inspect.Signature(\n"
+    "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
+    ")\n"
+    "\n"
+    "class OwnSigning(type):\n"
+    "    @property\n"
+    "    def __signature__(cls):\n"
+    "        return own\n"
+    "\n"
+    "class OwnSigningCalling(OwnSigning, LinkCalling):\n"
+    "    pass\n"
+    "\n"
+    "class CopiedCalled(metaclass=OwnSigningCalling):\n"
+    "    __signature__ = wrapper.__signature__\n"
+    "\n"
+    "class CopiedInitialised(LinkInitialised, metaclass=OwnSigning):\n"
+    "    __signature__ = wrapper.__signature__\n"
+    "\n"
+    "class LinkSigning(type):\n"
+    "    @property\n"
+    "    def __signature__(cls):\n"
+    "        return wrapper.__signature__\n"
+    "\n"
+    "class LinkSigningCalling(LinkSigning, LinkCalling):\n"
+    "    pass\n"
+    "\n"
+    "class OwnCalled(metaclass=LinkSigningCalling):\n"
+    "    __signature__ = own\n"
+    "\n"
+    "class OwnInitialised(LinkInitialised, metaclass=LinkSigning):\n"
+    "    __signature__ = own\n"
+)
+
 
 def test_a_class_names_the_classes_its_signature_names_read_where_its_constructor_is_spelled_though_the_class_carries_one(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
@@ -726,34 +765,8 @@ def test_a_class_that_carries_the_very_signature_a_link_of_its_constructor_chain
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "linkcalling", _LINKCALLING_SOURCE)
-    linksigning = imported_module(
-        tmp_path,
-        monkeypatch,
-        "linksigning",
-        "import inspect\n"
-        "from decimal import Decimal as Share\n"
-        "\n"
-        "from linkcalling import LinkCalling, LinkInitialised, wrapper\n"
-        "\n"
-        "own = inspect.Signature(\n"
-        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
-        ")\n"
-        "\n"
-        "class OwnSigning(type):\n"
-        "    @property\n"
-        "    def __signature__(cls):\n"
-        "        return own\n"
-        "\n"
-        "class OwnSigningCalling(OwnSigning, LinkCalling):\n"
-        "    pass\n"
-        "\n"
-        "class CopiedCalled(metaclass=OwnSigningCalling):\n"
-        "    __signature__ = wrapper.__signature__\n"
-        "\n"
-        "class CopiedInitialised(LinkInitialised, metaclass=OwnSigning):\n"
-        "    __signature__ = wrapper.__signature__\n",
-    )
-    holder = getattr(linksigning, name)
+    metasigning = imported_module(tmp_path, monkeypatch, "metasigning", _METASIGNING_SOURCE)
+    holder = getattr(metasigning, name)
 
     class Unsigning(type(holder)):
         __signature__ = None
@@ -775,34 +788,8 @@ def test_a_class_that_carries_a_signature_of_its_own_over_a_constructor_whose_ch
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "linkcalling", _LINKCALLING_SOURCE)
-    linksigning = imported_module(
-        tmp_path,
-        monkeypatch,
-        "linksigning",
-        "import inspect\n"
-        "from decimal import Decimal as Share\n"
-        "\n"
-        "from linkcalling import LinkCalling, LinkInitialised, wrapper\n"
-        "\n"
-        "own = inspect.Signature(\n"
-        "    [inspect.Parameter('share', inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation='Share')]\n"
-        ")\n"
-        "\n"
-        "class LinkSigning(type):\n"
-        "    @property\n"
-        "    def __signature__(cls):\n"
-        "        return wrapper.__signature__\n"
-        "\n"
-        "class LinkSigningCalling(LinkSigning, LinkCalling):\n"
-        "    pass\n"
-        "\n"
-        "class OwnCalled(metaclass=LinkSigningCalling):\n"
-        "    __signature__ = own\n"
-        "\n"
-        "class OwnInitialised(LinkInitialised, metaclass=LinkSigning):\n"
-        "    __signature__ = own\n",
-    )
-    holder = getattr(linksigning, name)
+    metasigning = imported_module(tmp_path, monkeypatch, "metasigning", _METASIGNING_SOURCE)
+    holder = getattr(metasigning, name)
 
     class Unsigning(type(holder)):
         __signature__ = None
@@ -812,7 +799,7 @@ def test_a_class_that_carries_a_signature_of_its_own_over_a_constructor_whose_ch
 
     with pytest.raises(
         TypeError,
-        match=rf"\blinksigning\.{name}\b.*'Share'.*\blinkcalling\.object\.__init__\b.*\bmay be a copy\b",
+        match=rf"\bmetasigning\.{name}\b.*'Share'.*\blinkcalling\.object\.__init__\b.*\bmay be a copy\b",
     ):
         named_classes(Shadowing)
 
