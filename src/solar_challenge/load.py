@@ -384,10 +384,11 @@ def _try_richardsonpy_profile(
     each at the Elexon path's daily energy for its own month:
     target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[day's month]).
 
-    The Elexon path is a defensive fallback: any exception returns None,
-    including an error from the household model, a day that is not 1,440
-    minutes long, and a window with no energy, which scale_profile_to_energy
-    refuses to scale.
+    The Elexon path is a defensive fallback for the household model's own
+    failures only: None is returned when the household model raises, as
+    richardsonpy's imports, data files or day simulation can, or gives a day
+    that is not 1,440 minutes long. The windowing and scaling around it are
+    the project's own, so their errors propagate.
 
     Args:
         config: Load configuration
@@ -398,57 +399,26 @@ def _try_richardsonpy_profile(
             gives each day's power in W
 
     Returns:
-        Load profile Series if successful, None otherwise (triggers Elexon fallback)
+        Load profile Series, or None when the household model failed (triggers Elexon fallback)
+
+    Raises:
+        ValueError: If the window's simulated days have no energy, which
+            scale_profile_to_energy refuses to scale.
     """
+    # Normalise dates (strip any intra-day time component)
+    start_norm = start_date.normalize()
+    end_norm = end_date.normalize()
+    if start_norm.tz is None:
+        start_norm = start_norm.tz_localize(timezone)
+    if end_norm.tz is None:
+        end_norm = end_norm.tz_localize(timezone)
+
+    # Calendar dates, not timedelta.days, which undercounts a window
+    # across the 23-hour spring-forward day.
+    days = _calendar_days(start_norm.date(), end_norm.date())
+
     try:
-        # Normalise dates (strip any intra-day time component)
-        start_norm = start_date.normalize()
-        end_norm = end_date.normalize()
-        if start_norm.tz is None:
-            start_norm = start_norm.tz_localize(timezone)
-        if end_norm.tz is None:
-            end_norm = end_norm.tz_localize(timezone)
-
-        # Calendar dates, not timedelta.days, which undercounts a window
-        # across the 23-hour spring-forward day.
-        days = _calendar_days(start_norm.date(), end_norm.date())
-
-        # Concatenate all days and convert W → kW
-        power_kw: np.ndarray = (
-            np.concatenate(_household_day_watts(household_model, config, days)) / 1000.0
-        )
-
-        # Build 1-minute DatetimeIndex for the requested window.
-        # Reuse the Elexon DST trim/pad pattern so index length is consistent.
-        minute_index = pd.date_range(
-            start=start_norm,
-            end=end_norm + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
-            freq="1min",
-            tz=timezone,
-        )
-
-        # Trim or extend to match index length (handles DST transitions)
-        if len(power_kw) > len(minute_index):
-            power_kw = power_kw[: len(minute_index)]
-        elif len(power_kw) < len(minute_index):
-            avg = (
-                power_kw[-MINUTES_PER_DAY:].mean()
-                if len(power_kw) >= MINUTES_PER_DAY
-                else power_kw.mean()
-            )
-            padding = np.full(len(minute_index) - len(power_kw), avg)
-            power_kw = np.concatenate([power_kw, padding])
-
-        profile = pd.Series(power_kw, index=minute_index, name="demand_kw")
-
-        # Do NOT use ElectricLoad's do_normalization — on a 1-day window it
-        # would force the full annual demand (~3400 kWh) into a single day.
-        annual_kwh = config.get_annual_consumption()
-        target_window_kwh = sum(
-            annual_kwh / 365.0 * SEASONAL_FACTORS.get(day.month, 1.0) for day in days
-        )
-        return scale_profile_to_energy(profile, target_window_kwh)
-
+        day_watts = _household_day_watts(household_model, config, days)
     except Exception as exc:  # noqa: BLE001
         # Log a warning so the fallback is observable; a silent fallback would
         # hide API-mismatch regressions in production (only unit tests, via the
@@ -460,6 +430,40 @@ def _try_richardsonpy_profile(
             exc,
         )
         return None
+
+    # Concatenate all days and convert W → kW
+    power_kw: np.ndarray = np.concatenate(day_watts) / 1000.0
+
+    # Build 1-minute DatetimeIndex for the requested window.
+    # Reuse the Elexon DST trim/pad pattern so index length is consistent.
+    minute_index = pd.date_range(
+        start=start_norm,
+        end=end_norm + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
+        freq="1min",
+        tz=timezone,
+    )
+
+    # Trim or extend to match index length (handles DST transitions)
+    if len(power_kw) > len(minute_index):
+        power_kw = power_kw[: len(minute_index)]
+    elif len(power_kw) < len(minute_index):
+        avg = (
+            power_kw[-MINUTES_PER_DAY:].mean()
+            if len(power_kw) >= MINUTES_PER_DAY
+            else power_kw.mean()
+        )
+        padding = np.full(len(minute_index) - len(power_kw), avg)
+        power_kw = np.concatenate([power_kw, padding])
+
+    profile = pd.Series(power_kw, index=minute_index, name="demand_kw")
+
+    # Do NOT use ElectricLoad's do_normalization — on a 1-day window it
+    # would force the full annual demand (~3400 kWh) into a single day.
+    annual_kwh = config.get_annual_consumption()
+    target_window_kwh = sum(
+        annual_kwh / 365.0 * SEASONAL_FACTORS.get(day.month, 1.0) for day in days
+    )
+    return scale_profile_to_energy(profile, target_window_kwh)
 
 
 def generate_load_profile(
@@ -477,8 +481,9 @@ def generate_load_profile(
     when config.use_stochastic is True (the default).  richardsonpy is a hard
     dependency so this path is always available.  Falls back to the
     deterministic Elexon Profile Class 1 shape only when use_stochastic=False,
-    or defensively if the stochastic profile cannot be built: the household
-    model raises an error, or its window has no energy to scale.
+    or defensively when the household model itself fails: it raises an error,
+    or gives a day that is not 1,440 minutes long.  A window whose simulated
+    days have no energy raises ValueError instead.
 
     A stochastic profile depends only on its LoadConfig: the call leaves the
     module-level random and numpy.random generators in the states it found
