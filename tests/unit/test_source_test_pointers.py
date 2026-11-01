@@ -769,6 +769,9 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         "# unit/test_pointed_at.py::TestGroup::test_member\n"
         "# test_pointed_at.py::TestGroup.test_member\n"
         "# test_twin.py\n"
+        "# test_pointed_at.py.TestRenamed and test_twin.py.TestRenamed join a name tests/ no longer holds with a dot,\n"
+        "# test_pointed_at.py.TestGroup.test_renamed a class and a member it no longer holds,\n"
+        "# unit/test_pointed_at.py-TestGroup::TestNested.test_deep a hyphen, then :: and a dot.\n"
         "# config/test_pointed_at.py and lib/test_pointed_at.py end no file of tests/,"
         " nor does a throwaway test_gamma.py.\n"
         "# Nor do backups such as test_pointed_at.py.bak and unit/test_pointed_at.py-old.\n",
@@ -783,6 +786,14 @@ def test_reports_a_test_file_named_by_a_path_not_rooted_at_tests_naming_its_path
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
         "src/pkg/module.py:4: test_twin.py: "
         + _named_without_its_path(["tests/e2e/test_twin.py", "tests/unit/test_twin.py"]),
+        "src/pkg/module.py:5: test_pointed_at.py.TestRenamed: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestRenamed"]),
+        "src/pkg/module.py:5: test_twin.py.TestRenamed: "
+        + _named_without_its_path(["tests/e2e/test_twin.py::TestRenamed", "tests/unit/test_twin.py::TestRenamed"]),
+        "src/pkg/module.py:6: test_pointed_at.py.TestGroup.test_renamed: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_renamed"]),
+        "src/pkg/module.py:7: unit/test_pointed_at.py-TestGroup::TestNested.test_deep: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::TestNested::test_deep"]),
     ]
 
 
@@ -794,9 +805,10 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "# test_gone.py::TestGroup covers it.\n"
         "# unit/test_gone.py::TestGroup.test_member\n"
         "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n"
-        "# test_pointed_at.py.TestGroup.test_member joins its names to the file's with dots,\n"
+        "# test_gone.py.TestGroup.test_member joins its names to the file's with dots,\n"
         "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n"
-        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n",
+        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n"
+        "# test_pointed_at.py.bak.TestGroup names a backup first, so the name after it is read alone.\n",
     )
     checkout = _Checkout(project)
 
@@ -812,6 +824,7 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "src/pkg/module.py:6: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
         "src/pkg/module.py:6: test_member: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:7: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
     ]
 
 
