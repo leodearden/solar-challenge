@@ -46,6 +46,7 @@ import sys
 import types
 import typing
 from collections.abc import Mapping
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -183,9 +184,17 @@ def test_all_equals_frozen_set() -> None:
         f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
         f"FROZEN_SET has {len(FROZEN_SET)} (expected 72 each)"
     )
-    # Document the CLI-excluded invariant explicitly
-    assert "get_cli_app" not in solar_challenge.__all__, (
-        "get_cli_app must remain excluded from __all__ (shipped but unfrozen CLI)"
+
+
+def test_all_has_no_cli_names() -> None:
+    """No name of __all__ is get_cli_app or starts with cli or web: the CLI and the web app ship unfrozen."""
+    cli_names = [
+        name
+        for name in solar_challenge.__all__
+        if name == "get_cli_app" or name.startswith(("cli", "web"))
+    ]
+    assert not cli_names, (
+        f"__all__ lists names of the CLI or the web app, which ship unfrozen: {cli_names}"
     )
 
 
@@ -626,6 +635,103 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Every exported name resolves to its typed import: the object the package's
+# `if TYPE_CHECKING:` block, which type checkers read, imports under that name
+# ---------------------------------------------------------------------------
+
+
+def _type_checking_imports() -> dict[str, tuple[str, str]]:
+    """Each name the package's top-level `if TYPE_CHECKING:` block binds, mapped to
+    the module it imports from and the name it imports there."""
+    source = Path(solar_challenge.__file__).read_text(encoding="utf-8")
+    blocks = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+    ]
+    return {
+        alias.asname or alias.name: (statement.module, alias.name)
+        for block in blocks
+        for statement in block.body
+        if isinstance(statement, ast.ImportFrom) and statement.module is not None
+        for alias in statement.names
+    }
+
+
+def test_type_checking_block_names_match_all() -> None:
+    """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
+
+    Reads the names the block binds through _type_checking_imports() and verifies
+    they stay in sync with __all__. Adding a name to __all__ and to the lazy
+    loader's map but forgetting its TYPE_CHECKING re-export would otherwise
+    silently break mypy --strict for consumers without failing this package's own checks.
+    """
+    tc_names = set(_type_checking_imports())
+
+    # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
+    # Typer is NOT in __all__ — CLI is shipped but unfrozen.
+    expected = set(solar_challenge.__all__) | {"Typer"}
+    assert tc_names == expected, (
+        f"TYPE_CHECKING block out of sync with __all__.\n"
+        f"Extra (not in __all__ + Typer): {tc_names - expected}\n"
+        f"Missing (in __all__ but not TYPE_CHECKING): {expected - tc_names}"
+    )
+
+
+def test_every_name_resolves_to_its_type_checking_import() -> None:
+    """Each __all__ name resolves to the object the package's `if TYPE_CHECKING:`
+    block imports under that name, and stays that object across accesses.
+
+    Type checkers read that block, so the runtime and typed surfaces must agree.
+    A name the block does not import is test_type_checking_block_names_match_all's
+    to report.
+    """
+    imports = _type_checking_imports()
+    misresolved: list[str] = []
+    for name in solar_challenge.__all__:
+        if name not in imports:
+            continue
+        module, source = imports[name]
+        imported = getattr(import_module(module), source)
+        resolved, resolved_again = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if resolved is not imported or resolved_again is not imported:
+            misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
+    assert not misresolved, (
+        "Names that resolve to an object other than their TYPE_CHECKING import:\n"
+        + "\n".join(misresolved)
+    )
+
+
+def test_tariffperiod_collision_resolved() -> None:
+    """DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
+
+    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
+    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
+    They must be distinct — otherwise one silently shadows the other.
+    """
+    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
+        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
+    )
+    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
+        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
+    )
+    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
+        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
+    )
+
+
+def test_unknown_attribute_raises() -> None:
+    """Accessing an undefined attribute raises AttributeError."""
+    with pytest.raises(AttributeError):
+        _ = solar_challenge.does_not_exist
+
+
+def test_dir_returns_sorted_all() -> None:
+    """`dir(solar_challenge)` returns exactly sorted(__all__)."""
+    assert dir(solar_challenge) == sorted(solar_challenge.__all__)
+
+
+# ---------------------------------------------------------------------------
 # H2 kind: targeted gotcha-guard for names whose kind would be WRONG if
 # inferred from naming convention alone.
 #
@@ -816,28 +922,4 @@ def test_touching_pvconfig_imports_pvlib() -> None:
     )
     assert result.returncode == 0, (
         f"pvlib was NOT imported after touching solar_challenge.PVConfig.\nstderr: {result.stderr}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# H4 collision: DispatchTariffPeriod (dispatch Enum) and TariffPeriod
-# (tariff dataclass) are distinct objects with distinct origin classes.
-# ---------------------------------------------------------------------------
-
-
-def test_tariffperiod_collision_resolved() -> None:
-    """H4: DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
-
-    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
-    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
-    They must be distinct — otherwise one silently shadows the other.
-    """
-    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
-        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
-    )
-    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
-        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
-    )
-    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
-        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
     )
