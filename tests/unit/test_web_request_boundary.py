@@ -11,6 +11,7 @@ from solar_challenge.location import Location
 from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
+    refuse_unencodable_text,
     refuse_unrecognised_keys,
     request_json_object,
     require_encodable_text,
@@ -129,6 +130,34 @@ class TestRequireEncodableText:
         assert str(refusal.value) == (
             f"points[1].run_id must be text that encodes as UTF-8, holding no lone surrogate; got {text!r}"
         )
+
+
+class TestRefuseUnencodableText:
+    """refuse_unencodable_text refuses text require_encodable_text refuses and leaves any other value to its reader."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(None, id="null"),
+            pytest.param(5, id="integer"),
+            pytest.param(True, id="boolean"),
+            pytest.param([chr(0xD800)], id="array-holding-a-lone-surrogate"),
+            pytest.param({"name": chr(0xD800)}, id="object-holding-a-lone-surrogate"),
+        ],
+    )
+    def test_a_value_that_is_not_text_is_left_to_its_reader(self, value: object) -> None:
+        assert refuse_unencodable_text(value, "name") is None
+
+    def test_text_that_encodes_is_not_refused(self) -> None:
+        refuse_unencodable_text("Café ☀ 😀", "name")
+
+    def test_text_holding_a_lone_surrogate_is_refused_as_require_encodable_text_refuses_it(self) -> None:
+        text = chr(0xD800)
+        with pytest.raises(ValueError) as expected:
+            require_encodable_text(text, "name")
+        with pytest.raises(ValueError) as refusal:
+            refuse_unencodable_text(text, "name")
+        assert str(refusal.value) == str(expected.value)
 
 
 class TestResolveLocation:
