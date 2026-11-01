@@ -15,6 +15,7 @@ import sys
 import types
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import pytest
 
@@ -310,6 +311,20 @@ REFUSED_ROUTINE_AND_PARTIAL_MEMBERS = (
     *UNREADABLE_ROUTINES,
     pytest.param(functools.partial(round, ndigits=1), "functools.partial", id="partial"),
 )
+
+
+class _Point(NamedTuple):
+    x: int
+
+
+class _Labelled(_Point):
+    @property
+    def _fields(self) -> tuple[str, ...]:
+        return ("x",)
+
+
+class Relabelled(_Labelled):
+    """A named tuple whose own body binds nothing and whose _fields holder, its base _Labelled, binds _fields to a property giving ("x",) over _Point, a typing.NamedTuple whose one field is x: its instances read ("x",), while the holder holds the property itself."""
 
 
 def imported_module(
