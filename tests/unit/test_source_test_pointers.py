@@ -670,7 +670,8 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         "# tests/unit/test_pointed_at.py.TestGroup-based\n"
         "# tests/unit/test_pointed_at.py.TestGroup-based::test_member\n"
         "# tests/unit/test_pointed_at.py-.TestGroup\n"
-        "# tests/unit/test_absent.py.TestGroup::TestNested.test_deep\n",
+        "# tests/unit/test_absent.py.TestGroup::TestNested.test_deep\n"
+        "# tests/unit/gone::test_top.test_inner\n",
     )
     checkout = _Checkout(project)
 
@@ -707,6 +708,8 @@ def test_reports_each_pointer_that_does_not_resolve_on_its_line(project: Path) -
         " a node-id joins its names with ::, so write tests/unit/test_pointed_at.py::TestGroup",
         "src/pkg/module.py:17: tests/unit/test_absent.py.TestGroup::TestNested.test_deep:"
         " tests/unit/test_absent.py.TestGroup does not exist, or git ignores it",
+        "src/pkg/module.py:18: tests/unit/gone::test_top.test_inner:"
+        " tests/unit/gone does not exist, or git ignores it",
     ]
 
 
