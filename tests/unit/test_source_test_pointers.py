@@ -14,8 +14,9 @@ a pointer naming a test in a Python file that is not UTF-8 text, or that does no
 repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path not rooted at tests/
 that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused, naming the path to write.
-One that ends no file of tests/ names another tree's or a throwaway project's file, so it is no pointer, but each
-test_<name> or Test<Name> after it, as in test_<name>.py::<Class>, is read as a name given alone, as below.
+One that ends no file of tests/ is assumed to name another tree's or a throwaway project's file, so it is no pointer,
+but each test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a
+name given alone, as below.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
@@ -62,7 +63,7 @@ _POINTER = re.compile(
     (?:
         (?:
             (?P<path>tests/(?:[\w.-]+/)*[\w.-]*\w)
-          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?:[\w.-]*\w)?)
+          | (?P<relative>(?:[\w.-]+/)*test_\w+\.py(?P<after_py>(?:[\w.-]*\w)?))
         )
         (?P<names>(?:::\w+)*)(?P<dotted_names>(?:\.\w+)*)
       | (?<!def\ )(?<!class\ )(?P<bare>{_TEST_LIKE_NAME.pattern})
@@ -292,7 +293,8 @@ def _pointers_given(
     """Return the pointers *match* gives on *line* of the file *source* in the *checkout*, in text order.
 
     A path rooted at tests/ gives one, and so does a path not rooted there that ends a file of tests/. A test-like name
-    given alone, and each test-like name after any other path, is read by _pointers_named_alone with *own_names*.
+    given alone, and each test-like name after the .py of any other path, is read by _pointers_named_alone with
+    *own_names*.
     """
     if match["bare"] is not None:
         return _pointers_named_alone(checkout, source, line, [match["bare"]], own_names)
@@ -305,7 +307,8 @@ def _pointers_given(
     if files:
         node_ids = tuple("::".join((str(file), *names, *dotted_names)) for file in files)
         return [_UnrootedPointer(source=source, line=line, written=match[0], node_ids=node_ids)]
-    test_like_names = [name for name in (*names, *dotted_names) if _TEST_LIKE_NAME.fullmatch(name)]
+    words_after_py = re.findall(r"\w+", match["after_py"] + match["names"] + match["dotted_names"])
+    test_like_names = [word for word in words_after_py if _TEST_LIKE_NAME.fullmatch(word)]
     return _pointers_named_alone(checkout, source, line, test_like_names, own_names)
 
 
@@ -790,7 +793,10 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "src/pkg/module.py",
         "# test_gone.py::TestGroup covers it.\n"
         "# unit/test_gone.py::TestGroup.test_member\n"
-        "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n",
+        "# test_gone.py::make_case and test_gone.py::test_gamma name no test tests/ holds.\n"
+        "# test_pointed_at.py.TestGroup.test_member joins its names to the file's with dots,\n"
+        "# unit/test_gone.py-TestGroup with a hyphen; test_gone.py.make_case names no test.\n"
+        "# test_gone.py.TestGroup::test_member joins one name with a dot and the next with ::, read in text order.\n",
     )
     checkout = _Checkout(project)
 
@@ -798,6 +804,13 @@ def test_a_test_like_name_after_a_path_that_ends_no_file_of_tests_is_read_as_giv
         "src/pkg/module.py:1: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
         "src/pkg/module.py:2: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
         "src/pkg/module.py:2: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:4: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:4: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+        "src/pkg/module.py:5: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:6: TestGroup: " + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup"]),
+        "src/pkg/module.py:6: test_member: "
         + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
     ]
 
