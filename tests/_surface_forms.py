@@ -213,10 +213,10 @@ def named_classes(obj: object) -> set[type]:
     A class's signature, an Enum's aside, is spelled where its constructor is, the
     __call__ its metaclass resolves if inspect reads that, as spelling_modules in
     tests/_surface_forms_signatures.py says; one its metaclass or a descriptor gives, or
-    one a class whose metaclass shadows __dict__ carries, raises TypeError. A signature
-    the class carries in the constructor's place is spelled there too, except over a
-    constructor whose chain, as inspect reads and binds it, ends at a callable defined
-    in C, which spells no annotation: that
+    one a class whose metaclass shadows __dict__ or defines __getattribute__ carries,
+    raises TypeError. A signature the class carries in the constructor's place is
+    spelled there too, except over a constructor whose chain, as inspect reads and
+    binds it, ends at a callable defined in C, which spells no annotation: that
     signature is read where the class holding it is spelled, as spelling_modules says.
     Where a link of that chain carries a signature of its own, which the class's may
     copy, the class's is read where that link's is if the class holds that very
