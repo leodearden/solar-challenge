@@ -419,7 +419,7 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
 
 
 def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a normal or uniform count that sample_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
+    """Refuse *config* when a normal or uniform count that _converted_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
     for path, row, spec in _component_draws(config):
         if (
             row.kind is FieldKind.COUNT
@@ -1596,21 +1596,62 @@ def _nearest_count(
             min to its max.
     """
     least, greatest = _count_bounds(spec, setting)
-    whole = math.floor(draw)
-    nearest = whole + 1 if draw - whole >= 0.5 else whole
-    return float(min(max(nearest, least), greatest))
+    return float(min(max(_nearest_whole_number(draw), least), greatest))
 
 
-#: The COUNT fields sample_count truncates, as the generator did before it drew each field by
-#: its kind; every other count is rounded. Task 868 rounds these too and deletes the set
+def _nearest_whole_number(value: float) -> float:
+    """Return the whole number nearest *value*, a half rounding up, as a float."""
+    whole = math.floor(value)
+    return float(whole + 1 if value - whole >= 0.5 else whole)
+
+
+#: The COUNT fields _converted_count truncates, as the generator did before it drew each field
+#: by its kind; every other count is rounded. Task 868 rounds these too and deletes the set
 #: (docs/prds/component-defaults-one-home.md §6 decisions 8 and 9).
 _TRUNCATED_COUNTS: frozenset[str] = frozenset({"ev.arrival_hour", "ev.departure_hour"})
+
+
+def _refuse_unless_finite(value: SpecValue, path: str) -> None:
+    """Refuse *value*, a count of the field at *path* to convert, if it is an infinity or a NaN, naming *path* and the value."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigurationError(f"{path} must be a finite number, got {value!r}")
+
+
+def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
+    """Return the count of the COUNT field at *path* for *value*, drawn from *spec*; this is the sampler's one count conversion.
+
+    A count in _TRUNCATED_COUNTS is truncated to an int. For any other, a draw from a normal or
+    uniform distribution gives the whole number nearest it among those from the spec's min to
+    its max, as _nearest_count states, and a proportional_to's value the whole number nearest
+    it, a half rounding up either way. The whole number is returned as a float, so a refusal of
+    the count names it as drawn, 1e+300 rather than the 301-digit int it equals. A fixed value
+    is returned as the spec gives it, and any other value as drawn.
+
+    Raises:
+        ConfigurationError: If a count it truncates, or a proportional_to's value, is an
+            infinity or a NaN, naming *path* and the value; or as _nearest_count does, for a
+            normal or uniform distribution with no whole number from its min to its max.
+    """
+    if path in _TRUNCATED_COUNTS:
+        _refuse_unless_finite(value, path)
+        return None if value is None else int(value)
+    if isinstance(spec, (int, float)):
+        return spec
+    if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
+        return _nearest_count(value, spec, path)
+    if isinstance(value, (int, float)) and isinstance(spec, ProportionalDistribution):
+        _refuse_unless_finite(value, path)
+        return _nearest_whole_number(value)
+    return value
 
 
 def _proportional_value(
     spec: ProportionalDistribution, path: str, drawn: Mapping[str, SpecValue]
 ) -> Optional[float]:
     """The value *spec*, the spec of the field at *path*, gives: its multiplier times the value *drawn* holds for its source, plus its offset; a null source gives null.
+
+    A home draws no field of a component it has none of, past the presence field, so a source
+    there is refused for each home without that component, and not for the others.
 
     Raises:
         ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
@@ -1658,21 +1699,23 @@ class _DistributionSampler:
             self._drawn_ahead[setting] = values
 
     def draw(
-        self, field: FleetField, spec: DistributionSpec, path: str, drawn: Mapping[str, SpecValue]
+        self, row: FleetField, spec: DistributionSpec, path: str, drawn: Mapping[str, SpecValue]
     ) -> SpecValue:
-        """Draw the next home's value of the field at *path*, whose fleet row is *field*, from *spec*.
+        """Draw the next home's value of the field at *path*, whose fleet row is *row*, from *spec*.
 
         A proportional_to gives what _proportional_value computes from *drawn*, the home's
-        draws so far by path; a COUNT is drawn by sample_count; any other field by sample.
+        draws so far by path, and any other spec what sample draws; a COUNT's value is then
+        converted by _converted_count.
 
         Raises:
-            ConfigurationError: As _proportional_value, sample_count or sample refuse the draw.
+            ConfigurationError: As _proportional_value, sample or _converted_count refuse the draw.
         """
+        value: SpecValue
         if isinstance(spec, ProportionalDistribution):
-            return _proportional_value(spec, path, drawn)
-        if field.kind is FieldKind.COUNT:
-            return self.sample_count(spec, path)
-        return self.sample(spec, path)
+            value = _proportional_value(spec, path, drawn)
+        else:
+            value = self.sample(spec, path)
+        return _converted_count(value, spec, path) if row.kind is FieldKind.COUNT else value
 
     def sample(self, spec: DistributionSpec, setting: str) -> SpecValue:
         """Draw the next home's value of *setting* from *spec*.
@@ -1725,54 +1768,6 @@ class _DistributionSampler:
         self._handed_out[setting] = handed_out + 1
         return values[handed_out]
 
-    def sample_count(self, spec: DistributionSpec, setting: str) -> SpecValue:
-        """Sample a count of *setting* from *spec*; this is the sampler's one count conversion.
-
-        A count in _TRUNCATED_COUNTS is drawn as sample_finite draws it and truncated to an int.
-        For any other, a draw from a normal or uniform distribution gives the whole number
-        nearest it among those from the spec's min to its max, a half rounding up, as
-        _nearest_count states. The whole number is returned as a float, so a refusal of the
-        count names it as drawn, 1e+300 rather than the 301-digit int it equals. A fixed
-        value is returned as the spec gives it, and any other value as drawn.
-
-        Args:
-            spec: The setting's distribution specification
-            setting: The setting's path in the fleet distribution, e.g. 'load.household_occupants'
-
-        Raises:
-            ConfigurationError: If *spec* is a normal or uniform distribution with
-                no whole number from its min to its max, naming *setting*, the min
-                and the max; as sample does, for a normal or uniform draw that is not a
-                finite number; or as sample_finite does, for a truncated count.
-        """
-        if setting in _TRUNCATED_COUNTS:
-            truncated = self.sample_finite(spec, setting)
-            return None if truncated is None else int(truncated)
-        if isinstance(spec, (int, float)):
-            return spec
-        value = self.sample(spec, setting)
-        if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
-            return _nearest_count(value, spec, setting)
-        return value
-
-    def sample_finite(self, spec: DistributionSpec, setting: str) -> SpecValue:
-        """Sample *setting* from *spec*, refusing an infinity or a NaN whichever spec gives it.
-
-        Any other value is returned as sample gives it.
-
-        Args:
-            spec: The setting's distribution specification
-            setting: The setting's path in the fleet distribution, e.g. 'ev.arrival_hour'
-
-        Raises:
-            ConfigurationError: As sample does; or if the value is an infinity or a
-                NaN, naming *setting* and the value.
-        """
-        value = self.sample(spec, setting)
-        if isinstance(value, float) and not math.isfinite(value):
-            raise ConfigurationError(f"{setting} must be a finite number, got {value!r}")
-        return value
-
 
 _NOTHING_GIVEN: Mapping[str, object] = MappingProxyType({})
 
@@ -1796,9 +1791,11 @@ def _drawn_component(
     so each field drawn null or not drawn takes its default.
 
     Raises:
-        ConfigurationError: If a required field draws null or is not drawn, naming its path and
-            the home; or, naming the component and the home, as the dataclass refuses what it is
-            built from.
+        ConfigurationError: As sampler.draw refuses a draw, naming its path; as the table's
+            presence rule refuses the presence field's draw, e.g. has_battery a negative or
+            non-finite battery capacity; if a required field is not drawn, naming its path, or
+            draws null, naming its path and the home; or, naming the component and the home, as
+            the dataclass refuses what it is built from.
     """
     if component is None:
         return None
@@ -1815,7 +1812,8 @@ def _drawn_component(
         if value is not None:
             values[key] = value
         elif row.required:
-            raise ConfigurationError(f"fleet_distribution.{path} is required, but home {home_number} drew null")
+            got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
+            raise ConfigurationError(f"fleet_distribution.{path} is required, but {got}")
     try:
         return block.config_type(**values, **component.settings, **given)
     except (ValueError, TypeError) as refusal:
@@ -1909,15 +1907,16 @@ def generate_homes_from_distribution(
     Raises:
         ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
             naming the pool; as the sampler refuses a draw, naming its setting (a
-            proportional_to whose source the home has not drawn, a normal or uniform
-            draw that is not a finite number, a count with no whole number from its
-            spec's min to its max, an EV hour that is an infinity or a NaN); if a
-            required field draws null, naming its path and the home; if a presence
-            rule refuses a draw, as battery.has_battery refuses a negative or
-            non-finite battery capacity; if the fleet gives a home no PV or no load,
-            which every home needs, naming the component and the home; or as a
-            component's dataclass refuses what it is built from, naming the component
-            and the home.
+            proportional_to whose source the home has not drawn, such as a field of a
+            component the home has none of, a normal or uniform draw that is not a
+            finite number, a count with no whole number from its spec's min to its max,
+            an EV hour or a proportional_to's count that is an infinity or a NaN); if a
+            required field is not drawn, naming its path, or draws null, naming its
+            path and the home; if a presence rule refuses a draw, as
+            battery.has_battery refuses a negative or non-finite battery capacity; if
+            the fleet gives a home no PV or no load, which every home needs, naming the
+            component and the home; or as a component's dataclass refuses what it is
+            built from, naming the component and the home.
     """
     _refuse_pools_not_sized_to_the_fleet(config)
     sampler = _DistributionSampler(config)

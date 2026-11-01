@@ -2,6 +2,7 @@
 """How generate_homes_from_distribution draws a fleet's settings: each stateless spec draws itself, each setting keeps its own pool and pre-sampled draws, and each random order draws ahead in the order it documents."""
 
 import dataclasses
+import math
 import random
 from collections.abc import Callable, Sequence
 from typing import Any, Optional
@@ -394,3 +395,91 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
         assert str(refusal.value) == (
             "heat_pump.thermal_capacity_kw is proportional_to heat_pump.heat_pump_type, which drew 'ASHP', not a number"
         )
+
+    def test_a_field_of_a_component_every_home_has_is_scaled(self) -> None:
+        """Every home has a battery charging at 2 kW, so a heat pump of 3 times that charge rate is 6 kW."""
+        homes = generate_homes_from_distribution(_fleet_with_heat_pump_sized_by_battery(5.0), Location.bristol())
+
+        assert [home.heat_pump_config.thermal_capacity_kw for home in homes] == [6.0, 6.0]
+
+    def test_a_field_of_a_component_a_home_lacks_is_refused(self) -> None:
+        """One of the 2 homes draws no battery, so it draws no charge rate either: whether a fleet is refused depends on its draws."""
+        fleet = _fleet_with_heat_pump_sized_by_battery({"type": "shuffled_pool", "values": [5.0, None], "counts": [1, 1]})
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "heat_pump.thermal_capacity_kw is proportional_to battery.max_charge_kw, which no earlier field of the home drew"
+        )
+
+
+def _fleet_with_heat_pump_sized_by_battery(capacity_kwh: object) -> FleetDistributionConfig:
+    """Parse a fleet of 2 homes whose batteries of *capacity_kwh* charge at 2 kW, and whose heat pumps are 3 times that."""
+    return parse_fleet_distribution_config(
+        {
+            "n_homes": 2,
+            "seed": 1,
+            "pv": {"capacity_kw": 4.0},
+            "battery": {"capacity_kwh": capacity_kwh, "max_charge_kw": 2.0},
+            "heat_pump": {
+                "heat_pump_type": "ASHP",
+                "thermal_capacity_kw": {"type": "proportional_to", "source": "battery.max_charge_kw", "multiplier": 3},
+            },
+        }
+    )
+
+
+def _proportional_to_pv(**spec: float) -> dict[str, Any]:
+    """A proportional_to spec whose source is pv.capacity_kw, with *spec*'s multiplier or offset."""
+    return {"type": "proportional_to", "source": "pv.capacity_kw", **spec}
+
+
+class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
+    """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count is rounded, as a normal's draw is, and an EV hour truncated, as its other specs' draws are."""
+
+    @pytest.mark.parametrize(("capacity_kw", "occupants"), [(2.4, 2), (2.5, 3), (2.6, 3)])
+    def test_an_occupant_count_is_the_whole_number_nearest_its_value(self, capacity_kw: float, occupants: int) -> None:
+        """Occupants equal to the home's PV capacity in kW are that capacity rounded, a half rounding up."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": capacity_kw}, "load": {"household_occupants": _proportional_to_pv()}}
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].load_config.household_occupants == occupants
+
+    def test_an_ev_hour_is_truncated(self) -> None:
+        """An arrival hour of 4 times a 4.6 kW PV capacity is 18.4, which the EV takes as 18."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.6},
+                "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to_pv(multiplier=4.0)},
+            }
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert homes[0].ev_config.arrival_hour == 18
+
+    @pytest.mark.parametrize(
+        ("component", "key", "block"),
+        [
+            pytest.param("load", "household_occupants", {}, id="load.household_occupants"),
+            pytest.param("ev", "arrival_hour", {"charger_type": "7kW"}, id="ev.arrival_hour"),
+        ],
+    )
+    @pytest.mark.parametrize("offset", [math.inf, -math.inf, math.nan], ids=["inf", "-inf", "nan"])
+    def test_a_count_that_is_not_finite_is_refused_naming_its_path(
+        self, component: str, key: str, block: dict[str, Any], offset: float
+    ) -> None:
+        """No whole number is nearest an infinity or a NaN, so the count is refused naming its path and its value."""
+        fleet = parse_fleet_distribution_config(
+            {"n_homes": 1, "pv": {"capacity_kw": 4.0}, component: {**block, key: _proportional_to_pv(offset=offset)}}
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == f"{component}.{key} must be a finite number, got {4.0 + offset!r}"

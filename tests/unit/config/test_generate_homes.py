@@ -1260,6 +1260,15 @@ class TestAComponentsRefusalNamesItsHome:
 
         assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but home 1 drew null"
 
+    def test_a_pv_capacity_the_fleet_does_not_draw_is_refused_naming_its_path(self) -> None:
+        """The parser refuses a pv block leaving out capacity_kw, but a fleet built in code may leave it out, and its first home is refused."""
+        fleet = FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({}))
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but the fleet does not draw it"
+
 
 class TestEveryHomeHasAPVAndALoad:
     """Every home needs a PV and a load, since HomeConfig's pv_config and load_config are not optional, so a fleet giving a home either one as None is refused when generated, naming the component and the home."""
