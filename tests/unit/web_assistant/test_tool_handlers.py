@@ -28,7 +28,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import Database
-from solar_challenge.web.request_boundary import resolve_location
+from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -851,6 +851,20 @@ class TestRunHomeSimulation:
         jm.submit_home_job.assert_not_called()
         with pytest.raises(ValueError) as refusal:
             resolve_location("Cardiff")
+        assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
+
+    def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:
+        """A name the model sends holding a lone surrogate, which the run store cannot bind, is returned as require_encodable_text's refusal naming name, never a run; nothing is submitted."""
+        jm = self._make_jm()
+        result = run_home_simulation(
+            {"pv_kw": 4, "days": 7, "location": "bristol", "name": chr(0xD800)},
+            jm,
+            _results_url_for_test,
+        )
+
+        jm.submit_home_job.assert_not_called()
+        with pytest.raises(ValueError) as refusal:
+            require_encodable_text(chr(0xD800), "name")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
 
