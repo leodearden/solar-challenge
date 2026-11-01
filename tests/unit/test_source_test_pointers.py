@@ -5,14 +5,16 @@ The scanned files are those git lists outside the _UNSCANNED directories, which 
 that name tests as they were when written, such as the PRDs and research notes under docs/.
 
 A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
-names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for anywhere in a file's text, comments,
-docstrings and code alike. A file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a
-fresh clone would hold them, so a file git ignores is not there to point at. Its names are looked up in the syntax tree
-of the Python file there, so a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is
-reported. A path in another repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so
-it is not rooted at tests/. A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or
-<dir>/test_<name>.py, is refused, naming the path to write. One that ends no file of tests/ names another tree's or a
-throwaway project's file, so it is no pointer.
+names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for in a file's whole text, comments,
+docstrings and code alike, but a Python file under tests/ is read only in its comments and the strings it writes as
+statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A
+file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
+so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
+a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
+repository is written from that repository's name, as in reify/tests/infra/run_all.sh, so it is not rooted at tests/.
+A path not rooted at tests/ that ends a test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py, is refused,
+naming the path to write. One that ends no file of tests/ names another tree's or a throwaway project's file, so it is
+no pointer.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined to a node-id's last name with a
@@ -26,7 +28,9 @@ after a dot.
 
 import ast
 import functools
+import io
 import re
+import tokenize
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -59,7 +63,7 @@ _POINTER = re.compile(
     re.VERBOSE,
 )
 
-_OWN_NAMES_UNREADABLE = "does not parse, so the names it uses itself cannot be told from pointers"
+_POINTERS_UNTOLD = "so its pointers cannot be told from the rest of its text"
 
 
 @dataclass(frozen=True)
@@ -194,11 +198,39 @@ def _pointers_in(checkout: _Checkout, source: PurePosixPath, text: str) -> list[
     The names the file uses itself, as a Python module's identifiers or a YAML file's keys, are read only if a test-like
     name is given alone in it.
     """
-    matches = list(_POINTER.finditer(text))
-    has_bare_name = any(match["bare"] is not None for match in matches)
+    located = [
+        (first_line + passage.count("\n", 0, match.start()), match)
+        for first_line, passage in _passages(checkout, source, text)
+        for match in _POINTER.finditer(passage)
+    ]
+    has_bare_name = any(match["bare"] is not None for _, match in located)
     own_names = _own_names(checkout, source, text) if has_bare_name else frozenset()
-    found = (_pointer(checkout, source, text.count("\n", 0, match.start()) + 1, match, own_names) for match in matches)
+    found = (_pointer(checkout, source, line, match, own_names) for line, match in located)
     return [pointer for pointer in found if pointer is not None]
+
+
+def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tuple[int, str]]:
+    """Return the passages of *text*, the text of the file *source* in the *checkout*, each after its first line's number.
+
+    A Python file under tests/ gives each of its comments and each string it writes as a statement, in text order, a
+    string statement before a comment on a line they share. They are read from its raw text, so a line counted within a
+    passage is a line of the file. Any other file gives its whole text.
+    """
+    if source.suffix != ".py" or not source.is_relative_to(_TESTS):
+        return [(1, text)]
+    strings = [
+        (statement.value.lineno, segment)
+        for statement in ast.walk(_parsed_source(checkout, source))
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant)
+        if isinstance(statement.value.value, str)
+        if (segment := ast.get_source_segment(text, statement.value)) is not None
+    ]
+    comments = [
+        (token.start[0], token.string)
+        for token in tokenize.generate_tokens(io.StringIO(text).readline)
+        if token.type == tokenize.COMMENT
+    ]
+    return sorted([*strings, *comments], key=lambda passage: passage[0])
 
 
 def _pointer(
@@ -232,17 +264,22 @@ def _own_names(checkout: _Checkout, source: PurePosixPath, text: str) -> frozens
     """
     match source.suffix:
         case ".py":
-            module = checkout.syntax_tree(source)
-            if isinstance(module, _NoSyntaxTree):
-                raise ValueError(f"{source} {_OWN_NAMES_UNREADABLE}")
-            return _code_names(module)
+            return _code_names(_parsed_source(checkout, source))
         case ".yaml" | ".yml":
             try:
                 return _yaml_keys(text)
             except yaml.YAMLError as error:
-                raise ValueError(f"{source} {_OWN_NAMES_UNREADABLE}: {error}") from error
+                raise ValueError(f"{source} does not parse, {_POINTERS_UNTOLD}: {error}") from error
         case _:
             return frozenset()
+
+
+def _parsed_source(checkout: _Checkout, source: PurePosixPath) -> ast.Module:
+    """Return the syntax tree of the Python file *source* in the *checkout*, or raise ValueError naming it if it has none."""
+    module = checkout.syntax_tree(source)
+    if isinstance(module, _NoSyntaxTree):
+        raise ValueError(f"{source} {module.value}, {_POINTERS_UNTOLD}")
+    return module
 
 
 def _code_names(module: ast.Module) -> frozenset[str]:
