@@ -1,33 +1,16 @@
-"""Authoritative surface-lock / freeze guard for the solar_challenge public-API seam.
+"""The contract of solar_challenge's public surface: what `import solar_challenge` serves, and the frozen forms a consumer builds against.
 
-This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
-§9 H2/H3/H4, decomposition §10 T4).  It is the single canonical executable
-specification that future maintainers must update when the public surface changes.
+Its sections, in order:
 
-Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the public names
-                     (test_all_equals_frozen_set)
-  H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
-                     routine's signature, a dataclass's following its kind, e.g.
-                     'dataclass[eq, frozen] (...)'; an Enum's members; a constant's type
-                     (test_every_exported_signature_matches_frozen_surface)
-  H2 closure       — FROZEN_CLOSURE pins the surface form of each class outside __all__
-                     that the frozen surface names, directly or through another such class
-                     (test_every_class_the_frozen_surface_names_matches_frozen_closure)
-  H2 members       — FROZEN_MEMBERS pins each pinned class's public members, exported
-                     or in FROZEN_CLOSURE: its methods, properties, class constants
-                     and declared attributes
-                     (test_every_pinned_class_member_matches_frozen_members,
-                      test_pinned_classes_inherit_only_from_pinned_classes,
-                      test_pinned_classes_declare_the_public_attributes_they_set_on_self,
-                      test_reviewed_computed_name_writes_name_only_pinned_classes)
-  H2 kind          — EXPECTED_KIND pins the introspected kind of each name
-                     (test_expected_kind_keys_match_frozen_set,
-                      test_every_expected_kind_name_resolves_to_its_kind)
-  H3 laziness      — pvlib is absent after bare import; present after touching PVConfig
-                     (test_import_is_pvlib_free, test_touching_pvconfig_imports_pvlib)
-  H4 collision     — DispatchTariffPeriod / TariffPeriod are distinct objects pointing
-                     to different origin classes (test_tariffperiod_collision_resolved)
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, and the locks
+  holding the package to them.  A surface change edits their rows, and adds its
+  'Unreleased on main' line to docs/domain-library-consumption.md in the same commit.
+- The drift report: how a failing lock names each drifted path with its frozen and
+  current forms.
+- Every exported name resolves to its typed import, the object the package's
+  `if TYPE_CHECKING:` block imports under that name.
+- The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
+- The package imports without pvlib and loads a submodule on first touch.
 """
 
 import abc
@@ -59,9 +42,9 @@ from tests._surface_forms import (
 
 
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the public names, each with its frozen surface form
+# The frozen forms: the public names, each with its frozen surface form
 #
-# The keys mirror docs/prds/domain-library-extraction.md §3.1, grouped by origin module.  Each value is the name's
+# The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
 # dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
 # members; or a constant's type.  Any add/remove to __all__ must be reflected in
@@ -187,50 +170,12 @@ def test_all_has_no_cli_names() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 signature: every exported name keeps the surface form FROZEN_SURFACE pins.
+# Every exported name keeps the surface form FROZEN_SURFACE pins
 # ---------------------------------------------------------------------------
 
 
-def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
-) -> str:
-    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
-
-    *frozen* holds the forms of the table named *table*, keyed by the same paths.
-    """
-    symbols = "".join(
-        f"\n  solar_challenge.{path}"
-        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {current}"
-        for path, current in drifted.items()
-    )
-    return (
-        f"Surface forms differ from {table}:{symbols}\n"
-        "Every change to the frozen public API (review/briefing.yaml), an addition "
-        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
-        "convention' section of docs/domain-library-consumption.md, landed in the same "
-        f"commit as the {table} edit."
-    )
-
-
-def _drifted(
-    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
-) -> dict[str, str]:
-    """Map each path whose current form is not its frozen one to its current form.
-
-    *current*'s paths come first, in its order, then each frozen path *current* lacks,
-    whose current form reads *absent*.
-    """
-    missing = [path for path in frozen if path not in current]
-    return {
-        path: current.get(path, absent)
-        for path in [*current, *missing]
-        if current.get(path) != frozen.get(path)
-    }
-
-
 def test_every_exported_signature_matches_frozen_surface() -> None:
-    """H2 signature-lock: every name in __all__ has the surface form FROZEN_SURFACE pins.
+    """Every name in __all__ has the surface form FROZEN_SURFACE pins.
 
     Fails once, naming each drifted symbol with its frozen and current forms.  A name
     absent from FROZEN_SURFACE counts as drifted, so its current form is printed ready to
@@ -249,8 +194,8 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 closure: the classes outside __all__ that the frozen surface names, directly
-# or through another such class, each with its frozen surface form
+# The classes outside __all__ that the frozen surface names, directly or
+# through another such class, each with its frozen surface form
 #
 # A consumer needs them to use exported names: a ScenarioConfig is built from a
 # SimulationPeriod and HomeConfigs, and FleetResults.per_home_results holds
@@ -295,7 +240,7 @@ def _closure_classes() -> Mapping[str, type]:
 
 
 def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
-    """H2 closure-lock: each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
+    """Each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
 
     Fails once, naming each drifted class with its frozen and current forms, in path
     order.  A class a pinned form newly names counts as drifted, so its current form is
@@ -310,7 +255,7 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 members: each pinned class's public members, with their frozen forms
+# Each pinned class's public members, with their frozen forms
 #
 # A pinned class is an exported class or a FROZEN_CLOSURE class.  Keys are the
 # pinned classes' paths below solar_challenge, then member names: exported
@@ -512,7 +457,7 @@ def _forms_by_member_path(
 
 
 def test_every_pinned_class_member_matches_frozen_members() -> None:
-    """H2 member-lock: every pinned class's public members have the forms FROZEN_MEMBERS pins.
+    """Every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
     forms, in pinned-class order and, within a class, the order member_forms lists its
@@ -531,7 +476,7 @@ _STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, 
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
-    """H2 member-lock guard: a pinned class's bases are pinned classes or _STDLIB_BASES.
+    """A pinned class's bases are pinned classes or _STDLIB_BASES.
 
     FROZEN_MEMBERS pins a member under the pinned class whose own body defines it.
     """
@@ -553,8 +498,7 @@ def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 members: the writes to self under a computed name that a reviewer has
-# checked
+# The writes to self under a computed name that a reviewer has checked
 #
 # undeclared_attributes and unset_attributes cannot tell which names a write to
 # self under a computed name sets, so they refuse one unless it is reviewed
@@ -572,7 +516,7 @@ REVIEWED_COMPUTED_NAME_WRITES: dict[str, dict[str, str]] = {
 
 
 def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None:
-    """H2 member-lock guard: a pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
+    """A pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
 
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
     once its class body declares it, e.g. `cache_dir: Path`; and a declaration that no
@@ -620,6 +564,50 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
         "REVIEWED_COMPUTED_NAME_WRITES names paths that are no pinned class's "
         f"(stale/misspelled?): {sorted(stale)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The drift report: each path whose current form differs from its frozen one,
+# printed with both forms, the current one ready to paste
+# ---------------------------------------------------------------------------
+
+
+def _drift_message(
+    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
+) -> str:
+    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
+
+    *frozen* holds the forms of the table named *table*, keyed by the same paths.
+    """
+    symbols = "".join(
+        f"\n  solar_challenge.{path}"
+        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
+        f"\n    current: {current}"
+        for path, current in drifted.items()
+    )
+    return (
+        f"Surface forms differ from {table}:{symbols}\n"
+        "Every change to the frozen public API (review/briefing.yaml), an addition "
+        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
+        "convention' section of docs/domain-library-consumption.md, landed in the same "
+        f"commit as the {table} edit."
+    )
+
+
+def _drifted(
+    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
+) -> dict[str, str]:
+    """Map each path whose current form is not its frozen one to its current form.
+
+    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    whose current form reads *absent*.
+    """
+    missing = [path for path in frozen if path not in current]
+    return {
+        path: current.get(path, absent)
+        for path in [*current, *missing]
+        if current.get(path) != frozen.get(path)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -845,16 +833,15 @@ def test_importing_the_package_refuses_tables_that_disagree(
 
 
 # ---------------------------------------------------------------------------
-# H3 laziness: pvlib must NOT be imported by a bare `import solar_challenge`;
-# it MUST be present after touching a pv-module symbol.
+# The package imports without pvlib and loads a submodule on first touch
 #
-# Both sub-tests use a CLEAN interpreter via subprocess to avoid contamination
-# from pvlib being already loaded by the test process.
+# Each test runs a fresh interpreter, since the test process has already
+# imported pvlib.
 # ---------------------------------------------------------------------------
 
 
 def test_import_is_pvlib_free() -> None:
-    """`import solar_challenge` alone must NOT pull pvlib into sys.modules (H3 clean direction)."""
+    """`import solar_challenge` alone leaves pvlib out of sys.modules."""
     code = (
         "import sys, solar_challenge; "
         "sys.exit(0 if 'pvlib' not in sys.modules else 1)"
@@ -871,7 +858,7 @@ def test_import_is_pvlib_free() -> None:
 
 
 def test_touching_pvconfig_imports_pvlib() -> None:
-    """`solar_challenge.PVConfig` DOES pull pvlib — lazy proven in both directions (H3 load direction)."""
+    """Touching `solar_challenge.PVConfig` loads its submodule, pv.py, and with it pvlib."""
     code = (
         "import sys, solar_challenge; "
         "solar_challenge.PVConfig; "
