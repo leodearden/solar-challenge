@@ -1186,9 +1186,9 @@ def _signature_holder(cls: type) -> type:
 
     No module is known to spell a signature that comes from anywhere else. So TypeError
     names *cls* and its metaclass where _metaclass_may_provide_signature(*cls*); and
-    where the first class in *cls*'s MRO that holds a __signature__ holds a descriptor
-    that gives one, an object whose type defines __get__ as _type_defines_get finds, an
-    inspect.Signature or not, TypeError names *cls*, that class and the descriptor's type.
+    where the first class in *cls*'s MRO that holds a __signature__ holds an object whose
+    type defines __get__ (_type_defines_get), TypeError names *cls*, that class and the
+    object's type.
     """
     if _metaclass_may_provide_signature(cls):
         raise TypeError(
