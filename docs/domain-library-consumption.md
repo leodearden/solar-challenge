@@ -992,7 +992,11 @@ every exported class and of every class outside `__all__` that the frozen
 surface names.  The same file's `FROZEN_CLOSURE` pins the constructor of each
 such class and, for a dataclass, which of those four parameters it sets;
 consumers import such a class, such as `HomeConfig`, from its module.
-`__all__` is also enforced at import time via the module's `__getattr__` guard,
-and `tests/unit/test_init_lazy_surface.py` checks the lazy loader's structure.
+Importing the package fails with a `RuntimeError` naming the offending name when
+its tables disagree: a name that `__all__` lists twice, a name that `__all__`
+and the lazy loader's module map do not both list, or an alias of a name outside
+`__all__`.  `tests/unit/test_public_api_surface.py` also checks that a bare
+`import solar_challenge` stays pvlib-free and that each public name resolves to
+the object its `TYPE_CHECKING` import names.
 Consumers should reference `__all__` directly rather than relying on any copy
 maintained in this document.

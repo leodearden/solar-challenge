@@ -1,49 +1,37 @@
-"""Authoritative surface-lock / freeze guard for the solar_challenge public-API seam.
+"""The contract of solar_challenge's public surface: what `import solar_challenge` serves, and the frozen forms a consumer builds against.
 
-This is the T4 contract file (PRD docs/prds/domain-library-extraction.md §3.5,
-§9 H2/H3/H4, decomposition §10 T4).  It is the single canonical executable
-specification that future maintainers must update when the public surface changes.
+Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
-Concerns:
-  H2 surface-lock  — FROZEN_SET, the keys of FROZEN_SURFACE, pins the exact 72 public
-                     names (test_all_equals_frozen_set)
-  H2 signature     — FROZEN_SURFACE pins each public name's surface form: a class's or
-                     routine's signature, a dataclass's following its kind, e.g.
-                     'dataclass[eq, frozen] (...)'; an Enum's members; a constant's type
-                     (test_every_exported_signature_matches_frozen_surface)
-  H2 closure       — FROZEN_CLOSURE pins the surface form of each class outside __all__
-                     that the frozen surface names, directly or through another such class
-                     (test_every_class_the_frozen_surface_names_matches_frozen_closure)
-  H2 members       — FROZEN_MEMBERS pins each pinned class's public members, exported
-                     or in FROZEN_CLOSURE: its methods, properties, class constants
-                     and declared attributes
-                     (test_every_pinned_class_member_matches_frozen_members,
-                      test_pinned_classes_inherit_only_from_pinned_classes,
-                      test_pinned_classes_declare_the_public_attributes_they_set_on_self,
-                      test_reviewed_computed_name_writes_name_only_pinned_classes)
-  H2 kind          — EXPECTED_KIND pins the introspected kind of each name
-                     (test_expected_kind_keys_match_frozen_set,
-                      test_every_name_resolves_to_expected_kind)
-  H3 laziness      — pvlib is absent after bare import; present after touching PVConfig
-                     (test_import_is_pvlib_free, test_touching_pvconfig_imports_pvlib)
-  H4 collision     — DispatchTariffPeriod / TariffPeriod are distinct objects pointing
-                     to different origin classes (test_tariffperiod_collision_resolved)
-
-Relationship to T3 (tests/unit/test_init_lazy_surface.py):
-  T3 owns structural checks (no-dup / no-CLI / lazy resolution / __dir__ /
-  TYPE_CHECKING sync).  T3 defers exact-name pinning to T4.  Bounded overlap in H3 / H4
-  is deliberate — this file must stand alone as the complete executable contract.
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
+  the package to them, and the member guards, which accept the writes to self that
+  REVIEWED_COMPUTED_NAME_WRITES lists.  A surface change edits the frozen tables' rows,
+  and adds its 'Unreleased on main' line to docs/domain-library-consumption.md in the
+  same commit.
+- The drift report: how a failing lock names each drifted path with its frozen and
+  current forms.
+- Name resolution: every exported name resolves to its typed import, the object the
+  package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
+  names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
+  resolve to the kind their spelling misleads about.
+- The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
+- The package imports without pvlib.
 """
 
 import abc
+import ast
 import enum
 import functools
 import inspect
+import json
 import subprocess
 import sys
 import types
 import typing
 from collections.abc import Mapping
+from importlib import import_module
+from pathlib import Path
+
+import pytest
 
 import solar_challenge
 import solar_challenge.dispatch as _dispatch
@@ -57,10 +45,15 @@ from tests._surface_forms import (
 )
 
 
+# ===========================================================================
+# The frozen forms, and the locks holding the package to them
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
-# H2 surface-lock: the exact 72 public names, each with its frozen surface form
+# The public names, each with its frozen surface form
 #
-# The keys mirror docs/prds/domain-library-extraction.md §3.1, grouped by origin module.  Each value is the name's
+# The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
 # dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
 # members; or a constant's type.  Any add/remove to __all__ must be reflected in
@@ -160,13 +153,10 @@ FROZEN_SET: frozenset[str] = frozenset(FROZEN_SURFACE)
 
 
 def test_all_equals_frozen_set() -> None:
-    """H2 surface-lock: solar_challenge.__all__ must equal FROZEN_SET exactly.
+    """__all__ lists exactly FROZEN_SURFACE's names; the message names each name only one of them lists.
 
-    Fails on any add/remove to __all__ without updating FROZEN_SET.
-    The symmetric-difference message names the exact drifted symbol(s).
-
-    Also asserts len==72 explicitly — a bare set-compare would silently pass
-    if __all__ contained a duplicate entry (set collapses duplicates).
+    A set comparison needs no count, because importing the package refuses a name
+    __all__ lists twice (test_importing_the_package_refuses_tables_that_disagree).
     """
     actual = set(solar_challenge.__all__)
     diff = actual.symmetric_difference(FROZEN_SET)
@@ -174,61 +164,27 @@ def test_all_equals_frozen_set() -> None:
         f"__all__ has drifted from FROZEN_SET.  "
         f"Symmetric difference: {sorted(diff)}"
     )
-    assert len(solar_challenge.__all__) == len(FROZEN_SET) == 72, (
-        f"Length mismatch: __all__ has {len(solar_challenge.__all__)} names, "
-        f"FROZEN_SET has {len(FROZEN_SET)} (expected 72 each)"
-    )
-    # Document the CLI-excluded invariant explicitly
-    assert "get_cli_app" not in solar_challenge.__all__, (
-        "get_cli_app must remain excluded from __all__ (shipped but unfrozen CLI)"
+
+
+def test_all_has_no_cli_names() -> None:
+    """No name of __all__ is get_cli_app or starts with cli or web: the CLI and the web app ship unfrozen."""
+    cli_names = [
+        name
+        for name in solar_challenge.__all__
+        if name == "get_cli_app" or name.startswith(("cli", "web"))
+    ]
+    assert not cli_names, (
+        f"__all__ lists names of the CLI or the web app, which ship unfrozen: {cli_names}"
     )
 
 
 # ---------------------------------------------------------------------------
-# H2 signature: every exported name keeps the surface form FROZEN_SURFACE pins.
+# Every exported name keeps the surface form FROZEN_SURFACE pins
 # ---------------------------------------------------------------------------
-
-
-def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
-) -> str:
-    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
-
-    *frozen* holds the forms of the table named *table*, keyed by the same paths.
-    """
-    symbols = "".join(
-        f"\n  solar_challenge.{path}"
-        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {current}"
-        for path, current in drifted.items()
-    )
-    return (
-        f"Surface forms differ from {table}:{symbols}\n"
-        "Every change to the frozen public API (review/briefing.yaml), an addition "
-        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
-        "convention' section of docs/domain-library-consumption.md, landed in the same "
-        f"commit as the {table} edit."
-    )
-
-
-def _drifted(
-    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
-) -> dict[str, str]:
-    """Map each path whose current form is not its frozen one to its current form.
-
-    *current*'s paths come first, in its order, then each frozen path *current* lacks,
-    whose current form reads *absent*.
-    """
-    missing = [path for path in frozen if path not in current]
-    return {
-        path: current.get(path, absent)
-        for path in [*current, *missing]
-        if current.get(path) != frozen.get(path)
-    }
 
 
 def test_every_exported_signature_matches_frozen_surface() -> None:
-    """H2 signature-lock: every name in __all__ has the surface form FROZEN_SURFACE pins.
+    """Every name in __all__ has the surface form FROZEN_SURFACE pins.
 
     Fails once, naming each drifted symbol with its frozen and current forms.  A name
     absent from FROZEN_SURFACE counts as drifted, so its current form is printed ready to
@@ -247,8 +203,8 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 closure: the classes outside __all__ that the frozen surface names, directly
-# or through another such class, each with its frozen surface form
+# The classes outside __all__ that the frozen surface names, directly or
+# through another such class, each with its frozen surface form
 #
 # A consumer needs them to use exported names: a ScenarioConfig is built from a
 # SimulationPeriod and HomeConfigs, and FleetResults.per_home_results holds
@@ -293,7 +249,7 @@ def _closure_classes() -> Mapping[str, type]:
 
 
 def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
-    """H2 closure-lock: each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
+    """Each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
 
     Fails once, naming each drifted class with its frozen and current forms, in path
     order.  A class a pinned form newly names counts as drifted, so its current form is
@@ -308,7 +264,7 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 members: each pinned class's public members, with their frozen forms
+# Each pinned class's public members, with their frozen forms
 #
 # A pinned class is an exported class or a FROZEN_CLOSURE class.  Keys are the
 # pinned classes' paths below solar_challenge, then member names: exported
@@ -510,7 +466,7 @@ def _forms_by_member_path(
 
 
 def test_every_pinned_class_member_matches_frozen_members() -> None:
-    """H2 member-lock: every pinned class's public members have the forms FROZEN_MEMBERS pins.
+    """Every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
     forms, in pinned-class order and, within a class, the order member_forms lists its
@@ -529,7 +485,7 @@ _STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, 
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
-    """H2 member-lock guard: a pinned class's bases are pinned classes or _STDLIB_BASES.
+    """A pinned class's bases are pinned classes or _STDLIB_BASES.
 
     FROZEN_MEMBERS pins a member under the pinned class whose own body defines it.
     """
@@ -551,8 +507,7 @@ def test_pinned_classes_inherit_only_from_pinned_classes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H2 members: the writes to self under a computed name that a reviewer has
-# checked
+# The writes to self under a computed name that a reviewer has checked
 #
 # undeclared_attributes and unset_attributes cannot tell which names a write to
 # self under a computed name sets, so they refuse one unless it is reviewed
@@ -570,7 +525,7 @@ REVIEWED_COMPUTED_NAME_WRITES: dict[str, dict[str, str]] = {
 
 
 def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None:
-    """H2 member-lock guard: a pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
+    """A pinned class declares in a class body each public attribute its __init__ or __post_init__ sets on self, and sets there each one its body only declares.
 
     member_forms reads class bodies, so FROZEN_MEMBERS pins an instance attribute only
     once its class body declares it, e.g. `cache_dir: Path`; and a declaration that no
@@ -620,23 +575,160 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
     )
 
 
+# ===========================================================================
+# The drift report: each path whose current form differs from its frozen one,
+# printed with both forms, the current one ready to paste
+# ===========================================================================
+
+
+def _drift_message(
+    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
+) -> str:
+    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
+
+    *frozen* holds the forms of the table named *table*, keyed by the same paths.
+    """
+    symbols = "".join(
+        f"\n  solar_challenge.{path}"
+        f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
+        f"\n    current: {current}"
+        for path, current in drifted.items()
+    )
+    return (
+        f"Surface forms differ from {table}:{symbols}\n"
+        "Every change to the frozen public API (review/briefing.yaml), an addition "
+        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
+        "convention' section of docs/domain-library-consumption.md, landed in the same "
+        f"commit as the {table} edit."
+    )
+
+
+def _drifted(
+    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
+) -> dict[str, str]:
+    """Map each path whose current form is not its frozen one to its current form.
+
+    *current*'s paths come first, in its order, then each frozen path *current* lacks,
+    whose current form reads *absent*.
+    """
+    missing = [path for path in frozen if path not in current]
+    return {
+        path: current.get(path, absent)
+        for path in [*current, *missing]
+        if current.get(path) != frozen.get(path)
+    }
+
+
+# ===========================================================================
+# Name resolution: what the package resolves each name to, and what dir() lists
+# ===========================================================================
+
+
 # ---------------------------------------------------------------------------
-# H2 kind: targeted gotcha-guard for names whose kind would be WRONG if
-# inferred from naming convention alone.
-#
-# The full surface is pinned by FROZEN_SURFACE above.  This table supplements
-# it with explicit kind checks only for the non-obvious entries:
-#   • FlatRateTariff  — CamelCase looks like a class; it is a factory function
-#   • GRID_SERVICES_RATE_BANDS — UPPER_CASE looks like a plain constant; it is
-#     a frozen-dataclass instance (still "constant" in our taxonomy, but the
-#     distinction is worth pinning)
-#   • DispatchTariffPeriod — Enum alias; verifies it resolves to a class, not
-#     to a string/sentinel from a botched re-export
-#
-# taxonomy (for reference):
-#   class    → inspect.isclass  (covers dataclasses, Enums, ABCs)
-#   function → inspect.isroutine (covers all def functions / factory callables)
-#   constant → neither           (dicts, tuples, lists, frozen-dataclass instances)
+# Every exported name resolves to its typed import: the object the package's
+# `if TYPE_CHECKING:` block, which type checkers read, imports under that name
+# ---------------------------------------------------------------------------
+
+
+def _type_checking_imports() -> dict[str, tuple[str, str]]:
+    """Each name the package's top-level `if TYPE_CHECKING:` block binds, mapped to
+    the module it imports from and the name it imports there."""
+    source = Path(solar_challenge.__file__).read_text(encoding="utf-8")
+    blocks = [
+        node
+        for node in ast.parse(source).body
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+    ]
+    return {
+        alias.asname or alias.name: (statement.module, alias.name)
+        for block in blocks
+        for statement in block.body
+        if isinstance(statement, ast.ImportFrom) and statement.module is not None
+        for alias in statement.names
+    }
+
+
+def test_type_checking_block_names_match_all() -> None:
+    """Names bound in the TYPE_CHECKING block must equal set(__all__) plus 'Typer'.
+
+    Reads the names the block binds through _type_checking_imports() and verifies
+    they stay in sync with __all__. Adding a name to __all__ and to the lazy
+    loader's map but forgetting its TYPE_CHECKING re-export would otherwise
+    silently break mypy --strict for consumers without failing this package's own checks.
+    """
+    tc_names = set(_type_checking_imports())
+
+    # TYPE_CHECKING block includes "Typer" for get_cli_app()'s return annotation;
+    # Typer is NOT in __all__ — CLI is shipped but unfrozen.
+    expected = set(solar_challenge.__all__) | {"Typer"}
+    assert tc_names == expected, (
+        f"TYPE_CHECKING block out of sync with __all__.\n"
+        f"Extra (not in __all__ + Typer): {tc_names - expected}\n"
+        f"Missing (in __all__ but not TYPE_CHECKING): {expected - tc_names}"
+    )
+
+
+def test_every_name_resolves_to_its_type_checking_import() -> None:
+    """Each __all__ name resolves to the object the package's `if TYPE_CHECKING:`
+    block imports under that name, and stays that object across accesses.
+
+    Type checkers read that block, so the runtime and typed surfaces must agree.
+    A name the block does not import is test_type_checking_block_names_match_all's
+    to report.
+    """
+    imports = _type_checking_imports()
+    misresolved: list[str] = []
+    for name in solar_challenge.__all__:
+        if name not in imports:
+            continue
+        module, source = imports[name]
+        imported = getattr(import_module(module), source)
+        resolved, resolved_again = getattr(solar_challenge, name), getattr(solar_challenge, name)
+        if resolved is not imported or resolved_again is not imported:
+            misresolved.append(f"solar_challenge.{name} is not {module}.{source}")
+    assert not misresolved, (
+        "Names that resolve to an object other than their TYPE_CHECKING import:\n"
+        + "\n".join(misresolved)
+    )
+
+
+def test_tariffperiod_collision_resolved() -> None:
+    """DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
+
+    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
+    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
+    They must be distinct — otherwise one silently shadows the other.
+    """
+    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
+        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
+    )
+    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
+        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
+    )
+    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
+        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
+    )
+
+
+# ---------------------------------------------------------------------------
+# dir() lists the exported names, and an unknown name raises AttributeError
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_attribute_raises() -> None:
+    """Accessing an undefined attribute raises AttributeError."""
+    with pytest.raises(AttributeError):
+        _ = solar_challenge.does_not_exist
+
+
+def test_dir_returns_sorted_all() -> None:
+    """`dir(solar_challenge)` returns exactly sorted(__all__)."""
+    assert dir(solar_challenge) == sorted(solar_challenge.__all__)
+
+
+# ---------------------------------------------------------------------------
+# The kind each name below resolves to, where its spelling suggests another:
+# 'class', 'function' or 'constant', as _kind classifies it
 # ---------------------------------------------------------------------------
 EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
@@ -668,88 +760,129 @@ def test_expected_kind_keys_match_frozen_set() -> None:
     )
 
 
-def test_every_name_resolves_to_expected_kind() -> None:
-    """H2: all public names resolve via the PEP-562 lazy loader; gotcha kinds are correct.
+def test_every_expected_kind_name_resolves_to_its_kind() -> None:
+    """Each EXPECTED_KIND name resolves to an object of the kind EXPECTED_KIND pins for it.
 
-    Iterates every name in FROZEN_SET — exercises solar_challenge.__getattr__
-    and must not raise AttributeError for any name.
-
-    For the small subset named in EXPECTED_KIND (the gotcha entries where naming
-    convention would mislead), additionally asserts the introspected kind is correct.
+    On a failure, pytest's diff of the two dicts names each name whose kind has drifted.
     """
-    for name in sorted(FROZEN_SET):
-        obj = getattr(solar_challenge, name)  # triggers lazy loader; must not raise
-        if name in EXPECTED_KIND:
-            actual_kind = _kind(obj)
-            assert actual_kind == EXPECTED_KIND[name], (
-                f"solar_challenge.{name}: expected kind={EXPECTED_KIND[name]!r}, "
-                f"got kind={actual_kind!r} (type={type(obj).__name__})"
-            )
+    assert {name: _kind(getattr(solar_challenge, name)) for name in EXPECTED_KIND} == EXPECTED_KIND
 
 
-# ---------------------------------------------------------------------------
-# H3 laziness: pvlib must NOT be imported by a bare `import solar_challenge`;
-# it MUST be present after touching a pv-module symbol.
+# ===========================================================================
+# The runtime tables agree at import: importing the package refuses __all__,
+# _SYMBOL_MODULE and _SOURCE_NAME when they disagree, naming each offender
+# ===========================================================================
+
+_IMPORT_PROBE = """\
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+package = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "solar_challenge", package / "__init__.py", submodule_search_locations=[str(package)]
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["solar_challenge"] = module
+try:
+    spec.loader.exec_module(module)
+except RuntimeError as refusal:
+    print(json.dumps(str(refusal)))
+else:
+    print(json.dumps(None))
+"""
+
+
+def _source_with_entry(source: str, table: str, entry: str) -> str:
+    """Return *source* with *entry* written first inside the literal its module-level annotated assignment to *table* holds."""
+    literals = [
+        statement.value
+        for statement in ast.parse(source).body
+        if isinstance(statement, ast.AnnAssign)
+        and isinstance(statement.target, ast.Name)
+        and statement.target.id == table
+        and statement.value is not None
+    ]
+    assert len(literals) == 1, (
+        f"the source holds {len(literals)} module-level annotated assignments to {table}, not one"
+    )
+    (literal,) = literals
+    lines = source.encode("utf-8").split(b"\n")
+    row, column = literal.lineno - 1, literal.col_offset + 1
+    lines[row] = lines[row][:column] + entry.encode("utf-8") + lines[row][column:]
+    return b"\n".join(lines).decode("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("table", "entry", "offender"),
+    [
+        pytest.param("__all__", '"Battery", ', "Battery", id="a-name-listed-twice"),
+        pytest.param(
+            "_SOURCE_NAME", '"Ghost": "TariffPeriod", ', "Ghost", id="an-alias-of-no-exported-name"
+        ),
+        pytest.param("__all__", '"Ghost", ', "Ghost", id="an-exported-name-with-no-origin-module"),
+        pytest.param(
+            "_SYMBOL_MODULE", '"Ghost": "battery", ', "Ghost", id="an-origin-module-for-no-exported-name"
+        ),
+    ],
+)
+def test_importing_the_package_refuses_tables_that_disagree(
+    tmp_path: Path, table: str, entry: str, offender: str
+) -> None:
+    """Importing a copy of the package whose *table* starts with *entry* raises RuntimeError naming *offender*.
+
+    The copy runs under -O, so an assert could not stand in for the check.  The probe
+    loads the copy by its path, not by a search of sys.path, so no installed
+    solar_challenge can be imported in its place.  A copy of __init__.py alone suffices,
+    because the package imports only importlib and typing at runtime.
+    """
+    package = tmp_path / "solar_challenge"
+    package.mkdir()
+    (package / "__init__.py").write_text(
+        _source_with_entry(Path(solar_challenge.__file__).read_text(encoding="utf-8"), table, entry),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-O", "-c", _IMPORT_PROBE, str(package)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, f"the import probe failed:\n{result.stderr}"
+    refusal = json.loads(result.stdout)
+    assert refusal is not None and repr(offender) in refusal, (
+        f"With {entry!r} written first in {table}, importing the package should raise "
+        f"RuntimeError naming {offender!r}; it "
+        + ("imported" if refusal is None else f"raised RuntimeError: {refusal}")
+    )
+
+
+# ===========================================================================
+# The package imports without pvlib
 #
-# Both sub-tests use a CLEAN interpreter via subprocess to avoid contamination
-# from pvlib being already loaded by the test process.
-# ---------------------------------------------------------------------------
+# Whether the first access of a name loads pvlib is checked, for each submodule
+# the lazy loader maps names to, by
+# tests/unit/test_lazy_pvlib_submodules.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules
+# ===========================================================================
 
 
 def test_import_is_pvlib_free() -> None:
-    """`import solar_challenge` alone must NOT pull pvlib into sys.modules (H3 clean direction)."""
+    """`import solar_challenge` alone leaves pvlib out of sys.modules.
+
+    It runs in a fresh interpreter, since the test process has already imported pvlib.
+    """
     code = (
         "import sys, solar_challenge; "
         "sys.exit(0 if 'pvlib' not in sys.modules else 1)"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code],
+        [sys.executable, "-I", "-c", code],
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode == 0, (
         f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
-    )
-
-
-def test_touching_pvconfig_imports_pvlib() -> None:
-    """`solar_challenge.PVConfig` DOES pull pvlib — lazy proven in both directions (H3 load direction)."""
-    code = (
-        "import sys, solar_challenge; "
-        "solar_challenge.PVConfig; "
-        "sys.exit(0 if 'pvlib' in sys.modules else 1)"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert result.returncode == 0, (
-        f"pvlib was NOT imported after touching solar_challenge.PVConfig.\nstderr: {result.stderr}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# H4 collision: DispatchTariffPeriod (dispatch Enum) and TariffPeriod
-# (tariff dataclass) are distinct objects with distinct origin classes.
-# ---------------------------------------------------------------------------
-
-
-def test_tariffperiod_collision_resolved() -> None:
-    """H4: DispatchTariffPeriod and TariffPeriod are distinct objects (collision-renamed correctly).
-
-    dispatch.TariffPeriod (Enum) is exposed as DispatchTariffPeriod.
-    tariff.TariffPeriod (dataclass) is exposed as TariffPeriod.
-    They must be distinct — otherwise one silently shadows the other.
-    """
-    assert solar_challenge.DispatchTariffPeriod is _dispatch.TariffPeriod, (
-        "solar_challenge.DispatchTariffPeriod must be dispatch.TariffPeriod"
-    )
-    assert solar_challenge.TariffPeriod is _tariff.TariffPeriod, (
-        "solar_challenge.TariffPeriod must be tariff.TariffPeriod"
-    )
-    assert solar_challenge.DispatchTariffPeriod is not solar_challenge.TariffPeriod, (
-        "DispatchTariffPeriod and TariffPeriod must be distinct objects"
     )

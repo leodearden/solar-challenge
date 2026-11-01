@@ -221,23 +221,26 @@ conventions:
       __dataclass_params__, which the kind is read from, does not record them. They too change
       what a consumer can do (match_args=False breaks a positional class pattern, and slots=True
       removes an instance's __dict__), and task 668 decides whether the contract covers them.
-      The surface-lock tests are intentional gates, not redundant ceremony: the frozen-__all__
-      freeze test; the three tables of tests/unit/test_public_api_surface.py, FROZEN_SURFACE (each
+      The surface-lock tests are intentional gates, not redundant ceremony.
+      tests/unit/test_public_api_surface.py holds all of them but one: the frozen-__all__ freeze
+      test; its three tables, FROZEN_SURFACE (each
       name's signature, a dataclass's after its kind), FROZEN_CLOSURE (the signature, a
       dataclass's after its kind, of each class outside __all__ that the exported surface names;
       the set of classes is derived from the exported forms, so a class newly named fails until
       it is pinned or exported) and FROZEN_MEMBERS (the public members of every class those two
       tables pin); the guard beside FROZEN_MEMBERS that fails on a public attribute set on self
       that no class body declares, and on a declaration that nothing sets; the ast-parsed
-      TYPE_CHECKING-block ↔ __all__ consistency check; and the isolated external-wheel install
-      test (imports every __all__ name in a fresh interpreter). All three tables are spelled alike
+      TYPE_CHECKING-block ↔ __all__ consistency check; and the pvlib-free import test. The other
+      is the isolated external-wheel install test (imports every __all__ name in a fresh
+      interpreter). All three tables are spelled alike
       on every admitted Python minor, and each fails until its table edit lands, naming every
       drifted symbol and asking for the change's 'Unreleased on main' line in the same commit.
       `__init__.py` is
       deliberately LAZY (PEP-562 __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge`
-      stays pvlib-free; the
-      import-time _SYMBOL_MODULE/__all__ sync check uses raise RuntimeError (not assert) on
-      purpose so it survives -O/-OO. The DispatchTariffPeriod alias (dispatch.TariffPeriod enum,
+      stays pvlib-free; the import-time check that __all__ lists each name once, that
+      _SYMBOL_MODULE maps exactly __all__'s names, and that _SOURCE_NAME aliases only names
+      __all__ lists, uses raise RuntimeError (not assert) on purpose so it survives -O/-OO. The
+      DispatchTariffPeriod alias (dispatch.TariffPeriod enum,
       re-exported renamed to avoid colliding with tariff.TariffPeriod) is intentional. Do not
       "tidy" any of this away.
 

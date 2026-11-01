@@ -7,8 +7,7 @@ a deliverable-presence guard for the consumer-facing recipe document.
 The authoritative public surface is ``solar_challenge.__all__`` (defined in
 ``src/solar_challenge/__init__.py``), which is frozen by
 ``tests/unit/test_public_api_surface.py``, whose ``FROZEN_SET`` pins every
-public name.  ``tests/unit/test_init_lazy_surface.py`` checks the lazy
-loader's structure.
+public name.  The same module also checks the lazy loader.
 """
 
 from pathlib import Path

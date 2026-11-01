@@ -28,7 +28,7 @@ reach up past its one importer.
 
 All five read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
-tests/unit/test_init_lazy_surface.py.
+tests/unit/test_public_api_surface.py.
 """
 
 import ast
@@ -77,7 +77,7 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "the cheap top-level import: `import solar_challenge` loads no submodule until a public "
         "name is accessed, and the CLI loads pvlib, Typer and Rich "
         "(docs/domain-library-consumption.md, Cheap top-level import; "
-        "tests/unit/test_init_lazy_surface.py::test_import_is_pvlib_free)"
+        "tests/unit/test_public_api_surface.py::test_import_is_pvlib_free)"
     ),
     ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.app"): _CLI_WITHOUT_THE_WEB_EXTRA,
