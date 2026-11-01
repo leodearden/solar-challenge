@@ -48,9 +48,10 @@ in text-signature form, were measured on those releases on 2026-10-30. 3.4's rea
 a class whose metaclass gives a `__mro__` other than the MRO the class records, 4.5's
 reading of such a class's constructor, and 4.8's readings, of a class whose metaclass
 shadows `__dict__`, were measured on CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4
-on 2026-10-31, and 4.8's readings of a class whose metaclass defines `__getattribute__`
-and 4.9's readings on those releases on 2026-11-01. A new refusal gets its rule test
-first, then its entry here.
+on 2026-10-31, and 4.8's readings of a class whose metaclass defines `__getattribute__`,
+its reading of where `inspect.getsource` finds a class's statement, and 4.9's readings
+on those releases on 2026-11-01. A new refusal gets its rule test first, then its entry
+here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -796,7 +797,8 @@ Some readings differ by minor. A `functools.partial` subclass whose own `__get__
 `__init__`, reads as `(receiver, rate: int) -> None` on 3.11 and 3.12 and raises
 `ValueError` from 3.13 (4.7). `inspect.get_annotations` reads a class's annotations from
 what `__dict__` gives on 3.11, 3.12 and 3.13, and from the namespace the class holds on
-3.14.
+3.14. From 3.13, `inspect.getsource` finds a class's statement by the `__firstlineno__`
+that `__dict__` gives, where 3.11 and 3.12 find it by its qualified name.
 
 So no one reading of such a class's namespace is faithful at every site.
 `surface_form`, `named_classes`, `member_forms` and `undeclared_attributes` raise
@@ -814,8 +816,8 @@ It holds no `__dict__` itself, so `inspect` counts no shadow. `inspect.getattr_s
 and `inspect`'s choice between a class's `__new__` and `__init__`, then read the
 `__dict__` that `__getattribute__` gives. So does `inspect.get_annotations` on 3.11, 3.12
 and 3.13; on 3.14 it reads the namespace the class holds. From 3.13, `inspect.getsource`
-finds a class's statement by the `__firstlineno__` that `__dict__` gives, for a shadow
-too, where 3.11 and 3.12 find it by its qualified name. With that `__dict__` giving `{}`
+finds a class's statement by the `__firstlineno__` that `__dict__` gives, where 3.11 and
+3.12 find it by its qualified name. With that `__dict__` giving `{}`
 over `Rating` and a body's own `__call__ = functools.partial(...)`, an object of the
 class held as `__init__` reads as `(rate: int) -> None` on every minor: `inspect` skips
 the partial the class holds and reads `Rating`'s. With `{'__call__': None}` over a body's
