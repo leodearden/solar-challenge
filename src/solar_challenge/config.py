@@ -536,12 +536,12 @@ class ScenarioConfig:
 
     def simulated_homes(self) -> tuple[HomeConfig, ...]:
         """The homes this scenario simulates, in order; one with no SEG tariff of its own exports at the scenario's rate."""
-        stored = tuple(home for _, home in self._homes_by_path())
         if self.seg_tariff_pence_per_kwh is None:
-            return stored
+            return self._stored_homes()
         tariff = SEGTariff(name="", rate_pence_per_kwh=self.seg_tariff_pence_per_kwh)
         return tuple(
-            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff) for home in stored
+            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff)
+            for home in self._stored_homes()
         )
 
     def map_homes(self, transform: Callable[[HomeConfig], HomeConfig]) -> "ScenarioConfig":
@@ -550,22 +550,19 @@ class ScenarioConfig:
             return replace(self, home=transform(self.home))
         return replace(self, homes=tuple(transform(home) for home in self.homes))
 
-    def _homes_by_path(self) -> Iterator[tuple[str, HomeConfig]]:
-        """Each stored home with its path in the scenario: 'home', or each fleet home's 'homes[i]' in order."""
-        if self.home is not None:
-            yield "home", self.home
-        else:
-            for index, home in enumerate(self.homes):
-                yield f"homes[{index}]", home
+    def _stored_homes(self) -> tuple[HomeConfig, ...]:
+        """The homes as stored: (home,) in the single-home form, else homes, in order."""
+        return (self.home,) if self.home is not None else self.homes
 
     def _refuse_a_home_seg_rate_other_than_the_scenarios(self) -> None:
-        """Raise ConfigurationError naming the first home whose own SEG rate is not math.isclose to the scenario's."""
+        """Raise ConfigurationError naming the first home, by its path 'home' or 'homes[i]', whose own SEG rate is not math.isclose to the scenario's."""
         rate = self.seg_tariff_pence_per_kwh
         if rate is None:
             return
-        for path, home in self._homes_by_path():
+        for index, home in enumerate(self._stored_homes()):
             if home.seg_tariff is None or math.isclose(home.seg_tariff.rate_pence_per_kwh, rate):
                 continue
+            path = "home" if self.home is not None else f"homes[{index}]"
             named = f"{path} ({home.name!r})" if home.name else path
             raise ConfigurationError(
                 f"Inconsistent SEG rate: {named} has its own seg_tariff at "
