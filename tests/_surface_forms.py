@@ -31,7 +31,7 @@ Usage::
         def reading(self) -> float: ...
 
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
-    assert surface_form({"peak": 0.3}) == "dict"
+    assert surface_form({"peak": 0.3}) == "dict {'peak': float}"
     assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
     assert named_classes(Meter) == {Path, float}
     assert undeclared_attributes(Meter) == {"label"}
@@ -42,10 +42,11 @@ import ast
 import collections
 import dataclasses
 import inspect
+import itertools
 import textwrap
 import types
 import typing
-from collections.abc import Callable, Collection, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
 from tests._surface_forms_labels import label_of
@@ -74,8 +75,12 @@ def surface_form(obj: object) -> str:
     An Enum's is its members, as NAME=value in definition order. A constant's, that of
     anything neither a class nor a routine, is its type's qualified name; a
     functools.partial is a routine on every admitted minor, and any other descriptor
-    whose type defines __get__ and __delete__ but no __set__ is no routine on any. Any
-    other class's or routine's is its signature, a class's being its constructor's
+    whose type defines __get__ and __delete__ but no __set__ is no routine on any. After
+    that name, a mapping's form gives its entries in braces in iteration order, each key
+    by its repr and each value by its own form, and a list's or tuple's gives its items'
+    forms in brackets, a run of equal forms spelled once with its count, as in
+    list [float × 48]. A class or routine held in a constant raises TypeError naming it.
+    Any other class's or routine's is its signature, a class's being its constructor's
     without self and a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
@@ -105,7 +110,7 @@ def surface_form(obj: object) -> str:
     if is_enum(obj):
         return ", ".join(f"{member.name}={member.value!r}" for member in obj)
     if not _is_class_or_routine(obj):
-        return type(obj).__qualname__
+        return _constant(obj).text()
     signature = signature_of(obj)
     text = str(
         signature.replace(
@@ -226,7 +231,8 @@ def named_classes(obj: object) -> set[type]:
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
     it carries is spelled in the module that spells the signature holding it. That
     module binds no type parameter, so a string that names one, as "Node[T]" names T,
-    raises NameError. A constant names its type, and an Enum's members name nothing.
+    raises NameError. A constant names the classes its form spells: its type and those
+    its values' or items' forms name, never a key's. An Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -577,12 +583,89 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
     return tuple(_Leaf(repr(value)) for value in values)
 
 
+class _Constant(abc.ABC):
+    """A constant, or a value inside one, read as its form spells it: the one reading both the form's text and the classes it names are taken from."""
+
+    @abc.abstractmethod
+    def text(self) -> str:
+        """The spelling, alike on every admitted minor."""
+
+    @abc.abstractmethod
+    def classes(self) -> set[type]:
+        """The classes it names, read in no module, as a constant's form holds no name to resolve."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _Typed(_Constant):
+    """A value read by its type alone: spelled by the type's qualified name, naming that type."""
+
+    kind: type
+
+    def text(self) -> str:
+        return self.kind.__qualname__
+
+    def classes(self) -> set[type]:
+        return {self.kind}
+
+
+@dataclasses.dataclass(frozen=True)
+class _Entries(_Constant):
+    """A mapping: spelled by its type, then its entries in braces in iteration order, each key by its repr and each value by its form; naming its type and its values' classes, a key naming none, as a Literal value names none."""
+
+    kind: _Typed
+    entries: tuple[tuple[str, _Constant], ...]
+
+    def text(self) -> str:
+        inside = ", ".join(f"{key}: {value.text()}" for key, value in self.entries)
+        return f"{self.kind.text()} {{{inside}}}"
+
+    def classes(self) -> set[type]:
+        return self.kind.classes().union(*(value.classes() for _, value in self.entries))
+
+
+@dataclasses.dataclass(frozen=True)
+class _Items(_Constant):
+    """A list or tuple: spelled by its type, then its items' forms in brackets in order, a run of n > 1 equal forms spelled once as form × n; naming its type and its items' classes."""
+
+    kind: _Typed
+    items: tuple[_Constant, ...]
+
+    def text(self) -> str:
+        runs = (
+            (form, sum(1 for _ in run))
+            for form, run in itertools.groupby(item.text() for item in self.items)
+        )
+        inside = ", ".join(form if count == 1 else f"{form} × {count}" for form, count in runs)
+        return f"{self.kind.text()} [{inside}]"
+
+    def classes(self) -> set[type]:
+        return self.kind.classes().union(*(item.classes() for item in self.items))
+
+
+def _constant(value: object) -> _Constant:
+    """*value* read as a constant: a mapping by its entries, a list or tuple by its items, anything else by its type; TypeError naming it if it is a class or routine, which no rule of a constant's form spells."""
+    if _is_class_or_routine(value):
+        raise TypeError(
+            f"{label_of(value)} is held in a constant, and no rule of a constant's form "
+            "spells a class or routine: hold no class or routine in a public constant, or "
+            "make the constant private"
+        )
+    if isinstance(value, Mapping):
+        return _Entries(
+            _Typed(type(value)),
+            tuple((repr(key), _constant(item)) for key, item in value.items()),
+        )
+    if isinstance(value, (list, tuple)):
+        return _Items(_Typed(type(value)), tuple(_constant(item) for item in value))
+    return _Typed(type(value))
+
+
 def _form_classes(obj: object) -> set[type]:
-    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
+    """The classes surface_form(obj) names: none for an Enum; for a constant its type and those its values' or items' forms name, never a key's; else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if is_enum(obj):
         return set()
     if not _is_class_or_routine(obj):
-        return {type(obj)}
+        return _constant(obj).classes()
     annotations = _signature_annotations(signature_of(obj))
     if not annotations:
         return set()

@@ -56,7 +56,8 @@ from tests._surface_forms import (
 # The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
 # dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
-# members; or a constant's type.  Any add/remove to __all__ must be reflected in
+# members; or a constant's type, then a mapping's entries or a list's or tuple's
+# items, e.g. 'dict {1: float}'.  Any add/remove to __all__ must be reflected in
 # the keys, and any change to a name's form in its value; the tests below fail
 # naming the drifted symbol(s).  Each value stays on one line, so the current
 # form a failure prints pastes in verbatim.
@@ -106,7 +107,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "SEGTariff": "dataclass[eq, frozen] (name: str, rate_pence_per_kwh: float) -> None",
     "resolve_seg_tariff": "(name: str) -> SEGTariff",
     "calculate_seg_revenue": "(export_kwh: float, tariff: SEGTariff) -> float",
-    "SEG_PRESETS": "dict",
+    "SEG_PRESETS": "dict {'Octopus': SEGTariff, 'British Gas': SEGTariff, 'EDF': SEGTariff, 'E.ON': SEGTariff, 'Scottish Power': SEGTariff, 'OVO': SEGTariff}",
     # --- gridservices (gridservices.py) ---
     "GridServicesRateBand": "dataclass[eq, frozen] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '', flat_gbp_per_kw_per_year: float = 0.0) -> None",
     "GridServicesRateBands": "dataclass[eq, frozen] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
@@ -117,7 +118,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...]) -> tuple[float, ...]",
     "compute_grid_services_at_events": "(fleet_results: FleetResults, cfg: GridServicesEventsConfig) -> GridServicesAtEvents",
     "GRID_SERVICES_RATE_BANDS": "GridServicesRateBands",
-    "DEFAULT_EVENT_WINDOWS": "tuple",
+    "DEFAULT_EVENT_WINDOWS": "tuple [EventWindow]",
     # --- community (community.py) ---
     "CommunityConfig": "dataclass[eq, frozen] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: Optional[BatteryConfig] = None, billing: Optional[CommunityBillingConfig] = None) -> None",
     "CommunityBillingConfig": "dataclass[eq, frozen] (tariff: Optional[TariffConfig] = None, seg_rate_pence_per_kwh: Optional[float] = None) -> None",
@@ -142,9 +143,9 @@ FROZEN_SURFACE: dict[str, str] = {
     "PrefetchedWeather": "dataclass[frozen] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
     "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
-    "OFGEM_TDCV_BY_OCCUPANTS": "dict",
-    "ELEXON_PROFILE_CLASS_1": "list",
-    "SEASONAL_FACTORS": "dict",
+    "OFGEM_TDCV_BY_OCCUPANTS": "dict {1: float, 2: float, 3: float, 4: float, 5: float}",
+    "ELEXON_PROFILE_CLASS_1": "list [float × 48]",
+    "SEASONAL_FACTORS": "dict {1: float, 2: float, 3: float, 4: float, 5: float, 6: float, 7: float, 8: float, 9: float, 10: float, 11: float, 12: float}",
     # --- location (location.py) ---
     "Location": "dataclass[eq, frozen] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
 }

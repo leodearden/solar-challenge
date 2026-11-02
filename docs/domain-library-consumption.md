@@ -115,10 +115,11 @@ the header of [cost-recovery-finance-model.md](cost-recovery-finance-model.md),
 and the next release folds both lists into its notes. A change to an exported
 signature, to the constructor of a class outside `__all__` that the frozen
 surface names, to which of the dataclass parameters `eq`, `order`,
-`unsafe_hash` and `frozen` either kind of class sets, or to either kind of
-class's public members, must also edit `FROZEN_SURFACE`, `FROZEN_CLOSURE` or
-`FROZEN_MEMBERS` in `tests/unit/test_public_api_surface.py`, which fails until
-it does.
+`unsafe_hash` and `frozen` either kind of class sets, to an exported container
+constant's keys or length, or the type of a value or item it holds, or to
+either kind of class's public members, must also edit `FROZEN_SURFACE`,
+`FROZEN_CLOSURE` or `FROZEN_MEMBERS` in `tests/unit/test_public_api_surface.py`,
+which fails until it does.
 
 **Unreleased on main** (task 392): `SimulationResults`, reached through
 `FleetResults.per_home_results`, gains two methods: `per_minute_amounts()`, a
@@ -149,6 +150,15 @@ are frozen except `SummaryStatistics`, `FleetConfig`, `FleetResults`,
 same parameters as on the 0.5.0 tag, except `SimulationResults` and
 `ScenarioConfig`, which tasks 436 and 955 froze (below). Consumers need no
 change when they re-pin.
+
+**Unreleased on main** (task 915): the frozen contract now covers what a
+consumer indexes in each exported container constant: the keys of
+`SEG_PRESETS`, `OFGEM_TDCV_BY_OCCUPANTS` and `SEASONAL_FACTORS`, in order, with
+the type of the value under each, and the length of `ELEXON_PROFILE_CLASS_1`
+and `DEFAULT_EVENT_WINDOWS`, with the type of each item. The 0.5.0 tag's
+constants hold the same keys and items, of the same types. Their numbers stay
+data: a changed rate is listed here as a change to what a public name returns.
+Consumers need no change when they re-pin.
 
 **Unreleased on main** (task 426): `Battery` declares `config`,
 `min_soc_fraction`, `max_soc_fraction`, `charge_efficiency` and
@@ -1068,10 +1078,12 @@ The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
 public name and that name's signature and, for a dataclass, which of `eq`,
-`order`, `unsafe_hash` and `frozen` it sets, and whose `FROZEN_MEMBERS` pins the
-public methods, properties, class constants, and declared instance attributes of
-every exported class and of every class outside `__all__` that the frozen
-surface names.  The same file's `FROZEN_CLOSURE` pins the constructor of each
+`order`, `unsafe_hash` and `frozen` it sets.  For a constant, `FROZEN_SURFACE`
+pins its type and, for a mapping, list or tuple, its keys or length and the type
+of each value or item.  The file's `FROZEN_MEMBERS` pins the public methods,
+properties, class constants, and declared instance attributes of every exported
+class and of every class outside `__all__` that the frozen surface names.  The
+same file's `FROZEN_CLOSURE` pins the constructor of each
 such class and, for a dataclass, which of those four parameters it sets;
 consumers import such a class, such as `HomeConfig`, from its module.
 Importing the package fails with a `RuntimeError` naming the offending name when
