@@ -445,6 +445,23 @@ def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in
     assert surface_form(()) == "tuple []"
 
 
+def test_an_instance_of_a_list_or_tuple_subclass_is_spelled_by_its_types_qualified_name_alone() -> None:
+    class Window(typing.NamedTuple):
+        start: int
+        end: float
+
+    class Band(tuple, enum.Enum):
+        LOW = (0.0, 0.1)
+
+    class Readings(list):
+        pass
+
+    assert surface_form(Window(1, 2.0)) == Window.__qualname__
+    assert surface_form(Band.LOW) == Band.__qualname__
+    assert surface_form(Readings([0.5])) == Readings.__qualname__
+    assert named_classes(Window(1, 2.0)) == {Window}
+
+
 def test_a_run_of_equal_item_forms_in_a_list_or_tuple_is_spelled_once_with_its_count() -> None:
     assert surface_form([0.012] * 48) == "list [float × 48]"
     assert surface_form((1, 2, "a", 3)) == "tuple [int × 2, str, int]"

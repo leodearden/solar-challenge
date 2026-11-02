@@ -78,11 +78,12 @@ def surface_form(obj: object) -> str:
     routine on every admitted minor, and any other descriptor whose type defines __get__
     and __delete__ but no __set__ is no routine on any. After that name, a mapping's
     form gives its entries in braces in iteration order, each key by its repr and each
-    value by its own form, and a list's or tuple's gives its items' forms in brackets, a
-    run of equal forms spelled once with its count, as in list [float × 48]. A class or
-    routine held in a constant raises TypeError naming it. Any other class's or
-    routine's is its signature, a class's being its constructor's without self and a
-    partial's the one it leaves of the callable it wraps.
+    value by its own form, and a list's or tuple's, but not a subclass instance's, such
+    as a NamedTuple's, gives its items' forms in brackets, a run of equal forms spelled
+    once with its count, as in list [float × 48]. A class or routine held in a constant
+    raises TypeError naming it. Any other class's or routine's is its signature, a
+    class's being its constructor's without self and a partial's the one it leaves of
+    the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -646,7 +647,7 @@ class _Items(_Constant):
 
 
 def _constant(value: object) -> _Constant:
-    """*value* read as a constant: a mapping by its entries, a list or tuple by its items, anything else by its type; TypeError naming it if it is a class or routine, which no rule of a constant's form spells."""
+    """*value* read as a constant: a mapping by its entries, a list or tuple by its items, anything else by its type, an instance of a list or tuple subclass, such as a NamedTuple's, included; TypeError naming it if it is a class or routine, which no rule of a constant's form spells."""
     if _is_class_or_routine(value):
         raise TypeError(
             f"{label_of(value)} is held in a constant, and no rule of a constant's form "
@@ -658,7 +659,7 @@ def _constant(value: object) -> _Constant:
             _Typed(type(value)),
             tuple((repr(key), _constant(item)) for key, item in value.items()),
         )
-    if isinstance(value, (list, tuple)):
+    if type(value) is list or type(value) is tuple:
         return _Items(_Typed(type(value)), tuple(_constant(item) for item in value))
     return _Typed(type(value))
 
