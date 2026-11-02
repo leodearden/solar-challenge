@@ -408,6 +408,21 @@ def test_an_enum_form_is_its_members_in_definition_order() -> None:
     assert surface_form(Period) == "PEAK='peak', OFF_PEAK='off_peak'"
 
 
+def test_an_enum_form_lists_its_aliases_in_definition_order_each_with_the_value_of_the_member_it_names() -> None:
+    class Rate(enum.Enum):
+        A = 1
+        B = 1
+        C = 2
+
+    class Access(enum.Flag):
+        READ = 4
+        WRITE = 2
+        READ_WRITE = 6
+
+    assert surface_form(Rate) == "A=1, B=1, C=2"
+    assert surface_form(Access) == "READ=4, WRITE=2, READ_WRITE=6"
+
+
 def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qualified_name() -> None:
     assert surface_form(Preset(rate=0.15)) == "Preset"
     assert surface_form("kWh") == "str"
