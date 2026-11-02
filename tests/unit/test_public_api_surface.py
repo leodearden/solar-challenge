@@ -56,11 +56,11 @@ from tests._surface_forms import (
 # The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
 # dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
-# members; or a constant's type, then a mapping's entries or a list's or tuple's
-# items, e.g. 'dict {1: float}'.  Any add/remove to __all__ must be reflected in
-# the keys, and any change to a name's form in its value; the tests below fail
-# naming the drifted symbol(s).  Each value stays on one line, so the current
-# form a failure prints pastes in verbatim.
+# members, aliases included; or a constant's type, then a mapping's entries or a
+# list's or tuple's items, e.g. 'dict {1: float}'.  Any add/remove to __all__
+# must be reflected in the keys, and any change to a name's form in its value;
+# the tests below fail naming the drifted symbol(s).  Each value stays on one
+# line, so the current form a failure prints pastes in verbatim.
 # ---------------------------------------------------------------------------
 FROZEN_SURFACE: dict[str, str] = {
     # --- finance / bill engine (finance.py) ---

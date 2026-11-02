@@ -72,16 +72,17 @@ from tests._surface_forms_signatures import (
 def surface_form(obj: object) -> str:
     """The surface form of *obj*.
 
-    An Enum's is its members, as NAME=value in definition order. A constant's, that of
-    anything neither a class nor a routine, is its type's qualified name; a
-    functools.partial is a routine on every admitted minor, and any other descriptor
-    whose type defines __get__ and __delete__ but no __set__ is no routine on any. After
-    that name, a mapping's form gives its entries in braces in iteration order, each key
-    by its repr and each value by its own form, and a list's or tuple's gives its items'
-    forms in brackets, a run of equal forms spelled once with its count, as in
-    list [float × 48]. A class or routine held in a constant raises TypeError naming it.
-    Any other class's or routine's is its signature, a class's being its constructor's
-    without self and a partial's the one it leaves of the callable it wraps.
+    An Enum's is its members, aliases included, as NAME=value in definition order, an
+    alias with the value of the member it names. A constant's, that of anything neither
+    a class nor a routine, is its type's qualified name; a functools.partial is a
+    routine on every admitted minor, and any other descriptor whose type defines __get__
+    and __delete__ but no __set__ is no routine on any. After that name, a mapping's
+    form gives its entries in braces in iteration order, each key by its repr and each
+    value by its own form, and a list's or tuple's gives its items' forms in brackets, a
+    run of equal forms spelled once with its count, as in list [float × 48]. A class or
+    routine held in a constant raises TypeError naming it. Any other class's or
+    routine's is its signature, a class's being its constructor's without self and a
+    partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -108,7 +109,7 @@ def surface_form(obj: object) -> str:
     too, with its kind.
     """
     if is_enum(obj):
-        return ", ".join(f"{member.name}={member.value!r}" for member in obj)
+        return ", ".join(f"{name}={member.value!r}" for name, member in obj.__members__.items())
     if not _is_class_or_routine(obj):
         return _constant(obj).text()
     signature = signature_of(obj)
