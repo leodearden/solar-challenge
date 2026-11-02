@@ -8,6 +8,7 @@ fleet page's counterpart of builder_form.py.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
+from functools import partial
 from types import MappingProxyType
 from typing import Any
 
@@ -100,17 +101,19 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     Each value is read once, as given, by the reader the loaders read it with, so the
     simulate endpoint and the export, which both read the form here, refuse it at the same
     value with the same message.  A form with a top-level key the fleet form does not have
-    is refused, naming it, before any value is read.  The name is read first, so a name
-    holding a lone surrogate is refused before any home is generated.
+    is refused, naming it, before any value is read.  The values are read in the order
+    Raises lists them, the name first, and every one before any home is generated, so a
+    value a reader refuses costs no home generation.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
             listing the fleet form's keys.
         ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
-        ValueError, TypeError: From the form's distribution conversion, location, SEG or
-            date range, or for a date that does not parse.
-        ConfigurationError: For a block the loaders refuse, or homes they cannot generate.
+        ValueError, TypeError, ConfigurationError: From the readers of the form's
+            distributions, location, tariff, dispatch strategy, SEG and window, read in that
+            order, a date that does not parse included.
+        ConfigurationError: For homes the loaders cannot generate from the distributions.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     sent_name = form.get("name")
@@ -119,8 +122,9 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     distribution = form_to_fleet_distribution_config(dict(form))
     fleet = parse_fleet_distribution_config(distribution)
     location = _fleet_form_location(form)
-    homes = _with_fleet_overlay(generate_homes_from_distribution(fleet, location), form)
+    apply_overlay = _read_fleet_overlay(form)
     start, end = parse_date_range(form)
+    homes = apply_overlay(generate_homes_from_distribution(fleet, location))
     return ParsedFleetForm(
         name=name,
         homes=tuple(homes),
@@ -154,21 +158,18 @@ def _fleet_form_location(form: Mapping[str, Any]) -> Location:
     return resolve_location(form.get("location", "bristol"))
 
 
-def _with_fleet_overlay(homes: list[HomeConfig], form: Mapping[str, Any]) -> list[HomeConfig]:
-    """*homes*, each given the fleet *form*'s tariff and SEG and, with a battery, its dispatch strategy.
+def _read_fleet_overlay(form: Mapping[str, Any]) -> Callable[[list[HomeConfig]], list[HomeConfig]]:
+    """The overlay of the fleet *form*, read: the function that gives each home it is given the form's tariff and SEG and, with a battery, its dispatch strategy.
 
     Raises:
         ValueError, ConfigurationError: For a tariff, dispatch strategy or SEG the loaders
             refuse, read in that order.
     """
-    tariff_config = parse_tariff_config(form.get("tariff"))
-    dispatch_strategy = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
-    seg_tariff = parse_seg_tariff(form.get("seg"))
-    return apply_fleet_overlay(
-        homes,
-        tariff_config=tariff_config,
-        dispatch_strategy=dispatch_strategy,
-        seg_tariff=seg_tariff,
+    return partial(
+        apply_fleet_overlay,
+        tariff_config=parse_tariff_config(form.get("tariff")),
+        dispatch_strategy=parse_dispatch_strategy_config(form.get("dispatch_strategy")),
+        seg_tariff=parse_seg_tariff(form.get("seg")),
     )
 
 
