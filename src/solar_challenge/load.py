@@ -432,8 +432,8 @@ def generate_load_profile(
     E_d. The Elexon profile also stands in, with a warning, when the household model itself
     fails: it raises, or gives a day that is not 1,440 minutes long.
 
-    The EV charging profile is laid out from the window's first midnight, 1,440 minutes a
-    day, and read on the window's rows.
+    The EV charging profile is laid out a minute to a row from the window's first midnight,
+    1,440 minutes a day, and read on the window's rows, so it needs one-minute rows.
 
     Args:
         config: Load configuration with consumption and household parameters
@@ -448,10 +448,15 @@ def generate_load_profile(
         Series of power in kW on window.rows(), named demand_kw
 
     Raises:
-        ValueError: If window's cadence is not a whole number of minutes dividing one hour,
-            naming it, before any household is built; or if a stochastic window's simulated
-            days have no energy.
+        ValueError: Naming window's cadence, before any household is built, if it is not a
+            whole number of minutes dividing one hour, or, with ev_config, not one minute; or
+            if a stochastic window's simulated days have no energy.
     """
+    if ev_config is not None and window.cadence != ONE_MINUTE:
+        raise ValueError(
+            "EV charging is laid out a minute to a row, so a profile with ev_config needs one-minute rows: "
+            f"got cadence={window.cadence!r}, {window.step_minutes:g} minutes"
+        )
     minutes_per_row = _minutes_per_row(window)
     days = list(window.local_days())
     household_kw = None

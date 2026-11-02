@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.ev import EVConfig
 from solar_challenge.load import (
     ELEXON_PROFILE_CLASS_1,
     DaySimulator,
@@ -913,5 +914,27 @@ class TestHouseholdOnLocalDays:
 
         with pytest.raises(ValueError, match=re.escape(f"cadence={datetime.timedelta(seconds=30)!r}")):
             generate_load_profile(load_config, window, household_model=household)
+
+        assert household.windows == []
+
+
+class TestEVChargingOnTheProfile:
+    """generate_load_profile lays EV charging out a minute to a row, so it adds it only to a profile on one-minute rows."""
+
+    @pytest.mark.parametrize("load_config", _EACH_PATH)
+    def test_ev_charging_on_rows_longer_than_a_minute_is_refused_naming_the_cadence_before_any_household_is_built(
+        self, load_config: LoadConfig
+    ) -> None:
+        """A half-hourly row would read the charging at its first minute alone, so a session starting or ending inside the row would carry the wrong energy."""
+        household = _RecordingHousehold(_household_of_days(_day_of_year_watts))
+        half_hourly = datetime.timedelta(minutes=30)
+
+        with pytest.raises(ValueError, match=f"ev_config.*{re.escape(repr(half_hourly))}"):
+            generate_load_profile(
+                load_config,
+                _window("2024-06-21", "2024-06-22", cadence=half_hourly),
+                EVConfig(charger_type="3.6kW"),
+                household_model=household,
+            )
 
         assert household.windows == []
