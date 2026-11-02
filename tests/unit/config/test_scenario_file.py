@@ -265,11 +265,15 @@ class TestSimulatedHomes:
             pytest.param(lambda: _scenario(homes=[_home(), _home()], seg_tariff_pence_per_kwh=5.0), id="homes"),
         ],
     )
-    def test_is_pure_and_never_empty(self, build: Callable[[], ScenarioConfig]) -> None:
+    def test_fills_copies_and_leaves_the_scenario_as_built(self, build: Callable[[], ScenarioConfig]) -> None:
         scenario = build()
 
-        assert scenario.simulated_homes() == scenario.simulated_homes()
-        assert len(scenario.simulated_homes()) >= 1
+        first = scenario.simulated_homes()
+        second = scenario.simulated_homes()
+
+        assert all(home.seg_tariff is not None for home in first)
+        assert second == first
+        assert scenario == build()
 
 
 class TestScenarioConfigRefusals:
