@@ -82,9 +82,8 @@ def surface_form(obj: object) -> str:
     subclass's instance is spelled as its base's is, unless its type is a named tuple or
     an Enum, whose own form pins what the instance holds: such an instance is spelled by
     its type alone. A class or routine held in a constant raises TypeError naming it,
-    and a key whose type is not exactly str, int, float, bool or NoneType, whose reprs
-    alone are the literals that write them on every admitted minor, raises TypeError
-    naming its type, as does a list, tuple or mapping held inside itself. Any other
+    and a key whose type is not exactly one of those _spelled_key spells, or a list,
+    tuple or mapping held inside itself, raises TypeError naming its type. Any other
     class's or routine's is its signature, a class's being its constructor's without
     self and a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
@@ -614,14 +613,15 @@ _LITERAL_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, types.NoneType)
 
 
 def _spelled_key(key: object) -> str:
-    """*key* by its repr, if its type is exactly one of _LITERAL_KEY_TYPES, whose repr is the literal that writes it on every admitted minor; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
+    """*key* by its repr, if its type is exactly one of _LITERAL_KEY_TYPES, as such a key's repr is the same on every admitted minor, a str's while its characters are all assigned in every admitted minor's Unicode database; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
     if type(key) not in _LITERAL_KEY_TYPES:
         names = ", ".join(kind.__qualname__ for kind in _LITERAL_KEY_TYPES)
         raise TypeError(
             f"a key of type {label_of(type(key))} is held in a constant, and a constant's "
-            f"form spells a key only if its type is one of {names}, whose repr is the "
-            "literal that writes the key on every admitted minor: key the mapping by one of "
-            "those types, or make the constant private"
+            f"form spells a key only if its type is exactly one of {names}, as such a "
+            "key's repr is the same on every admitted minor, a str's while its characters "
+            "are all assigned in every admitted minor's Unicode database: key the mapping "
+            "by one of those types, or make the constant private"
         )
     return repr(key)
 
