@@ -948,7 +948,8 @@ day of another length. Consumers re-baseline demand figures when they re-pin.
 scenario is built, so `ScenarioConfig(homes=[h1, h2], ...).homes` is
 `(h1, h2)`. Assigning to one of its fields, such as `scenario.homes = homes`,
 raises `dataclasses.FrozenInstanceError`; the 0.5.0 tag accepts the
-assignment. `hash(scenario)` still raises `TypeError`. Consumers that assign to
+assignment. `hash(scenario)` still raises `TypeError`, because its `period`, a
+`SimulationPeriod`, is unhashable. Consumers that assign to
 a scenario field build the changed scenario with
 `dataclasses.replace(scenario, homes=homes)` instead, and those that compare
 `scenario.homes` with a list compare it with a tuple, when they re-pin.
