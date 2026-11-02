@@ -912,6 +912,37 @@ truncated; the tag refuses one there with `Unknown distribution type`. A null se
 (`use_stochastic`, `smart_charging_mode`, `grid_charging`, `dispatch_strategy`)
 reads as absent. Every other generated fleet is unchanged, home for home.
 
+**Unreleased on main** (task 894): `generate_load_profile` now takes
+`(config, window, ev_config=None, *, household_model=...)`, where `window`, a
+`timebase.SimulationWindow`, replaces `start_date`, `end_date` and `timezone`,
+and it returns kW on `window.rows()`. Each local day's minute-of-day profile,
+Elexon's or the household model's, is placed by wall-clock minute: a
+spring-forward day skips 01:00-01:59 and an autumn day plays it twice. The
+0.5.0 tag lays the days end to end, 1,440 minutes each, from the window's first
+midnight. So a day whose clock is an hour ahead of the first day's, on summer
+time after a winter start, is laid an hour late, and one an hour behind, on
+winter time after a summer start, an hour early; and a window whose last day is
+the March change day ends at 00:59 the next day, one whose last day is the
+October change day at 22:59. Every run spanning a clock change moves. A row
+takes the mean of the minutes it spans, and a cadence that is not whole minutes
+raises `ValueError` naming it, as does any cadence but one minute with an
+`ev_config`. Each day's energy is the annual consumption ×
+`SEASONAL_FACTORS[month]` / the factors summed over the days of its calendar
+year, so a whole calendar year delivers `annual_consumption_kwh` exactly, on
+both paths: demand rises to 3,400.0 kWh for 2023, 2.3% above the tag's 3,325.0,
+and to 3,400.0 for 2024, 1.9% above the tag's 3,336.2. `simulate_home`'s rows
+run from its first local date's midnight to the midnight after its last, at one
+minute on the location's clock; a tz-aware date in another zone is read as its
+date on that clock, and a naive one as already on it. So a run whose last day
+is the March change day ends at 23:59 on it, and its `SimulationResults.window`
+ends that day. `calculate_summary` still counts `simulation_days` from the
+rows' span, so a run whose last day is the October change day now counts one
+day more than its window holds, 3 for 2024-10-26..27 where the tag counts 2, as
+the tag already does for a run past that day. `generate_load_profile` raises
+`ValueError` for a household model whose days have no energy: the Elexon
+fallback the task 906 line describes covers only a model that raises or gives a
+day of another length. Consumers re-baseline demand figures when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

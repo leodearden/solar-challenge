@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Load profile generation for domestic energy consumption."""
 
+import calendar
 import contextlib
 import datetime
 import logging
@@ -16,7 +17,7 @@ import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.number_fields import POSITIVE, Interval, as_finite_float, as_whole_number, read_field
-from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, SimulationWindow
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, ONE_MINUTE, LocalDay, SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.ev import EVConfig
@@ -152,62 +153,44 @@ SEASONAL_FACTORS: dict[int, float] = {
 }
 
 
-def _normalize_profile(profile: list[float]) -> "np.ndarray[tuple[int], np.dtype[np.float64]]":
-    """Normalize profile so it sums to 1.0."""
-    arr: np.ndarray[tuple[int], np.dtype[np.float64]] = np.array(profile, dtype=np.float64)
-    result: np.ndarray[tuple[int], np.dtype[np.float64]] = arr / arr.sum()
-    return result
+def _seasonal_day_energy_kwh(annual_kwh: float, day: datetime.date) -> float:
+    """The household's energy on day: annual_kwh shared over the days of day's calendar year by their months' SEASONAL_FACTORS, so a whole calendar year delivers annual_kwh (docs/prds/load-composition-and-calendar-days.md decision 6)."""
+    year_weight = sum(
+        SEASONAL_FACTORS[month] * calendar.monthrange(day.year, month)[1] for month in SEASONAL_FACTORS
+    )
+    return annual_kwh * SEASONAL_FACTORS[day.month] / year_weight
 
 
-def _get_daily_profile_kwh(
-    date: pd.Timestamp,
-    annual_consumption_kwh: float,
-) -> np.ndarray:
-    """Get daily load profile in kWh for a specific date.
+def _elexon_minute_shape() -> npt.NDArray[np.float64]:
+    """Elexon Profile Class 1's relative demand at each minute of the wall clock from 00:00: each half hour's value at each of its minutes."""
+    return np.repeat(
+        np.asarray(ELEXON_PROFILE_CLASS_1, dtype=np.float64),
+        MINUTES_PER_DAY // len(ELEXON_PROFILE_CLASS_1),
+    )
 
-    Args:
-        date: Date for the profile
-        annual_consumption_kwh: Target annual consumption
 
-    Returns:
-        Array of 48 half-hourly energy values in kWh
+def _minutes_per_row(window: SimulationWindow) -> int:
+    """How many minutes of the wall clock each of window's rows spans.
+
+    Raises:
+        ValueError: If window's cadence is not a whole number of minutes, naming it: a household
+            profile gives each minute of the day, which a row must hold whole.
     """
-    # Base daily consumption (uniform across year)
-    base_daily = annual_consumption_kwh / 365.0
-
-    # Apply seasonal factor
-    month = date.month
-    seasonal_factor = SEASONAL_FACTORS.get(month, 1.0)
-
-    # Scale base profile to get daily consumption
-    daily_consumption = base_daily * seasonal_factor
-    normalized_profile = _normalize_profile(ELEXON_PROFILE_CLASS_1)
-
-    # Energy per half-hour period in kWh
-    half_hourly_kwh = normalized_profile * daily_consumption
-
-    return half_hourly_kwh
+    if window.cadence % ONE_MINUTE:
+        raise ValueError(
+            "A household profile gives each minute of the day, so its rows must span whole minutes: "
+            f"got cadence={window.cadence!r}, {window.step_minutes:g} minutes"
+        )
+    return window.cadence // ONE_MINUTE
 
 
-def _interpolate_half_hourly_to_minute(
-    half_hourly_kwh: np.ndarray,
-) -> np.ndarray:
-    """Interpolate half-hourly energy to 1-minute power.
+def _on_wall_clock(minute_profile: npt.NDArray[np.float64], day: LocalDay, minutes_per_row: int) -> pd.Series:
+    """minute_profile, one value per minute of the wall clock from 00:00, on day's rows: each row the mean of the minutes it spans.
 
-    Converts half-hourly energy (kWh) to 1-minute power (kW).
-    Each half-hour's energy is divided equally across 30 minutes.
-
-    Args:
-        half_hourly_kwh: 48 half-hourly energy values in kWh
-
-    Returns:
-        1440 minute-by-minute power values in kW
+    A day the clocks go forward skips the hour they skip, and a day they go back plays the hour they repeat twice.
     """
-    # Each half-hour value becomes 30 identical minute values
-    # Energy (kWh) per half hour = Power (kW) * 0.5 hours
-    # So Power (kW) = Energy (kWh) / 0.5 = Energy (kWh) * 2
-    minute_power = np.repeat(half_hourly_kwh * 2, 30)
-    return minute_power
+    row_means = minute_profile.reshape(-1, minutes_per_row).mean(axis=1)
+    return pd.Series(row_means[day.minute_of_day() // minutes_per_row], index=day.rows)
 
 
 def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
@@ -266,11 +249,6 @@ def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) ->
         return np.asarray(total_w, dtype=np.float64)
 
     return simulate_day
-
-
-def _calendar_days(first: datetime.date, last: datetime.date) -> list[datetime.date]:
-    """The calendar dates from first through last, consecutive and ascending."""
-    return [first + datetime.timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 _rng_lock = threading.Lock()
@@ -366,93 +344,44 @@ def _household_day_watts(
     return day_watts
 
 
-def _try_richardsonpy_profile(
-    config: LoadConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    timezone: str,
-    household_model: HouseholdModel,
-) -> Optional[pd.Series]:
-    """Generate a windowed stochastic load profile from household_model, richardsonpy's by default.
+def _elexon_household_kw(annual_kwh: float, window: SimulationWindow) -> pd.Series:
+    """The deterministic household on window's rows: the Elexon shape on each of its local days by wall clock, scaled to that day's seasonal energy.
 
-    Builds one household for the window and simulates each of the window's
-    calendar days once, in order: a 1-day request simulates 1 day, a 7-day
-    request 7.
-
-    Normalization is performed by scaling the raw stochastic shape, with
-    scale_profile_to_energy, to the seasonal energy of those calendar days,
-    each at the Elexon path's daily energy for its own month:
-    target_window_kwh = Σ_days (annual/365 × SEASONAL_FACTORS[day's month]).
-
-    The Elexon path is a defensive fallback: any exception returns None,
-    including an error from the household model, a day that is not 1,440
-    minutes long, and a window with no energy, which scale_profile_to_energy
-    refuses to scale.
-
-    Args:
-        config: Load configuration
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        timezone: IANA timezone string
-        household_model: Builds the window's household, whose day simulator
-            gives each day's power in W
-
-    Returns:
-        Load profile Series if successful, None otherwise (triggers Elexon fallback)
+    Raises:
+        ValueError: If window's cadence is not a whole number of minutes dividing one hour, naming it.
     """
+    minute_shape = _elexon_minute_shape()
+    minutes_per_row = _minutes_per_row(window)
+    return pd.concat(
+        scale_profile_to_energy(
+            _on_wall_clock(minute_shape, day, minutes_per_row), _seasonal_day_energy_kwh(annual_kwh, day.date)
+        )
+        for day in window.local_days()
+    ).rename("demand_kw")
+
+
+def _simulated_household_kw(
+    config: LoadConfig, window: SimulationWindow, household_model: HouseholdModel
+) -> Optional[pd.Series]:
+    """The stochastic household on window's rows: household_model's days on the wall clock, the window scaled once to its days' seasonal energy.
+
+    None, with a warning naming the failure, when the household model fails: it raises, as
+    richardsonpy's imports, data files or day simulation can, or gives a day that is not
+    1,440 minutes long. Reading the window, and placing and scaling the days, are the
+    project's own steps, so their errors propagate.
+
+    Raises:
+        ValueError: If window's cadence is not a whole number of minutes dividing one hour,
+            naming it, before the household is built; or if the simulated days have no
+            energy, which scale_profile_to_energy refuses to scale.
+    """
+    minutes_per_row = _minutes_per_row(window)
+    days = list(window.local_days())
     try:
-        # Normalise dates (strip any intra-day time component)
-        start_norm = start_date.normalize()
-        end_norm = end_date.normalize()
-        if start_norm.tz is None:
-            start_norm = start_norm.tz_localize(timezone)
-        if end_norm.tz is None:
-            end_norm = end_norm.tz_localize(timezone)
-
-        # Calendar dates, not timedelta.days, which undercounts a window
-        # across the 23-hour spring-forward day.
-        days = _calendar_days(start_norm.date(), end_norm.date())
-
-        # Concatenate all days and convert W → kW
-        power_kw: np.ndarray = (
-            np.concatenate(_household_day_watts(household_model, config, days)) / 1000.0
-        )
-
-        # Build 1-minute DatetimeIndex for the requested window.
-        # Reuse the Elexon DST trim/pad pattern so index length is consistent.
-        minute_index = pd.date_range(
-            start=start_norm,
-            end=end_norm + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
-            freq="1min",
-            tz=timezone,
-        )
-
-        # Trim or extend to match index length (handles DST transitions)
-        if len(power_kw) > len(minute_index):
-            power_kw = power_kw[: len(minute_index)]
-        elif len(power_kw) < len(minute_index):
-            avg = (
-                power_kw[-MINUTES_PER_DAY:].mean()
-                if len(power_kw) >= MINUTES_PER_DAY
-                else power_kw.mean()
-            )
-            padding = np.full(len(minute_index) - len(power_kw), avg)
-            power_kw = np.concatenate([power_kw, padding])
-
-        profile = pd.Series(power_kw, index=minute_index, name="demand_kw")
-
-        # Do NOT use ElectricLoad's do_normalization — on a 1-day window it
-        # would force the full annual demand (~3400 kWh) into a single day.
-        annual_kwh = config.get_annual_consumption()
-        target_window_kwh = sum(
-            annual_kwh / 365.0 * SEASONAL_FACTORS.get(day.month, 1.0) for day in days
-        )
-        return scale_profile_to_energy(profile, target_window_kwh)
-
+        day_watts = _household_day_watts(household_model, config, [day.date for day in days])
     except Exception as exc:  # noqa: BLE001
         # Log a warning so the fallback is observable; a silent fallback would
-        # hide API-mismatch regressions in production (only unit tests, via the
-        # call-count assertions, would catch the silent degradation).
+        # hide API-mismatch regressions in production.
         logger.warning(
             "richardsonpy stochastic generation failed; falling back to Elexon "
             "deterministic profile: %s: %s",
@@ -461,143 +390,81 @@ def _try_richardsonpy_profile(
         )
         return None
 
+    placed_kw = pd.concat(
+        _on_wall_clock(np.asarray(watts, dtype=np.float64) / 1000.0, day, minutes_per_row)
+        for watts, day in zip(day_watts, days, strict=True)
+    )
+    annual_kwh = config.get_annual_consumption()
+    return scale_profile_to_energy(
+        placed_kw.rename("demand_kw"), sum(_seasonal_day_energy_kwh(annual_kwh, day.date) for day in days)
+    )
+
 
 def generate_load_profile(
     config: LoadConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    timezone: str = "Europe/London",
+    window: SimulationWindow,
     ev_config: "Optional[EVConfig]" = None,
     *,
     household_model: HouseholdModel = richardsonpy_household,
 ) -> pd.Series:
-    """Generate domestic load profile.
+    """The household's demand in kW on window.rows(), EV charging included when ev_config is set.
 
-    Uses the windowed stochastic household_model, richardsonpy's by default,
-    when config.use_stochastic is True (the default).  richardsonpy is a hard
-    dependency so this path is always available.  Falls back to the
-    deterministic Elexon Profile Class 1 shape only when use_stochastic=False,
-    or defensively if the stochastic profile cannot be built: the household
-    model raises an error, or its window has no energy to scale.
+    Each of the window's local days takes a profile of the minutes of its wall clock from 00:00
+    to 23:59, placed on its rows by each row's local minute of the day: a day the clocks go
+    forward skips 01:00-01:59, and a day they go back plays it twice. A row's value is the mean
+    of the minutes it spans. Day d's seasonal energy E_d is the annual consumption times its
+    month's SEASONAL_FACTORS weight over the weights of every day of its calendar year, so a
+    whole calendar year delivers config.get_annual_consumption()
+    (docs/prds/load-composition-and-calendar-days.md decisions 5, 6 and 15).
 
-    A stochastic profile depends only on its LoadConfig: the call leaves the
-    module-level random and numpy.random generators in the states it found
-    them in, and stochastic windows run one at a time across threads.
+    With config.use_stochastic, the default, household_model builds one household for the
+    window's dates and simulates each date once, in order, and the window is scaled once to
+    the sum of its days' E_d, keeping the variation between its days. A stochastic profile
+    depends only on its LoadConfig: the call leaves the module-level random and numpy.random
+    generators in the states it found them in, and stochastic windows run one at a time
+    across threads. Otherwise each day is the Elexon Profile Class 1 shape scaled to its own
+    E_d. The Elexon profile also stands in, with a warning, when the household model itself
+    fails: it raises, or gives a day that is not 1,440 minutes long.
 
-    Creates a 1-minute resolution load profile for the specified date range,
-    scaled to match the configured annual consumption using seasonal factors.
-
-    If an EV configuration is provided, EV charging load is added to the
-    household base load.
+    The EV charging profile is laid out a minute to a row from the window's first midnight,
+    1,440 minutes a day, and read on the window's rows, so it needs one-minute rows.
 
     Args:
         config: Load configuration with consumption and household parameters
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        timezone: IANA timezone string for output index
+        window: The calendar days to generate, how long each of their rows lasts, and their
+            clock's zone
         ev_config: Optional EV configuration for charging load
-        household_model: Called once per stochastic window with config and the
-            window's dates; the day simulator it returns is called once per
-            date. Unused when config.use_stochastic is False.
+        household_model: Called once per stochastic window with config and the window's
+            dates; the day simulator it returns is called once per date. Unused when
+            config.use_stochastic is False.
 
     Returns:
-        Series with 1-minute DatetimeIndex and power values in kW
+        Series of power in kW on window.rows(), named demand_kw
+
+    Raises:
+        ValueError: Naming window's cadence, before any household is built, if it is not a
+            whole number of minutes dividing one hour, or, with ev_config, not one minute; or
+            if a stochastic window's simulated days have no energy.
     """
-    # Try the stochastic household model first if enabled
+    if ev_config is not None and window.cadence != ONE_MINUTE:
+        raise ValueError(
+            "EV charging is laid out a minute to a row, so a profile with ev_config needs one-minute rows: "
+            f"got cadence={window.cadence!r}, {window.step_minutes:g} minutes"
+        )
+    household_kw = None
     if config.use_stochastic:
-        result = _try_richardsonpy_profile(
-            config, start_date, end_date, timezone, household_model
-        )
-        if result is not None:
-            base_load = result
-        else:
-            # Fall back to Elexon Profile Class 1
-            base_load = _generate_elexon_profile(config, start_date, end_date, timezone)
-    else:
-        # Fall back to Elexon Profile Class 1
-        base_load = _generate_elexon_profile(config, start_date, end_date, timezone)
+        household_kw = _simulated_household_kw(config, window, household_model)
+    if household_kw is None:
+        household_kw = _elexon_household_kw(config.get_annual_consumption(), window)
+    if ev_config is None:
+        return household_kw
 
-    # Add EV charging if configured
-    if ev_config is not None:
-        from solar_challenge.ev import generate_ev_charging_profile
+    from solar_challenge.ev import generate_ev_charging_profile
 
-        ev_load = generate_ev_charging_profile(
-            ev_config, start_date, end_date, timezone
-        )
-
-        # Combine household and EV load
-        # Align the profiles in case of any index mismatch
-        combined_load = base_load.add(ev_load, fill_value=0.0)
-        combined_load.name = "demand_kw"
-        return combined_load
-
-    return base_load
-
-
-def _generate_elexon_profile(
-    config: LoadConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    timezone: str = "Europe/London",
-) -> pd.Series:
-    """Generate domestic load profile using Elexon Profile Class 1 shape.
-
-    Creates a 1-minute resolution load profile for the specified date range,
-    scaled to match the configured annual consumption.
-
-    Args:
-        config: Load configuration with annual consumption target
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        timezone: IANA timezone string for output index
-
-    Returns:
-        Series with 1-minute DatetimeIndex and power values in kW
-    """
-    # Get annual consumption from config (may be derived from occupants)
-    annual_consumption = config.get_annual_consumption()
-
-    # Ensure dates are timezone-aware
-    if start_date.tz is None:
-        start_date = start_date.tz_localize(timezone)
-    if end_date.tz is None:
-        end_date = end_date.tz_localize(timezone)
-
-    # Create minute-by-minute index
-    minute_index = pd.date_range(
-        start=start_date,
-        end=end_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
-        freq="1min",
-        tz=timezone,
-    )
-
-    # Generate profile for each day
-    all_power: list[np.ndarray] = []
-    current_date = start_date.normalize()
-
-    while current_date <= end_date:
-        daily_kwh = _get_daily_profile_kwh(current_date, annual_consumption)
-        minute_power = _interpolate_half_hourly_to_minute(daily_kwh)
-        all_power.append(minute_power)
-        current_date += pd.Timedelta(days=1)
-
-    # Concatenate all days
-    power_values = np.concatenate(all_power)
-
-    # Trim or extend to match index length (handle DST transitions)
-    if len(power_values) > len(minute_index):
-        power_values = power_values[: len(minute_index)]
-    elif len(power_values) < len(minute_index):
-        # Extend with last day's average
-        avg = (
-            power_values[-MINUTES_PER_DAY:].mean()
-            if len(power_values) >= MINUTES_PER_DAY
-            else power_values.mean()
-        )
-        padding = np.full(len(minute_index) - len(power_values), avg)
-        power_values = np.concatenate([power_values, padding])
-
-    return pd.Series(power_values, index=minute_index, name="demand_kw")
+    ev_kw = generate_ev_charging_profile(
+        ev_config, pd.Timestamp(window.first_day), pd.Timestamp(window.last_day), window.timezone
+    ).reindex(household_kw.index, fill_value=0.0)
+    return (household_kw + ev_kw).rename("demand_kw")
 
 
 def energy_kwh(profile: pd.Series) -> float:

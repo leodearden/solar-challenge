@@ -184,7 +184,7 @@ def generate_ev_charging_profile(
     config: EVConfig,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-    timezone: str = "Europe/London",
+    timezone: str | None = "Europe/London",
 ) -> pd.Series:
     """Generate EV charging load profile.
 
@@ -211,7 +211,7 @@ def generate_ev_charging_profile(
         config: EV configuration
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
-        timezone: Timezone for the simulation
+        timezone: Timezone for the simulation, None for a naive index
 
     Returns:
         Time series of charging power in kW at 1-minute resolution
