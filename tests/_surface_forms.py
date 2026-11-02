@@ -60,7 +60,6 @@ from tests._surface_forms_module_lookup import (
 from tests._surface_forms_signatures import (
     ModuleOrUnspelled,
     Unspelled,
-    is_decorated_dataclass,
     is_enum,
     namespace_holders,
     refuse_member_without_a_portable_form,
@@ -136,8 +135,8 @@ def member_forms(cls: type) -> dict[str, str]:
 
     A member is a public name that *cls*'s own body defines, or declares as an instance
     attribute by annotating it alone or as a dataclass field, except those
-    surface_form(cls) already pins: the dataclass fields, named tuple fields and
-    init-only variables its constructor's signature takes, and an Enum's members.
+    surface_form(cls) already pins: the dataclass fields and named tuple fields its
+    constructor's signature takes, and an Enum's members.
     A __slots__ in the body binds a slot in *cls*'s own namespace for each name it
     lists, and @dataclass(slots=True) one for each field no base holds a slot for. Such
     a slot is no name the body defines if the body annotates its name, other than as a
@@ -763,18 +762,6 @@ def _defaulted_fields(cls: type) -> set[str]:
     }
 
 
-def _init_only_variables(cls: type) -> set[str]:
-    """The names of the dataclass init-only variables *cls*'s own body declares: those it annotates, other than as a ClassVar, that its constructor takes but that are no dataclass fields."""
-    if not is_decorated_dataclass(cls):
-        return set()
-    annotated = {
-        name
-        for name, annotation in own_annotations(cls).items()
-        if not _is_class_var(annotation, cls)
-    }
-    return (annotated & _constructor_parameters(cls)) - _dataclass_fields(cls).keys()
-
-
 def _field_slots(cls: type) -> set[str]:
     """The names of *cls*'s dataclass fields that *cls*'s own namespace binds a slot for, as _is_slot recognises one; none if *cls* is no dataclass."""
     return {name for name in _dataclass_fields(cls) if _is_slot(own_namespace(cls).get(name))}
@@ -819,7 +806,7 @@ def _refuse_class_member(label: str, member: object) -> None:
 
 
 def _own_members(cls: type) -> dict[str, object]:
-    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value; a dataclass init-only variable declares a constructor parameter, so it is neither, even with a default, and a dataclass field's slot defines nothing, since the field is declared where a body annotates it."""
+    """Each attribute *cls*'s own body declares, as an _AnnotatedAttribute, then each other name it defines, as its value; a dataclass field's slot defines nothing, since the field is declared where a body annotates it."""
     declared = {
         name: _AnnotatedAttribute(annotation)
         for name, annotation in _declared_attributes(cls).items()
@@ -830,12 +817,7 @@ def _own_members(cls: type) -> dict[str, object]:
         for name, value in own_namespace(cls).items()
         if name not in declared and name not in slots
     }
-    init_only = _init_only_variables(cls)
-    return {
-        name: member
-        for name, member in (declared | defined).items()
-        if name not in init_only
-    }
+    return declared | defined
 
 
 def _declared_attributes(cls: type) -> dict[str, object]:
