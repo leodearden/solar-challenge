@@ -828,6 +828,27 @@ def test_a_function_member_that_wraps_a_callable_descriptor_but_carries_a_signat
     assert member_forms(Meter) == {"half": "(self, rate: int) -> None"}
 
 
+def test_a_public_name_a_class_body_binds_to_a_class_raises_a_type_error_naming_the_member_and_that_class() -> None:
+    class Meter:
+        class Reading:
+            def scaled(self, factor: float) -> float: ...
+
+    class Gauge:
+        Unit = Preset
+
+    with pytest.raises(
+        TypeError, match=r"\.Meter\.Reading is the class \S+\.Meter\.Reading\b"
+    ):
+        member_forms(Meter)
+    with pytest.raises(
+        TypeError,
+        match=r"\.Gauge\.Unit is the class tests\.unit\.surface_forms_helper\._fixtures\.Preset\b",
+    ):
+        member_forms(Gauge)
+    with pytest.raises(TypeError, match=r"\.Meter\.Reading is the class"):
+        named_classes(Meter)
+
+
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)
 def test_a_member_that_is_a_routine_whose_signature_inspect_cannot_read_raises_a_type_error_naming_the_class_the_member_and_its_kind(
     routine: object, kind: str
