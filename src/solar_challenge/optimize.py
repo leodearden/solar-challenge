@@ -513,10 +513,10 @@ def sensitivity_panel(
 
     Raises:
         ValueError: If *base_configs* is empty, *axes* is empty, any axis has
-            empty values, or the baseline run has no feasible config.  Every
-            axis but the floor's also propagates :func:`apply_knob`'s
-            ValueError for an unknown knob name, a non-fleet scenario, or a
-            swept SEG rate that a home's own tariff contradicts.
+            empty values, or the baseline run has no feasible config.  After
+            the baseline run, every axis but the floor's also propagates any
+            ValueError (ConfigurationError included) that :func:`apply_knob`
+            raises.
     """
     # -----------------------------------------------------------------------
     # Input guards
