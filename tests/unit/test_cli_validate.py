@@ -689,6 +689,20 @@ home:
                 id="pv-homes-list",
             ),
             pytest.param(
+                "scenarios:\n"
+                "  - name: one\n"
+                "    period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
+                "    home: {pv: {capacity_kw: 60.0}}\n"
+                "  - name: fleet\n"
+                "    period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
+                "    seg: {rate_pence_per_kwh: 15.0}\n"
+                "    homes:\n"
+                "      - pv: {capacity_kw: 55.0}\n"
+                "      - pv: {capacity_kw: 4.0}\n",
+                "PV capacity 60.0 kW seems high for domestic (2 of 3 homes above 50 kW)",
+                id="pv-scenarios",
+            ),
+            pytest.param(
                 "home:\n  battery: {capacity_kwh: 150.0}\n",
                 "Battery capacity 150.0 kWh seems high for domestic (1 of 1 homes above 100 kWh)",
                 id="battery-home",
