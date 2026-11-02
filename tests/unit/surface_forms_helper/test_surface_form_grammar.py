@@ -296,10 +296,56 @@ def test_an_annotated_is_spelled_with_its_metadata_reprs() -> None:
     assert surface_form(f) == "(power: Annotated[float | None, 'kW']) -> None"
 
 
-def test_an_annotation_no_construct_reads_raises_a_type_error_naming_it_and_its_type() -> None:
-    def f(preset: Wrapper[Preset]) -> None: ...
+@pytest.mark.parametrize(
+    ("annotation", "naming_it_and_its_type"),
+    [
+        pytest.param(
+            Wrapper[Preset],
+            r"Wrapper\[Preset\].*\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.Wrapper\b",
+            id="wrapper",
+        ),
+        pytest.param(
+            InitVar[int], r"dataclasses\.InitVar\[int\].*\bdataclasses\.InitVar\b", id="init-var"
+        ),
+        pytest.param(TypeVar("Rated"), r"~Rated\b.*\btyping\.TypeVar\b", id="type-variable"),
+        pytest.param(ParamSpec("Hook"), r"~Hook\b.*\btyping\.ParamSpec\b", id="param-spec"),
+        pytest.param(
+            TypeVarTuple("Shape"),
+            r"\bShape\b.*\btyping\.TypeVarTuple\b",
+            id="type-variable-tuple",
+        ),
+        pytest.param(
+            NewType("Kwh", float),
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.Kwh\b.*\btyping\.NewType\b",
+            id="new-type",
+        ),
+        pytest.param(
+            Annotated[int, 1],
+            r"typing\.Annotated\[int, 1\].*\btyping\._AnnotatedAlias\b",
+            id="annotated",
+        ),
+        pytest.param(
+            Annotated[float, "kW"],
+            r"typing\.Annotated\[float, 'kW'\].*\btyping\._AnnotatedAlias\b",
+            id="annotated-string-metadata",
+        ),
+        pytest.param(
+            ParamSpec("Hook").args,
+            r"\bHook\.args\b.*\btyping\.ParamSpecArgs\b",
+            id="param-spec-args",
+        ),
+        pytest.param(
+            ParamSpec("Hook").kwargs,
+            r"\bHook\.kwargs\b.*\btyping\.ParamSpecKwargs\b",
+            id="param-spec-kwargs",
+        ),
+    ],
+)
+def test_an_annotation_no_construct_reads_raises_a_type_error_naming_it_and_its_type(
+    annotation: object, naming_it_and_its_type: str
+) -> None:
+    def f(value: annotation) -> None: ...
 
-    naming_it_and_its_type = r"Wrapper\[Preset\].*\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.Wrapper\b"
     with pytest.raises(TypeError, match=naming_it_and_its_type):
         surface_form(f)
     with pytest.raises(TypeError, match=naming_it_and_its_type):
