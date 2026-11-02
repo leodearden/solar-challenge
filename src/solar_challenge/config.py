@@ -477,7 +477,7 @@ class OutputConfig:
     aggregation: str = "minute"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScenarioConfig:
     """Configuration for a simulation scenario.
 
@@ -486,7 +486,7 @@ class ScenarioConfig:
         description: Human-readable description
         location: Geographic location (defaults to Bristol)
         period: Simulation period
-        homes: List of home configurations (for fleet simulation)
+        homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
@@ -498,7 +498,7 @@ class ScenarioConfig:
     period: SimulationPeriod
     description: str = ""
     location: Optional[Location] = None
-    homes: list[HomeConfig] = field(default_factory=list)
+    homes: tuple[HomeConfig, ...] = ()
     home: Optional[HomeConfig] = None
     output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
@@ -507,6 +507,7 @@ class ScenarioConfig:
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
+        object.__setattr__(self, "homes", tuple(self.homes))
         if not self.homes and self.home is None:
             raise ConfigurationError(
                 f"Scenario '{self.name}' must define either 'home' or 'homes'"
@@ -2148,7 +2149,7 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
         description=data.get("description", ""),
         location=location,
         period=_parse_period(data["period"], block_path=_child_path(block_path, "period")),
-        homes=homes,
+        homes=tuple(homes),
         home=home,
         output=_parse_output_config(
             data.get("output"), block_path=_child_path(block_path, "output")

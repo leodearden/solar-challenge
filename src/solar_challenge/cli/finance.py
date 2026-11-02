@@ -250,7 +250,7 @@ def run(
     scenario_config = ScenarioConfig(
         name=raw.get("name", str(scenario)),
         period=SimulationPeriod(start_date=start, end_date=end),
-        homes=list(fleet_config.homes),
+        homes=tuple(fleet_config.homes),
         location=loc,
         finance=finance,
         # Only --cost-recovery passes the rate on:

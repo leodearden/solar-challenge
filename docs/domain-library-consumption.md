@@ -143,11 +143,11 @@ class it pins, whether it is a dataclass and which of the dataclass parameters
 instances compare equal field by field, support `<`, `<=`, `>` and `>=`, are
 hashable, and refuse a field assignment with `dataclasses.FrozenInstanceError`.
 All 34 pinned dataclasses set `eq`, and none sets `order` or `unsafe_hash`. All
-are frozen except `SummaryStatistics`, `ScenarioConfig`, `FleetConfig`,
-`FleetResults`, `EnergyFlowResult` and `CommunityResults`, and
-`DispatchStrategyConfig`, `OutputConfig` and `SimulationPeriod` in
-`solar_challenge.config`. Each sets the same parameters as on the 0.5.0 tag,
-except `SimulationResults`, which task 436 froze (below). Consumers need no
+are frozen except `SummaryStatistics`, `FleetConfig`, `FleetResults`,
+`EnergyFlowResult` and `CommunityResults`, and `DispatchStrategyConfig`,
+`OutputConfig` and `SimulationPeriod` in `solar_challenge.config`. Each sets the
+same parameters as on the 0.5.0 tag, except `SimulationResults` and
+`ScenarioConfig`, which tasks 436 and 955 froze (below). Consumers need no
 change when they re-pin.
 
 **Unreleased on main** (task 426): `Battery` declares `config`,
@@ -942,6 +942,16 @@ the tag already does for a run past that day. `generate_load_profile` raises
 `ValueError` for a household model whose days have no energy: the Elexon
 fallback the task 906 line describes covers only a model that raises or gives a
 day of another length. Consumers re-baseline demand figures when they re-pin.
+
+**Unreleased on main** (task 955): `ScenarioConfig` is frozen, and it holds
+`homes` as a tuple, defaulting to `()`: a list of homes is converted when the
+scenario is built, so `ScenarioConfig(homes=[h1, h2], ...).homes` is
+`(h1, h2)`. Assigning to one of its fields, such as `scenario.homes = homes`,
+raises `dataclasses.FrozenInstanceError`; the 0.5.0 tag accepts the
+assignment. `hash(scenario)` still raises `TypeError`. Consumers that assign to
+a scenario field build the changed scenario with
+`dataclasses.replace(scenario, homes=homes)` instead, and those that compare
+`scenario.homes` with a list compare it with a tuple, when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

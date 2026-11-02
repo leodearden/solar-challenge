@@ -253,7 +253,7 @@ def configs(
             start_date=_start_str,
             end_date=_end_str,
         ),
-        homes=list(fleet_config.homes),
+        homes=tuple(fleet_config.homes),
         location=loc,
         finance=finance,
     )

@@ -197,9 +197,9 @@ class _DefinedHomes:
     sweep_points: int = 1
 
 
-def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
+def _scenario_homes(scenario: ScenarioConfig) -> tuple[HomeConfig, ...]:
     """The homes a scenario simulates: its single home, or else its fleet."""
-    return [scenario.home] if scenario.home is not None else scenario.homes
+    return (scenario.home,) if scenario.home is not None else scenario.homes
 
 
 def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:

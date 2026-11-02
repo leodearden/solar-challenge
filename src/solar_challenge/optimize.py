@@ -265,7 +265,7 @@ def iter_configs(
 
     for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
         point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
-        new_homes = [_apply_install(h, point) for h in base.homes]
+        new_homes = tuple(_apply_install(h, point) for h in base.homes)
         yield point, replace(base, homes=new_homes)
 
 
@@ -442,7 +442,7 @@ def _repriced_at_seg_rate(
     tariff = SEGTariff(name="", rate_pence_per_kwh=rate_pence_per_kwh)
     return replace(
         scenario,
-        homes=[replace(home, seg_tariff=tariff) for home in scenario.homes],
+        homes=tuple(replace(home, seg_tariff=tariff) for home in scenario.homes),
         seg_tariff_pence_per_kwh=rate_pence_per_kwh,
     )
 
@@ -484,10 +484,10 @@ def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioCon
     if name in _DEGRADATION_KNOBS:
         return replace(
             scenario,
-            homes=[
+            homes=tuple(
                 replace(h, pv_config=replace(h.pv_config, degradation_rate_per_year=value))
                 for h in scenario.homes
-            ],
+            ),
         )
     supported = sorted(_FINANCE_KNOBS) + list(_SEG_KNOBS) + list(_DEGRADATION_KNOBS)
     raise ValueError(f"Unknown sensitivity knob '{name}'. Supported knobs: {supported}")

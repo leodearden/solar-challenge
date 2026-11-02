@@ -159,7 +159,7 @@ def make_physics_column_scenario() -> ScenarioConfig:
         period=SimulationPeriod(
             start_date=first_day.date().isoformat(), end_date=last_day.date().isoformat()
         ),
-        homes=[home] * 2,
+        homes=(home,) * 2,
     )
 
 
