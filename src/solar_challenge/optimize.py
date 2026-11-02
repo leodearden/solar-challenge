@@ -514,9 +514,9 @@ def sensitivity_panel(
     Raises:
         ValueError: If *base_configs* is empty, *axes* is empty, any axis has
             empty values, or the baseline run has no feasible config.  After
-            the baseline run, every axis but the floor's also propagates the
+            the baseline run, every axis but the floor's also propagates any
             ValueError (ConfigurationError included) that :func:`apply_knob`
-            raises for its knob and value.
+            raises.
     """
     # -----------------------------------------------------------------------
     # Input guards
