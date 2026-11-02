@@ -18,7 +18,6 @@ from solar_challenge.battery import CAPACITY_SETTING_KWH, BatteryConfig, has_bat
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     FinanceConfig,
-    _resolve_homes,
     bill_distribution,
     project_economics,
     project_multi_year,
@@ -881,8 +880,7 @@ def _age0_baseline_outlay(
     Returns:
         Representative home's total annual outlay (£).
     """
-    # Reuse finance._resolve_homes so homes-resolution semantics stay in one place
-    homes: List[HomeConfig] = _resolve_homes(scenario)
+    homes = (scenario.home,) if scenario.home is not None else scenario.homes
 
     # Age all PV to system_age_years=0.0 (battery left unchanged for age-0 baseline)
     aged_homes = [
