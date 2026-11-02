@@ -184,16 +184,13 @@ def _minutes_per_row(window: SimulationWindow) -> int:
     return window.cadence // ONE_MINUTE
 
 
-def _on_wall_clock(
-    minute_profile: npt.NDArray[np.float64], day: LocalDay, minutes_per_row: int
-) -> npt.NDArray[np.float64]:
+def _on_wall_clock(minute_profile: npt.NDArray[np.float64], day: LocalDay, minutes_per_row: int) -> pd.Series:
     """minute_profile, one value per minute of the wall clock from 00:00, on day's rows: each row the mean of the minutes it spans.
 
     A day the clocks go forward skips the hour they skip, and a day they go back plays the hour they repeat twice.
     """
     row_means = minute_profile.reshape(-1, minutes_per_row).mean(axis=1)
-    placed: npt.NDArray[np.float64] = row_means[day.minute_of_day() // minutes_per_row]
-    return placed
+    return pd.Series(row_means[day.minute_of_day() // minutes_per_row], index=day.rows)
 
 
 def richardsonpy_household(config: LoadConfig, days: Sequence[datetime.date]) -> DaySimulator:
@@ -347,44 +344,44 @@ def _household_day_watts(
     return day_watts
 
 
-def _elexon_household_kw(
-    annual_kwh: float, window: SimulationWindow, days: Sequence[LocalDay], minutes_per_row: int
-) -> pd.Series:
-    """The deterministic household on window's rows: the Elexon shape on each of days by wall clock, scaled to that day's seasonal energy."""
+def _elexon_household_kw(annual_kwh: float, window: SimulationWindow) -> pd.Series:
+    """The deterministic household on window's rows: the Elexon shape on each of its local days by wall clock, scaled to that day's seasonal energy.
+
+    Raises:
+        ValueError: If window's cadence is not a whole number of minutes dividing one hour, naming it.
+    """
     minute_shape = _elexon_minute_shape()
-    day_kw = [
+    minutes_per_row = _minutes_per_row(window)
+    return pd.concat(
         scale_profile_to_energy(
-            pd.Series(_on_wall_clock(minute_shape, day, minutes_per_row), index=day.rows),
-            _seasonal_day_energy_kwh(annual_kwh, day.date),
-        ).to_numpy()
-        for day in days
-    ]
-    return pd.Series(np.concatenate(day_kw), index=window.rows(), name="demand_kw")
+            _on_wall_clock(minute_shape, day, minutes_per_row), _seasonal_day_energy_kwh(annual_kwh, day.date)
+        )
+        for day in window.local_days()
+    ).rename("demand_kw")
 
 
 def _simulated_household_kw(
-    config: LoadConfig,
-    window: SimulationWindow,
-    days: Sequence[LocalDay],
-    minutes_per_row: int,
-    household_model: HouseholdModel,
+    config: LoadConfig, window: SimulationWindow, household_model: HouseholdModel
 ) -> Optional[pd.Series]:
     """The stochastic household on window's rows: household_model's days on the wall clock, the window scaled once to its days' seasonal energy.
 
     None, with a warning naming the failure, when the household model fails: it raises, as
     richardsonpy's imports, data files or day simulation can, or gives a day that is not
-    1,440 minutes long. Placing and scaling the days are the project's own steps, so their
-    errors propagate.
+    1,440 minutes long. Reading the window, and placing and scaling the days, are the
+    project's own steps, so their errors propagate.
 
     Raises:
-        ValueError: If the simulated days have no energy, which scale_profile_to_energy refuses to scale.
+        ValueError: If window's cadence is not a whole number of minutes dividing one hour,
+            naming it, before the household is built; or if the simulated days have no
+            energy, which scale_profile_to_energy refuses to scale.
     """
+    minutes_per_row = _minutes_per_row(window)
+    days = list(window.local_days())
     try:
         day_watts = _household_day_watts(household_model, config, [day.date for day in days])
     except Exception as exc:  # noqa: BLE001
         # Log a warning so the fallback is observable; a silent fallback would
-        # hide API-mismatch regressions in production (only unit tests, via the
-        # call-count assertions, would catch the silent degradation).
+        # hide API-mismatch regressions in production.
         logger.warning(
             "richardsonpy stochastic generation failed; falling back to Elexon "
             "deterministic profile: %s: %s",
@@ -393,16 +390,13 @@ def _simulated_household_kw(
         )
         return None
 
-    placed_kw = np.concatenate(
-        [
-            _on_wall_clock(np.asarray(watts, dtype=np.float64) / 1000.0, day, minutes_per_row)
-            for watts, day in zip(day_watts, days, strict=True)
-        ]
+    placed_kw = pd.concat(
+        _on_wall_clock(np.asarray(watts, dtype=np.float64) / 1000.0, day, minutes_per_row)
+        for watts, day in zip(day_watts, days, strict=True)
     )
     annual_kwh = config.get_annual_consumption()
     return scale_profile_to_energy(
-        pd.Series(placed_kw, index=window.rows(), name="demand_kw"),
-        sum(_seasonal_day_energy_kwh(annual_kwh, day.date) for day in days),
+        placed_kw.rename("demand_kw"), sum(_seasonal_day_energy_kwh(annual_kwh, day.date) for day in days)
     )
 
 
@@ -457,13 +451,11 @@ def generate_load_profile(
             "EV charging is laid out a minute to a row, so a profile with ev_config needs one-minute rows: "
             f"got cadence={window.cadence!r}, {window.step_minutes:g} minutes"
         )
-    minutes_per_row = _minutes_per_row(window)
-    days = list(window.local_days())
     household_kw = None
     if config.use_stochastic:
-        household_kw = _simulated_household_kw(config, window, days, minutes_per_row, household_model)
+        household_kw = _simulated_household_kw(config, window, household_model)
     if household_kw is None:
-        household_kw = _elexon_household_kw(config.get_annual_consumption(), window, days, minutes_per_row)
+        household_kw = _elexon_household_kw(config.get_annual_consumption(), window)
     if ev_config is None:
         return household_kw
 
