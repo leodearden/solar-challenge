@@ -186,7 +186,12 @@ conventions:
       such class, such as HomeConfig, SimulationResults, SimulationPeriod and GridChargeConfig:
       their constructors and public members. For each class the contract covers that is a
       dataclass, the contract also covers which of the dataclass parameters eq, order,
-      unsafe_hash and frozen it sets. Other names importable only from submodules stay
+      unsafe_hash and frozen it sets. Each exported constant is in the contract by its
+      structure, not by its type name: a mapping by its keys, in order, and the type of each
+      value; a list or tuple by its length and the type of each item (task 915). Its numbers
+      are data, so a changed preset rate is a change to what a public name returns, not a
+      surface change. An Enum is pinned by every member name, aliases included. Other names
+      importable only from submodules stay
       outside it; this refines the freeze policy in docs/prds/domain-library-extraction.md §3.1.
       Adding, removing, renaming, or changing the signature of a public symbol or member is a
       BREAKING CHANGE that requires a deliberate version/tag bump — never a silent edit. Each class
@@ -221,11 +226,14 @@ conventions:
       __dataclass_params__, which the kind is read from, does not record them. They too change
       what a consumer can do (match_args=False breaks a positional class pattern, and slots=True
       removes an instance's __dict__), and task 668 decides whether the contract covers them.
+      A constant's structure is in the contract too (task 915), because the platform indexes
+      the exported constants, as in SEG_PRESETS['Octopus'] or ELEXON_PROFILE_CLASS_1[47]: a
+      dropped key or item breaks it while the type name stays dict or list.
       The surface-lock tests are intentional gates, not redundant ceremony.
       tests/unit/test_public_api_surface.py holds all of them but one: the frozen-__all__ freeze
       test; its three tables, FROZEN_SURFACE (each
-      name's signature, a dataclass's after its kind), FROZEN_CLOSURE (the signature, a
-      dataclass's after its kind, of each class outside __all__ that the exported surface names;
+      name's signature, a dataclass's after its kind, a constant's structure),
+      FROZEN_CLOSURE (the signature, a dataclass's after its kind, of each class outside __all__ that the exported surface names;
       the set of classes is derived from the exported forms, so a class newly named fails until
       it is pinned or exported) and FROZEN_MEMBERS (the public members of every class those two
       tables pin); the guard beside FROZEN_MEMBERS that fails on a public attribute set on self
