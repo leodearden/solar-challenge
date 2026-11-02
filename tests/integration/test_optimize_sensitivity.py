@@ -15,6 +15,7 @@ from typing import Optional
 import pytest
 
 from solar_challenge.config import ScenarioConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import SimulationResults
@@ -593,46 +594,47 @@ class TestRetainedFloorAxis:
 
 
 # ---------------------------------------------------------------------------
-# TestSegAxisOnSegPricedHomes — the 'seg' knob on homes that carry the rate
+# TestSegAxis — the 'seg' knob sets the scenario's SEG rate
 # ---------------------------------------------------------------------------
 
 
-class TestSegAxisOnSegPricedHomes:
-    """The 'seg' knob on the fleet `optimize configs` builds, whose homes already carry the seg: rate."""
-
-    _BASE_RATE = 4.1
-    _SWEPT_RATE = 6.0
+class TestSegAxis:
+    """The 'seg' knob sets the scenario's rate, at which each home without a tariff of its own exports."""
 
     @pytest.mark.parametrize("knob", ["seg", "seg_tariff_pence_per_kwh"])
-    def test_sweep_completes_and_simulates_every_home_at_the_swept_rate(
-        self, knob: str
-    ) -> None:
-        """Sweeping the rate must re-price the homes' own tariffs, so the swept rate reaches
-        the simulated export revenue instead of tripping the per-home vs scenario SEG
-        consistency check.
+    def test_every_fleet_a_sweep_simulates_exports_at_that_sweeps_rate(self, knob: str) -> None:
+        """On homes with no tariff of their own, the baseline sweep's fleets, its age-0 outlay fleet
+        included, export at the scenario's 4.1 p/kWh, and each swept value's fleets at that value.
         """
-        scenario = _make_seg_priced_scenario(self._BASE_RATE, finance=_interior_finance())
-        assert scenario.seg_tariff_pence_per_kwh == self._BASE_RATE
-        assert all(
-            home.seg_tariff == SEGTariff(name="", rate_pence_per_kwh=self._BASE_RATE)
-            for home in scenario.homes
+        scenario = make_scenario(
+            n_homes=_N_HOMES, seg_tariff_pence_per_kwh=4.1, finance=_interior_finance()
         )
         base_configs = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
         )
         simulate = _SegPricingSimulate()
 
-        panel = sensitivity_panel(
-            base_configs,
-            axes={knob: [self._BASE_RATE, self._SWEPT_RATE]},
-            simulate=simulate,
+        panel = sensitivity_panel(base_configs, axes={knob: [4.1, 6.0]}, simulate=simulate)
+
+        assert panel.axes[0].values == (4.1, 6.0)
+        assert set(simulate.rates_per_call) == {
+            frozenset({4.1}),
+            frozenset({6.0}),
+        }, f"fleets were simulated at SEG rates {set(simulate.rates_per_call)}"
+
+    def test_sweeping_another_rate_than_the_homes_carry_is_refused(self) -> None:
+        """On the fleet `optimize configs` builds, whose homes carry the seg: rate of 4.1 p/kWh,
+        sweeping 6.0 p/kWh is refused, naming the first home and both rates, not overwritten.
+        """
+        base_configs = enumerate_configs(
+            _make_seg_priced_scenario(4.1, finance=_interior_finance()),
+            pv_kwp=[4.0],
+            battery_kwh=[0.0],
+            inverter_kw=[3.6],
         )
 
-        assert panel.axes[0].values == (self._BASE_RATE, self._SWEPT_RATE)
-        assert set(simulate.rates_per_call) == {
-            frozenset({self._BASE_RATE}),
-            frozenset({self._SWEPT_RATE}),
-        }, f"fleets were simulated at SEG rates {set(simulate.rates_per_call)}"
+        with pytest.raises(ConfigurationError, match=r"homes\[0\].*4\.1.*6\.0"):
+            sensitivity_panel(base_configs, axes={"seg": [6.0]}, simulate=_SegPricingSimulate())
 
 
 # ---------------------------------------------------------------------------
