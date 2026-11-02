@@ -253,6 +253,16 @@ class MixedIntercepting(GetattributeMixin, type):
     """A metaclass whose MRO holds GetattributeMixin, and then type."""
 
 
+class TypeFirst(type, GetattributeMixin):
+    """A metaclass whose MRO holds type, and then GetattributeMixin."""
+
+
+class TypeGetattributeHolding(type):
+    """A metaclass whose body binds __getattribute__ to the one type holds as its own."""
+
+    __getattribute__ = type.__getattribute__
+
+
 class OverPassingThrough(Initialised, metaclass=PassingThrough):
     """An Initialised of PassingThrough."""
 
@@ -263,6 +273,14 @@ class OverInterceptingSubclass(Initialised, metaclass=InterceptingSubclass):
 
 class OverMixedIntercepting(Initialised, metaclass=MixedIntercepting):
     """An Initialised of MixedIntercepting."""
+
+
+class OverTypeFirst(Initialised, metaclass=TypeFirst):
+    """An Initialised of TypeFirst."""
+
+
+class OverTypeGetattribute(Initialised, metaclass=TypeGetattributeHolding):
+    """An Initialised of TypeGetattributeHolding."""
 
 
 class CallingIntercepting(metaclass_whose_getattribute_gives_dict(lambda cls: {})):
@@ -488,6 +506,19 @@ def test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the
 ) -> None:
     with pytest.raises(TypeError, match=dict_intercepting_refusal(name, metaclass, holder)):
         surface_form(cls)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        pytest.param(OverTypeFirst, id="getattribute-held-after-type"),
+        pytest.param(OverTypeGetattribute, id="body-binding-types-own-getattribute"),
+    ],
+)
+def test_a_class_whose_metaclass_mro_first_holds_types_own_getattribute_is_spelled_by_its_constructor(
+    cls: type,
+) -> None:
+    assert surface_form(cls) == "(rate: int) -> None"
 
 
 @pytest.mark.parametrize(
