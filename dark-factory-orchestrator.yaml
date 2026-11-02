@@ -2,6 +2,9 @@
 # Overrides only what is project-specific; package defaults live in dark-factory/orchestrator/defaults.yaml.
 project_root: &project_root "/home/leo/src/solar-challenge"
 
+# Leo 2026-11-02 (portfolio review Q9): arrival order instead of the package default 'unordered'; the platform's recorded worst verify wait was 50.6 h against 14 h replayed under arrival order.
+verify_admission_order: arrival
+
 # Cost ceiling: effectively disabled; per-account Max caps govern spend.
 orch_daily_cost_ceiling_usd: 10000.0
 
