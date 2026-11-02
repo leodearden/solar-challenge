@@ -4,6 +4,7 @@
 Wrapper is defined at module level, where its qualified name carries no '<locals>'.
 """
 
+import collections
 import collections.abc
 import datetime
 import enum
@@ -407,10 +408,49 @@ def test_an_enum_form_is_its_members_in_definition_order() -> None:
     assert surface_form(Period) == "PEAK='peak', OFF_PEAK='off_peak'"
 
 
-def test_a_constant_form_is_its_type_qualified_name() -> None:
-    assert surface_form({"a": 1}) == "dict"
-    assert surface_form((1, 2)) == "tuple"
+def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qualified_name() -> None:
     assert surface_form(Preset(rate=0.15)) == "Preset"
+    assert surface_form("kWh") == "str"
+    assert surface_form(frozenset({1})) == "frozenset"
+
+
+def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration_order_each_key_by_its_repr_and_each_value_by_its_form() -> None:
+    assert (
+        surface_form({"Octopus": Preset(rate=4.1), "OVO": Preset(rate=4.0), 3: 0.5})
+        == "dict {'Octopus': Preset, 'OVO': Preset, 3: float}"
+    )
+    assert surface_form(types.MappingProxyType({"peak": 0.3})) == "mappingproxy {'peak': float}"
+    assert surface_form(collections.OrderedDict(b=1, a="x")) == "OrderedDict {'b': int, 'a': str}"
+    assert surface_form({}) == "dict {}"
+
+
+def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in_order() -> None:
+    assert surface_form([1.0, "kWh", Preset(rate=0.1)]) == "list [float, str, Preset]"
+    assert surface_form((Outer.Inner(),)) == "tuple [Outer.Inner]"
+    assert surface_form(()) == "tuple []"
+
+
+def test_a_run_of_equal_item_forms_in_a_list_or_tuple_is_spelled_once_with_its_count() -> None:
+    assert surface_form([0.012] * 48) == "list [float × 48]"
+    assert surface_form((1, 2, "a", 3)) == "tuple [int × 2, str, int]"
+
+
+def test_a_value_a_constant_holds_is_spelled_by_the_rules_of_a_constant() -> None:
+    assert (
+        surface_form({"bands": [(0.1, 0.9)], "rates": {"peak": 0.3}})
+        == "dict {'bands': list [tuple [float × 2]], 'rates': dict {'peak': float}}"
+    )
+
+
+def test_a_class_or_routine_a_constant_holds_raises_a_type_error_naming_it() -> None:
+    with pytest.raises(
+        TypeError, match=r"\btests\.unit\.surface_forms_helper\._fixtures\.Preset\b"
+    ):
+        surface_form({"preset": Preset})
+    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b"):
+        surface_form([len])
+    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b"):
+        named_classes((len,))
 
 
 @pytest.mark.parametrize(

@@ -156,13 +156,21 @@ def test_an_abstract_member_form_begins_with_abstract() -> None:
     }
 
 
-def test_a_class_constant_member_is_spelled_by_its_type() -> None:
+def test_a_class_constant_member_is_spelled_as_surface_form_spells_a_constant() -> None:
     class Meter:
         UNITS = "kWh"
         SCALE = 1.5
         RATE: ClassVar[float] = 0.15
+        LIMITS = (0.1, 0.9)
+        RATES: ClassVar[dict[str, float]] = {"peak": 0.3}
 
-    assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float", "RATE": "float"}
+    assert member_forms(Meter) == {
+        "UNITS": "str",
+        "SCALE": "float",
+        "RATE": "float",
+        "LIMITS": "tuple [float × 2]",
+        "RATES": "dict {'peak': float}",
+    }
 
 
 def test_a_class_constant_the_body_also_annotates_is_spelled_by_its_type_not_as_an_attribute() -> None:
