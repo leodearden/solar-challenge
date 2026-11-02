@@ -277,29 +277,3 @@ class TestProjectHonoursScenarioLevelSeg:
             f"baseline: rate={sol_base.own_use_rate_pence_per_kwh:.4f}p, "
             f"surplus={sol_base.net_surplus_per_home_per_year_gbp:.4f})"
         )
-
-    def test_inconsistent_seg_inputs_raise_through_projection(self) -> None:
-        """project_multi_year raises ValueError when per-home seg_tariff != scenario rate."""
-        homes_inconsistent = [
-            dataclasses.replace(
-                make_home_config(),
-                seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.0),
-            )
-            for _ in range(self._N_HOMES)
-        ]
-        scenario_inconsistent = ScenarioConfig(
-            name="test-inconsistent",
-            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
-            description="Inconsistent SEG",
-            homes=homes_inconsistent,
-            seg_tariff_pence_per_kwh=6.0,  # 6.0 != 4.0 → should raise
-        )
-        finance = FinanceConfig(
-            standing_charge_pence_per_day=28.0,
-            asset_life_years=25,
-            loan_term_years=15,
-        )
-        sim = _seg_aware_fleet_results_factory()
-
-        with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
-            project_multi_year(scenario_inconsistent, finance, simulate=sim)
