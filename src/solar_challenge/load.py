@@ -383,8 +383,7 @@ def _simulated_household_kw(
         # Log a warning so the fallback is observable; a silent fallback would
         # hide API-mismatch regressions in production.
         logger.warning(
-            "richardsonpy stochastic generation failed; falling back to Elexon "
-            "deterministic profile: %s: %s",
+            "the household model failed; falling back to Elexon deterministic profile: %s: %s",
             type(exc).__name__,
             exc,
         )

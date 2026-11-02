@@ -478,8 +478,8 @@ class TestRichardsonpyIntegration:
         assert profile.index.tz is not None
 
 
-def _raise_simulated_richardsonpy_failure(*_: object) -> NoReturn:
-    raise RuntimeError("Simulated richardsonpy internal failure")
+def _raise_simulated_household_failure(*_: object) -> NoReturn:
+    raise RuntimeError("Simulated household failure")
 
 
 class _RecordingHousehold:
@@ -655,8 +655,8 @@ class TestWindowedStochasticGeneration:
     @pytest.mark.parametrize(
         "household_model",
         [
-            pytest.param(_raise_simulated_richardsonpy_failure, id="household"),
-            pytest.param(_household_of_days(_raise_simulated_richardsonpy_failure), id="day"),
+            pytest.param(_raise_simulated_household_failure, id="household"),
+            pytest.param(_household_of_days(_raise_simulated_household_failure), id="day"),
         ],
     )
     def test_a_household_model_that_raises_gives_the_elexon_profile_with_a_warning(
@@ -677,8 +677,8 @@ class TestWindowedStochasticGeneration:
             for record in caplog.records
             if record.name == "solar_challenge.load"
         ] == [
-            "richardsonpy stochastic generation failed; falling back to Elexon "
-            "deterministic profile: RuntimeError: Simulated richardsonpy internal failure"
+            "the household model failed; falling back to Elexon deterministic profile: "
+            "RuntimeError: Simulated household failure"
         ]
 
     def test_a_window_whose_simulated_days_have_no_energy_raises_instead_of_falling_back(
@@ -745,9 +745,8 @@ class TestHouseholdModelSeam:
             for record in caplog.records
             if record.name == "solar_challenge.load"
         ] == [
-            "richardsonpy stochastic generation failed; falling back to Elexon "
-            "deterministic profile: ValueError: the household model simulated 1439 "
-            "minutes for 2024-06-21, not 1440"
+            "the household model failed; falling back to Elexon deterministic profile: "
+            "ValueError: the household model simulated 1439 minutes for 2024-06-21, not 1440"
         ]
 
     def test_a_richardsonpy_household_refuses_a_date_outside_its_window(self) -> None:
