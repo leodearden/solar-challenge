@@ -489,8 +489,8 @@ class ScenarioConfig:
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
-        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional);
-            a home whose own seg_tariff sets another rate is refused
+        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
+            as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
         tariff_config: Refused when set: no simulation reads it, so a home's
             tariff is its HomeConfig.tariff_config
         finance: Financial appraisal parameters (None for no financial analysis)
@@ -518,6 +518,7 @@ class ScenarioConfig:
             raise ConfigurationError(
                 f"Scenario '{self.name}' cannot define both 'home' and 'homes'"
             )
+        self._read_the_seg_rate()
         self._refuse_a_home_seg_rate_other_than_the_scenarios()
         if self.tariff_config is not None:
             raise ConfigurationError(
@@ -536,9 +537,9 @@ class ScenarioConfig:
 
     def simulated_homes(self) -> tuple[HomeConfig, ...]:
         """The homes this scenario simulates, in order; one with no SEG tariff of its own exports at the scenario's rate."""
-        if self.seg_tariff_pence_per_kwh is None:
+        tariff = self._seg_tariff()
+        if tariff is None:
             return self._stored_homes()
-        tariff = SEGTariff(name="", rate_pence_per_kwh=self.seg_tariff_pence_per_kwh)
         return tuple(
             home if home.seg_tariff is not None else replace(home, seg_tariff=tariff)
             for home in self._stored_homes()
@@ -553,6 +554,24 @@ class ScenarioConfig:
     def _stored_homes(self) -> tuple[HomeConfig, ...]:
         """The homes as stored: (home,) in the single-home form, else homes, in order."""
         return (self.home,) if self.home is not None else self.homes
+
+    def _seg_tariff(self) -> Optional[SEGTariff]:
+        """The tariff a home with none of its own exports at: the scenario's rate, unnamed; None when the scenario sets no rate."""
+        if self.seg_tariff_pence_per_kwh is None:
+            return None
+        return SEGTariff(name="", rate_pence_per_kwh=self.seg_tariff_pence_per_kwh)
+
+    def _read_the_seg_rate(self) -> None:
+        """Hold seg_tariff_pence_per_kwh as the float SEGTariff reads, raising ConfigurationError, naming the scenario and the rate, for one SEGTariff refuses."""
+        try:
+            tariff = self._seg_tariff()
+        except ConfigurationError as exc:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' sets seg_tariff_pence_per_kwh="
+                f"{self.seg_tariff_pence_per_kwh!r}, which SEGTariff refuses: {exc}"
+            ) from exc
+        if tariff is not None:
+            object.__setattr__(self, "seg_tariff_pence_per_kwh", tariff.rate_pence_per_kwh)
 
     def _refuse_a_home_seg_rate_other_than_the_scenarios(self) -> None:
         """Raise ConfigurationError naming the first home, by its path 'home' or 'homes[i]', whose own SEG rate is not math.isclose to the scenario's."""

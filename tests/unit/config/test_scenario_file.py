@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+import math
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -177,6 +178,12 @@ class TestScenarioConfig:
         with pytest.raises(dataclasses.FrozenInstanceError):
             scenario.homes = ()  # type: ignore[misc]
 
+    def test_holds_its_seg_rate_as_the_float_segtariff_reads(self) -> None:
+        scenario = _scenario(home=_home(), seg_tariff_pence_per_kwh=5)
+
+        assert type(scenario.seg_tariff_pence_per_kwh) is float
+        assert scenario.seg_tariff_pence_per_kwh == 5.0
+
     def test_requires_home_or_homes(self) -> None:
         """Test that scenario requires home or homes."""
         with pytest.raises(ConfigurationError, match="must define either"):
@@ -266,7 +273,30 @@ class TestSimulatedHomes:
 
 
 class TestScenarioConfigRefusals:
-    """Construction is the one point that refuses a home's own SEG rate other than the scenario's, and a scenario tariff_config."""
+    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a scenario tariff_config."""
+
+    @pytest.mark.parametrize(
+        ("rate", "requirement"),
+        [
+            pytest.param(-1.0, "at least 0", id="negative"),
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="infinite"),
+            pytest.param(True, "a finite number", id="boolean"),
+        ],
+    )
+    def test_a_seg_rate_segtariff_refuses_is_refused_naming_the_scenario_and_the_rate(
+        self, rate: float, requirement: str
+    ) -> None:
+        with pytest.raises(
+            ConfigurationError, match=_naming("'x'", f"seg_tariff_pence_per_kwh={rate!r}", requirement)
+        ):
+            _scenario(homes=[_home()], seg_tariff_pence_per_kwh=rate)
+
+    def test_the_seg_rate_is_refused_before_a_home_rate_is_compared_with_it(self) -> None:
+        home = dataclasses.replace(_home(), seg_tariff=SEGTariff("", 5.0))
+
+        with pytest.raises(ConfigurationError, match=_naming("seg_tariff_pence_per_kwh=nan", "a finite number")):
+            _scenario(homes=[home], seg_tariff_pence_per_kwh=math.nan)
 
     def test_a_fleet_home_at_another_seg_rate_is_refused_by_its_path_and_name(self) -> None:
         north = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("", 3.0))

@@ -88,6 +88,11 @@ class TestApplyKnob:
         assert new.seg_tariff_pence_per_kwh == pytest.approx(octopus.rate_pence_per_kwh)
         assert new.homes == scenario.homes
 
+    def test_seg_knob_refuses_a_rate_segtariff_refuses_as_it_sets_it(self) -> None:
+        """A swept rate SEGTariff refuses is refused by the knob itself, naming the rate, not later by a sweep."""
+        with pytest.raises(ConfigurationError, match=r"seg_tariff_pence_per_kwh=-1\.0.*at least 0"):
+            apply_knob(_fleet_scenario(), "seg", -1.0)
+
     @pytest.mark.parametrize("name", ["degradation", "degradation_rate_per_year"])
     def test_degradation_knob_sets_every_homes_pv_degradation(self, name: str) -> None:
         """Either degradation name sets degradation_rate_per_year on every home's PV."""
