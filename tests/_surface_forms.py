@@ -83,9 +83,10 @@ def surface_form(obj: object) -> str:
     once with its count, as in list [float × 48]. A class or routine held in a constant
     raises TypeError naming it, and a key whose type is not exactly str, int, float,
     bool or NoneType, whose reprs alone are the literals that write them on every
-    admitted minor, raises TypeError naming its type. Any other class's or routine's is
-    its signature, a class's being its constructor's without self and a partial's the
-    one it leaves of the callable it wraps.
+    admitted minor, raises TypeError naming its type, as does a list, tuple or mapping
+    held inside itself. Any other class's or routine's is its signature, a class's
+    being its constructor's without self and a partial's the one it leaves of the
+    callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -648,21 +649,33 @@ class _Items(_Constant):
         return self.kind.classes().union(*(item.classes() for item in self.items))
 
 
-def _constant(value: object) -> _Constant:
-    """*value* read as a constant: a mapping by its entries, each key as _spelled_key spells it, a list or tuple by its items, anything else by its type, an instance of a list or tuple subclass, such as a NamedTuple's, included; TypeError naming it if it is a class or routine, which no rule of a constant's form spells."""
+def _constant(value: object, holder_ids: frozenset[int] = frozenset()) -> _Constant:
+    """*value* read as a constant, held in the containers whose ids *holder_ids* gives: a mapping by its entries, each key as _spelled_key spells it, a list or tuple by its items, anything else by its type, an instance of a list or tuple subclass, such as a NamedTuple's, included.
+
+    A class or routine raises TypeError naming it, as no rule of a constant's form spells
+    one, and a value among its own holders raises TypeError naming its type, as the form
+    of a container held inside itself would never end.
+    """
     if _is_class_or_routine(value):
         raise TypeError(
             f"{label_of(value)} is held in a constant, and no rule of a constant's form "
             "spells a class or routine: hold no class or routine in a public constant, or "
             "make the constant private"
         )
+    if id(value) in holder_ids:
+        raise TypeError(
+            f"a {label_of(type(value))} held in a constant holds itself, and a constant's "
+            "form, which spells each value it holds, would never end: hold no container "
+            "inside itself in a public constant, or make the constant private"
+        )
+    inside = holder_ids | {id(value)}
     if isinstance(value, Mapping):
         return _Entries(
             _Typed(type(value)),
-            tuple((_spelled_key(key), _constant(item)) for key, item in value.items()),
+            tuple((_spelled_key(key), _constant(item, inside)) for key, item in value.items()),
         )
     if type(value) is list or type(value) is tuple:
-        return _Items(_Typed(type(value)), tuple(_constant(item) for item in value))
+        return _Items(_Typed(type(value)), tuple(_constant(item, inside) for item in value))
     return _Typed(type(value))
 
 

@@ -489,6 +489,20 @@ def test_a_value_a_constant_holds_is_spelled_by_the_rules_of_a_constant() -> Non
     )
 
 
+def test_a_list_tuple_or_mapping_a_constant_holds_inside_itself_raises_a_type_error_naming_its_type() -> None:
+    looped: list[object] = [1.0]
+    looped.append(looped)
+    keyed: dict[str, object] = {}
+    keyed["self"] = (keyed,)
+    shared = [0.5]
+
+    assert surface_form((shared, shared)) == "tuple [list [float] × 2]"
+    with pytest.raises(TypeError, match=r"\bbuiltins\.list held in a constant holds itself\b"):
+        surface_form(looped)
+    with pytest.raises(TypeError, match=r"\bbuiltins\.dict held in a constant holds itself\b"):
+        named_classes(keyed)
+
+
 def test_a_class_or_routine_a_constant_holds_raises_a_type_error_naming_it() -> None:
     with pytest.raises(
         TypeError, match=r"\btests\.unit\.surface_forms_helper\._fixtures\.Preset\b"
