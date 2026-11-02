@@ -12,6 +12,7 @@ import functools
 import pathlib
 import re
 import types
+from dataclasses import InitVar
 from typing import (
     Callable,
     List,
@@ -177,6 +178,13 @@ def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
     assert named_classes(documents.store) == {dict, str, list}
     assert named_classes(documents.send) == {dict, str, list}
     assert named_classes(documents.plant) == {tuple, int, list}
+
+
+def test_a_string_annotation_evaluating_to_an_annotation_no_construct_reads_raises_a_type_error_naming_that_annotation_and_its_type() -> None:
+    def f(value: "InitVar[int]") -> None: ...
+
+    with pytest.raises(TypeError, match=r"dataclasses\.InitVar\[int\].*\bdataclasses\.InitVar\b"):
+        named_classes(f)
 
 
 def test_a_default_value_names_no_class() -> None:
