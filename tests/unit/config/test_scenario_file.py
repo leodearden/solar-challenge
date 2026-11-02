@@ -20,6 +20,7 @@ from solar_challenge.config import (
     parse_location_block,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -52,6 +53,13 @@ def _scenario(
 def _naming(*pieces: str) -> str:
     """A pattern matching a message that names each of *pieces*, in order."""
     return ".*".join(re.escape(piece) for piece in pieces)
+
+
+def _one_kw_larger(home: HomeConfig) -> HomeConfig:
+    """*home* with its PV array 1 kW larger."""
+    return dataclasses.replace(
+        home, pv_config=dataclasses.replace(home.pv_config, capacity_kw=home.pv_config.capacity_kw + 1.0)
+    )
 
 
 class TestSimulationPeriod:
@@ -302,6 +310,60 @@ class TestScenarioConfigRefusals:
                 home=_home(),
                 tariff_config=TariffConfig.economy_7(),
             )
+
+
+class TestMapHomes:
+    """map_homes(transform) applies *transform* to each stored home, in either form, keeping every scenario-level field."""
+
+    def test_the_single_home_form_maps_its_home(self) -> None:
+        home = _home()
+
+        mapped = _scenario(home=home).map_homes(_one_kw_larger)
+
+        assert mapped.home == _one_kw_larger(home)
+        assert mapped.homes == ()
+
+    def test_the_fleet_form_maps_each_home_in_order(self) -> None:
+        scenario = _scenario(homes=[_home(), dataclasses.replace(_home(), name="north")])
+
+        mapped = scenario.map_homes(_one_kw_larger)
+
+        assert mapped.homes == tuple(_one_kw_larger(home) for home in scenario.homes)
+
+    def test_every_scenario_level_field_is_kept(self) -> None:
+        scenario = ScenarioConfig(
+            name="full",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            description="every scenario-level field set",
+            location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
+            homes=[_home(), _home()],
+            output=OutputConfig(aggregation="daily"),
+            seg_tariff_pence_per_kwh=5.0,
+            finance=FinanceConfig(standing_charge_pence_per_day=28.0),
+        )
+
+        mapped = scenario.map_homes(_one_kw_larger)
+
+        assert mapped == dataclasses.replace(
+            scenario, homes=tuple(_one_kw_larger(home) for home in scenario.homes)
+        )
+
+    def test_the_transform_sees_the_stored_home_not_the_filled_one(self) -> None:
+        seen: list[HomeConfig] = []
+
+        def record(home: HomeConfig) -> HomeConfig:
+            seen.append(home)
+            return home
+
+        _scenario(homes=[_home()], seg_tariff_pence_per_kwh=5.0).map_homes(record)
+
+        assert [home.seg_tariff for home in seen] == [None]
+
+    def test_a_transform_giving_a_home_another_seg_rate_is_refused(self) -> None:
+        scenario = _scenario(homes=[_home()], seg_tariff_pence_per_kwh=5.0)
+
+        with pytest.raises(ConfigurationError, match=_naming("homes[0]", "3.0", "5.0")):
+            scenario.map_homes(lambda home: dataclasses.replace(home, seg_tariff=SEGTariff("", 3.0)))
 
 
 class TestLoadConfigYaml:
