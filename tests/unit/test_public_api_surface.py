@@ -280,6 +280,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "ScenarioConfig": {
         "is_fleet": "property (self) -> bool",
         "get_location": "(self) -> Location",
+        "simulated_homes": "(self) -> tuple[HomeConfig, ...]",
     },
     "FleetConfig": {
         "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",

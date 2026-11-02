@@ -526,6 +526,24 @@ class ScenarioConfig:
         """Get location, defaulting to Bristol."""
         return self.location if self.location is not None else Location.bristol()
 
+    def simulated_homes(self) -> tuple[HomeConfig, ...]:
+        """The homes this scenario simulates, in order; one with no SEG tariff of its own exports at the scenario's rate."""
+        stored = tuple(home for _, home in self._homes_by_path())
+        if self.seg_tariff_pence_per_kwh is None:
+            return stored
+        tariff = SEGTariff(name="", rate_pence_per_kwh=self.seg_tariff_pence_per_kwh)
+        return tuple(
+            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff) for home in stored
+        )
+
+    def _homes_by_path(self) -> Iterator[tuple[str, HomeConfig]]:
+        """Each stored home with its path in the scenario: 'home', or each fleet home's 'homes[i]' in order."""
+        if self.home is not None:
+            yield "home", self.home
+        else:
+            for index, home in enumerate(self.homes):
+                yield f"homes[{index}]", home
+
 
 def _child_path(block_path: str, key: str) -> str:
     """Return the path of the *key* block inside the block at *block_path*; "" is the top level."""

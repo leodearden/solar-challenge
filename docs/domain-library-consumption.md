@@ -952,6 +952,12 @@ assignment. `hash(scenario)` still raises `TypeError`. Consumers that assign to
 a scenario field build the changed scenario with
 `dataclasses.replace(scenario, homes=homes)` instead, and those that compare
 `scenario.homes` with a list compare it with a tuple, when they re-pin.
+`ScenarioConfig.simulated_homes()` returns the homes the scenario simulates:
+`(home,)` in the single-home form, else `homes`, in order. When the scenario
+sets `seg_tariff_pence_per_kwh`, each home whose `seg_tariff` is None is given
+`SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh)`, and a home's
+own tariff is kept; the stored homes are left as they are. The 0.5.0 tag has no
+such method.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
