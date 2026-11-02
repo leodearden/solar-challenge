@@ -13,18 +13,12 @@ import pathlib
 import re
 import types
 from collections.abc import Callable
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from typing import ClassVar, NamedTuple, Optional
 
 import pytest
 
-from tests._surface_forms import (
-    member_forms,
-    named_classes,
-    surface_form,
-    undeclared_attributes,
-    unset_attributes,
-)
+from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
     RELABELLED_REFUSAL,
     UNREADABLE_ROUTINES,
@@ -499,39 +493,6 @@ def test_a_descriptor_typed_dataclass_field_is_both_a_parameter_its_class_form_s
     assert (Meter().reading, Meter(2.6).reading) == (0, 3)
     assert surface_form(Meter) == "dataclass[eq] (reading: Rounded = 0) -> None"
     assert member_forms(Meter) == {"reading": "Rounded"}
-
-
-def test_a_dataclass_init_only_variable_is_neither_a_member_nor_an_unset_attribute() -> None:
-    @dataclass(frozen=True)
-    class Reading:
-        LAT: ClassVar[float] = 51.45
-        kwh: float
-        scale: InitVar[float]
-        offset: "InitVar[float]"
-        floor: InitVar[float] = 0.0
-
-        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
-            object.__setattr__(self, "kwh", max(self.kwh * scale + offset, floor))
-
-    assert member_forms(Reading) == {"LAT": "float"}
-    assert unset_attributes(Reading) == set()
-
-
-def test_an_undecorated_subclass_of_a_dataclass_has_no_init_only_variable_so_it_declares_what_it_annotates() -> None:
-    @dataclass
-    class Base:
-        x: int
-
-    class Sub(Base):
-        y: str
-
-        def __init__(self, x: int, y: str) -> None:
-            super().__init__(x)
-            self.y = y
-
-    assert vars(Sub(x=1, y="a")).keys() >= {"y"}
-    assert member_forms(Sub) == {"y": "attribute str"}
-    assert undeclared_attributes(Sub) == set()
 
 
 def test_a_hand_written_constructor_parameter_does_not_hide_a_member_of_the_same_name() -> None:

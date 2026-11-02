@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The rules of tests/_surface_forms.py's named_classes for the module a string annotation is read in, found from the routine, class or type variable that spells it, and the errors raised when no such module can be read, one per test."""
+"""The rules of tests/_surface_forms.py's named_classes for the module a string annotation is read in, found from the routine or class that spells it, and the errors raised when no such module can be read, one per test."""
 
 import _json
 import collections
@@ -318,18 +318,16 @@ def test_a_routine_that_wraps_a_callable_object_whose_call_methods_module_anothe
 
 @pytest.fixture
 def removed_auditing(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
-    """The module 'auditing', imported and then removed from sys.modules, that defines a type variable, a routine, a class, a routine that wraps the class, and a class whose instances are callable."""
+    """The module 'auditing', imported and then removed from sys.modules, that defines a routine, a class, a routine that wraps the class, and a class whose instances are callable."""
     auditing = imported_module(
         tmp_path,
         monkeypatch,
         "auditing",
         "from functools import wraps\n"
-        "from typing import TYPE_CHECKING, TypeVar\n"
+        "from typing import TYPE_CHECKING\n"
         "\n"
         "if TYPE_CHECKING:\n"
         "    from fractions import Fraction as Share\n"
-        "\n"
-        "Portion = TypeVar('Portion', bound='Share')\n"
         "\n"
         "def settle(share: 'Share') -> None: ...\n"
         "\n"
@@ -374,18 +372,6 @@ def test_a_routine_that_wraps_a_class_whose_module_has_since_left_sys_modules_ra
         named_classes(removed_auditing.audit)
 
     assert "auditing.Audit" in str(raised.value)
-    assert "'auditing'" in str(raised.value)
-
-
-def test_a_type_variable_whose_module_has_since_left_sys_modules_raises_a_lookup_error_naming_it_and_that_modules_name(
-    removed_auditing: types.ModuleType,
-) -> None:
-    def portion(share: removed_auditing.Portion) -> None: ...
-
-    with pytest.raises(LookupError) as raised:
-        named_classes(portion)
-
-    assert repr(removed_auditing.Portion) in str(raised.value)
     assert "'auditing'" in str(raised.value)
 
 
@@ -517,72 +503,3 @@ def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> No
 
     with pytest.raises(NameError, match="Nowhere"):
         named_classes(f)
-
-
-def test_a_forward_reference_a_type_variable_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    rating = imported_module(
-        tmp_path,
-        monkeypatch,
-        "rating",
-        "from fractions import Fraction\n"
-        "from typing import TypeVar\n"
-        "\n"
-        "Ratio = TypeVar('Ratio', bound='Fraction')\n",
-    )
-
-    def f(ratio: rating.Ratio) -> None: ...
-
-    assert named_classes(f) == {fractions.Fraction}
-
-
-def test_a_forward_reference_a_new_type_declares_names_the_class_the_module_declaring_it_binds_the_name_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ratingnewtype = imported_module(
-        tmp_path,
-        monkeypatch,
-        "ratingnewtype",
-        "from fractions import Fraction\n"
-        "from typing import NewType\n"
-        "\n"
-        "Ratio = NewType('Ratio', 'Fraction')\n",
-    )
-
-    def f(ratio: ratingnewtype.Ratio) -> None: ...
-
-    assert named_classes(f) == {fractions.Fraction}
-
-
-@pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
-)
-def test_a_forward_reference_a_type_parameter_declares_names_the_class_the_module_of_its_routine_binds_the_name_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scoping = imported_module(
-        tmp_path,
-        monkeypatch,
-        "scoping",
-        "class Counter: ...\n\n\ndef tally[T: 'Counter'](counter: T) -> T: ...\n",
-    )
-
-    assert named_classes(scoping.tally) == {scoping.Counter}
-
-
-@pytest.mark.skipif(
-    sys.version_info < (3, 12), reason="type parameter syntax is new in Python 3.12"
-)
-def test_a_forward_reference_to_a_type_parameter_raises_a_name_error_naming_it(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    bounding = imported_module(
-        tmp_path,
-        monkeypatch,
-        "bounding",
-        "class Node[T]: ...\n\n\ndef link[T: 'Node[T]'](node: T) -> T: ...\n",
-    )
-
-    with pytest.raises(NameError, match="'T'"):
-        named_classes(bounding.link)

@@ -12,7 +12,7 @@ import re
 import sys
 import types
 from collections.abc import Callable
-from dataclasses import InitVar, dataclass
+from dataclasses import dataclass
 
 import pytest
 
@@ -183,30 +183,6 @@ def test_a_private_attribute_set_on_self_is_never_undeclared() -> None:
             object.__setattr__(self, "_level", 0.0)
 
     assert undeclared_attributes(Meter) == set()
-
-
-def test_an_attribute_set_on_self_under_a_dataclass_init_only_variable_name_is_undeclared() -> None:
-    @dataclass(frozen=True)
-    class Reading:
-        kwh: float
-        scale: InitVar[float]
-        offset: "InitVar[float]"
-        floor: InitVar[float] = 0.0
-
-        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
-            object.__setattr__(self, "scale", scale)
-            object.__setattr__(self, "offset", offset)
-            object.__setattr__(self, "floor", floor)
-
-    @dataclass(frozen=True)
-    class Scaled(Reading):
-        def __post_init__(self, scale: float, offset: float, floor: float) -> None:
-            object.__setattr__(self, "scale", scale)
-
-    reading = Reading(kwh=1.0, scale=2.0, offset=0.5)
-    assert vars(reading).keys() >= {"scale", "offset", "floor"}
-    assert undeclared_attributes(Reading) == {"scale", "offset", "floor"}
-    assert undeclared_attributes(Scaled) == {"scale"}
 
 
 @pytest.mark.parametrize(("routine", "kind"), REFUSED_ROUTINE_AND_PARTIAL_MEMBERS)
