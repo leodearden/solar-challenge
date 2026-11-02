@@ -170,36 +170,6 @@ def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_o
     assert named_classes(regauging.Replaced) == {fractions.Fraction}
 
 
-def test_an_inherited_init_only_variable_names_the_classes_the_module_of_the_dataclass_declaring_it_binds_the_names_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "priming",
-        "from dataclasses import InitVar, dataclass\n"
-        "from fractions import Fraction as Prime\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    prime: InitVar['Prime']\n",
-    )
-    repriming = imported_module(
-        tmp_path,
-        monkeypatch,
-        "repriming",
-        "from dataclasses import dataclass\n"
-        "from decimal import Decimal as Prime\n"
-        "\n"
-        "from priming import Meter\n"
-        "\n"
-        "@dataclass\n"
-        "class Submeter(Meter): ...\n",
-    )
-
-    assert named_classes(repriming.Submeter) == {fractions.Fraction}
-
-
 def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

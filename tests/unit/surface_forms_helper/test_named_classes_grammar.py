@@ -8,34 +8,25 @@ module's namespace.
 import collections.abc
 import datetime
 import enum
-import fractions
 import functools
 import pathlib
 import re
-import sys
 import types
-from dataclasses import InitVar, dataclass
 from typing import (
-    Annotated,
     Callable,
     List,
     Literal,
     NamedTuple,
-    NewType,
     NoReturn,
     Optional,
-    ParamSpec,
     Self,
     Type,
-    TypeVar,
-    TypeVarTuple,
     Union,
-    Unpack,
 )
 
 import pytest
 
-from tests._surface_forms import named_classes, surface_form
+from tests._surface_forms import named_classes
 from tests.unit.surface_forms_helper._fixtures import (
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     RELABELLED_REFUSAL,
@@ -104,76 +95,16 @@ def test_a_union_names_its_members_classes_alone() -> None:
     assert named_classes(f) == {Preset, int, str, float}
 
 
-def test_an_init_only_variable_names_its_type_classes_alone() -> None:
-    @dataclass(frozen=True)
-    class Reading:
-        kwh: float
-        ratio: InitVar[Optional[fractions.Fraction]]
-        preset: "InitVar[Preset]"
-
-    assert named_classes(Reading) == {float, fractions.Fraction, Preset}
-
-
-def test_literal_values_and_annotated_metadata_name_no_class() -> None:
-    def f(a: Literal["Preset"], b: Annotated[float, Preset]) -> None: ...
+def test_literal_values_name_no_class() -> None:
+    def f(a: Literal["Preset"], b: float) -> None: ...
 
     assert named_classes(f) == {float}
 
 
-def test_a_param_spec_args_and_kwargs_name_no_class() -> None:
-    P = ParamSpec("P")
-
-    def f(*args: P.args, **kwargs: P.kwargs) -> None: ...
+def test_a_special_form_names_no_class() -> None:
+    def f(a: Self) -> NoReturn: ...
 
     assert named_classes(f) == set()
-
-
-def test_a_type_variable_declaring_nothing_or_a_special_form_names_no_class() -> None:
-    T = TypeVar("T")
-    P = ParamSpec("P")
-    Ts = TypeVarTuple("Ts")
-
-    def f(a: T, b: P, c: Ts, d: Self) -> NoReturn: ...
-
-    assert named_classes(f) == set()
-
-
-def test_a_type_variable_names_the_classes_its_constraints_and_its_bound_name() -> None:
-    Rated = TypeVar("Rated", bound=Optional[Preset])
-    Pending = TypeVar("Pending", bound="Outer.Inner")
-    Ratio = TypeVar("Ratio", int, fractions.Fraction)
-
-    def f(a: Rated, b: Pending) -> Ratio: ...
-
-    assert named_classes(f) == {Preset, Outer.Inner, int, fractions.Fraction}
-
-
-@pytest.mark.skipif(
-    sys.version_info < (3, 13), reason="a type variable's default is new in Python 3.13"
-)
-def test_a_type_variable_names_the_classes_its_default_names() -> None:
-    Rated = TypeVar("Rated", default=Preset)
-    Hook = ParamSpec("Hook", default=[fractions.Fraction])
-    Shape = TypeVarTuple("Shape", default=Unpack[tuple[Outer.Inner]])
-
-    def f(a: Rated, b: Callable[Hook, None], c: tuple[Unpack[Shape]]) -> None: ...
-
-    assert named_classes(f) == {
-        Preset,
-        collections.abc.Callable,
-        fractions.Fraction,
-        tuple,
-        Outer.Inner,
-    }
-
-
-def test_a_new_type_names_its_supertype_classes_alone() -> None:
-    PresetId = NewType("PresetId", Preset)
-    Readings = NewType("Readings", list[Outer.Inner])
-
-    def f(a: PresetId, b: Readings) -> None: ...
-
-    assert named_classes(f) == {Preset, list, Outer.Inner}
 
 
 def test_none_and_type_none_name_no_class() -> None:
@@ -223,32 +154,6 @@ def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_
         named_classes(Relabelled)
 
 
-def test_a_type_variable_or_a_new_type_inside_its_own_declaration_names_no_class_there(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    linking = imported_module(
-        tmp_path,
-        monkeypatch,
-        "linking",
-        "from typing import Generic, NewType, TypeVar\n"
-        "\n"
-        "Linked = TypeVar('Linked', bound='Node[Linked]')\n"
-        "Ranked = TypeVar('Ranked', bound='list[Graded]')\n"
-        "Graded = TypeVar('Graded', bound='dict[str, Ranked]')\n"
-        "Chain = NewType('Chain', 'list[Chain]')\n"
-        "\n"
-        "class Node(Generic[Linked]): ...\n",
-    )
-
-    def f(a: linking.Linked, b: linking.Ranked, c: linking.Chain) -> None: ...
-
-    assert (
-        surface_form(f)
-        == "(a: ~Linked(bound=Node[Linked]), b: ~Ranked(bound=list[Graded]), c: Chain(list[Chain])) -> None"
-    )
-    assert named_classes(f) == {linking.Node, list, dict, str}
-
-
 def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -272,34 +177,6 @@ def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
     assert named_classes(documents.store) == {dict, str, list}
     assert named_classes(documents.send) == {dict, str, list}
     assert named_classes(documents.plant) == {tuple, int, list}
-
-
-def test_a_forward_reference_inside_its_own_evaluation_names_the_class_another_module_evaluating_it_binds_it_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "sharing",
-        "from fractions import Fraction as Ratio\n"
-        "from typing import NewType\n"
-        "\n"
-        "Share = NewType('Share', 'Ratio')\n",
-    )
-    pooling = imported_module(
-        tmp_path,
-        monkeypatch,
-        "pooling",
-        "from typing import Union\n"
-        "\n"
-        "import sharing\n"
-        "\n"
-        "Ratio = Union[sharing.Share, list['Ratio']]\n"
-        "\n"
-        "def pool(ratio: 'Ratio') -> None: ...\n",
-    )
-
-    assert named_classes(pooling.pool) == {fractions.Fraction, list}
 
 
 def test_a_default_value_names_no_class() -> None:

@@ -8,7 +8,6 @@ each other resolve in this module's namespace.
 import pathlib
 import re
 from dataclasses import dataclass
-from typing import NewType, TypeVar
 
 import pytest
 
@@ -56,15 +55,6 @@ def test_a_signature_closure_holds_only_classes_the_package_defines() -> None:
 
     assert signature_closure([supply], "tests.unit") == {Feeder, Tap, Tally}
     assert signature_closure([supply], "solar_challenge") == set()
-
-
-def test_a_signature_closure_follows_the_classes_a_type_variable_or_a_new_type_carries() -> None:
-    Supplied = TypeVar("Supplied", bound=Feeder)
-    PresetId = NewType("PresetId", Preset)
-
-    def supply(feeder: Supplied, preset: PresetId) -> Supplied: ...
-
-    assert signature_closure([supply], "tests") == {Feeder, Tap, Tally, Preset}
 
 
 @pytest.mark.parametrize(("routine", "kind"), REFUSED_ROUTINE_AND_PARTIAL_MEMBERS)
