@@ -159,10 +159,13 @@ def member_forms(cls: type) -> dict[str, str]:
     bind raises NameError, a module inspect reads no source for raises TypeError, and a
     module another of the same name has replaced in sys.modules raises LookupError. A
     class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
-    the TypeError own_namespace raises for it. A public member that no member rule
-    spells and that is a routine whose signature inspect cannot read, as surface_form
-    describes one, or a functools.partial, raises TypeError naming *cls*, the member and
-    its kind or binding.
+    the TypeError own_namespace raises for it. A public name the body binds to a class,
+    by a nested class statement or an alias, raises TypeError naming *cls*, the name and
+    that class: its form would spell only that class's constructor, leaving the class's
+    own members unpinned. A public member that no member rule spells and that is a
+    routine whose signature inspect cannot read, as surface_form describes one, or a
+    functools.partial, raises TypeError naming *cls*, the member and its kind or
+    binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -836,7 +839,8 @@ class _AnnotatedAttribute:
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
-    A member that spelled_function has no rule for raises the TypeError
+    A member that is a class raises the TypeError _refuse_class_member raises for it
+    first. Then a member that spelled_function has no rule for raises the TypeError
     refuse_member_without_a_portable_form raises for it, if any, naming *cls* and the
     member.
     """
@@ -847,9 +851,21 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
+        label = f"{label_of(cls)}.{name}"
+        _refuse_class_member(label, member)
         if spelled_function(member) is None:
-            refuse_member_without_a_portable_form(f"{label_of(cls)}.{name}", member)
+            refuse_member_without_a_portable_form(label, member)
     return members
+
+
+def _refuse_class_member(label: str, member: object) -> None:
+    """Raise TypeError naming the member *label* and the class it is, if *member* is a class: its form would spell only that class's constructor, leaving the class's own members unpinned."""
+    if inspect.isclass(member):
+        raise TypeError(
+            f"{label} is the class {label_of(member)}, so its form would spell only that "
+            "class's constructor and the class's own members would go unpinned: make the "
+            "name private, or bind the class at module level"
+        )
 
 
 def _own_members(cls: type) -> dict[str, object]:
