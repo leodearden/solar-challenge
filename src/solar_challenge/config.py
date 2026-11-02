@@ -477,7 +477,7 @@ class OutputConfig:
     aggregation: str = "minute"
 
 
-@dataclass
+@dataclass(frozen=True)
 class ScenarioConfig:
     """Configuration for a simulation scenario.
 
@@ -486,11 +486,13 @@ class ScenarioConfig:
         description: Human-readable description
         location: Geographic location (defaults to Bristol)
         period: Simulation period
-        homes: List of home configurations (for fleet simulation)
+        homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
-        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
-        tariff_config: Tariff configuration (None for no cost tracking)
+        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
+            as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
+        tariff_config: Refused when set: no simulation reads it, so a home's
+            tariff is its HomeConfig.tariff_config
         finance: Financial appraisal parameters (None for no financial analysis)
     """
 
@@ -498,7 +500,7 @@ class ScenarioConfig:
     period: SimulationPeriod
     description: str = ""
     location: Optional[Location] = None
-    homes: list[HomeConfig] = field(default_factory=list)
+    homes: tuple[HomeConfig, ...] = ()
     home: Optional[HomeConfig] = None
     output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
@@ -507,6 +509,7 @@ class ScenarioConfig:
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
+        object.__setattr__(self, "homes", tuple(self.homes))
         if not self.homes and self.home is None:
             raise ConfigurationError(
                 f"Scenario '{self.name}' must define either 'home' or 'homes'"
@@ -514,6 +517,13 @@ class ScenarioConfig:
         if self.homes and self.home is not None:
             raise ConfigurationError(
                 f"Scenario '{self.name}' cannot define both 'home' and 'homes'"
+            )
+        self._read_the_seg_rate()
+        self._refuse_a_home_seg_rate_other_than_the_scenarios()
+        if self.tariff_config is not None:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
+                "give each home its tariff as HomeConfig.tariff_config"
             )
 
     @property
@@ -524,6 +534,60 @@ class ScenarioConfig:
     def get_location(self) -> Location:
         """Get location, defaulting to Bristol."""
         return self.location if self.location is not None else Location.bristol()
+
+    def simulated_homes(self) -> tuple[HomeConfig, ...]:
+        """The homes this scenario simulates, in order; one with no SEG tariff of its own exports at the scenario's rate."""
+        tariff = self._seg_tariff()
+        if tariff is None:
+            return self._stored_homes()
+        return tuple(
+            home if home.seg_tariff is not None else replace(home, seg_tariff=tariff)
+            for home in self._stored_homes()
+        )
+
+    def map_homes(self, transform: Callable[[HomeConfig], HomeConfig]) -> "ScenarioConfig":
+        """This scenario in the same form, *transform* applied to each stored home, and checked as construction checks."""
+        if self.home is not None:
+            return replace(self, home=transform(self.home))
+        return replace(self, homes=tuple(transform(home) for home in self.homes))
+
+    def _stored_homes(self) -> tuple[HomeConfig, ...]:
+        """The homes as stored: (home,) in the single-home form, else homes, in order."""
+        return (self.home,) if self.home is not None else self.homes
+
+    def _seg_tariff(self) -> Optional[SEGTariff]:
+        """The tariff a home with none of its own exports at: the scenario's rate, unnamed; None when the scenario sets no rate."""
+        if self.seg_tariff_pence_per_kwh is None:
+            return None
+        return SEGTariff(name="", rate_pence_per_kwh=self.seg_tariff_pence_per_kwh)
+
+    def _read_the_seg_rate(self) -> None:
+        """Hold seg_tariff_pence_per_kwh as the float SEGTariff reads, raising ConfigurationError, naming the scenario and the rate, for one SEGTariff refuses."""
+        try:
+            tariff = self._seg_tariff()
+        except ConfigurationError as exc:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' sets seg_tariff_pence_per_kwh="
+                f"{self.seg_tariff_pence_per_kwh!r}, which SEGTariff refuses: {exc}"
+            ) from exc
+        if tariff is not None:
+            object.__setattr__(self, "seg_tariff_pence_per_kwh", tariff.rate_pence_per_kwh)
+
+    def _refuse_a_home_seg_rate_other_than_the_scenarios(self) -> None:
+        """Raise ConfigurationError naming the first home, by its path 'home' or 'homes[i]', whose own SEG rate is not math.isclose to the scenario's."""
+        rate = self.seg_tariff_pence_per_kwh
+        if rate is None:
+            return
+        for index, home in enumerate(self._stored_homes()):
+            if home.seg_tariff is None or math.isclose(home.seg_tariff.rate_pence_per_kwh, rate):
+                continue
+            path = "home" if self.home is not None else f"homes[{index}]"
+            named = f"{path} ({home.name!r})" if home.name else path
+            raise ConfigurationError(
+                f"Inconsistent SEG rate: {named} has its own seg_tariff at "
+                f"{home.seg_tariff.rate_pence_per_kwh}p/kWh but scenario '{self.name}' sets "
+                f"seg_tariff_pence_per_kwh={rate}p/kWh. Set only one, or use matching rates."
+            )
 
 
 def _child_path(block_path: str, key: str) -> str:
@@ -2148,7 +2212,7 @@ def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
         description=data.get("description", ""),
         location=location,
         period=_parse_period(data["period"], block_path=_child_path(block_path, "period")),
-        homes=homes,
+        homes=tuple(homes),
         home=home,
         output=_parse_output_config(
             data.get("output"), block_path=_child_path(block_path, "output")

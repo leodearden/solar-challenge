@@ -310,15 +310,16 @@ seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
                     export revenue / physics export kWh × 100
                     (0 when physics export is 0)
 
-                    SEG input reconciliation: project_multi_year calls
-                    _reconcile_seg_homes() immediately after _resolve_homes().
-                    When ScenarioConfig.seg_tariff_pence_per_kwh is set and a
-                    home's HomeConfig.seg_tariff is None, the scenario rate is
-                    threaded onto that home as SEGTariff(rate_pence_per_kwh=R),
-                    making per-home seg_tariff the single source of SEG maths
-                    (robust to the Task-85 export-revenue zeroing).  If a
-                    per-home seg_tariff is already set and its rate differs from
-                    the scenario rate, ValueError is raised (fail-fast).
+                    SEG input reconciliation: project_multi_year simulates
+                    scenario.simulated_homes().  When
+                    ScenarioConfig.seg_tariff_pence_per_kwh is set, each home
+                    whose HomeConfig.seg_tariff is None simulates at
+                    SEGTariff(rate_pence_per_kwh=R), so per-home seg_tariff
+                    stays the single source of SEG maths (robust to the
+                    Task-85 export-revenue zeroing).  A scenario whose home
+                    carries its own other rate cannot be built: ScenarioConfig
+                    construction raises ConfigurationError naming the home and
+                    both rates.
 
 grid_services_income(t) = pricing.annual_income_gbp(F_t)
     pricing = grid_services_model_of(finance), resolved once, before any simulation

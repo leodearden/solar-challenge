@@ -19,7 +19,6 @@ from solar_challenge.cli.utils import (
     verbatim_table_title,
 )
 from solar_challenge.config import (
-    ScenarioConfig,
     detect_fleet_sweep_spec,
     load_config,
     load_home_config,
@@ -197,11 +196,6 @@ class _DefinedHomes:
     sweep_points: int = 1
 
 
-def _scenario_homes(scenario: ScenarioConfig) -> list[HomeConfig]:
-    """The homes a scenario simulates: its single home, or else its fleet."""
-    return [scenario.home] if scenario.home is not None else scenario.homes
-
-
 def _fleet_homes(document: Mapping[str, Any]) -> _DefinedHomes:
     """The homes `fleet run` builds from the file.
 
@@ -240,7 +234,7 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
             homes=[
                 home
                 for scenario in load_scenarios(config_file)
-                for home in _scenario_homes(scenario)
+                for home in scenario.simulated_homes()
             ]
         )
     if "fleet_distribution" in document or "homes" in document:

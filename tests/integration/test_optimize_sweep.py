@@ -34,8 +34,9 @@ from solar_challenge.optimize import (
     pareto_baseline,
     run_sweep,
 )
+from solar_challenge.seg import SEGTariff
 from tests._factories import make_config_result, make_cost_recovery_solution
-from tests._finance_builders import make_fleet_results, make_scenario
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_scenario
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +386,20 @@ class TestRunSweepSingleConfig:
         _, _, _, simulate, configs = self._setup()
         ranked = run_sweep(configs, simulate=simulate)
         assert ranked.cheapest_feasible is ranked.results[0].config
+
+    def test_every_fleet_it_simulates_exports_at_the_scenario_seg_rate(self) -> None:
+        """The scenario's 5 p/kWh reaches each home of every fleet run_sweep simulates, the age-0
+        baseline outlay fleet included, though no home carries a tariff of its own."""
+        _, _, fr, _, configs = self._setup()
+        tariffs_simulated: list[SEGTariff | None] = []
+
+        def recording_simulate(fc: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            tariffs_simulated.extend(home.seg_tariff for home in fc.homes)
+            return make_fleet_results_of(fr.per_home_results, homes=fc.homes)
+
+        run_sweep(configs, simulate=recording_simulate)
+
+        assert set(tariffs_simulated) == {SEGTariff(name="", rate_pence_per_kwh=5.0)}
 
 
 # ---------------------------------------------------------------------------

@@ -287,33 +287,6 @@ class TestProjectEconomicsCapex:
         assert econ.equity_gbp == pytest.approx(0.0, abs=1e-9)
         assert econ.debt_gbp == pytest.approx(0.0, abs=1e-9)
 
-    def test_empty_homes_raises_value_error(self) -> None:
-        """project_economics must raise ValueError when scenario has no homes."""
-        # ScenarioConfig.__post_init__ requires homes OR home — use one then clear
-        # We need to bypass: directly pass homes=[] would fail ScenarioConfig validation.
-        # Use a single home scenario but call project_economics on a zero-home one
-        # via a monkeypatch — but simpler: test that project_economics raises when
-        # it finds no homes via the resolution path.
-        # ScenarioConfig requires at least one home, so we test that by passing
-        # a scenario whose homes list is empty after resolution by providing
-        # scenario.homes=[] and scenario.home=None — but this is blocked by
-        # __post_init__. We verify project_economics raises ValueError by
-        # constructing a valid 1-home scenario and monkeypatching (not possible
-        # without object.__setattr__).
-        # Instead: test project_economics with a patched scenario-like object.
-        valid_scenario = make_scenario_of([make_sized_home(pv_kwp=4.0)])
-        finance = _make_finance()
-        curve = _make_curve([8000.0] * 25)
-
-        # Monkey-patch: clear homes list on a copy
-        empty_scenario = dataclasses.replace(valid_scenario)
-        # ScenarioConfig is not frozen — we can set homes directly
-        object.__setattr__(empty_scenario, "homes", [])
-        object.__setattr__(empty_scenario, "home", None)
-
-        with pytest.raises(ValueError, match="at least one home"):
-            project_economics(curve, empty_scenario, finance)
-
 
 # ---------------------------------------------------------------------------
 # Step-5: level-amortisation annuity debt service (H5)

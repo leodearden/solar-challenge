@@ -143,11 +143,11 @@ class it pins, whether it is a dataclass and which of the dataclass parameters
 instances compare equal field by field, support `<`, `<=`, `>` and `>=`, are
 hashable, and refuse a field assignment with `dataclasses.FrozenInstanceError`.
 All 34 pinned dataclasses set `eq`, and none sets `order` or `unsafe_hash`. All
-are frozen except `SummaryStatistics`, `ScenarioConfig`, `FleetConfig`,
-`FleetResults`, `EnergyFlowResult` and `CommunityResults`, and
-`DispatchStrategyConfig`, `OutputConfig` and `SimulationPeriod` in
-`solar_challenge.config`. Each sets the same parameters as on the 0.5.0 tag,
-except `SimulationResults`, which task 436 froze (below). Consumers need no
+are frozen except `SummaryStatistics`, `FleetConfig`, `FleetResults`,
+`EnergyFlowResult` and `CommunityResults`, and `DispatchStrategyConfig`,
+`OutputConfig` and `SimulationPeriod` in `solar_challenge.config`. Each sets the
+same parameters as on the 0.5.0 tag, except `SimulationResults` and
+`ScenarioConfig`, which tasks 436 and 955 froze (below). Consumers need no
 change when they re-pin.
 
 **Unreleased on main** (task 426): `Battery` declares `config`,
@@ -942,6 +942,57 @@ the tag already does for a run past that day. `generate_load_profile` raises
 `ValueError` for a household model whose days have no energy: the Elexon
 fallback the task 906 line describes covers only a model that raises or gives a
 day of another length. Consumers re-baseline demand figures when they re-pin.
+
+**Unreleased on main** (task 955): `ScenarioConfig` is frozen, and it holds
+`homes` as a tuple, defaulting to `()`: a list of homes is converted when the
+scenario is built, so `ScenarioConfig(homes=[h1, h2], ...).homes` is
+`(h1, h2)`. Assigning to one of its fields, such as `scenario.homes = homes`,
+raises `dataclasses.FrozenInstanceError`; the 0.5.0 tag accepts the
+assignment. `hash(scenario)` still raises `TypeError`, because its `period`, a
+`SimulationPeriod`, is unhashable. Consumers that assign to a scenario field
+build the changed scenario with
+`dataclasses.replace(scenario, homes=homes)` instead, and those that compare
+`scenario.homes` with a list compare it with a tuple, when they re-pin.
+`ScenarioConfig.simulated_homes()` returns the homes the scenario simulates:
+`(home,)` in the single-home form, else `homes`, in order. When the scenario
+sets `seg_tariff_pence_per_kwh`, each home whose `seg_tariff` is None is given
+`SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh)`, and a home's
+own tariff is kept; the stored homes are left as they are. The 0.5.0 tag has no
+such method. `ScenarioConfig.map_homes(transform)` returns the scenario in the
+same form with *transform* applied to each stored home, never to the filled
+homes `simulated_homes()` returns, and every scenario-level field kept; the
+result is checked as construction checks it. The tag has no such method
+either. Construction raises `ConfigurationError`, a `ValueError`, for a
+home whose own `seg_tariff` rate is not `math.isclose` to
+`seg_tariff_pence_per_kwh`, naming the home's position (`home` or `homes[i]`),
+its name and both rates, and `dataclasses.replace` re-runs the check. The tag
+builds that scenario, and its `project_multi_year` and
+`solve_cost_recovery_rate` raise a plain `ValueError` on it. Construction also
+raises `ConfigurationError` for a `seg_tariff_pence_per_kwh` that `SEGTariff`
+refuses, one that is negative, not finite or a boolean, naming the scenario and
+the rate; it checks the rate before it compares any home's rate with it, and it
+holds the rate as the float `SEGTariff` reads, so `simulated_homes()` never
+raises. The tag builds that scenario; its `project_multi_year` and
+`solve_cost_recovery_rate` raise a plain `ValueError` on a negative rate and
+simulate a NaN one. Construction also
+raises `ConfigurationError` for a set `tariff_config`, which no simulation
+reads, naming `HomeConfig.tariff_config`, so `load_scenarios` refuses a
+scenario that sets `tariff_config:`; the tag builds that scenario and loads
+that file. Consumers give each home its tariff as `HomeConfig.tariff_config`
+when they re-pin. `optimize.apply_knob`, which the tag lacks, sets only the
+scenario's rate through its `'seg'` knob and leaves the stored homes as they
+are, as the tag's `sensitivity_panel` does, so `simulated_homes()` gives the
+swept rate to each home without a tariff of its own. When a home carries its
+own tariff at another rate, the knob raises `ConfigurationError`, naming the
+home's position and both rates, where the tag's `sensitivity_panel` raises a
+plain `ValueError` as it evaluates that value. The knob also raises
+`ConfigurationError` as it sets a rate that `SEGTariff` refuses.
+`optimize.run_sweep` simulates its age-0 baseline outlay fleet as
+`simulated_homes()` gives it, as it already
+simulates the solve's and the projection's fleets; the tag simulates that fleet
+without the scenario's rate on a home that has no tariff of its own.
+`baseline_outlay_gbp` is unchanged, since the householder bill reads no export
+income.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

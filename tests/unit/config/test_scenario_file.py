@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for a scenario file's top level, from the raw YAML or JSON read to the ScenarioConfig that load_scenarios builds."""
 
+import dataclasses
 import json
+import math
+import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -17,10 +21,46 @@ from solar_challenge.config import (
     parse_location_block,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
+
+
+def _home() -> HomeConfig:
+    """A 4 kW home on the default load, carrying no SEG tariff of its own."""
+    return HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+
+def _scenario(
+    *,
+    home: HomeConfig | None = None,
+    homes: list[HomeConfig] | None = None,
+    seg_tariff_pence_per_kwh: float | None = None,
+) -> ScenarioConfig:
+    """Scenario 'x' over the first week of 2024, holding *home* or *homes* under *seg_tariff_pence_per_kwh*."""
+    return ScenarioConfig(
+        name="x",
+        period=SimulationPeriod("2024-01-01", "2024-01-07"),
+        home=home,
+        homes=homes or [],
+        seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
+    )
+
+
+def _naming(*pieces: str) -> str:
+    """A pattern matching a message that names each of *pieces*, in order."""
+    return ".*".join(re.escape(piece) for piece in pieces)
+
+
+def _one_kw_larger(home: HomeConfig) -> HomeConfig:
+    """*home* with its PV array 1 kW larger."""
+    return dataclasses.replace(
+        home, pv_config=dataclasses.replace(home.pv_config, capacity_kw=home.pv_config.capacity_kw + 1.0)
+    )
 
 
 class TestSimulationPeriod:
@@ -107,6 +147,43 @@ class TestScenarioConfig:
         assert scenario.is_fleet
         assert len(scenario.homes) == 3
 
+    def test_holds_its_homes_as_a_tuple_in_order(self) -> None:
+        """A list of homes is held as a tuple in the given order, and the single-home form holds none."""
+        h1 = HomeConfig(pv_config=PVConfig(capacity_kw=3.0), load_config=LoadConfig())
+        h2 = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+        fleet = ScenarioConfig(
+            name="Fleet",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            homes=[h1, h2],
+        )
+        single = ScenarioConfig(
+            name="Single",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            home=h1,
+        )
+
+        assert isinstance(fleet.homes, tuple)
+        assert fleet.homes == (h1, h2)
+        assert single.homes == ()
+
+    def test_refuses_a_field_assignment(self) -> None:
+        """A scenario is a frozen value: assigning one of its fields raises FrozenInstanceError."""
+        scenario = ScenarioConfig(
+            name="Test",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            homes=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
+        )
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            scenario.homes = ()  # type: ignore[misc]
+
+    def test_holds_its_seg_rate_as_the_float_segtariff_reads(self) -> None:
+        scenario = _scenario(home=_home(), seg_tariff_pence_per_kwh=5)
+
+        assert type(scenario.seg_tariff_pence_per_kwh) is float
+        assert scenario.seg_tariff_pence_per_kwh == 5.0
+
     def test_requires_home_or_homes(self) -> None:
         """Test that scenario requires home or homes."""
         with pytest.raises(ConfigurationError, match="must define either"):
@@ -142,6 +219,185 @@ class TestScenarioConfig:
         )
         loc = scenario.get_location()
         assert loc.latitude == pytest.approx(51.45, abs=0.01)
+
+
+class TestSimulatedHomes:
+    """simulated_homes() reads the homes a scenario simulates, each given the scenario's SEG rate unless it carries its own tariff."""
+
+    def test_the_single_home_is_simulated_at_the_scenario_seg_rate(self) -> None:
+        home = _home()
+
+        scenario = _scenario(home=home, seg_tariff_pence_per_kwh=5.0)
+
+        assert scenario.simulated_homes() == (
+            dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.0)),
+        )
+        assert scenario.home is home
+        assert scenario.home.seg_tariff is None
+
+    def test_a_fleet_home_is_filled_with_the_scenario_rate_and_a_home_tariff_is_kept(self) -> None:
+        h1 = _home()
+        h2 = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("Octopus", 5.0))
+
+        scenario = _scenario(homes=[h1, h2], seg_tariff_pence_per_kwh=5.0)
+        simulated = scenario.simulated_homes()
+
+        assert simulated[0] == dataclasses.replace(h1, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.0))
+        assert simulated[1] is h2
+        assert scenario.homes == (h1, h2)
+
+    def test_with_no_scenario_rate_the_stored_homes_are_simulated(self) -> None:
+        h1 = _home()
+        h2 = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("Octopus", 5.0))
+
+        fleet = _scenario(homes=[h1, h2])
+        single = _scenario(home=h1)
+
+        assert fleet.simulated_homes() == fleet.homes
+        assert fleet.simulated_homes()[0].seg_tariff is None
+        assert fleet.simulated_homes()[1].seg_tariff == SEGTariff("Octopus", 5.0)
+        assert single.simulated_homes() == (h1,)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda: _scenario(home=_home(), seg_tariff_pence_per_kwh=5.0), id="home"),
+            pytest.param(lambda: _scenario(homes=[_home(), _home()], seg_tariff_pence_per_kwh=5.0), id="homes"),
+        ],
+    )
+    def test_fills_copies_and_leaves_the_scenario_as_built(self, build: Callable[[], ScenarioConfig]) -> None:
+        scenario = build()
+
+        first = scenario.simulated_homes()
+        second = scenario.simulated_homes()
+
+        assert all(home.seg_tariff is not None for home in first)
+        assert second == first
+        assert scenario == build()
+
+
+class TestScenarioConfigRefusals:
+    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a scenario tariff_config."""
+
+    @pytest.mark.parametrize(
+        ("rate", "requirement"),
+        [
+            pytest.param(-1.0, "at least 0", id="negative"),
+            pytest.param(math.nan, "a finite number", id="nan"),
+            pytest.param(math.inf, "a finite number", id="infinite"),
+            pytest.param(True, "a finite number", id="boolean"),
+        ],
+    )
+    def test_a_seg_rate_segtariff_refuses_is_refused_naming_the_scenario_and_the_rate(
+        self, rate: float, requirement: str
+    ) -> None:
+        with pytest.raises(
+            ConfigurationError, match=_naming("'x'", f"seg_tariff_pence_per_kwh={rate!r}", requirement)
+        ):
+            _scenario(homes=[_home()], seg_tariff_pence_per_kwh=rate)
+
+    def test_the_seg_rate_is_refused_before_a_home_rate_is_compared_with_it(self) -> None:
+        home = dataclasses.replace(_home(), seg_tariff=SEGTariff("", 5.0))
+
+        with pytest.raises(ConfigurationError, match=_naming("seg_tariff_pence_per_kwh=nan", "a finite number")):
+            _scenario(homes=[home], seg_tariff_pence_per_kwh=math.nan)
+
+    def test_a_fleet_home_at_another_seg_rate_is_refused_by_its_path_and_name(self) -> None:
+        north = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("", 3.0))
+
+        with pytest.raises(ConfigurationError, match=_naming("homes[1]", "'north'", "3.0", "5.0")):
+            _scenario(homes=[_home(), north], seg_tariff_pence_per_kwh=5.0)
+
+    def test_the_single_home_at_another_seg_rate_is_refused(self) -> None:
+        home = dataclasses.replace(_home(), seg_tariff=SEGTariff("", 3.0))
+
+        with pytest.raises(ConfigurationError, match=_naming(" home ", "3.0", "5.0")):
+            _scenario(home=home, seg_tariff_pence_per_kwh=5.0)
+
+    def test_replace_re_runs_the_check(self) -> None:
+        fleet = _scenario(homes=[dataclasses.replace(_home(), seg_tariff=SEGTariff("", 5.0))])
+
+        with pytest.raises(ConfigurationError, match=_naming("homes[0]", "5.0", "3.0")):
+            dataclasses.replace(fleet, seg_tariff_pence_per_kwh=3.0)
+
+    @pytest.mark.parametrize(
+        ("home_rate", "scenario_rate"),
+        [
+            pytest.param(5.0, 5.0 + 1e-12, id="a-home-rate-close-to-the-scenario-rate"),
+            pytest.param(3.0, None, id="no-scenario-rate"),
+        ],
+    )
+    def test_a_home_tariff_the_scenario_does_not_contradict_constructs(
+        self, home_rate: float, scenario_rate: float | None
+    ) -> None:
+        home = dataclasses.replace(_home(), seg_tariff=SEGTariff("", home_rate))
+
+        scenario = _scenario(homes=[home], seg_tariff_pence_per_kwh=scenario_rate)
+
+        assert scenario.homes == (home,)
+
+    def test_a_scenario_tariff_config_is_refused_naming_the_home_field(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("tariff_config", "HomeConfig.tariff_config")):
+            ScenarioConfig(
+                name="x",
+                period=SimulationPeriod("2024-01-01", "2024-01-07"),
+                home=_home(),
+                tariff_config=TariffConfig.economy_7(),
+            )
+
+
+class TestMapHomes:
+    """map_homes(transform) applies *transform* to each stored home, in either form, keeping every scenario-level field."""
+
+    def test_the_single_home_form_maps_its_home(self) -> None:
+        home = _home()
+
+        mapped = _scenario(home=home).map_homes(_one_kw_larger)
+
+        assert mapped.home == _one_kw_larger(home)
+        assert mapped.homes == ()
+
+    def test_the_fleet_form_maps_each_home_in_order(self) -> None:
+        scenario = _scenario(homes=[_home(), dataclasses.replace(_home(), name="north")])
+
+        mapped = scenario.map_homes(_one_kw_larger)
+
+        assert mapped.homes == tuple(_one_kw_larger(home) for home in scenario.homes)
+
+    def test_every_scenario_level_field_is_kept(self) -> None:
+        scenario = ScenarioConfig(
+            name="full",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            description="every scenario-level field set",
+            location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
+            homes=[_home(), _home()],
+            output=OutputConfig(aggregation="daily"),
+            seg_tariff_pence_per_kwh=5.0,
+            finance=FinanceConfig(standing_charge_pence_per_day=28.0),
+        )
+
+        mapped = scenario.map_homes(_one_kw_larger)
+
+        assert mapped == dataclasses.replace(
+            scenario, homes=tuple(_one_kw_larger(home) for home in scenario.homes)
+        )
+
+    def test_the_transform_sees_the_stored_home_not_the_filled_one(self) -> None:
+        seen: list[HomeConfig] = []
+
+        def record(home: HomeConfig) -> HomeConfig:
+            seen.append(home)
+            return home
+
+        _scenario(homes=[_home()], seg_tariff_pence_per_kwh=5.0).map_homes(record)
+
+        assert [home.seg_tariff for home in seen] == [None]
+
+    def test_a_transform_giving_a_home_another_seg_rate_is_refused(self) -> None:
+        scenario = _scenario(homes=[_home()], seg_tariff_pence_per_kwh=5.0)
+
+        with pytest.raises(ConfigurationError, match=_naming("homes[0]", "3.0", "5.0")):
+            scenario.map_homes(lambda home: dataclasses.replace(home, seg_tariff=SEGTariff("", 3.0)))
 
 
 class TestLoadConfigYaml:

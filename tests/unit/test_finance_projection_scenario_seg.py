@@ -2,15 +2,14 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Unit tests for scenario-level SEG.
 
-_reconcile_seg_homes threads ScenarioConfig.seg_tariff_pence_per_kwh onto the
-homes and refuses an inconsistent per-home rate, and project_multi_year and
-solve_cost_recovery_rate honour the scenario rate.
+project_multi_year and solve_cost_recovery_rate honour
+ScenarioConfig.seg_tariff_pence_per_kwh through ScenarioConfig.simulated_homes(),
+which gives the scenario rate to each home that carries no SEG tariff of its own.
 """
 from __future__ import annotations
 
 import dataclasses
 import math
-import re
 from typing import Callable
 
 import pandas as pd
@@ -19,73 +18,12 @@ import pytest
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import (
     FinanceConfig,
-    _reconcile_seg_homes,
     project_multi_year,
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
-
-
-class TestReconcileSegHomes:
-    """Unit tests for the _reconcile_seg_homes pure helper."""
-
-    def test_none_scenario_rate_returns_homes_unchanged(self) -> None:
-        """(a) When scenario_seg_rate is None, return the homes list unchanged."""
-        home = make_home_config()
-        result = _reconcile_seg_homes([home], scenario_seg_rate=None)
-        assert result == [home]
-        assert result[0] is home  # same object, no copy
-
-    def test_none_seg_home_gets_tariff_threaded(self) -> None:
-        """(b) Home with seg_tariff=None + scenario_seg_rate=6.0 → seg_tariff set to SEGTariff(6.0).
-
-        Other HomeConfig fields (pv_config, load_config, location, battery_config)
-        are preserved unchanged via dataclasses.replace semantics.
-        """
-        home = make_home_config()
-        assert home.seg_tariff is None  # pre-condition
-
-        result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
-        assert len(result) == 1
-        updated = result[0]
-        # seg_tariff is threaded
-        assert updated.seg_tariff is not None
-        assert isinstance(updated.seg_tariff, SEGTariff)
-        assert updated.seg_tariff.rate_pence_per_kwh == pytest.approx(6.0)
-        # other fields preserved
-        assert updated.pv_config == home.pv_config
-        assert updated.load_config == home.load_config
-        assert updated.location == home.location
-        assert updated.battery_config == home.battery_config
-        # input not mutated
-        assert home.seg_tariff is None
-
-    def test_home_with_existing_seg_and_none_scenario_rate_unchanged(self) -> None:
-        """(c) Home with seg_tariff=SEGTariff(4.0) + scenario_seg_rate=None → unchanged."""
-        tariff = SEGTariff(name="export", rate_pence_per_kwh=4.0)
-        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
-        result = _reconcile_seg_homes([home], scenario_seg_rate=None)
-        assert result == [home]
-        assert result[0].seg_tariff is tariff
-
-    def test_consistent_rate_no_raise_home_unchanged(self) -> None:
-        """(d) Home seg=SEGTariff(6.0) + scenario_seg_rate=6.0 (CLI-style) → no raise, same home."""
-        tariff = SEGTariff(name="", rate_pence_per_kwh=6.0)
-        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
-        # Must not raise; home is returned as-is (rates match)
-        result = _reconcile_seg_homes([home], scenario_seg_rate=6.0)
-        assert len(result) == 1
-        assert result[0] is home
-
-    def test_inconsistent_rate_raises_value_error(self) -> None:
-        """(e) Home seg=SEGTariff(4.0) + scenario_seg_rate=6.0 → raises ValueError naming both rates."""
-        tariff = SEGTariff(name="", rate_pence_per_kwh=4.0)
-        home = dataclasses.replace(make_home_config(), seg_tariff=tariff)
-
-        with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
-            _reconcile_seg_homes([home], scenario_seg_rate=6.0)
 
 
 def _seg_aware_fleet_results_factory(
@@ -179,8 +117,8 @@ class TestProjectHonoursScenarioLevelSeg:
         """project_multi_year: scenario_seg fleet_revenue equals home_ref at year 0 (non-vacuous).
 
         scenario_seg (homes seg=None, scenario rate=R) must produce the same
-        fleet_revenue_gbp as home_ref (homes seg=SEGTariff(R), scenario rate=None)
-        after _reconcile_seg_homes threads the tariff onto homes.
+        fleet_revenue_gbp as home_ref (homes seg=SEGTariff(R), scenario rate=None),
+        since simulated_homes() gives the scenario rate to each home.
         Both must exceed baseline_none (no SEG at all) — proving the SEG
         income is load-bearing.
         """
@@ -205,6 +143,29 @@ class TestProjectHonoursScenarioLevelSeg:
             f"SEG income must increase fleet_revenue vs no-SEG baseline "
             f"(home_ref={rev_ref:.4f}, baseline={rev_base:.4f})"
         )
+
+    def test_project_multi_year_honours_scenario_level_seg_on_a_single_home(self) -> None:
+        """A single-home scenario's rate earns the year-0 revenue its home's own tariff at that rate earns (non-vacuous)."""
+        *_, finance = self._make_three_scenarios()
+        home = make_home_config()
+        period = SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31")
+        scenario_seg = ScenarioConfig(
+            name="single-seg", period=period, home=home, seg_tariff_pence_per_kwh=self._SEG_RATE
+        )
+        home_ref = ScenarioConfig(
+            name="single-home-ref",
+            period=period,
+            home=dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=self._SEG_RATE)),
+        )
+        baseline_none = ScenarioConfig(name="single-baseline", period=period, home=home)
+        sim = _seg_aware_fleet_results_factory()
+
+        rev_seg = project_multi_year(scenario_seg, finance, simulate=sim).points[0].fleet_revenue_gbp
+        rev_ref = project_multi_year(home_ref, finance, simulate=sim).points[0].fleet_revenue_gbp
+        rev_base = project_multi_year(baseline_none, finance, simulate=sim).points[0].fleet_revenue_gbp
+
+        assert rev_seg == pytest.approx(rev_ref, rel=1e-6)
+        assert rev_ref > rev_base
 
     def test_solve_cost_recovery_rate_honours_scenario_level_seg(self) -> None:
         """solve_cost_recovery_rate: scenario_seg solution equals home_ref (non-vacuous).
@@ -277,29 +238,3 @@ class TestProjectHonoursScenarioLevelSeg:
             f"baseline: rate={sol_base.own_use_rate_pence_per_kwh:.4f}p, "
             f"surplus={sol_base.net_surplus_per_home_per_year_gbp:.4f})"
         )
-
-    def test_inconsistent_seg_inputs_raise_through_projection(self) -> None:
-        """project_multi_year raises ValueError when per-home seg_tariff != scenario rate."""
-        homes_inconsistent = [
-            dataclasses.replace(
-                make_home_config(),
-                seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.0),
-            )
-            for _ in range(self._N_HOMES)
-        ]
-        scenario_inconsistent = ScenarioConfig(
-            name="test-inconsistent",
-            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
-            description="Inconsistent SEG",
-            homes=homes_inconsistent,
-            seg_tariff_pence_per_kwh=6.0,  # 6.0 != 4.0 → should raise
-        )
-        finance = FinanceConfig(
-            standing_charge_pence_per_day=28.0,
-            asset_life_years=25,
-            loan_term_years=15,
-        )
-        sim = _seg_aware_fleet_results_factory()
-
-        with pytest.raises(ValueError, match=re.compile(r"inconsistent.*SEG", re.IGNORECASE)):
-            project_multi_year(scenario_inconsistent, finance, simulate=sim)

@@ -107,7 +107,7 @@ def make_scenario(
         name="test-scenario",
         period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
         description="Unit test scenario",
-        homes=[make_home_config(battery_config=battery_config) for _ in range(n_homes)],
+        homes=tuple(make_home_config(battery_config=battery_config) for _ in range(n_homes)),
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
         finance=finance,
     )
@@ -115,7 +115,7 @@ def make_scenario(
 
 def make_scenario_of(homes: Sequence[HomeConfig]) -> ScenarioConfig:
     """make_scenario's scenario, holding exactly *homes*."""
-    return dataclasses.replace(make_scenario(), homes=list(homes))
+    return dataclasses.replace(make_scenario(), homes=tuple(homes))
 
 
 def make_scenario_and_finance(

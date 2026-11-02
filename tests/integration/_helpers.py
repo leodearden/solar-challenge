@@ -44,6 +44,6 @@ def board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:
     scenario = ScenarioConfig(
         name="Board-GridServices-Test",
         period=period,
-        homes=list(fleet.homes),
+        homes=tuple(fleet.homes),
     )
     return scenario, finance

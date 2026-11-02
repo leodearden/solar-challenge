@@ -8,6 +8,7 @@ import dataclasses
 import pytest
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.optimize import apply_knob
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from tests._finance_builders import make_home_config, make_scenario_and_finance
@@ -17,6 +18,18 @@ def _fleet_scenario(n_homes: int = 2) -> ScenarioConfig:
     """A fleet of *n_homes* default homes carrying make_scenario_and_finance's finance block."""
     scenario, finance = make_scenario_and_finance(n_homes=n_homes)
     return dataclasses.replace(scenario, finance=finance)
+
+
+def _fleet_carrying(tariffs: list[SEGTariff | None]) -> ScenarioConfig:
+    """_fleet_scenario's fleet with no scenario SEG rate, its homes carrying *tariffs* in order."""
+    scenario = _fleet_scenario(n_homes=len(tariffs))
+    return dataclasses.replace(
+        scenario,
+        homes=tuple(
+            dataclasses.replace(home, seg_tariff=tariff)
+            for home, tariff in zip(scenario.homes, tariffs, strict=True)
+        ),
+    )
 
 
 class TestApplyKnob:
@@ -43,40 +56,42 @@ class TestApplyKnob:
         assert new.finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(42.0)
 
     @pytest.mark.parametrize("name", ["seg", "seg_tariff_pence_per_kwh"])
-    def test_seg_knob_reprices_the_scenario_and_every_home(self, name: str) -> None:
-        """Either SEG name sets the scenario's SEG rate and every home's tariff, leaving finance alone."""
+    def test_seg_knob_sets_the_rate_every_simulated_home_exports_at(self, name: str) -> None:
+        """Either SEG name sets only the scenario's rate, which each home without a tariff simulates at."""
         scenario = _fleet_scenario()
 
         new = apply_knob(scenario, name, 7.5)
 
         assert new.seg_tariff_pence_per_kwh == pytest.approx(7.5)
-        assert [home.seg_tariff for home in new.homes] == [
+        assert new.homes == scenario.homes
+        assert [home.seg_tariff for home in new.simulated_homes()] == [
             SEGTariff(name="", rate_pence_per_kwh=7.5)
         ] * len(scenario.homes)
         assert new.finance is scenario.finance
 
-    def test_seg_knob_replaces_whatever_tariff_each_home_carried(self) -> None:
-        """A preset, no tariff and another rate all end on the swept rate, as an unnamed tariff."""
-        carried = [
-            resolve_seg_tariff("Octopus"),
-            None,
-            SEGTariff(name="", rate_pence_per_kwh=9.9),
-        ]
-        scenario = _fleet_scenario(n_homes=len(carried))
-        scenario = dataclasses.replace(
-            scenario,
-            homes=[
-                dataclasses.replace(home, seg_tariff=tariff)
-                for home, tariff in zip(scenario.homes, carried, strict=True)
-            ],
+    def test_seg_knob_refuses_a_home_carrying_another_rate(self) -> None:
+        """A home whose own tariff sets another rate is refused, naming it and both rates, not overwritten."""
+        scenario = _fleet_carrying(
+            [resolve_seg_tariff("Octopus"), None, SEGTariff(name="", rate_pence_per_kwh=9.9)]
         )
 
-        new = apply_knob(scenario, "seg", 6.0)
+        with pytest.raises(ConfigurationError, match=r"homes\[0\].*4\.1.*6\.0"):
+            apply_knob(scenario, "seg", 6.0)
 
-        assert new.seg_tariff_pence_per_kwh == pytest.approx(6.0)
-        assert [home.seg_tariff for home in new.homes] == [
-            SEGTariff(name="", rate_pence_per_kwh=6.0)
-        ] * len(carried)
+    def test_seg_knob_keeps_the_homes_carrying_the_swept_rate(self) -> None:
+        """Homes whose own tariff already sets the swept rate are accepted, each keeping its tariff."""
+        octopus = resolve_seg_tariff("Octopus")
+        scenario = _fleet_carrying([octopus, None])
+
+        new = apply_knob(scenario, "seg", octopus.rate_pence_per_kwh)
+
+        assert new.seg_tariff_pence_per_kwh == pytest.approx(octopus.rate_pence_per_kwh)
+        assert new.homes == scenario.homes
+
+    def test_seg_knob_refuses_a_rate_segtariff_refuses_as_it_sets_it(self) -> None:
+        """A swept rate SEGTariff refuses is refused by the knob itself, naming the rate, not later by a sweep."""
+        with pytest.raises(ConfigurationError, match=r"seg_tariff_pence_per_kwh=-1\.0.*at least 0"):
+            apply_knob(_fleet_scenario(), "seg", -1.0)
 
     @pytest.mark.parametrize("name", ["degradation", "degradation_rate_per_year"])
     def test_degradation_knob_sets_every_homes_pv_degradation(self, name: str) -> None:
