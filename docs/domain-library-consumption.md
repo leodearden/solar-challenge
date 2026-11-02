@@ -971,7 +971,18 @@ raises `ConfigurationError` for a set `tariff_config`, which no simulation
 reads, naming `HomeConfig.tariff_config`, so `load_scenarios` refuses a
 scenario that sets `tariff_config:`; the tag builds that scenario and loads
 that file. Consumers give each home its tariff as `HomeConfig.tariff_config`
-when they re-pin.
+when they re-pin. `optimize.apply_knob`, which the tag lacks, sets only the
+scenario's rate through its `'seg'` knob and leaves the stored homes as they
+are, as the tag's `sensitivity_panel` does, so `simulated_homes()` gives the
+swept rate to each home without a tariff of its own. When a home carries its
+own tariff at another rate, the knob raises `ConfigurationError`, naming the
+home's position and both rates, where the tag's `sensitivity_panel` raises a
+plain `ValueError` as it evaluates that value. `optimize.run_sweep` simulates
+its age-0 baseline outlay fleet as `simulated_homes()` gives it, as it already
+simulates the solve's and the projection's fleets; the tag simulates that fleet
+without the scenario's rate on a home that has no tariff of its own.
+`baseline_outlay_gbp` is unchanged, since the householder bill reads no export
+income.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

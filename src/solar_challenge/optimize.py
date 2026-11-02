@@ -27,7 +27,6 @@ from solar_challenge.fleet import FleetConfig, simulate_fleet
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
-from solar_challenge.seg import SEGTariff
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -264,8 +263,7 @@ def iter_configs(
 
     for pv, batt, inv in itertools.product(pv_kwp, battery_kwh, inverter_kw):
         point = ConfigPoint(pv_kwp=pv, battery_kwh=batt, inverter_kw=inv)
-        new_homes = tuple(_apply_install(h, point) for h in base.homes)
-        yield point, replace(base, homes=new_homes)
+        yield point, base.map_homes(lambda home: _apply_install(home, point))
 
 
 def enumerate_configs(
@@ -280,10 +278,9 @@ def enumerate_configs(
     For each combination in ``itertools.product(pv_kwp, battery_kwh, inverter_kw)``
     (pv outermost, inverter innermost) a :class:`ConfigPoint` is built and a new
     :class:`~solar_challenge.config.ScenarioConfig` is produced from *base* via
-    ``dataclasses.replace`` so that all scenario-level fields (finance,
-    location, period, tariff, seg, name) are preserved automatically.  The homes
-    in the returned scenario are homogeneous in PV/battery/inverter install
-    (see :func:`_apply_install`).
+    :meth:`~solar_challenge.config.ScenarioConfig.map_homes`, so every
+    scenario-level field is kept.  The homes in the returned scenario are
+    homogeneous in PV/battery/inverter install (see :func:`_apply_install`).
 
     .. note::
         This function eagerly materialises the full product into a list.  For a
@@ -431,21 +428,6 @@ SENSITIVITY_BANDS: Mapping[str, tuple[float, ...]] = MappingProxyType({
 # OAT knob application
 # ---------------------------------------------------------------------------
 
-def _repriced_at_seg_rate(
-    scenario: ScenarioConfig, rate_pence_per_kwh: float
-) -> ScenarioConfig:
-    """Return *scenario* with its SEG rate and every home's SEG tariff set to *rate_pence_per_kwh*.
-
-    Each home's own tariff, named or not, is replaced, so the whole fleet exports at one rate.
-    """
-    tariff = SEGTariff(name="", rate_pence_per_kwh=rate_pence_per_kwh)
-    return replace(
-        scenario,
-        homes=tuple(replace(home, seg_tariff=tariff) for home in scenario.homes),
-        seg_tariff_pence_per_kwh=rate_pence_per_kwh,
-    )
-
-
 _FINANCE_KNOBS: frozenset[str] = frozenset(f.name for f in dc_fields(FinanceConfig))
 _SEG_KNOBS: tuple[str, ...] = ("seg", "seg_tariff_pence_per_kwh")
 _DEGRADATION_KNOBS: tuple[str, ...] = ("degradation", "degradation_rate_per_year")
@@ -458,8 +440,9 @@ def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioCon
 
     - any :class:`~solar_challenge.finance.FinanceConfig` field: that field of
       ``scenario.finance``;
-    - ``'seg'`` / ``'seg_tariff_pence_per_kwh'``: the scenario's SEG rate and every
-      home's ``seg_tariff``, through :func:`_repriced_at_seg_rate`;
+    - ``'seg'`` / ``'seg_tariff_pence_per_kwh'``: the scenario's SEG rate, which
+      :meth:`~solar_challenge.config.ScenarioConfig.simulated_homes` gives every
+      home that has no tariff of its own;
     - ``'degradation'`` / ``'degradation_rate_per_year'``: every home's
       ``pv_config.degradation_rate_per_year``.
 
@@ -469,6 +452,8 @@ def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioCon
     Raises:
         ValueError: If *scenario* is not a fleet scenario, *name* is not a supported
             knob, or *name* is a FinanceConfig field and ``scenario.finance`` is None.
+        ConfigurationError: A ValueError, if *name* is a SEG knob and a home carries
+            its own tariff at a different rate.
     """
     _require_fleet_scenario(scenario, "apply_knob")
     if name in _FINANCE_KNOBS:
@@ -479,14 +464,12 @@ def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioCon
         new_finance = replace(scenario.finance, **{name: value})  # type: ignore[arg-type]
         return replace(scenario, finance=new_finance)
     if name in _SEG_KNOBS:
-        return _repriced_at_seg_rate(scenario, value)
+        return replace(scenario, seg_tariff_pence_per_kwh=value)
     if name in _DEGRADATION_KNOBS:
-        return replace(
-            scenario,
-            homes=tuple(
-                replace(h, pv_config=replace(h.pv_config, degradation_rate_per_year=value))
-                for h in scenario.homes
-            ),
+        return scenario.map_homes(
+            lambda home: replace(
+                home, pv_config=replace(home.pv_config, degradation_rate_per_year=value)
+            )
         )
     supported = sorted(_FINANCE_KNOBS) + list(_SEG_KNOBS) + list(_DEGRADATION_KNOBS)
     raise ValueError(f"Unknown sensitivity knob '{name}'. Supported knobs: {supported}")
@@ -532,7 +515,8 @@ def sensitivity_panel(
         ValueError: If *base_configs* is empty, *axes* is empty, any axis has
             empty values, or the baseline run has no feasible config.  Every
             axis but the floor's also propagates :func:`apply_knob`'s
-            ValueError for an unknown knob name or a non-fleet scenario.
+            ValueError for an unknown knob name, a non-fleet scenario, or a
+            swept SEG rate that a home's own tariff contradicts.
     """
     # -----------------------------------------------------------------------
     # Input guards
@@ -862,9 +846,10 @@ def _age0_baseline_outlay(
 ) -> float:
     """Compute representative householder outlay from an age-0 fleet simulation.
 
-    Runs the fleet with all PV configs aged to 0.0 using the injected
-    *simulate*, computes per-home :class:`~solar_challenge.home.SummaryStatistics`,
-    and returns
+    Runs the scenario's
+    :meth:`~solar_challenge.config.ScenarioConfig.simulated_homes`, with all PV
+    configs aged to 0.0, using the injected *simulate*, computes per-home
+    :class:`~solar_challenge.home.SummaryStatistics`, and returns
     ``bill_distribution(..., finance, sim_days).representative.total_outlay_gbp``.
 
     This is the 'second pure post-sim evaluation' of
@@ -880,7 +865,7 @@ def _age0_baseline_outlay(
     Returns:
         Representative home's total annual outlay (£).
     """
-    homes = (scenario.home,) if scenario.home is not None else scenario.homes
+    homes = scenario.simulated_homes()
 
     # Age all PV to system_age_years=0.0 (battery left unchanged for age-0 baseline)
     aged_homes = [
