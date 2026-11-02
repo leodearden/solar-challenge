@@ -460,7 +460,7 @@ def _parsed(annotation: object, enclosing: _Enclosing) -> _Construct:
         return _parsed(typing.get_origin(annotation), enclosing)
     if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
-    if _is_subscription(annotation):
+    if _is_subscription_a_construct_reads(annotation):
         return _parsed_subscription(annotation, enclosing)
     if inspect.isclass(annotation):
         return _Leaf(annotation.__qualname__, frozenset({annotation}))
@@ -481,10 +481,14 @@ def _is_bare_alias(annotation: object) -> bool:
     return has_class_origin and not hasattr(annotation, "__args__")
 
 
-def _is_subscription(annotation: object) -> bool:
-    """Whether *annotation* subscripts an origin a construct reads, a class or a name in _CLASSLESS_NAME_KINDS, as list[int] subscripts list and Literal['a'] Literal: not P.args, whose origin is the ParamSpec P, nor Annotated[int, 1], whose metadata are values no construct reads, though its origin is a class on 3.11 and 3.12 and a name from 3.13."""
+def _is_subscription_a_construct_reads(annotation: object) -> bool:
+    """Whether *annotation* is a subscription a construct reads: it subscripts a class or a special form, as list[int] subscripts list and Literal['a'] Literal, and is no Annotated, whose metadata are values no construct reads, though its origin is a class on 3.11 and 3.12 and a special form from 3.13.
+
+    Not P.args, whose origin is the ParamSpec P, whatever _CLASSLESS_NAME_KINDS lists: that
+    list makes a name a leaf, not an origin a subscription is read from.
+    """
     origin = typing.get_origin(annotation)
-    is_read_origin = inspect.isclass(origin) or isinstance(origin, _CLASSLESS_NAME_KINDS)
+    is_read_origin = inspect.isclass(origin) or isinstance(origin, typing._SpecialForm)
     return is_read_origin and origin is not typing.Annotated
 
 
