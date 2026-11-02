@@ -156,13 +156,21 @@ def test_an_abstract_member_form_begins_with_abstract() -> None:
     }
 
 
-def test_a_class_constant_member_is_spelled_by_its_type() -> None:
+def test_a_class_constant_member_is_spelled_as_surface_form_spells_a_constant() -> None:
     class Meter:
         UNITS = "kWh"
         SCALE = 1.5
         RATE: ClassVar[float] = 0.15
+        LIMITS = (0.1, 0.9)
+        RATES: ClassVar[dict[str, float]] = {"peak": 0.3}
 
-    assert member_forms(Meter) == {"UNITS": "str", "SCALE": "float", "RATE": "float"}
+    assert member_forms(Meter) == {
+        "UNITS": "str",
+        "SCALE": "float",
+        "RATE": "float",
+        "LIMITS": "tuple [float × 2]",
+        "RATES": "dict {'peak': float}",
+    }
 
 
 def test_a_class_constant_the_body_also_annotates_is_spelled_by_its_type_not_as_an_attribute() -> None:
@@ -818,6 +826,36 @@ def test_a_function_member_that_wraps_a_callable_descriptor_but_carries_a_signat
         half.__signature__ = None
 
     assert member_forms(Meter) == {"half": "(self, rate: int) -> None"}
+
+
+def test_a_public_name_a_class_body_binds_to_a_class_raises_a_type_error_naming_the_member_and_that_class() -> None:
+    class Meter:
+        class Reading:
+            def scaled(self, factor: float) -> float: ...
+
+    class Gauge:
+        Unit = Preset
+
+    class Panel:
+        class Kind(enum.Enum):
+            SOLAR = 1
+
+    with pytest.raises(
+        TypeError, match=r"\.Meter\.Reading is the class \S+\.Meter\.Reading\b"
+    ):
+        member_forms(Meter)
+    with pytest.raises(
+        TypeError,
+        match=r"\.Gauge\.Unit is the class tests\.unit\.surface_forms_helper\._fixtures\.Preset\b",
+    ):
+        member_forms(Gauge)
+    with pytest.raises(
+        TypeError,
+        match=r"\.Panel\.Kind is the class \S+\.Panel\.Kind, so member_forms would not pin that class's own members\b",
+    ):
+        member_forms(Panel)
+    with pytest.raises(TypeError, match=r"\.Meter\.Reading is the class"):
+        named_classes(Meter)
 
 
 @pytest.mark.parametrize(("routine", "kind"), UNREADABLE_ROUTINES)

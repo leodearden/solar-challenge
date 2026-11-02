@@ -325,6 +325,12 @@ def test_a_named_tuple_names_the_classes_its_constructor_annotates_its_fields_wi
     assert named_classes(Reading) == {pathlib.Path, Preset}
 
 
-def test_a_constant_names_its_type() -> None:
-    assert named_classes({"a": 1}) == {dict}
+def test_a_constant_names_its_type_and_the_classes_its_values_or_items_forms_name_but_never_a_keys_class() -> None:
     assert named_classes(Preset(rate=0.1)) == {Preset}
+    assert named_classes({1: [2.0], 2: (Preset(rate=0.1),)}) == {
+        dict,
+        list,
+        float,
+        tuple,
+        Preset,
+    }

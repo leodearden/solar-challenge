@@ -4,6 +4,7 @@
 Wrapper is defined at module level, where its qualified name carries no '<locals>'.
 """
 
+import collections
 import collections.abc
 import datetime
 import enum
@@ -407,10 +408,110 @@ def test_an_enum_form_is_its_members_in_definition_order() -> None:
     assert surface_form(Period) == "PEAK='peak', OFF_PEAK='off_peak'"
 
 
-def test_a_constant_form_is_its_type_qualified_name() -> None:
-    assert surface_form({"a": 1}) == "dict"
-    assert surface_form((1, 2)) == "tuple"
+def test_an_enum_form_lists_its_aliases_in_definition_order_each_with_the_value_of_the_member_it_names() -> None:
+    class Rate(enum.Enum):
+        A = 1
+        B = 1
+        C = 2
+
+    class Access(enum.Flag):
+        READ = 4
+        WRITE = 2
+        READ_WRITE = 6
+
+    assert surface_form(Rate) == "A=1, B=1, C=2"
+    assert surface_form(Access) == "READ=4, WRITE=2, READ_WRITE=6"
+
+
+def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qualified_name() -> None:
     assert surface_form(Preset(rate=0.15)) == "Preset"
+    assert surface_form("kWh") == "str"
+    assert surface_form(frozenset({1})) == "frozenset"
+
+
+def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration_order_each_key_by_its_repr_and_each_value_by_its_form() -> None:
+    assert (
+        surface_form({"Octopus": Preset(rate=4.1), "OVO": Preset(rate=4.0), 3: 0.5})
+        == "dict {'Octopus': Preset, 'OVO': Preset, 3: float}"
+    )
+    assert surface_form(types.MappingProxyType({"peak": 0.3})) == "mappingproxy {'peak': float}"
+    assert surface_form(collections.OrderedDict(b=1, a="x")) == "OrderedDict {'b': int, 'a': str}"
+    assert surface_form({}) == "dict {}"
+
+
+def test_a_mapping_key_whose_type_is_not_exactly_str_int_float_bool_or_none_raises_a_type_error_naming_that_type() -> None:
+    class Level(enum.IntEnum):
+        LOW = 1
+
+    assert surface_form({0.5: 1, True: 2, None: 3}) == "dict {0.5: int, True: int, None: int}"
+    with pytest.raises(
+        TypeError, match=r"\btests\.unit\.surface_forms_helper\._fixtures\.Preset\b"
+    ):
+        surface_form({Preset(rate=0.1): 1})
+    with pytest.raises(TypeError, match=r"\bbuiltins\.object\b"):
+        surface_form({"rates": {object(): 1}})
+    with pytest.raises(TypeError, match=r"<locals>\.Level\b"):
+        named_classes({Level.LOW: 1})
+
+
+def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in_order() -> None:
+    assert surface_form([1.0, "kWh", Preset(rate=0.1)]) == "list [float, str, Preset]"
+    assert surface_form((Outer.Inner(),)) == "tuple [Outer.Inner]"
+    assert surface_form(()) == "tuple []"
+
+
+def test_an_instance_of_a_list_or_tuple_subclass_is_spelled_by_its_types_qualified_name_alone() -> None:
+    class Window(typing.NamedTuple):
+        start: int
+        end: float
+
+    class Band(tuple, enum.Enum):
+        LOW = (0.0, 0.1)
+
+    class Readings(list):
+        pass
+
+    assert surface_form(Window(1, 2.0)) == Window.__qualname__
+    assert surface_form(Band.LOW) == Band.__qualname__
+    assert surface_form(Readings([0.5])) == Readings.__qualname__
+    assert named_classes(Window(1, 2.0)) == {Window}
+
+
+def test_a_run_of_equal_item_forms_in_a_list_or_tuple_is_spelled_once_with_its_count() -> None:
+    assert surface_form([0.012] * 48) == "list [float × 48]"
+    assert surface_form((1, 2, "a", 3)) == "tuple [int × 2, str, int]"
+
+
+def test_a_value_a_constant_holds_is_spelled_by_the_rules_of_a_constant() -> None:
+    assert (
+        surface_form({"bands": [(0.1, 0.9)], "rates": {"peak": 0.3}})
+        == "dict {'bands': list [tuple [float × 2]], 'rates': dict {'peak': float}}"
+    )
+
+
+def test_a_list_tuple_or_mapping_a_constant_holds_inside_itself_raises_a_type_error_naming_its_type() -> None:
+    looped: list[object] = [1.0]
+    looped.append(looped)
+    keyed: dict[str, object] = {}
+    keyed["self"] = (keyed,)
+    shared = [0.5]
+
+    assert surface_form((shared, shared)) == "tuple [list [float] × 2]"
+    with pytest.raises(TypeError, match=r"\bbuiltins\.list held in a constant holds itself\b"):
+        surface_form(looped)
+    with pytest.raises(TypeError, match=r"\bbuiltins\.dict held in a constant holds itself\b"):
+        named_classes(keyed)
+
+
+def test_a_class_or_routine_a_constant_holds_raises_a_type_error_naming_it() -> None:
+    with pytest.raises(
+        TypeError, match=r"\btests\.unit\.surface_forms_helper\._fixtures\.Preset\b"
+    ):
+        surface_form({"preset": Preset})
+    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b"):
+        surface_form([len])
+    with pytest.raises(TypeError, match=r"\bbuiltins\.len\b"):
+        named_classes((len,))
 
 
 @pytest.mark.parametrize(

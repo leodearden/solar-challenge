@@ -31,7 +31,7 @@ Usage::
         def reading(self) -> float: ...
 
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
-    assert surface_form({"peak": 0.3}) == "dict"
+    assert surface_form({"peak": 0.3}) == "dict {'peak': float}"
     assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
     assert named_classes(Meter) == {Path, float}
     assert undeclared_attributes(Meter) == {"label"}
@@ -42,10 +42,11 @@ import ast
 import collections
 import dataclasses
 import inspect
+import itertools
 import textwrap
 import types
 import typing
-from collections.abc import Callable, Collection, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
 from tests._surface_forms_labels import label_of
@@ -71,12 +72,21 @@ from tests._surface_forms_signatures import (
 def surface_form(obj: object) -> str:
     """The surface form of *obj*.
 
-    An Enum's is its members, as NAME=value in definition order. A constant's, that of
-    anything neither a class nor a routine, is its type's qualified name; a
-    functools.partial is a routine on every admitted minor, and any other descriptor
-    whose type defines __get__ and __delete__ but no __set__ is no routine on any. Any
-    other class's or routine's is its signature, a class's being its constructor's
-    without self and a partial's the one it leaves of the callable it wraps.
+    An Enum's is its members, aliases included, as NAME=value in definition order, an
+    alias with the value of the member it names. A constant's, that of anything neither
+    a class nor a routine, is its type's qualified name; a functools.partial is a
+    routine on every admitted minor, and any other descriptor whose type defines __get__
+    and __delete__ but no __set__ is no routine on any. After that name, a mapping's
+    form gives its entries in braces in iteration order, each key by its repr and each
+    value by its own form, and a list's or tuple's, but not a subclass instance's, such
+    as a NamedTuple's, gives its items' forms in brackets, a run of equal forms spelled
+    once with its count, as in list [float × 48]. A class or routine held in a constant
+    raises TypeError naming it, and a key whose type is not exactly str, int, float,
+    bool or NoneType, whose reprs alone are the literals that write them on every
+    admitted minor, raises TypeError naming its type, as does a list, tuple or mapping
+    held inside itself. Any other class's or routine's is its signature, a class's
+    being its constructor's without self and a partial's the one it leaves of the
+    callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -103,9 +113,9 @@ def surface_form(obj: object) -> str:
     too, with its kind.
     """
     if is_enum(obj):
-        return ", ".join(f"{member.name}={member.value!r}" for member in obj)
+        return ", ".join(f"{name}={member.value!r}" for name, member in obj.__members__.items())
     if not _is_class_or_routine(obj):
-        return type(obj).__qualname__
+        return _constant(obj).text()
     signature = signature_of(obj)
     text = str(
         signature.replace(
@@ -153,10 +163,12 @@ def member_forms(cls: type) -> dict[str, str]:
     bind raises NameError, a module inspect reads no source for raises TypeError, and a
     module another of the same name has replaced in sys.modules raises LookupError. A
     class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
-    the TypeError own_namespace raises for it. A public member that no member rule
-    spells and that is a routine whose signature inspect cannot read, as surface_form
-    describes one, or a functools.partial, raises TypeError naming *cls*, the member and
-    its kind or binding.
+    the TypeError own_namespace raises for it. A public name the body binds to a class,
+    by a nested class statement or an alias, raises TypeError naming *cls*, the name and
+    that class, whose own members it would leave unpinned. A public member that no
+    member rule spells and that is a routine whose signature inspect cannot read, as
+    surface_form describes one, or a functools.partial, raises TypeError naming *cls*,
+    the member and its kind or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -226,7 +238,8 @@ def named_classes(obj: object) -> set[type]:
     A type parameter, as in def f[T: "Node"](x: T), reports no module of its own: what
     it carries is spelled in the module that spells the signature holding it. That
     module binds no type parameter, so a string that names one, as "Node[T]" names T,
-    raises NameError. A constant names its type, and an Enum's members name nothing.
+    raises NameError. A constant names the classes its form spells: its type and those
+    its values' or items' forms name, never a key's. An Enum's members name nothing.
     """
     if not inspect.isclass(obj):
         return _form_classes(obj)
@@ -577,12 +590,117 @@ def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
     return tuple(_Leaf(repr(value)) for value in values)
 
 
+class _Constant(abc.ABC):
+    """A constant, or a value inside one, read as its form spells it: the one reading both the form's text and the classes it names are taken from."""
+
+    @abc.abstractmethod
+    def text(self) -> str:
+        """The spelling, alike on every admitted minor."""
+
+    @abc.abstractmethod
+    def classes(self) -> set[type]:
+        """The classes it names, read in no module, as a constant's form holds no name to resolve."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _Typed(_Constant):
+    """A value read by its type alone: spelled by the type's qualified name, naming that type."""
+
+    kind: type
+
+    def text(self) -> str:
+        return self.kind.__qualname__
+
+    def classes(self) -> set[type]:
+        return {self.kind}
+
+
+@dataclasses.dataclass(frozen=True)
+class _Entries(_Constant):
+    """A mapping: spelled by its type, then its entries in braces in iteration order, each key by its repr and each value by its form; naming its type and its values' classes, a key naming none, as a Literal value names none."""
+
+    kind: _Typed
+    entries: tuple[tuple[str, _Constant], ...]
+
+    def text(self) -> str:
+        inside = ", ".join(f"{key}: {value.text()}" for key, value in self.entries)
+        return f"{self.kind.text()} {{{inside}}}"
+
+    def classes(self) -> set[type]:
+        return self.kind.classes().union(*(value.classes() for _, value in self.entries))
+
+
+@dataclasses.dataclass(frozen=True)
+class _Items(_Constant):
+    """A list or tuple: spelled by its type, then its items' forms in brackets in order, a run of n > 1 equal forms spelled once as form × n; naming its type and its items' classes."""
+
+    kind: _Typed
+    items: tuple[_Constant, ...]
+
+    def text(self) -> str:
+        runs = (
+            (form, sum(1 for _ in run))
+            for form, run in itertools.groupby(item.text() for item in self.items)
+        )
+        inside = ", ".join(form if count == 1 else f"{form} × {count}" for form, count in runs)
+        return f"{self.kind.text()} [{inside}]"
+
+    def classes(self) -> set[type]:
+        return self.kind.classes().union(*(item.classes() for item in self.items))
+
+
+def _constant(value: object, holder_ids: frozenset[int] = frozenset()) -> _Constant:
+    """*value* read as a constant, held in the containers whose ids *holder_ids* gives: a mapping by its entries, each key as _spelled_key spells it, a list or tuple by its items, anything else by its type, an instance of a list or tuple subclass, such as a NamedTuple's, included.
+
+    A class or routine raises TypeError naming it, as no rule of a constant's form spells
+    one, and a value among its own holders raises TypeError naming its type, as the form
+    of a container held inside itself would never end.
+    """
+    if _is_class_or_routine(value):
+        raise TypeError(
+            f"{label_of(value)} is held in a constant, and no rule of a constant's form "
+            "spells a class or routine: hold no class or routine in a public constant, or "
+            "make the constant private"
+        )
+    if id(value) in holder_ids:
+        raise TypeError(
+            f"a {label_of(type(value))} held in a constant holds itself, and a constant's "
+            "form, which spells each value it holds, would never end: hold no container "
+            "inside itself in a public constant, or make the constant private"
+        )
+    inside = holder_ids | {id(value)}
+    if isinstance(value, Mapping):
+        return _Entries(
+            _Typed(type(value)),
+            tuple((_spelled_key(key), _constant(item, inside)) for key, item in value.items()),
+        )
+    if type(value) is list or type(value) is tuple:
+        return _Items(_Typed(type(value)), tuple(_constant(item, inside) for item in value))
+    return _Typed(type(value))
+
+
+_LITERAL_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, types.NoneType)
+
+
+def _spelled_key(key: object) -> str:
+    """*key* by its repr, if its type is exactly one of _LITERAL_KEY_TYPES, whose repr is the literal that writes it on every admitted minor; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
+    if type(key) not in _LITERAL_KEY_TYPES:
+        names = ", ".join(kind.__qualname__ for kind in _LITERAL_KEY_TYPES)
+        raise TypeError(
+            f"a key of type {label_of(type(key))} is held in a constant, and a constant's "
+            f"form spells a key only if its type is one of {names}, whose repr is the "
+            "literal that writes the key on every admitted minor: key the mapping by one of "
+            "those types, or make the constant private"
+        )
+    return repr(key)
+
+
 def _form_classes(obj: object) -> set[type]:
-    """The classes surface_form(obj) names: none for an Enum, a constant's type, else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
+    """The classes surface_form(obj) names: none for an Enum; for a constant its type and those its values' or items' forms name, never a key's; else those its signature's annotations name, each read in the module that spells it; none, and no module looked up, for a signature that annotates nothing."""
     if is_enum(obj):
         return set()
     if not _is_class_or_routine(obj):
-        return {type(obj)}
+        return _constant(obj).classes()
     annotations = _signature_annotations(signature_of(obj))
     if not annotations:
         return set()
@@ -752,7 +870,8 @@ class _AnnotatedAttribute:
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
-    A member that spelled_function has no rule for raises the TypeError
+    A member that is a class raises the TypeError _refuse_class_member raises for it
+    first. Then a member that spelled_function has no rule for raises the TypeError
     refuse_member_without_a_portable_form raises for it, if any, naming *cls* and the
     member.
     """
@@ -763,9 +882,20 @@ def _public_members(cls: type) -> dict[str, object]:
         if not name.startswith("_") and name not in pinned
     }
     for name, member in members.items():
+        label = f"{label_of(cls)}.{name}"
+        _refuse_class_member(label, member)
         if spelled_function(member) is None:
-            refuse_member_without_a_portable_form(f"{label_of(cls)}.{name}", member)
+            refuse_member_without_a_portable_form(label, member)
     return members
+
+
+def _refuse_class_member(label: str, member: object) -> None:
+    """Raise TypeError naming the member *label* and the class it is, if *member* is a class, whose own members member_forms would leave unpinned."""
+    if inspect.isclass(member):
+        raise TypeError(
+            f"{label} is the class {label_of(member)}, so member_forms would not pin that "
+            "class's own members: make the name private, or bind the class at module level"
+        )
 
 
 def _own_members(cls: type) -> dict[str, object]:
