@@ -48,10 +48,10 @@ in text-signature form, were measured on those releases on 2026-10-30. 3.4's rea
 a class whose metaclass gives a `__mro__` other than the MRO the class records, 4.5's
 reading of such a class's constructor, and 4.8's readings, of a class whose metaclass
 shadows `__dict__`, were measured on CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 and 3.14.4
-on 2026-10-31, and 4.8's readings of a class whose metaclass defines `__getattribute__`,
-its reading of where `inspect.getsource` finds a class's statement, and 4.9's readings
-on those releases on 2026-11-01. A new refusal gets its rule test first, then its entry
-here.
+on 2026-10-31, and 4.8's readings of a class whose metaclass's MRO holds a class
+other than `type` and `object` that holds a `__getattribute__`, its reading of where
+`inspect.getsource` finds a class's statement, and 4.9's readings on those releases on
+2026-11-01. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
