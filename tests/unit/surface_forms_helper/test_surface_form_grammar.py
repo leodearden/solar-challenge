@@ -439,6 +439,21 @@ def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration
     assert surface_form({}) == "dict {}"
 
 
+def test_a_mapping_key_whose_type_is_not_exactly_str_int_float_bool_or_none_raises_a_type_error_naming_that_type() -> None:
+    class Level(enum.IntEnum):
+        LOW = 1
+
+    assert surface_form({0.5: 1, True: 2, None: 3}) == "dict {0.5: int, True: int, None: int}"
+    with pytest.raises(
+        TypeError, match=r"\btests\.unit\.surface_forms_helper\._fixtures\.Preset\b"
+    ):
+        surface_form({Preset(rate=0.1): 1})
+    with pytest.raises(TypeError, match=r"\bbuiltins\.object\b"):
+        surface_form({"rates": {object(): 1}})
+    with pytest.raises(TypeError, match=r"<locals>\.Level\b"):
+        named_classes({Level.LOW: 1})
+
+
 def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in_order() -> None:
     assert surface_form([1.0, "kWh", Preset(rate=0.1)]) == "list [float, str, Preset]"
     assert surface_form((Outer.Inner(),)) == "tuple [Outer.Inner]"
