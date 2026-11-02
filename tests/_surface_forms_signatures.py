@@ -1174,7 +1174,7 @@ def _generated_constructor_modules(
     holder: type, names: Iterable[str]
 ) -> dict[str, types.ModuleType]:
     """The module spelling each of *names* in a constructor compiled outside *holder*'s body and renamed into it: that of the nearest class in *holder*'s MRO that the dataclass decorator processed and whose own body annotates the name, or *holder*'s if none does."""
-    decorated = tuple(base for base in recorded_mro(holder) if is_decorated_dataclass(base))
+    decorated = tuple(base for base in recorded_mro(holder) if _is_decorated_dataclass(base))
     return {
         name: defining_module(
             next((base for base in decorated if name in own_annotations(base)), holder)
@@ -1249,7 +1249,7 @@ def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
     )
 
 
-def is_decorated_dataclass(cls: type) -> bool:
+def _is_decorated_dataclass(cls: type) -> bool:
     """Whether the dataclass decorator processed *cls* itself; is_dataclass is true as well of an undecorated subclass of a dataclass, whose annotations the decorator never read."""
     return "__dataclass_fields__" in own_namespace(cls)
 
