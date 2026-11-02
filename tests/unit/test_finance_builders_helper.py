@@ -174,12 +174,12 @@ def test_sized_home_has_no_battery_and_an_inverter_sized_to_the_array_by_default
 def test_scenario_holds_n_default_homes_and_the_given_seg_rate() -> None:
     scenario = make_scenario(n_homes=2, seg_tariff_pence_per_kwh=5.0)
 
-    assert scenario.homes == [make_home_config()] * 2
+    assert scenario.homes == (make_home_config(),) * 2
     assert scenario.seg_tariff_pence_per_kwh == 5.0
 
     default_scenario = make_scenario()
 
-    assert default_scenario.homes == [make_home_config()]
+    assert default_scenario.homes == (make_home_config(),)
     assert default_scenario.seg_tariff_pence_per_kwh is None
 
 
@@ -189,7 +189,7 @@ def test_scenario_carries_the_given_finance_block() -> None:
     scenario = make_scenario(n_homes=2, finance=finance)
 
     assert scenario.finance is finance
-    assert scenario.homes == [make_home_config()] * 2
+    assert scenario.homes == (make_home_config(),) * 2
     assert make_scenario().finance is None
 
 
@@ -199,8 +199,8 @@ def test_scenario_builders_give_every_home_the_given_battery() -> None:
 
     scenario, _ = make_scenario_and_finance(n_homes=2, battery_config=battery)
 
-    assert make_scenario(n_homes=2, battery_config=battery).homes == [battery_home] * 2
-    assert scenario.homes == [battery_home] * 2
+    assert make_scenario(n_homes=2, battery_config=battery).homes == (battery_home,) * 2
+    assert scenario.homes == (battery_home,) * 2
 
 
 def test_scenario_of_holds_exactly_the_given_homes() -> None:
@@ -208,7 +208,7 @@ def test_scenario_of_holds_exactly_the_given_homes() -> None:
 
     scenario = make_scenario_of(homes)
 
-    assert scenario.homes == homes
+    assert scenario.homes == tuple(homes)
     assert dataclasses.replace(scenario, homes=[make_home_config()]) == make_scenario()
 
 

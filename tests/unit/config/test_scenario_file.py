@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for a scenario file's top level, from the raw YAML or JSON read to the ScenarioConfig that load_scenarios builds."""
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -106,6 +107,37 @@ class TestScenarioConfig:
         )
         assert scenario.is_fleet
         assert len(scenario.homes) == 3
+
+    def test_holds_its_homes_as_a_tuple_in_order(self) -> None:
+        """A list of homes is held as a tuple in the given order, and the single-home form holds none."""
+        h1 = HomeConfig(pv_config=PVConfig(capacity_kw=3.0), load_config=LoadConfig())
+        h2 = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+        fleet = ScenarioConfig(
+            name="Fleet",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            homes=[h1, h2],
+        )
+        single = ScenarioConfig(
+            name="Single",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            home=h1,
+        )
+
+        assert isinstance(fleet.homes, tuple)
+        assert fleet.homes == (h1, h2)
+        assert single.homes == ()
+
+    def test_refuses_a_field_assignment(self) -> None:
+        """A scenario is a frozen value: assigning one of its fields raises FrozenInstanceError."""
+        scenario = ScenarioConfig(
+            name="Test",
+            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            homes=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
+        )
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            scenario.homes = ()  # type: ignore[misc]
 
     def test_requires_home_or_homes(self) -> None:
         """Test that scenario requires home or homes."""
