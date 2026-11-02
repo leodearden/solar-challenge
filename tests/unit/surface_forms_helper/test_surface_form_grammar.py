@@ -340,7 +340,7 @@ def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qua
     assert surface_form(frozenset({1})) == "frozenset"
 
 
-def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration_order_each_key_by_its_repr_and_each_value_by_its_form() -> None:
+def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration_order_each_key_as_ascii_writes_it_and_each_value_by_its_form() -> None:
     assert (
         surface_form({"Octopus": Preset(rate=4.1), "OVO": Preset(rate=4.0), 3: 0.5})
         == "dict {'Octopus': Preset, 'OVO': Preset, 3: float}"
@@ -348,6 +348,11 @@ def test_a_mapping_constant_is_spelled_by_its_type_then_its_entries_in_iteration
     assert surface_form(types.MappingProxyType({"peak": 0.3})) == "mappingproxy {'peak': float}"
     assert surface_form(collections.OrderedDict(b=1, a="x")) == "OrderedDict {'b': int, 'a': str}"
     assert surface_form({}) == "dict {}"
+    assert surface_form({"\xe9": 1}) == "dict {'\\xe9': int}"
+
+
+def test_a_str_key_holding_a_character_a_newer_unicode_database_assigns_is_spelled_with_its_escape_on_every_minor() -> None:
+    assert surface_form({"\U0001F6DC": 1}) == "dict {'\\U0001f6dc': int}"
 
 
 def test_a_mapping_key_whose_type_is_not_exactly_str_int_float_bool_or_none_raises_a_type_error_naming_that_type() -> None:
