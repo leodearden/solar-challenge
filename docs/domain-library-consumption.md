@@ -957,7 +957,17 @@ a scenario field build the changed scenario with
 sets `seg_tariff_pence_per_kwh`, each home whose `seg_tariff` is None is given
 `SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh)`, and a home's
 own tariff is kept; the stored homes are left as they are. The 0.5.0 tag has no
-such method.
+such method. Construction raises `ConfigurationError`, a `ValueError`, for a
+home whose own `seg_tariff` rate is not `math.isclose` to
+`seg_tariff_pence_per_kwh`, naming the home's position (`home` or `homes[i]`),
+its name and both rates, and `dataclasses.replace` re-runs the check. The tag
+builds that scenario, and its `project_multi_year` and
+`solve_cost_recovery_rate` raise a plain `ValueError` on it. Construction also
+raises `ConfigurationError` for a set `tariff_config`, which no simulation
+reads, naming `HomeConfig.tariff_config`, so `load_scenarios` refuses a
+scenario that sets `tariff_config:`; the tag builds that scenario and loads
+that file. Consumers give each home its tariff as `HomeConfig.tariff_config`
+when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

@@ -489,8 +489,10 @@ class ScenarioConfig:
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
-        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
-        tariff_config: Tariff configuration (None for no cost tracking)
+        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional);
+            a home whose own seg_tariff sets another rate is refused
+        tariff_config: Refused when set: no simulation reads it, so a home's
+            tariff is its HomeConfig.tariff_config
         finance: Financial appraisal parameters (None for no financial analysis)
     """
 
@@ -515,6 +517,12 @@ class ScenarioConfig:
         if self.homes and self.home is not None:
             raise ConfigurationError(
                 f"Scenario '{self.name}' cannot define both 'home' and 'homes'"
+            )
+        self._refuse_a_home_seg_rate_other_than_the_scenarios()
+        if self.tariff_config is not None:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
+                "give each home its tariff as HomeConfig.tariff_config"
             )
 
     @property
@@ -543,6 +551,21 @@ class ScenarioConfig:
         else:
             for index, home in enumerate(self.homes):
                 yield f"homes[{index}]", home
+
+    def _refuse_a_home_seg_rate_other_than_the_scenarios(self) -> None:
+        """Raise ConfigurationError naming the first home whose own SEG rate is not math.isclose to the scenario's."""
+        rate = self.seg_tariff_pence_per_kwh
+        if rate is None:
+            return
+        for path, home in self._homes_by_path():
+            if home.seg_tariff is None or math.isclose(home.seg_tariff.rate_pence_per_kwh, rate):
+                continue
+            named = f"{path} ({home.name!r})" if home.name else path
+            raise ConfigurationError(
+                f"Inconsistent SEG rate: {named} has its own seg_tariff at "
+                f"{home.seg_tariff.rate_pence_per_kwh}p/kWh but scenario '{self.name}' sets "
+                f"seg_tariff_pence_per_kwh={rate}p/kWh. Set only one, or use matching rates."
+            )
 
 
 def _child_path(block_path: str, key: str) -> str:
