@@ -613,14 +613,15 @@ _LITERAL_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, types.NoneType)
 
 
 def _spelled_key(key: object) -> str:
-    """*key* by its repr, if its type is exactly one of _LITERAL_KEY_TYPES, as such a key's repr is the same on every admitted minor; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
+    """*key* by its repr, if its type is exactly one of _LITERAL_KEY_TYPES, as such a key's repr is the same on every admitted minor, a str's while its characters are all assigned in every admitted minor's Unicode database; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
     if type(key) not in _LITERAL_KEY_TYPES:
         names = ", ".join(kind.__qualname__ for kind in _LITERAL_KEY_TYPES)
         raise TypeError(
             f"a key of type {label_of(type(key))} is held in a constant, and a constant's "
             f"form spells a key only if its type is exactly one of {names}, as such a "
-            "key's repr is the same on every admitted minor: key the mapping by one of "
-            "those types, or make the constant private"
+            "key's repr is the same on every admitted minor, a str's while its characters "
+            "are all assigned in every admitted minor's Unicode database: key the mapping "
+            "by one of those types, or make the constant private"
         )
     return repr(key)
 
