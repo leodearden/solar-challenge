@@ -161,11 +161,10 @@ def member_forms(cls: type) -> dict[str, str]:
     class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
     the TypeError own_namespace raises for it. A public name the body binds to a class,
     by a nested class statement or an alias, raises TypeError naming *cls*, the name and
-    that class: its form would spell only that class's constructor, leaving the class's
-    own members unpinned. A public member that no member rule spells and that is a
-    routine whose signature inspect cannot read, as surface_form describes one, or a
-    functools.partial, raises TypeError naming *cls*, the member and its kind or
-    binding.
+    that class, whose own members it would leave unpinned. A public member that no
+    member rule spells and that is a routine whose signature inspect cannot read, as
+    surface_form describes one, or a functools.partial, raises TypeError naming *cls*,
+    the member and its kind or binding.
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
@@ -859,12 +858,11 @@ def _public_members(cls: type) -> dict[str, object]:
 
 
 def _refuse_class_member(label: str, member: object) -> None:
-    """Raise TypeError naming the member *label* and the class it is, if *member* is a class: its form would spell only that class's constructor, leaving the class's own members unpinned."""
+    """Raise TypeError naming the member *label* and the class it is, if *member* is a class, whose own members member_forms would leave unpinned."""
     if inspect.isclass(member):
         raise TypeError(
-            f"{label} is the class {label_of(member)}, so its form would spell only that "
-            "class's constructor and the class's own members would go unpinned: make the "
-            "name private, or bind the class at module level"
+            f"{label} is the class {label_of(member)}, so member_forms would not pin that "
+            "class's own members: make the name private, or bind the class at module level"
         )
 
 

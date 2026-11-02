@@ -836,6 +836,10 @@ def test_a_public_name_a_class_body_binds_to_a_class_raises_a_type_error_naming_
     class Gauge:
         Unit = Preset
 
+    class Panel:
+        class Kind(enum.Enum):
+            SOLAR = 1
+
     with pytest.raises(
         TypeError, match=r"\.Meter\.Reading is the class \S+\.Meter\.Reading\b"
     ):
@@ -845,6 +849,11 @@ def test_a_public_name_a_class_body_binds_to_a_class_raises_a_type_error_naming_
         match=r"\.Gauge\.Unit is the class tests\.unit\.surface_forms_helper\._fixtures\.Preset\b",
     ):
         member_forms(Gauge)
+    with pytest.raises(
+        TypeError,
+        match=r"\.Panel\.Kind is the class \S+\.Panel\.Kind, so member_forms would not pin that class's own members\b",
+    ):
+        member_forms(Panel)
     with pytest.raises(TypeError, match=r"\.Meter\.Reading is the class"):
         named_classes(Meter)
 
