@@ -77,15 +77,16 @@ def surface_form(obj: object) -> str:
     routine on every admitted minor, and any other descriptor whose type defines __get__
     and __delete__ but no __set__ is no routine on any. After that name, a mapping's
     form gives its entries in braces in iteration order, each key by its repr and each
-    value by its own form, and a list's or tuple's, but not a subclass instance's, such
-    as a NamedTuple's, gives its items' forms in brackets, a run of equal forms spelled
-    once with its count, as in list [float × 48]. A class or routine held in a constant
-    raises TypeError naming it, and a key whose type is not exactly str, int, float,
-    bool or NoneType, whose reprs alone are the literals that write them on every
-    admitted minor, raises TypeError naming its type, as does a list, tuple or mapping
-    held inside itself. Any other class's or routine's is its signature, a class's
-    being its constructor's without self and a partial's the one it leaves of the
-    callable it wraps.
+    value by its own form, and a list's or tuple's gives its items' forms in brackets, a
+    run of equal forms spelled once with its count, as in list [float × 48]. A
+    subclass's instance is spelled as its base's is, unless its type is a named tuple or
+    an Enum, whose own form pins what the instance holds: such an instance is spelled by
+    its type alone. A class or routine held in a constant raises TypeError naming it,
+    and a key whose type is not exactly str, int, float, bool or NoneType, whose reprs
+    alone are the literals that write them on every admitted minor, raises TypeError
+    naming its type, as does a list, tuple or mapping held inside itself. Any other
+    class's or routine's is its signature, a class's being its constructor's without
+    self and a partial's the one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -572,8 +573,13 @@ class _Items(_Constant):
         return self.kind.classes().union(*(item.classes() for item in self.items))
 
 
+def _class_form_pins_contents(cls: type) -> bool:
+    """Whether surface_form(*cls*) already pins what an instance of *cls* holds, as a named tuple's constructor signature pins its fields and an Enum's form each member's value, so that a constant's form reads such an instance by its type alone."""
+    return _is_named_tuple(cls) or is_enum(cls)
+
+
 def _constant(value: object, holder_ids: frozenset[int] = frozenset()) -> _Constant:
-    """*value* read as a constant, held in the containers whose ids *holder_ids* gives: a mapping by its entries, each key as _spelled_key spells it, a list or tuple by its items, anything else by its type, an instance of a list or tuple subclass, such as a NamedTuple's, included.
+    """*value* read as a constant, held in the containers whose ids *holder_ids* gives: an instance of a named tuple or an Enum by its type, as _class_form_pins_contents says; any other mapping by its entries, each key as _spelled_key spells it, and any other list or tuple by its items, a subclass's instance as its base's; anything else by its type.
 
     A class or routine raises TypeError naming it, as no rule of a constant's form spells
     one, and a value among its own holders raises TypeError naming its type, as the form
@@ -585,6 +591,8 @@ def _constant(value: object, holder_ids: frozenset[int] = frozenset()) -> _Const
             "spells a class or routine: hold no class or routine in a public constant, or "
             "make the constant private"
         )
+    if _class_form_pins_contents(type(value)):
+        return _Typed(type(value))
     if id(value) in holder_ids:
         raise TypeError(
             f"a {label_of(type(value))} held in a constant holds itself, and a constant's "
@@ -597,7 +605,7 @@ def _constant(value: object, holder_ids: frozenset[int] = frozenset()) -> _Const
             _Typed(type(value)),
             tuple((_spelled_key(key), _constant(item, inside)) for key, item in value.items()),
         )
-    if type(value) is list or type(value) is tuple:
+    if isinstance(value, (list, tuple)):
         return _Items(_Typed(type(value)), tuple(_constant(item, inside) for item in value))
     return _Typed(type(value))
 

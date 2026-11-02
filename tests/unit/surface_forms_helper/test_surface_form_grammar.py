@@ -371,21 +371,49 @@ def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in
     assert surface_form(()) == "tuple []"
 
 
-def test_an_instance_of_a_list_or_tuple_subclass_is_spelled_by_its_types_qualified_name_alone() -> None:
+def test_an_instance_of_a_list_tuple_or_mapping_subclass_is_spelled_by_its_type_then_its_items_or_entries_as_its_bases_is() -> None:
+    class Readings(list):
+        pass
+
+    class Span(tuple):
+        pass
+
+    class Rates(dict):
+        pass
+
+    assert surface_form(Readings([0.5] * 48)) == f"{Readings.__qualname__} [float × 48]"
+    assert surface_form(Span((0, 1.5))) == f"{Span.__qualname__} [int, float]"
+    assert surface_form(Rates(a=0.1, b=0.2)) == f"{Rates.__qualname__} {{'a': float, 'b': float}}"
+    assert named_classes(Readings([0.5])) == {Readings, float}
+
+
+def test_a_named_tuple_instance_or_an_enum_member_is_spelled_by_its_types_qualified_name_alone_even_if_it_is_a_list_tuple_or_mapping() -> None:
     class Window(typing.NamedTuple):
         start: int
         end: float
 
+    class Slot(Window):
+        pass
+
+    Pair = collections.namedtuple("Pair", "x y")
+
     class Band(tuple, enum.Enum):
         LOW = (0.0, 0.1)
 
-    class Readings(list):
-        pass
+    class Steps(list, enum.Enum):
+        A = [1, 2]
+
+    class Tier(dict, enum.Enum):
+        LOW = {"rate": 0.1}
 
     assert surface_form(Window(1, 2.0)) == Window.__qualname__
+    assert surface_form(Slot(1, 2.0)) == Slot.__qualname__
+    assert surface_form(Pair(1, 2)) == Pair.__qualname__
     assert surface_form(Band.LOW) == Band.__qualname__
-    assert surface_form(Readings([0.5])) == Readings.__qualname__
+    assert surface_form(Steps.A) == Steps.__qualname__
+    assert surface_form(Tier.LOW) == Tier.__qualname__
     assert named_classes(Window(1, 2.0)) == {Window}
+    assert named_classes(Tier.LOW) == {Tier}
 
 
 def test_a_run_of_equal_item_forms_in_a_list_or_tuple_is_spelled_once_with_its_count() -> None:
@@ -401,8 +429,13 @@ def test_a_value_a_constant_holds_is_spelled_by_the_rules_of_a_constant() -> Non
 
 
 def test_a_list_tuple_or_mapping_a_constant_holds_inside_itself_raises_a_type_error_naming_its_type() -> None:
+    class Growing(list):
+        pass
+
     looped: list[object] = [1.0]
     looped.append(looped)
+    grown = Growing()
+    grown.append(grown)
     keyed: dict[str, object] = {}
     keyed["self"] = (keyed,)
     shared = [0.5]
@@ -410,6 +443,8 @@ def test_a_list_tuple_or_mapping_a_constant_holds_inside_itself_raises_a_type_er
     assert surface_form((shared, shared)) == "tuple [list [float] × 2]"
     with pytest.raises(TypeError, match=r"\bbuiltins\.list held in a constant holds itself\b"):
         surface_form(looped)
+    with pytest.raises(TypeError, match=r"<locals>\.Growing held in a constant holds itself\b"):
+        surface_form(grown)
     with pytest.raises(TypeError, match=r"\bbuiltins\.dict held in a constant holds itself\b"):
         named_classes(keyed)
 
