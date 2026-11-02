@@ -151,7 +151,7 @@ def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_
 
 
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
-def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes(
+def test_a_class_whose_metaclass_overrides_types_getattribute_raises_a_type_error_naming_it_and_its_metaclass_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]],
 ) -> None:
     class Meter(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {"label": None})):

@@ -318,7 +318,7 @@ def test_a_class_whose_metaclass_takes_a_signature_from_a_base_its_own_metaclass
         named_classes(Signed)
 
 
-def test_a_class_whose_metaclass_defines_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
+def test_a_class_whose_metaclass_overrides_types_getattribute_raises_type_error_whatever_its_constructor_but_one_that_shadows_its_metaclass_attribute_names_its_own_signatures_classes(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     imported_module(
