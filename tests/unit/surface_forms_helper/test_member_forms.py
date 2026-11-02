@@ -695,7 +695,7 @@ def test_a_class_whose_metaclass_shadows_dict_raises_a_type_error_naming_it_and_
         ),
     ],
 )
-def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_its_dict_gives(
+def test_a_class_whose_metaclass_overrides_types_getattribute_raises_a_type_error_naming_it_and_its_metaclass_whatever_members_or_annotations_its_dict_gives(
     intercepted: object,
 ) -> None:
     class Meter(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: intercepted)):

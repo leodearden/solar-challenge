@@ -620,7 +620,7 @@ def test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metacl
         named_classes(functools.partial(Carrying))
 
 
-def test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_defines_getattribute_raises_the_signature_rules_type_error_naming_that_class_and_its_metaclass() -> None:
+def test_a_routine_whose_chain_ends_at_a_class_carrying_a_signature_whose_metaclass_overrides_types_getattribute_raises_the_signature_rules_type_error_naming_that_class_and_its_metaclass() -> None:
     def build(rate: int) -> None: ...
 
     class Carrying(metaclass=metaclass_whose_getattribute_gives_dict(lambda cls: {})):

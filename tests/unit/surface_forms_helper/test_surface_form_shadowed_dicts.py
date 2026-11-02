@@ -447,7 +447,7 @@ def test_a_class_whose_metaclass_mro_holds_a_class_whose_own_dict_is_the_one_cpy
         ),
     ],
 )
-def test_an_object_whose_types_metaclass_defines_getattribute_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it(
+def test_an_object_whose_types_metaclass_overrides_types_getattribute_raises_a_type_error_naming_that_type_and_its_metaclass_wherever_inspect_reads_it(
     build: Callable[[], object], name: str
 ) -> None:
     with pytest.raises(TypeError, match=dict_intercepting_refusal(name)):
@@ -468,7 +468,7 @@ def test_an_object_whose_types_metaclass_defines_getattribute_raises_a_type_erro
         ),
     ],
 )
-def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init(
+def test_a_class_whose_metaclass_overrides_types_getattribute_raises_a_type_error_naming_it_and_its_metaclass_wherever_inspect_reads_its_new_or_init(
     cls: type, name: str
 ) -> None:
     with pytest.raises(TypeError, match=dict_intercepting_refusal(name)):
@@ -501,7 +501,7 @@ def test_a_class_whose_metaclass_defines_getattribute_raises_a_type_error_naming
         ),
     ],
 )
-def test_a_type_error_for_a_class_whose_metaclass_defines_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives(
+def test_a_type_error_for_a_class_whose_metaclass_overrides_types_getattribute_names_the_class_in_that_metaclass_mro_holding_it_whatever_it_gives(
     cls: type, name: str, metaclass: str, holder: str
 ) -> None:
     with pytest.raises(TypeError, match=dict_intercepting_refusal(name, metaclass, holder)):
@@ -528,7 +528,7 @@ def test_a_class_whose_metaclass_mro_first_holds_types_own_getattribute_is_spell
         pytest.param(InterceptedCarrying, "(rate: int) -> None", id="carried-signature"),
     ],
 )
-def test_a_class_whose_metaclass_defines_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
+def test_a_class_whose_metaclass_overrides_types_getattribute_is_spelled_by_the_metaclass_call_inspect_reads_in_place_of_its_new_and_init_or_by_the_signature_it_carries(
     cls: type, form: str
 ) -> None:
     assert surface_form(cls) == form
