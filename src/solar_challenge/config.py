@@ -544,6 +544,12 @@ class ScenarioConfig:
             home if home.seg_tariff is not None else replace(home, seg_tariff=tariff) for home in stored
         )
 
+    def map_homes(self, transform: Callable[[HomeConfig], HomeConfig]) -> "ScenarioConfig":
+        """This scenario in the same form, *transform* applied to each stored home, and checked as construction checks."""
+        if self.home is not None:
+            return replace(self, home=transform(self.home))
+        return replace(self, homes=tuple(transform(home) for home in self.homes))
+
     def _homes_by_path(self) -> Iterator[tuple[str, HomeConfig]]:
         """Each stored home with its path in the scenario: 'home', or each fleet home's 'homes[i]' in order."""
         if self.home is not None:

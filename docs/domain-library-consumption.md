@@ -957,7 +957,11 @@ a scenario field build the changed scenario with
 sets `seg_tariff_pence_per_kwh`, each home whose `seg_tariff` is None is given
 `SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh)`, and a home's
 own tariff is kept; the stored homes are left as they are. The 0.5.0 tag has no
-such method. Construction raises `ConfigurationError`, a `ValueError`, for a
+such method. `ScenarioConfig.map_homes(transform)` returns the scenario in the
+same form with *transform* applied to each stored home, never to the filled
+homes `simulated_homes()` returns, and every scenario-level field kept; the
+result is checked as construction checks it. The tag has no such method
+either. Construction raises `ConfigurationError`, a `ValueError`, for a
 home whose own `seg_tariff` rate is not `math.isclose` to
 `seg_tariff_pence_per_kwh`, naming the home's position (`home` or `homes[i]`),
 its name and both rates, and `dataclasses.replace` re-runs the check. The tag
