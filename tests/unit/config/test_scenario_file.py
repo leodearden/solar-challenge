@@ -3,6 +3,7 @@
 
 import dataclasses
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,28 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.seg import SEGTariff
+
+
+def _home() -> HomeConfig:
+    """A 4 kW home on the default load, carrying no SEG tariff of its own."""
+    return HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+
+def _scenario(
+    *,
+    home: HomeConfig | None = None,
+    homes: list[HomeConfig] | None = None,
+    seg_tariff_pence_per_kwh: float | None = None,
+) -> ScenarioConfig:
+    """Scenario 'x' over the first week of 2024, holding *home* or *homes* under *seg_tariff_pence_per_kwh*."""
+    return ScenarioConfig(
+        name="x",
+        period=SimulationPeriod("2024-01-01", "2024-01-07"),
+        home=home,
+        homes=homes or [],
+        seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
+    )
 
 
 class TestSimulationPeriod:
@@ -174,6 +197,57 @@ class TestScenarioConfig:
         )
         loc = scenario.get_location()
         assert loc.latitude == pytest.approx(51.45, abs=0.01)
+
+
+class TestSimulatedHomes:
+    """simulated_homes() reads the homes a scenario simulates, each given the scenario's SEG rate unless it carries its own tariff."""
+
+    def test_the_single_home_is_simulated_at_the_scenario_seg_rate(self) -> None:
+        home = _home()
+
+        scenario = _scenario(home=home, seg_tariff_pence_per_kwh=5.0)
+
+        assert scenario.simulated_homes() == (
+            dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.0)),
+        )
+        assert scenario.home is home
+        assert scenario.home.seg_tariff is None
+
+    def test_a_fleet_home_is_filled_with_the_scenario_rate_and_a_home_tariff_is_kept(self) -> None:
+        h1 = _home()
+        h2 = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("Octopus", 5.0))
+
+        scenario = _scenario(homes=[h1, h2], seg_tariff_pence_per_kwh=5.0)
+        simulated = scenario.simulated_homes()
+
+        assert simulated[0] == dataclasses.replace(h1, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.0))
+        assert simulated[1] is h2
+        assert scenario.homes == (h1, h2)
+
+    def test_with_no_scenario_rate_the_stored_homes_are_simulated(self) -> None:
+        h1 = _home()
+        h2 = dataclasses.replace(_home(), name="north", seg_tariff=SEGTariff("Octopus", 5.0))
+
+        fleet = _scenario(homes=[h1, h2])
+        single = _scenario(home=h1)
+
+        assert fleet.simulated_homes() == fleet.homes
+        assert fleet.simulated_homes()[0].seg_tariff is None
+        assert fleet.simulated_homes()[1].seg_tariff == SEGTariff("Octopus", 5.0)
+        assert single.simulated_homes() == (h1,)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda: _scenario(home=_home(), seg_tariff_pence_per_kwh=5.0), id="home"),
+            pytest.param(lambda: _scenario(homes=[_home(), _home()], seg_tariff_pence_per_kwh=5.0), id="homes"),
+        ],
+    )
+    def test_is_pure_and_never_empty(self, build: Callable[[], ScenarioConfig]) -> None:
+        scenario = build()
+
+        assert scenario.simulated_homes() == scenario.simulated_homes()
+        assert len(scenario.simulated_homes()) >= 1
 
 
 class TestLoadConfigYaml:
