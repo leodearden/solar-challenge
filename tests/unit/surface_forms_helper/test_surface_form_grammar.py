@@ -371,7 +371,23 @@ def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in
     assert surface_form(()) == "tuple []"
 
 
-def test_an_instance_of_a_list_or_tuple_subclass_is_spelled_by_its_types_qualified_name_alone() -> None:
+def test_an_instance_of_a_list_tuple_or_mapping_subclass_is_spelled_by_its_type_then_its_items_or_entries_as_its_bases_is() -> None:
+    class Readings(list):
+        pass
+
+    class Span(tuple):
+        pass
+
+    class Rates(dict):
+        pass
+
+    assert surface_form(Readings([0.5] * 48)) == f"{Readings.__qualname__} [float × 48]"
+    assert surface_form(Span((0, 1.5))) == f"{Span.__qualname__} [int, float]"
+    assert surface_form(Rates(a=0.1, b=0.2)) == f"{Rates.__qualname__} {{'a': float, 'b': float}}"
+    assert named_classes(Readings([0.5])) == {Readings, float}
+
+
+def test_a_named_tuple_instance_or_an_enum_member_is_spelled_by_its_types_qualified_name_alone_even_if_it_is_a_list_tuple_or_mapping() -> None:
     class Window(typing.NamedTuple):
         start: int
         end: float
@@ -379,13 +395,18 @@ def test_an_instance_of_a_list_or_tuple_subclass_is_spelled_by_its_types_qualifi
     class Band(tuple, enum.Enum):
         LOW = (0.0, 0.1)
 
-    class Readings(list):
-        pass
+    class Steps(list, enum.Enum):
+        A = [1, 2]
+
+    class Tier(dict, enum.Enum):
+        LOW = {"rate": 0.1}
 
     assert surface_form(Window(1, 2.0)) == Window.__qualname__
     assert surface_form(Band.LOW) == Band.__qualname__
-    assert surface_form(Readings([0.5])) == Readings.__qualname__
+    assert surface_form(Steps.A) == Steps.__qualname__
+    assert surface_form(Tier.LOW) == Tier.__qualname__
     assert named_classes(Window(1, 2.0)) == {Window}
+    assert named_classes(Tier.LOW) == {Tier}
 
 
 def test_a_run_of_equal_item_forms_in_a_list_or_tuple_is_spelled_once_with_its_count() -> None:
