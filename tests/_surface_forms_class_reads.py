@@ -45,9 +45,9 @@ def overriding_getattribute_holder(metaclass: type) -> type | None:
     That class is the first in the MRO *metaclass* records whose own namespace, read
     unchecked as attribute lookup reads it, holds __getattribute__, or type if none does.
     What it holds is type's own when it is type, as when a class holds one only after type
-    in that MRO, or when its body binds type.__getattribute__. Attribute lookup on a class
-    of *metaclass* calls the __getattribute__ of the class returned for every name,
-    __dict__ and __signature__ among them.
+    in that MRO, or when it is a class whose body binds type.__getattribute__. Attribute
+    lookup on a class of *metaclass* calls the __getattribute__ of the class returned for
+    every name, __dict__ and __signature__ among them.
     """
     holder = next(
         (base for base in recorded_mro(metaclass) if "__getattribute__" in _held_namespace(base)),
