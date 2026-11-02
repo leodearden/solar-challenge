@@ -4,13 +4,15 @@
 LAYERS lists the helper's modules bottom first. Of the helper, each imports only the
 modules listed before it, and only at module level, so each reads alone: no reach-back,
 no cycle, and no import placed in a function to break one. Its docstrings likewise name,
-of the other modules, only public names of those below it.
+of the other modules, only public names of those below it. A public name of a layer below
+the top is the interface between the helper's modules, so a layer above imports it by name;
+the top's public names are the helper's interface to the suite.
 """
 
 import ast
 import importlib.util
 import re
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterable, Iterator
 from pathlib import Path
 
 _TESTS = Path(__file__).resolve().parents[1]
@@ -66,6 +68,17 @@ def _docstring_mentions(tree: ast.Module, names: Collection[str]) -> Iterator[tu
                 yield from ((line, word) for word in _IDENTIFIER.findall(text) if word in names)
 
 
+def _names_imported_from(stem: str, trees: Iterable[ast.Module]) -> set[str]:
+    """The names that `from tests.<stem> import <name>` statements anywhere in *trees* import."""
+    return {
+        alias.name
+        for tree in trees
+        for statement, imported in _helper_imports(tree)
+        if imported == stem and isinstance(statement, ast.ImportFrom)
+        for alias in statement.names
+    }
+
+
 def test_every_module_of_the_helper_is_a_layer() -> None:
     modules = sorted(path.stem for path in _TESTS.glob("_surface_forms*.py"))
 
@@ -111,4 +124,23 @@ def test_the_docstrings_of_each_layer_name_of_the_other_layers_only_public_names
         "names of those below it in LAYERS. Cite the public name whose docstring points to "
         "the private one, or state the rule in this module's own words:\n"
         + "\n".join(violations)
+    )
+
+
+def test_each_public_name_of_a_layer_below_the_top_is_imported_by_a_layer_above_it() -> None:
+    trees = {stem: ast.parse((_TESTS / f"{stem}.py").read_bytes()) for stem in LAYERS}
+    unimported: list[str] = []
+    for index, stem in enumerate(LAYERS[:-1]):
+        imported = _names_imported_from(stem, (trees[above] for above in LAYERS[index + 1 :]))
+        unimported.extend(
+            f"tests/{stem}.py defines {name}"
+            for name in sorted(_top_level_names(trees[stem]) - imported)
+            if not name.startswith("_")
+        )
+
+    assert unimported == [], (
+        "Of the helper, a public name of a layer below the top of LAYERS is the interface "
+        "between its modules, so a layer above it imports it by name, "
+        "`from tests.<layer> import <name>`. Make each name below private, or import it by "
+        "name where a layer above uses it:\n" + "\n".join(unimported)
     )
