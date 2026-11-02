@@ -238,7 +238,7 @@ def _generate_a_profile_inside_a_household_model() -> None:
         raise AssertionError("the profile generated inside the household model is not the Elexon profile")
     messages = [record.getMessage() for record in logged.buffer]
     if messages != [
-        "richardsonpy stochastic generation failed; falling back to Elexon deterministic profile: "
+        "the household model failed; falling back to Elexon deterministic profile: "
         "RuntimeError: a household model must not generate a load profile: the RNG hand-off is "
         "not re-entrant"
     ]:
