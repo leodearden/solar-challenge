@@ -334,6 +334,15 @@ def test_an_enum_form_lists_its_aliases_in_definition_order_each_with_the_value_
     assert surface_form(Access) == "READ=4, WRITE=2, READ_WRITE=6"
 
 
+def test_an_enum_form_spells_each_members_value_as_ascii_writes_it() -> None:
+    class Band(enum.Enum):
+        WIFI = "\U0001F6DC"
+        ACUTE = "\xe9"
+        PAIR = ("\xe9", 1)
+
+    assert surface_form(Band) == "WIFI='\\U0001f6dc', ACUTE='\\xe9', PAIR=('\\xe9', 1)"
+
+
 def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qualified_name() -> None:
     assert surface_form(Preset(rate=0.15)) == "Preset"
     assert surface_form("kWh") == "str"
