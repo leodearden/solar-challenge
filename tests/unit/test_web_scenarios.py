@@ -669,7 +669,7 @@ class TestBuilderScenarioYaml:
         "location_preset": "bristol",
         "n_homes": 100,
         "import_rate": 0.245,
-        "seg_rate_pence_per_kwh": 15.0,
+        "seg_rate_pence_per_kwh": "",
         "pv_capacity_kw": 4,
         "battery_capacity_kwh": 5,
         "annual_consumption_kwh": 3500,
@@ -683,7 +683,7 @@ class TestBuilderScenarioYaml:
     def test_default_form_yaml_loads_through_load_fleet_config(
         self, client: FlaskClient, tmp_path: Path
     ) -> None:
-        """load_fleet_config builds every home of the form; the period and SEG rate are there for their own readers."""
+        """load_fleet_config builds every home of the form; the period is there for its own reader, and the seg: block is null, since the builder starts with no SEG rate."""
         yaml_text, document = _preview_document(client, self._DEFAULT_FORM)
         path = tmp_path / "builder.yaml"
         path.write_text(yaml_text, encoding="utf-8")
@@ -702,7 +702,7 @@ class TestBuilderScenarioYaml:
             for home in fleet.homes
         } == {(4.0, 5.0, 3500.0, TariffConfig.flat_rate(0.245), LOCATION_PRESETS["bristol"])}
         assert document["period"] == {"start_date": "2024-01-01", "end_date": "2024-12-31"}
-        assert parse_seg_rate(document["seg"]) == 15.0
+        assert document["seg"] is None
 
     @pytest.mark.parametrize(
         ("distribution_fields", "expected"),
@@ -770,6 +770,24 @@ class TestBuilderScenarioYaml:
         assert getattr(fleet_distribution, component).draws[grammar_key] == expected
 
     @pytest.mark.parametrize(
+        "rate",
+        [
+            pytest.param("5.5", id="typed"),
+            pytest.param(5.5, id="uploaded"),
+        ],
+    )
+    def test_a_seg_rate_the_form_sets_is_the_rate_the_seg_reader_reads(
+        self, client: FlaskClient, rate: str | float
+    ) -> None:
+        """A SEG rate the form sets is written in the seg: block as the rate the seg: reader reads.
+
+        The builder sends a rate typed into its SEG input as text, and an uploaded scenario's rate as the number its YAML holds.
+        """
+        _, document = _preview_document(client, {**self._DEFAULT_FORM, "seg_rate_pence_per_kwh": rate})
+
+        assert parse_seg_rate(document["seg"]) == 5.5
+
+    @pytest.mark.parametrize(
         ("rate_field", "block"),
         [
             pytest.param("import_rate", "tariff", id="import rate"),
@@ -779,11 +797,11 @@ class TestBuilderScenarioYaml:
     def test_a_cleared_rate_writes_its_block_as_null_and_the_form_validates(
         self, client: FlaskClient, rate_field: str, block: str
     ) -> None:
-        """Clearing the import or SEG rate means a scenario with no tariff or no SEG, which the readers accept.
+        """Clearing the import or SEG rate of a form that sets both means a scenario with no tariff or no SEG, which the readers accept.
 
         The block is written as null, the readers' spelling of none, not as an empty block they refuse.
         """
-        form = {**self._DEFAULT_FORM, rate_field: ""}
+        form = {**self._DEFAULT_FORM, "seg_rate_pence_per_kwh": 5.5, rate_field: ""}
 
         _, document = _preview_document(client, form)
         validation = client.post("/api/scenarios/validate", json=form).get_json()
