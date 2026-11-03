@@ -175,53 +175,6 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
-def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Local's __init__ annotates nothing, so only Local's own module is looked up, for its attribute, and __init__ carries the globals of the module that built Local."""
-    earlier = imported_module(
-        tmp_path_factory.mktemp("earlier"),
-        monkeypatch,
-        "auditing",
-        "from typing import TYPE_CHECKING\n"
-        "\n"
-        "if TYPE_CHECKING:\n"
-        "    from fractions import Fraction as Share\n"
-        "\n"
-        "def build():\n"
-        "    class Local:\n"
-        "        share: 'Share'\n"
-        "\n"
-        "        def __init__(self): ...\n"
-        "\n"
-        "    return Local\n",
-    )
-    local = earlier.build()
-    later = imported_module(
-        tmp_path_factory.mktemp("later"),
-        monkeypatch,
-        "auditing",
-        "from typing import TYPE_CHECKING\n"
-        "\n"
-        "if TYPE_CHECKING:\n"
-        "    from decimal import Decimal as Share\n"
-        "\n"
-        "def build():\n"
-        "    class Local:\n"
-        "        share: 'Share'\n"
-        "\n"
-        "        def __init__(self): ...\n"
-        "\n"
-        "    return Local\n",
-    )
-
-    with pytest.raises(LookupError) as raised:
-        named_classes(local)
-
-    assert earlier.__file__ in str(raised.value)
-    assert later.__file__ in str(raised.value)
-
-
 def _name_each_code_as_if_compiled_at_module_level(
     cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,8 +186,12 @@ def _name_each_code_as_if_compiled_at_module_level(
             )
 
 
-def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both_whatever_qualified_name_the_code_of_each_function_its_body_compiled_carries(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "rename_codes",
+    [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
+)
+def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
     """Local's __init__ annotates nothing, so only Local's own module is looked up, for its attribute, and __init__ carries the globals of the module that built Local."""
     earlier = imported_module(
@@ -272,7 +229,8 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
         "\n"
         "    return Local\n",
     )
-    _name_each_code_as_if_compiled_at_module_level(local, monkeypatch)
+    if rename_codes:
+        _name_each_code_as_if_compiled_at_module_level(local, monkeypatch)
 
     with pytest.raises(LookupError) as raised:
         named_classes(local)
@@ -578,8 +536,12 @@ def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_for
     assert named_classes(_json.make_scanner) == {int, types.MemberDescriptorType}
 
 
+@pytest.mark.parametrize(
+    "rename_codes",
+    [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
+)
 def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_its_body_compiled_a_function(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
     """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__ carries the globals of the module that defined Audit."""
     auditing = imported_module(
@@ -589,26 +551,8 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
         "class Audit:\n    share: int\n\n    def __init__(self): ...\n",
     )
     monkeypatch.setitem(sys.modules, "auditing", types.ModuleType("auditing"))
-
-    with pytest.raises(LookupError) as raised:
-        named_classes(auditing.Audit)
-
-    assert "auditing.Audit" in str(raised.value)
-    assert auditing.__file__ in str(raised.value)
-
-
-def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_its_body_compiled_a_function_whatever_qualified_name_the_code_of_each_function_its_body_compiled_carries(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__ carries the globals of the module that defined Audit."""
-    auditing = imported_module(
-        tmp_path,
-        monkeypatch,
-        "auditing",
-        "class Audit:\n    share: int\n\n    def __init__(self): ...\n",
-    )
-    monkeypatch.setitem(sys.modules, "auditing", types.ModuleType("auditing"))
-    _name_each_code_as_if_compiled_at_module_level(auditing.Audit, monkeypatch)
+    if rename_codes:
+        _name_each_code_as_if_compiled_at_module_level(auditing.Audit, monkeypatch)
 
     with pytest.raises(LookupError) as raised:
         named_classes(auditing.Audit)
