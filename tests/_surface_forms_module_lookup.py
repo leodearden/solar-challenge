@@ -8,14 +8,13 @@ tests/unit/test_surface_forms_layers.py's LAYERS, which checks that.
 """
 
 import ast
-import collections
 import functools
 import inspect
 import sys
 import types
 import typing
 import weakref
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 
 from tests._surface_forms_class_reads import own_namespace
 from tests._surface_forms_generators import may_be_generated
@@ -185,40 +184,33 @@ def bound_under(qualified_name: str, module: types.ModuleType) -> object:
 
 
 def class_statement(cls: type) -> ast.ClassDef | None:
-    """The class statement that defined *cls*, parsed from its source as its lines stand, read only once defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; None if that module's source holds no class statement that defined *cls*, as for a class collections.namedtuple or dataclasses.make_dataclass makes.
+    """The class statement that defined *cls*: the one the source of the module defining_module gives for *cls* holds under *cls*'s qualified name, as _class_statements_in spells the name each statement there gives, alike on every minor; None if that source holds none, as for a class collections.namedtuple or dataclasses.make_dataclass makes, or one whose __module__ names a module that re-exports it.
 
-    An indented statement, a nested or local class's, is parsed as the body of an if
-    statement, since a line of it inside a string or a comment may start further left.
-    TypeError names *cls* if inspect reads no source for its module, as for a built-in
-    or extension module, which may hold a class statement that defined it; if that source
-    holds another class statement under *cls*'s qualified name, as
-    _ambiguous_qualified_names finds one, since inspect before Python 3.13 reads the first
-    of them, whichever defined *cls*; or if what inspect reads is not a single class
-    statement.
+    TypeError names *cls* if inspect reads no source for that module, as for a built-in
+    or extension module, which may hold a class statement that defined it; or if that
+    source holds several class statements under *cls*'s qualified name, which does not
+    tell which of them defined it.
     """
     module = defining_module(cls)
     try:
-        source = inspect.getsource(cls)
+        statements = _class_statements(module)
     except (OSError, TypeError) as unread:
-        if _has_source(module):
-            return None
         raise TypeError(
             f"{label_of(cls)} has no class statement inspect can read, since inspect reads no "
             f"source for its module {module.__name__!r}, as for a built-in or extension "
             "module, so what a class statement there defined is not known: pass a class that "
             "a class statement in a source file defines"
         ) from unread
-    if cls.__qualname__ in _ambiguous_qualified_names(module):
-        raise TypeError(
-            f"{label_of(cls)} is defined by one of several class statements its module's "
-            f"source holds under the qualified name {cls.__qualname__!r}, and inspect before "
-            "Python 3.13 reads the first of them, whichever defined it: define the class with "
-            "one class statement"
-        )
-    match ast.parse(f"if 1:\n{source}" if source[0].isspace() else source).body:
-        case [ast.ClassDef() as statement] | [ast.If(body=[ast.ClassDef() as statement])]:
+    match statements.get(cls.__qualname__, ()):
+        case ():
+            return None
+        case (statement,):
             return statement
-    raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
+    raise TypeError(
+        f"{label_of(cls)} is defined by one of several class statements its module's "
+        f"source holds under the qualified name {cls.__qualname__!r}, which does not tell "
+        "which of them defined it: define the class with one class statement"
+    )
 
 
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:
@@ -271,29 +263,31 @@ def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
 
 
 @_cached_while_alive
-def _ambiguous_qualified_names(module: types.ModuleType) -> frozenset[str]:
-    """The qualified names that more than one class statement in *module*'s source gives the class it defines, as _class_statement_names spells them, so a class's qualified name does not tell which of them defined it."""
-    counts = collections.Counter(
-        _class_statement_names(ast.parse(inspect.getsource(module)).body, "")
-    )
-    return frozenset(name for name, count in counts.items() if count > 1)
+def _class_statements(module: types.ModuleType) -> Mapping[str, tuple[ast.ClassDef, ...]]:
+    """The class statements in *module*'s source, parsed once while *module* lives, grouped in source order by the qualified name each gives the class it defines, as _class_statements_in spells it."""
+    statements: dict[str, tuple[ast.ClassDef, ...]] = {}
+    for name, statement in _class_statements_in(ast.parse(inspect.getsource(module)).body, ""):
+        statements[name] = (*statements.get(name, ()), statement)
+    return statements
 
 
-def _class_statement_names(nodes: Iterable[ast.AST], scope: str) -> Iterator[str]:
-    """The qualified name that each class statement among *nodes*, or in any block or body of theirs, gives the class it defines, as the compiler spells it in *scope*: after the name of each class enclosing it, dotted, and of each function enclosing it, dotted with <locals>."""
+def _class_statements_in(
+    nodes: Iterable[ast.AST], scope: str
+) -> Iterator[tuple[str, ast.ClassDef]]:
+    """Each class statement among *nodes*, or in any block or body of theirs, with the qualified name it gives the class it defines, as the compiler spells it in *scope*: after the name of each class enclosing it, dotted, and of each function enclosing it, dotted with <locals>."""
     for node in nodes:
         match node:
-            case ast.ClassDef(name=name, body=body):
-                yield f"{scope}{name}"
-                yield from _class_statement_names(body, f"{scope}{name}.")
+            case ast.ClassDef(name=name, body=body) as statement:
+                yield f"{scope}{name}", statement
+                yield from _class_statements_in(body, f"{scope}{name}.")
             case ast.FunctionDef(name=name, body=body) | ast.AsyncFunctionDef(
                 name=name, body=body
             ):
-                yield from _class_statement_names(body, f"{scope}{name}.<locals>.")
+                yield from _class_statements_in(body, f"{scope}{name}.<locals>.")
             case ast.expr():
                 pass
             case _:
-                yield from _class_statement_names(ast.iter_child_nodes(node), scope)
+                yield from _class_statements_in(ast.iter_child_nodes(node), scope)
 
 
 @_cached_while_alive
