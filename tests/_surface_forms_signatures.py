@@ -1321,6 +1321,8 @@ def _refuse_def_written_member_of_statementless_class(
     source for. Such a function may be one the class statement that defined *cls* defines,
     and that statement is elsewhere, as for a class whose __module__ names a module that
     re-exports it, so whether it defines *name* is not known.
+    docs/surface-forms-inspect-readings.md §3.5 says how each minor reads the source of
+    such a class and of the functions a generator writes.
     """
     try:
         inspect.getsource(function)

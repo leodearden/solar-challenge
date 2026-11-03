@@ -189,7 +189,8 @@ def class_statement(cls: type) -> ast.ClassDef | None:
     TypeError names *cls* if inspect reads no source for that module, as for a built-in
     or extension module, which may hold a class statement that defined it; or if that
     source holds several class statements under *cls*'s qualified name, which does not
-    tell which of them defined it.
+    tell which of them defined it. docs/surface-forms-inspect-readings.md §3.5 says how
+    each minor finds a class's statement.
     """
     module = defining_module(cls)
     try:
