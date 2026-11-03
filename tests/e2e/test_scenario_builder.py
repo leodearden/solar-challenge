@@ -248,12 +248,40 @@ def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_bui
 
 
 def test_a_freshly_opened_builder_sends_no_seg_rate(page: Page, live_server: str) -> None:
-    """Like the home and fleet pages, which start with the SEG off, the builder starts with no SEG export rate, so a scenario built from its defaults carries no seg: block."""
+    """A freshly opened builder shows and sends an empty SEG export rate."""
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Tariff")
 
     assert page.get_by_role("spinbutton", name="SEG Export Rate (p/kWh)", exact=True).input_value() == ""
     assert _form_sent_on_validate(page)["seg_rate_pence_per_kwh"] == ""
+
+
+def _run_sent_by_a_freshly_opened_simulate_page(
+    page: Page, url: str, run_button: str, submission: str
+) -> dict[str, Any]:
+    """Open the simulate page at *url*, click its button named *run_button* and return the body of the run it POSTs to the route glob *submission*, aborted so no job reaches the live server's JobManager."""
+    page.route(submission, lambda route: route.abort())
+    page.goto(url)
+    with page.expect_request(submission) as sent:
+        page.get_by_role("button", name=run_button, exact=True).click()
+    return sent.value.post_data_json
+
+
+def test_the_builder_starts_with_no_seg_as_the_home_and_fleet_pages_do(page: Page, live_server: str) -> None:
+    """Freshly opened, the home and fleet pages run with no seg block, and the builder previews a scenario whose seg: block is null."""
+    home_run = _run_sent_by_a_freshly_opened_simulate_page(
+        page, live_server + "/simulate/home", "Run Simulation", "**/api/simulate/home"
+    )
+    fleet_run = _run_sent_by_a_freshly_opened_simulate_page(
+        page, live_server + "/simulate/fleet", "Run Fleet Simulation", "**/api/simulate/fleet-from-distribution"
+    )
+    builder_scenario = yaml.safe_load(open_builder(page, live_server).json()["yaml"])
+
+    assert {
+        "home": home_run.get("seg"),
+        "fleet": fleet_run.get("seg"),
+        "builder": builder_scenario["seg"],
+    } == {"home": None, "fleet": None, "builder": None}
 
 
 def test_custom_location_controls_named_by_their_captions_set_the_location_the_builder_sends(
