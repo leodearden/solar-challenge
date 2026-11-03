@@ -18,6 +18,16 @@ from tests.unit.surface_forms_helper._fixtures import (
 )
 
 
+_TAPPING_SOURCE = (
+    "from dataclasses import dataclass\n"
+    "from fractions import Fraction as Tap\n"
+    "\n"
+    "@dataclass\n"
+    "class Meter:\n"
+    "    tap: 'Tap'\n"
+)
+
+
 def test_an_inherited_constructor_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -133,17 +143,7 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
 def test_a_generated_dataclass_constructor_whose_code_carries_its_own_qualified_name_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     retapping = imported_module(
         tmp_path,
         monkeypatch,
@@ -310,17 +310,7 @@ def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statemen
 def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_in_a_class_it_last_processed_with_init_off_raises_type_error_naming_the_class_and_the_function(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     retapping = imported_module(
         tmp_path,
         monkeypatch,
@@ -348,17 +338,7 @@ def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_
 def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_a_line_left_of_its_class_statement_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     nesting = imported_module(
         tmp_path,
         monkeypatch,
@@ -387,17 +367,7 @@ def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_
 def test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     branching = imported_module(
         tmp_path,
         monkeypatch,
@@ -427,17 +397,7 @@ def test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another
 def test_a_generated_dataclass_constructor_of_a_class_whose_name_class_statements_inside_a_function_or_class_also_give_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     scoping = imported_module(
         tmp_path,
         monkeypatch,
@@ -471,17 +431,7 @@ def test_a_generated_dataclass_constructor_of_a_class_whose_name_class_statement
 def test_a_generated_dataclass_constructor_of_a_class_whose_module_inspect_reads_no_source_for_raises_type_error_naming_the_class(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     unsourced = imported_module(
         tmp_path,
         monkeypatch,
@@ -508,17 +458,7 @@ def test_a_generated_dataclass_constructor_of_a_class_whose_module_inspect_reads
 def test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     imported_module(
         tmp_path,
         monkeypatch,
@@ -550,17 +490,7 @@ def test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_i
 def test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     imported_module(
         tmp_path,
         monkeypatch,
@@ -615,17 +545,7 @@ def test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_
 def test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "tapping",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Tap\n"
-        "\n"
-        "@dataclass\n"
-        "class Meter:\n"
-        "    tap: 'Tap'\n",
-    )
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     rehoming = imported_module(
         tmp_path,
         monkeypatch,
