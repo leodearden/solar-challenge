@@ -166,12 +166,15 @@ def test_a_callable_is_spelled_with_its_parameter_types_respelled() -> None:
     )
 
 
-def test_a_literal_is_spelled_with_its_values_reprs() -> None:
+def test_a_literal_is_spelled_with_its_values_as_ascii_writes_them() -> None:
     def f(sharing_mode: Literal["p2p", "community_battery"]) -> None: ...
+
+    def band(wireless: Literal["\U0001F6DC", "\xe9"]) -> None: ...
 
     assert (
         surface_form(f) == "(sharing_mode: Literal['p2p', 'community_battery']) -> None"
     )
+    assert surface_form(band) == "(wireless: Literal['\\U0001f6dc', '\\xe9']) -> None"
 
 
 @pytest.mark.parametrize(
