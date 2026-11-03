@@ -948,8 +948,9 @@ def test_a_constructor_generated_for_another_class_than_the_one_assigning_it_rai
         "    def __init__(self, *args, **kwargs) -> None: ...\n",
     )
 
-    with pytest.raises(TypeError) as raised:
+    with pytest.raises(
+        TypeError,
+        match=rf"^borrowing\.{name} is constructed through sourcing\.Source\.__init__, "
+        rf"a function generated for another class and assigned in the body of borrowing\.{name}, ",
+    ):
         named_classes(getattr(borrowing, name))
-
-    assert f"borrowing.{name}" in str(raised.value)
-    assert "sourcing.Source.__init__" in str(raised.value)
