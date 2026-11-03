@@ -75,6 +75,22 @@ def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
     assert surface_form(h) == "(a, b=1)"
 
 
+def test_a_parameter_default_is_spelled_as_ascii_writes_it() -> None:
+    def f(
+        band: str = "\U0001F6DC", label="\xe9", *, pair: tuple[str, int] = ("\xe9", 1)
+    ) -> None: ...
+
+    @dataclass(frozen=True)
+    class Tag:
+        label: str = "\xe9"
+
+    assert (
+        surface_form(f)
+        == "(band: str = '\\U0001f6dc', label='\\xe9', *, pair: tuple[str, int] = ('\\xe9', 1)) -> None"
+    )
+    assert surface_form(Tag) == "dataclass[eq, frozen] (label: str = '\\xe9') -> None"
+
+
 def test_an_optional_or_a_union_is_spelled_with_bars() -> None:
     def f(a: Optional[int], b: Union[int, str], c: int | None) -> None: ...
 
@@ -166,12 +182,15 @@ def test_a_callable_is_spelled_with_its_parameter_types_respelled() -> None:
     )
 
 
-def test_a_literal_is_spelled_with_its_values_reprs() -> None:
+def test_a_literal_is_spelled_with_its_values_as_ascii_writes_them() -> None:
     def f(sharing_mode: Literal["p2p", "community_battery"]) -> None: ...
+
+    def band(wireless: Literal["\U0001F6DC", "\xe9"]) -> None: ...
 
     assert (
         surface_form(f) == "(sharing_mode: Literal['p2p', 'community_battery']) -> None"
     )
+    assert surface_form(band) == "(wireless: Literal['\\U0001f6dc', '\\xe9']) -> None"
 
 
 @pytest.mark.parametrize(
@@ -332,6 +351,15 @@ def test_an_enum_form_lists_its_aliases_in_definition_order_each_with_the_value_
 
     assert surface_form(Rate) == "A=1, B=1, C=2"
     assert surface_form(Access) == "READ=4, WRITE=2, READ_WRITE=6"
+
+
+def test_an_enum_form_spells_each_members_value_as_ascii_writes_it() -> None:
+    class Band(enum.Enum):
+        WIFI = "\U0001F6DC"
+        ACUTE = "\xe9"
+        PAIR = ("\xe9", 1)
+
+    assert surface_form(Band) == "WIFI='\\U0001f6dc', ACUTE='\\xe9', PAIR=('\\xe9', 1)"
 
 
 def test_a_constant_that_is_no_mapping_list_or_tuple_is_spelled_by_its_types_qualified_name() -> None:
