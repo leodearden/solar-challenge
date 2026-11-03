@@ -666,7 +666,7 @@ def test_on_a_phone_a_cards_second_row_starts_each_column_where_its_first_row_do
 def test_default_form_previews_yaml_the_fleet_loader_loads(
     page: Page, live_server: str, tmp_path: Path
 ) -> None:
-    """The YAML previewed for the builder's default form loads through load_fleet_config.
+    """The YAML previewed for the builder's default form loads through load_fleet_config and has no SEG.
 
     The page previews its default form as soon as it opens, so this pins the real
     payload of getFormData(), which
@@ -674,13 +674,15 @@ def test_default_form_previews_yaml_the_fleet_loader_loads(
     """
     response = open_builder(page, live_server)
     assert response.status == 200
+    yaml_text = response.json()["yaml"]
     path = tmp_path / "builder.yaml"
-    path.write_text(response.json()["yaml"], encoding="utf-8")
+    path.write_text(yaml_text, encoding="utf-8")
 
     fleet = load_fleet_config(path)
 
     assert len(fleet.homes) == 100
     assert {home.pv_config.capacity_kw for home in fleet.homes} == {4.0}
+    assert yaml.safe_load(yaml_text)["seg"] is None
 
 
 def _form_previewed_after(page: Page, action: Callable[[], None]) -> dict[str, Any]:
