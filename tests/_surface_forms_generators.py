@@ -71,3 +71,12 @@ NAMEDTUPLE = MethodGenerator(
     named_after=lambda cls: cls.__name__,
     processed=lambda cls: "_fields" in own_namespace(cls),
 )
+
+_GENERATORS = (DATACLASS_DECORATOR, NAMEDTUPLE)
+
+
+def may_be_generated(cls: type, function: types.FunctionType) -> bool:
+    """Whether the dataclass decorator or collections.namedtuple may have written *function* into *cls* as the method its own name names, as MethodGenerator.may_have_written finds; only *cls*'s class statement tells such a function from one that statement defined."""
+    return any(
+        generator.may_have_written(cls, function.__name__, function) for generator in _GENERATORS
+    )
