@@ -72,20 +72,21 @@ def surface_form(obj: object) -> str:
     """The surface form of *obj*.
 
     An Enum's is its members, aliases included, as NAME=value in definition order, an
-    alias with the value of the member it names. A constant's, that of anything neither
-    a class nor a routine, is its type's qualified name; a functools.partial is a
-    routine on every admitted minor, and any other descriptor whose type defines __get__
-    and __delete__ but no __set__ is no routine on any. After that name, a mapping's
-    form gives its entries in braces in iteration order, each key as _spelled_key spells
-    it and each value by its own form, and a list's or tuple's gives its items' forms in
-    brackets, a run of equal forms spelled once with its count, as in list [float × 48].
-    A subclass's instance is spelled as its base's is, unless its type is a named tuple
-    or an Enum, whose own form pins what the instance holds: such an instance is spelled
-    by its type alone. A class or routine held in a constant raises TypeError naming it,
-    and a key whose type is not exactly one of those _spelled_key spells, or a list,
-    tuple or mapping held inside itself, raises TypeError naming its type. Any other
-    class's or routine's is its signature, a class's being its constructor's without
-    self and a partial's the one it leaves of the callable it wraps.
+    alias with the value of the member it names, each value as _spelled_value spells it.
+    A constant's, that of anything neither a class nor a routine, is its type's
+    qualified name; a functools.partial is a routine on every admitted minor, and any
+    other descriptor whose type defines __get__ and __delete__ but no __set__ is no
+    routine on any. After that name, a mapping's form gives its entries in braces in
+    iteration order, each key as _spelled_key spells it and each value by its own form,
+    and a list's or tuple's gives its items' forms in brackets, a run of equal forms
+    spelled once with its count, as in list [float × 48]. A subclass's instance is
+    spelled as its base's is, unless its type is a named tuple or an Enum, whose own
+    form pins what the instance holds: such an instance is spelled by its type alone. A
+    class or routine held in a constant raises TypeError naming it, and a key whose type
+    is not exactly one of those _spelled_key spells, or a list, tuple or mapping held
+    inside itself, raises TypeError naming its type. Any other class's or routine's is
+    its signature, a class's being its constructor's without self and a partial's the
+    one it leaves of the callable it wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -112,7 +113,10 @@ def surface_form(obj: object) -> str:
     too, with its kind.
     """
     if is_enum(obj):
-        return ", ".join(f"{name}={member.value!r}" for name, member in obj.__members__.items())
+        return ", ".join(
+            f"{name}={_spelled_value(member.value)}"
+            for name, member in obj.__members__.items()
+        )
     if not _is_class_or_routine(obj):
         return _constant(obj).text()
     signature = signature_of(obj)
@@ -333,6 +337,11 @@ def _spelled(annotation: object) -> object:
     if annotation is inspect.Parameter.empty:
         return annotation
     return _Spelling(_parsed(annotation, frozenset()).text())
+
+
+def _spelled_value(value: object) -> str:
+    """*value* by its ascii(), which escapes every non-ASCII character, where repr() escapes only those the running minor's Unicode database deems unprintable, so that no character's spelling hangs on that database."""
+    return ascii(value)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -613,7 +622,7 @@ _LITERAL_KEY_TYPES: tuple[type, ...] = (str, int, float, bool, types.NoneType)
 
 
 def _spelled_key(key: object) -> str:
-    """*key* by its ascii(), if its type is exactly one of _LITERAL_KEY_TYPES, as such a key's ascii() is the same on every admitted minor; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
+    """*key* as _spelled_value spells it, if its type is exactly one of _LITERAL_KEY_TYPES, as such a key's spelling is the same on every admitted minor; TypeError naming its type for any other key, a subclass's instance, such as an IntEnum member, included."""
     if type(key) not in _LITERAL_KEY_TYPES:
         names = ", ".join(kind.__qualname__ for kind in _LITERAL_KEY_TYPES)
         raise TypeError(
@@ -621,7 +630,7 @@ def _spelled_key(key: object) -> str:
             f"form spells a key only if its type is exactly one of {names}: key the mapping "
             "by one of those types, or make the constant private"
         )
-    return ascii(key)
+    return _spelled_value(key)
 
 
 def _form_classes(obj: object) -> set[type]:
