@@ -75,6 +75,22 @@ def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
     assert surface_form(h) == "(a, b=1)"
 
 
+def test_a_parameter_default_is_spelled_as_ascii_writes_it() -> None:
+    def f(
+        band: str = "\U0001F6DC", label="\xe9", *, pair: tuple[str, int] = ("\xe9", 1)
+    ) -> None: ...
+
+    @dataclass(frozen=True)
+    class Tag:
+        label: str = "\xe9"
+
+    assert (
+        surface_form(f)
+        == "(band: str = '\\U0001f6dc', label='\\xe9', *, pair: tuple[str, int] = ('\\xe9', 1)) -> None"
+    )
+    assert surface_form(Tag) == "dataclass[eq, frozen] (label: str = '\\xe9') -> None"
+
+
 def test_an_optional_or_a_union_is_spelled_with_bars() -> None:
     def f(a: Optional[int], b: Union[int, str], c: int | None) -> None: ...
 
