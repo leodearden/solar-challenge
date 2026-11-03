@@ -17,11 +17,12 @@ pinned; and markers cannot tell glibc from musl, or one glibc floor from another
 
 Usage::
 
-    from tests._required_environment import pinned_environment
+    from tests._required_environment import declare_required_environment, pinned_environment
 
-    environment = pinned_environment(project_root)
+    declare_required_environment(project, pinned_environment(project))
 """
 
+import json
 from pathlib import Path
 
 from packaging.markers import Marker, default_environment
@@ -37,3 +38,9 @@ def pinned_environment(project_root: Path) -> Marker:
         f"python_version == '{pin.major}.{pin.minor}' and sys_platform == '{host['sys_platform']}' "
         f"and platform_machine == '{host['platform_machine']}'"
     )
+
+
+def declare_required_environment(project: Path, environment: Marker) -> None:
+    """Append to *project*'s pyproject.toml a [tool.uv] table declaring *environment* its uv required environment, so `uv lock` pins for that environment only releases with a wheel for it wherever a release has no source distribution."""
+    with (project / "pyproject.toml").open("a", encoding="utf-8") as pyproject:
+        pyproject.write(f"\n[tool.uv]\nrequired-environments = [{json.dumps(str(environment))}]\n")
