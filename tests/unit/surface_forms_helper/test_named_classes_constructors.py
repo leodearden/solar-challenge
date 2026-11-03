@@ -302,6 +302,166 @@ def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statemen
     assert named_classes(submetering.Submeter) == {decimal.Decimal}
 
 
+def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_a_line_left_of_its_class_statement_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    nesting = imported_module(
+        tmp_path,
+        monkeypatch,
+        "nesting",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "class Outer:\n"
+        "    @dataclass\n"
+        "    class Noted(Meter):\n"
+        "        note: str = '''\n"
+        "unindented'''\n"
+        "\n"
+        "    @dataclass\n"
+        "    class Commented(Meter):\n"
+        "# unindented\n"
+        "        pass\n",
+    )
+
+    assert named_classes(nesting.Outer.Noted) == {fractions.Fraction, str}
+    assert named_classes(nesting.Outer.Commented) == {fractions.Fraction}
+
+
+def test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    branching = imported_module(
+        tmp_path,
+        monkeypatch,
+        "branching",
+        "import sys\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "if sys.version_info < (3, 0):\n"
+        "    @dataclass\n"
+        "    class Submeter(Meter):\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "else:\n"
+        "    @dataclass\n"
+        "    class Submeter(Meter):\n"
+        "        pass\n",
+    )
+
+    with pytest.raises(
+        TypeError, match=r"^branching\.Submeter is defined by one of several class statements"
+    ):
+        named_classes(branching.Submeter)
+
+
+def test_a_generated_dataclass_constructor_of_a_class_whose_name_class_statements_inside_a_function_or_class_also_give_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    scoping = imported_module(
+        tmp_path,
+        monkeypatch,
+        "scoping",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    pass\n"
+        "\n"
+        "def build():\n"
+        "    @dataclass\n"
+        "    class Submeter(Meter):\n"
+        "        pass\n"
+        "    return Submeter\n"
+        "\n"
+        "class Outer:\n"
+        "    @dataclass\n"
+        "    class Submeter(Meter):\n"
+        "        pass\n",
+    )
+
+    assert named_classes(scoping.Submeter) == {fractions.Fraction}
+    assert named_classes(scoping.build()) == {fractions.Fraction}
+    assert named_classes(scoping.Outer.Submeter) == {fractions.Fraction}
+
+
+def test_a_generated_dataclass_constructor_of_a_class_whose_module_inspect_reads_no_source_for_raises_type_error_naming_the_class(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    unsourced = imported_module(
+        tmp_path,
+        monkeypatch,
+        "unsourced",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n",
+    )
+    monkeypatch.delattr(unsourced, "__file__")
+
+    with pytest.raises(
+        TypeError, match=r"^unsourced\.Submeter has no class statement inspect can read"
+    ) as raised:
+        named_classes(unsourced.Submeter)
+
+    assert raised.value.__cause__ is not None
+
+
 @pytest.mark.parametrize(
     "name",
     [
