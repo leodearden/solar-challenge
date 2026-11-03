@@ -331,7 +331,7 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 
 
 class _Spelling(str):
-    """An annotation's or a default's spelling, which inspect prints as given, as it prints a default, and an annotation it does not know, by its repr."""
+    """An annotation's or a default's spelling, which inspect prints as given: it prints both a default and an annotation it does not know by repr(), and a spelling's repr() is its text."""
 
     def __repr__(self) -> str:
         return str(self)
