@@ -247,6 +247,15 @@ def test_section_control_named_by_its_caption_sets_its_field_of_the_form_the_bui
     assert _form_sent_on_validate(page)[field] == value
 
 
+def test_a_freshly_opened_builder_sends_no_seg_rate(page: Page, live_server: str) -> None:
+    """Like the home and fleet pages, which start with the SEG off, the builder starts with no SEG export rate, so a scenario built from its defaults carries no seg: block."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Tariff")
+
+    assert page.get_by_role("spinbutton", name="SEG Export Rate (p/kWh)", exact=True).input_value() == ""
+    assert _form_sent_on_validate(page)["seg_rate_pence_per_kwh"] == ""
+
+
 def test_custom_location_controls_named_by_their_captions_set_the_location_the_builder_sends(
     page: Page, live_server: str
 ) -> None:

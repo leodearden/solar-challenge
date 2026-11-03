@@ -115,7 +115,7 @@ document.addEventListener('alpine:init', () => {
         altitude: 11.0,
         n_homes: 100,
         import_rate: 0.245,
-        seg_rate_pence_per_kwh: 15.0,
+        seg_rate_pence_per_kwh: '',
 
         // Each component's distribution, by its key: a fixed value while type is ''
         dists: Object.fromEntries(components.map((component) => [component.key, component.dist])),
