@@ -769,6 +769,12 @@ class TestBuilderScenarioYaml:
         fleet_distribution = parse_fleet_distribution_config(document["fleet_distribution"])
         assert getattr(fleet_distribution, component).draws[grammar_key] == expected
 
+    def test_a_seg_rate_the_form_sets_is_the_rate_the_seg_reader_reads(self, client: FlaskClient) -> None:
+        """A SEG rate the form sets is written in the seg: block as the rate the seg: reader reads."""
+        _, document = _preview_document(client, {**self._DEFAULT_FORM, "seg_rate_pence_per_kwh": 5.5})
+
+        assert parse_seg_rate(document["seg"]) == 5.5
+
     @pytest.mark.parametrize(
         ("rate_field", "block"),
         [
