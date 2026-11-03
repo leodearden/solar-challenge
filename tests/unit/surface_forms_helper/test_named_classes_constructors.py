@@ -130,6 +130,39 @@ def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_
     assert named_classes(retapping.Submeter) == {fractions.Fraction, decimal.Decimal}
 
 
+def test_a_generated_dataclass_constructor_whose_code_carries_its_own_qualified_name_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    retapping = imported_module(
+        tmp_path,
+        monkeypatch,
+        "retapping",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Spare\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    spare: 'Spare'\n",
+    )
+    init = vars(retapping.Submeter)["__init__"]
+    monkeypatch.setattr(init, "__code__", init.__code__.replace(co_qualname=init.__qualname__))
+
+    assert named_classes(retapping.Submeter) == {fractions.Fraction, decimal.Decimal}
+
+
 def test_a_generated_dataclass_constructor_does_not_read_a_field_in_the_module_of_a_class_the_dataclass_decorator_never_processed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -219,13 +252,54 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
         "\n"
         "@dataclass\n"
         "class CalledSubmeter(Meter):\n"
-        "    __init__ = Caller()\n",
+        "    __init__ = Caller()\n"
+        "\n"
+        "@dataclass\n"
+        "class BlockSubmeter(Meter):\n"
+        "    if Meter:\n"
+        "        def __init__(self, valve: 'Valve') -> None: ...\n",
     )
 
     assert named_classes(revalving.Submeter) == {decimal.Decimal}
     assert named_classes(revalving.LoggedSubmeter) == {decimal.Decimal}
     assert named_classes(revalving.Resubmeter) == {decimal.Decimal}
     assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
+    assert named_classes(revalving.BlockSubmeter) == {decimal.Decimal}
+
+
+def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statement_names_the_classes_the_module_defining_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "metering",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    share: 'Share'\n",
+    )
+    submetering = imported_module(
+        tmp_path,
+        monkeypatch,
+        "submetering",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "from metering import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    pass\n"
+        "\n"
+        "def settle(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "Submeter.__init__ = settle\n",
+    )
+
+    assert named_classes(submetering.Submeter) == {decimal.Decimal}
 
 
 @pytest.mark.parametrize(
@@ -388,6 +462,29 @@ def test_a_constructor_compiled_outside_its_class_body_names_the_classes_the_mod
         "from typing import NamedTuple\n"
         "\n" + definition,
     )
+
+    class Subpoint(pointing.Point):
+        pass
+
+    assert named_classes(Subpoint) == {decimal.Decimal}
+
+
+def test_a_named_tuple_constructor_whose_code_carries_its_own_qualified_name_names_the_classes_the_module_of_that_class_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "pointing",
+        "from decimal import Decimal as Share\n"
+        "from typing import NamedTuple\n"
+        "\n"
+        "class Point(NamedTuple):\n"
+        "    share: 'Share'\n",
+    )
+    held = vars(pointing.Point)["__new__"]
+    new = getattr(held, "__func__", held)
+    monkeypatch.setattr(new, "__code__", new.__code__.replace(co_qualname=new.__qualname__))
 
     class Subpoint(pointing.Point):
         pass
