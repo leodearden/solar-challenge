@@ -1072,7 +1072,7 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     author = _annotations_author(_chain_end(constructor))
-    generated = _generated_constructor_of(holder, name, author)
+    generated = _generated_constructor_of(cls, holder, name, author)
     if generated is not None:
         _refuse_constructor_its_generator_records_unwritten(cls, holder, author, generated)
         return generated.spelling_modules(holder, names)
@@ -1118,7 +1118,7 @@ def _refuse_constructor_generated_for_another_class(
     if named is None:
         return
     owner, name = named
-    if owner is not holder and _generated_constructor_of(owner, name, author) is not None:
+    if owner is not holder and _generated_constructor_of(cls, owner, name, author) is not None:
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(author)}, a function generated "
             f"for another class and assigned in the body of {label_of(holder)}, so no module is "
@@ -1263,19 +1263,22 @@ class _GeneratedConstructor:
 
 
 def _generated_constructor_of(
-    holder: type, name: str, author: object
+    cls: type, holder: type, name: str, author: object
 ) -> _GeneratedConstructor | None:
-    """The constructor _GENERATED_CONSTRUCTORS holds under *name*, if its generator may have written *author* into *holder* as that constructor, as MethodGenerator.may_have_written finds, and *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
+    """The constructor _GENERATED_CONSTRUCTORS holds under *name*, if its generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, and *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
 
     A function assigned from elsewhere keeps its own name. A function that records
     __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
+    _defined_in_body refuses, naming *cls*, the class constructed through *author*, where
+    it cannot tell whether that statement defines *name*.
     """
     constructor = _GENERATED_CONSTRUCTORS.get(name)
     if (
         constructor is None
+        or not isinstance(author, types.FunctionType)
         or hasattr(author, "__wrapped__")
         or not constructor.generator.may_have_written(holder, name, author)
-        or name in _defined_in_body(holder)
+        or _defined_in_body(cls, holder, constructor, author)
     ):
         return None
     return constructor
@@ -1300,10 +1303,47 @@ def _refuse_constructor_its_generator_records_unwritten(
         )
 
 
-def _defined_in_body(cls: type) -> set[str]:
-    """The names the def statements in any block of *cls*'s class statement, as class_statement reads it, bind in *cls*'s namespace, as _def_names finds them; none if class_statement finds that no class statement defined *cls*."""
-    statement = class_statement(cls)
-    return set() if statement is None else set(_def_names(statement.body))
+def _defined_in_body(
+    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
+) -> bool:
+    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace, as _def_names finds them; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds inspect reads no source for *function*, the one *cls* is constructed through."""
+    statement = class_statement(holder)
+    if statement is None:
+        _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
+        return False
+    return constructor.name in _def_names(statement.body)
+
+
+def _refuse_def_written_member_of_statementless_class(
+    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
+) -> None:
+    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*.
+
+    A generator compiles each function it writes from text it writes, for which inspect
+    reads no source; a def statement in a source file wrote any function inspect reads a
+    source for. Such a function may be one the class statement that defined *holder*
+    defines, and that statement is elsewhere, as for a class whose __module__ names a
+    module that re-exports it, so whether it defines that constructor is not known.
+    class_statement looks that statement up by *holder*'s __module__ and __qualname__,
+    which the remedy leaves as the statement set them.
+    docs/surface-forms-inspect-readings.md §3.5 says how each minor reads the source of
+    such a class and of the functions a generator writes.
+    """
+    try:
+        inspect.getsource(function)
+    except (OSError, TypeError):
+        return
+    raise TypeError(
+        f"{label_of(cls)} is constructed through {label_of(function)}, which carries the "
+        f"name {constructor.generator.label} gives the {constructor.name} it writes into "
+        f"{label_of(holder)}, and inspect reads a source for it, as for a function a def "
+        "statement wrote, but the source of the module "
+        f"{defining_module(holder).__name__!r} holds no class statement under the qualified "
+        f"name {holder.__qualname__!r}, so whether the class statement that defined "
+        f"{label_of(holder)} defines {constructor.name} is not known: make the name "
+        f"private, or leave the __module__ and __qualname__ of {label_of(holder)} as its "
+        "class statement set them"
+    )
 
 
 def _def_names(nodes: Iterable[ast.AST]) -> Iterator[str]:

@@ -17,7 +17,10 @@ minor (§3), or raises `TypeError` naming what `inspect` reads that way and sayi
 do instead (§4). Both rest on the chain `inspect` follows from a routine, which is the same
 on every minor (§2). `named_classes`, which gives the classes a form names, reads each
 string annotation in the module that spells it, and raises `TypeError` where that module
-could differ by minor (4.2). `member_forms`, which spells the public members a class's own
+could differ by minor (4.2). It also raises `TypeError` for a constructor named as the
+dataclass decorator or `collections.namedtuple` names the one it writes, but written by a
+`def` statement in a source file, in a class whose module's source holds no class
+statement for it (3.5). `member_forms`, which spells the public members a class's own
 body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Both
 raise `TypeError` for a class whose metaclass shadows `__dict__` or overrides `type`'s
 `__getattribute__` (4.8). `member_forms` also raises `TypeError` for a named tuple whose
@@ -51,7 +54,8 @@ shadows `__dict__`, were measured on CPython 3.11.15, 3.11.17, 3.12.3, 3.13.9 an
 on 2026-10-31, and 4.8's readings of a class whose metaclass's MRO holds a class
 other than `type` and `object` that holds a `__getattribute__`, its reading of where
 `inspect.getsource` finds a class's statement, and 4.9's readings on those releases on
-2026-11-01. A new refusal gets its rule test first, then its entry here.
+2026-11-01. 3.5's readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on
+2026-11-03. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -160,6 +164,80 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_carried_signatures.py::test_a_class_whose_metaclass_takes_a_signature_from_a_base_its_own_metaclass_mro_hides_raises_type_error_naming_the_class_and_that_metaclass`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_an_attribute_a_base_body_declares_is_declared_whatever_mro_the_class_metaclass_gives`
 - `tests/unit/surface_forms_helper/test_member_forms.py::test_a_named_tuple_whose_metaclass_gives_a_mro_other_than_the_one_it_records_raises_the_type_error_surface_form_raises_for_it`
+
+### 3.5 A class's statement, found by the qualified name it gives
+
+From 3.13, `inspect.getsource` finds a class's statement by the `__firstlineno__` its
+namespace holds, in the file of the module its `__module__` names. Assigning `__module__`,
+even the name it already holds, removes `__firstlineno__`, so from 3.13 `inspect` reads no
+statement for such a class: after `Submeter.__module__ = __name__` in the module whose
+class statement defines `Submeter`, it raises `OSError`. Assigning `__qualname__` keeps
+`__firstlineno__`. 3.11 and 3.12 find the statement by the class's qualified name in the
+source of the module its `__module__` names. So with `Real.__qualname__ = 'Decoy'` and
+`Decoy = Real` below a `class Decoy` statement, 3.11 and 3.12 read `class Decoy:` for
+`Real`, and 3.13 and 3.14 read `class Real:`. 3.11 and 3.12 spell the qualified name of
+each statement without the compiler's rule for a `global` statement. Under that rule, a
+class or function whose name a `global` statement of the function or class body holding
+it declares takes that name alone, wherever in that body the declaration stands: after
+`global Gauge` in a function `build`, `class Gauge:` there defines `Gauge`, not
+`build.<locals>.Gauge`, on every minor. So 3.11 and 3.12 find no statement for such a
+class, and 3.13 and 3.14 find it by `__firstlineno__`. A class whose `__module__` names a
+module that re-exports it, as `from implementing import Submeter` and then
+`Submeter.__module__ = __name__` in a module `facade` make it, gets no statement from
+`inspect` on any minor. For a class that text given to `exec` defines, `inspect` from 3.13
+reads the block at line `__firstlineno__` of the module's own file, whatever is there, as
+that module's first import; 3.11 and 3.12 find none.
+
+The helper finds a class's statement by its qualified name in the source of the module
+its `__module__` names, alike on every minor, as 3.11 and 3.12 find it, and spells the
+qualified name of each statement as the compiler does, its `global` rule included. So
+`named_classes`, `undeclared_attributes` and `unset_attributes` read by its own statement,
+on every minor, a class whose own module assigns its `__module__`, and one a `global`
+statement declares. Where its module also holds a statement under the same qualified
+name, as a module-level `class Gauge:` above `build` makes it, the helper reads neither:
+`named_classes` raises `TypeError` naming the class as defined by one of several class
+statements under that name, as it does for two branches of an `if`, since 3.11 and 3.12
+read the first and 3.13 and 3.14 the one `__firstlineno__` gives. They read a class whose
+`__qualname__` was assigned another statement's qualified name by that other statement,
+as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
+`class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
+`__name__` was assigned, so no rule could refuse the one and still read the other.
+
+Where that source holds no class statement under the class's qualified name, nothing
+there tells whether the statement that defined the class defines its constructor. The
+dataclass decorator writes an `__init__`, and `collections.namedtuple` a `__new__`, named
+after the class, unless its statement defines one. `named_classes` reads such a
+constructor as the one the decorator or `collections.namedtuple` wrote, spelled as each
+spells the one it writes, only if `inspect` reads no source for it. On every admitted
+minor `inspect` reads none for any function the two write, which they compile from text
+they write. So a dataclass that `dataclass(type(...))` makes, a named tuple that
+`typing.NamedTuple('Pointed', [('share', 'Share')])` makes, and a re-homed dataclass whose
+body defines no `__init__` read alike on every minor. A constructor that a `def` statement
+in text given to `exec` wrote has no source either, so it reads as one the decorator
+wrote: such a dataclass whose own `__init__` takes `tap: 'Tap'`, `Tap` being `Decimal` in
+its module, names `{Fraction}`, its base's field declaration, on every minor, where
+`{Decimal}` is right. Only that function's `co_qualname` tells it from a written one, and
+no rule of the helper reads `co_qualname`. If `inspect` reads a source for the
+constructor, as for any function a `def` statement in a source file wrote, `named_classes`
+raises `TypeError`, since the statement that defined the class the constructor is named
+after is elsewhere and may define that constructor. The error names the class read, the
+constructor, the class it is named after and the module whose source holds no statement
+for that class, whether the class read is that class, a subclass inheriting the
+constructor, or a class whose body assigns it. Its remedy leaves both `__module__` and
+`__qualname__` as the class statement set them, since the helper finds a statement by
+both. The re-homed `Submeter` above, a dataclass whose body defines
+`def __init__(self, tap: 'Tap')`, is refused so; read as the decorator's, it would name
+`{Fraction}` where `{Decimal}` is right.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
@@ -798,7 +876,8 @@ Some readings differ by minor. A `functools.partial` subclass whose own `__get__
 `ValueError` from 3.13 (4.7). `inspect.get_annotations` reads a class's annotations from
 what `__dict__` gives on 3.11, 3.12 and 3.13, and from the namespace the class holds on
 3.14. From 3.13, `inspect.getsource` finds a class's statement by the `__firstlineno__`
-that `__dict__` gives, where 3.11 and 3.12 find it by its qualified name.
+that `__dict__` gives, where 3.11 and 3.12 find it by its qualified name; the helper finds
+it by its qualified name on every minor (3.5).
 
 So no one reading of such a class's namespace is faithful at every site.
 `surface_form`, `named_classes`, `member_forms` and `undeclared_attributes` raise
@@ -817,7 +896,8 @@ and `inspect`'s choice between a class's `__new__` and `__init__`, then read the
 `__dict__` that `__getattribute__` gives. So does `inspect.get_annotations` on 3.11, 3.12
 and 3.13; on 3.14 it reads the namespace the class holds. From 3.13, `inspect.getsource`
 finds a class's statement by the `__firstlineno__` that `__dict__` gives, where 3.11 and
-3.12 find it by its qualified name. With that `__dict__` giving `{}`
+3.12 find it by its qualified name; the helper finds it by its qualified name on every
+minor (3.5). With that `__dict__` giving `{}`
 over `Rating` and a body's own `__call__ = functools.partial(...)`, an object of the
 class held as `__init__` reads as `(rate: int) -> None` on every minor: `inspect` skips
 the partial the class holds and reads `Rating`'s. With `{'__call__': None}` over a body's
@@ -905,12 +985,13 @@ on 3.11, 3.12 and 3.14, and as `()` on 3.13. The warning 3.3 ignores rests on 3.
 4.6's refusal where a partial is bound rests on no minor: it names a binding no rule
 reads. 4.5's refusal of a class whose metaclass gives another `__mro__` rests on no
 minor either: it names a choice no rule reads. 4.8's refusal rests on 3.11 and 3.12 where
-it meets 4.6's or 4.7's reading, on 3.14 where `inspect.get_annotations` reads the
-namespace the class holds, and on 3.13 and 3.14 where `inspect.getsource` finds a class's
-statement by what its `__dict__` gives; otherwise it rests on no minor: it names readings
-no rule reads. 4.9's refusal rests on no minor either, since every minor reads `_fields`
-alike: it names a `_fields` from which no rule reads the fields' names. Whether to lift
-one is for the task that changes `requires-python`.
+it meets 4.6's or 4.7's reading, and on 3.14 where `inspect.get_annotations` reads the
+namespace the class holds; otherwise it rests on no minor: it names readings no rule
+reads. 4.9's refusal rests on no minor either, since every minor reads `_fields` alike: it
+names a `_fields` from which no rule reads the fields' names. 3.5's lookup stays whatever
+the admitted minors: it finds a class's statement by qualified name, as 3.11 and 3.12 do,
+and the lookup 3.13 and 3.14 make reads none for a class whose `__module__` was assigned.
+Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 
