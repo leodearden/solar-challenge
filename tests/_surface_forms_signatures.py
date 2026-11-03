@@ -1252,6 +1252,15 @@ class _GeneratedConstructor:
     writes: Callable[[type], bool]
     spelling_modules: Callable[[type, Iterable[str]], Mapping[str, types.ModuleType]]
 
+    def __post_init__(self) -> None:
+        """Refuse a constructor its generator's methods do not list, which _generated_constructor_of would never find written."""
+        if self.name not in self.generator.methods:
+            raise ValueError(
+                f"The constructor {self.name} is recorded as written by "
+                f"{self.generator.label}, whose methods do not list it, so no {self.name} "
+                f"would be read as one it wrote: list {self.name} among its methods"
+            )
+
 
 def _generated_constructor_of(
     holder: type, name: str, author: object
@@ -1264,8 +1273,8 @@ def _generated_constructor_of(
     constructor = _GENERATED_CONSTRUCTORS.get(name)
     if (
         constructor is None
-        or not constructor.generator.may_have_written(holder, name, author)
         or hasattr(author, "__wrapped__")
+        or not constructor.generator.may_have_written(holder, name, author)
         or name in _defined_in_body(holder)
     ):
         return None
