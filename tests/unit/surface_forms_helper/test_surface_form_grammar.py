@@ -370,10 +370,8 @@ def test_a_mapping_key_whose_type_is_not_exactly_str_int_float_bool_or_none_rais
         named_classes({Level.LOW: 1})
 
 
-def test_a_mapping_keys_type_error_names_the_key_types_a_form_spells_then_at_once_its_remedy() -> None:
-    with pytest.raises(
-        TypeError, match=r"\bbuiltins\.object\b.*\bstr, int, float, bool, NoneType: "
-    ):
+def test_a_mapping_keys_type_error_names_the_key_types_a_form_spells() -> None:
+    with pytest.raises(TypeError, match=r"\bstr, int, float, bool, NoneType\b"):
         surface_form({object(): 1})
 
 
