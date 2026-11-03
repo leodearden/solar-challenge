@@ -11,12 +11,9 @@ uv required environment, so wherever a release has no source distribution, uv
 pins there only a release that ships a wheel for it; tests/_required_environment.py
 says why. The suite's command is unchanged: only the copy's pyproject.toml
 gains that [tool.uv] table, which every uv command in the copy reads. The run
-deselects the two tests the copy breaks by design:
-tests/unit/test_dependency_floors.py's floor test, which holds only for the
-committed pyproject.toml and uv.lock pair, and the test in
-tests/unit/test_required_environment_helper.py that the table can be appended
-to pyproject.toml, whose copy here already holds it. An upstream release that
-breaks this code then files a fix task before a consumer meets it.
+deselects each test tests/_newest_releases_deselections.py names, which the
+copy breaks by design. An upstream release that breaks this code then files a
+fix task before a consumer meets it.
 
 The orchestrator's offline lane runs this module after each merge to main, as
 its newest-releases job. tests/conftest.py keeps this directory out of every
@@ -29,6 +26,7 @@ Manual run::
     uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
 """
 
+import shlex
 import shutil
 import subprocess
 import tomllib
@@ -39,6 +37,7 @@ import pytest
 
 from tests._command_runner import describe_pytest_outcome
 from tests._hermetic_checkout import init_hermetic_checkout
+from tests._newest_releases_deselections import NEWEST_RELEASES_DESELECTIONS
 from tests._required_environment import declare_required_environment, pinned_environment
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
@@ -47,18 +46,6 @@ from tests._working_tree import copy_working_tree
 pytestmark = pytest.mark.slow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-# This copy upgrades uv.lock and leaves pyproject.toml's requirements as they are, so the floor test's rule,
-# floor == lock, is false here by construction. --deselect matches every parametrisation by node-id prefix. A rename of
-# the floor test stops the match, so the test then runs here, fails and turns the lane red: the coupling cannot fail
-# silently.
-_FLOOR_TEST = "tests/unit/test_dependency_floors.py::test_every_declared_floor_is_the_locked_release"
-
-# This copy's pyproject.toml already holds the [tool.uv] table the declaration appends, so the test that the table can
-# be appended to pyproject.toml fails here by construction. A rename of it fails here the same way.
-_DECLARATION_TEST = (
-    "tests/unit/test_required_environment_helper.py::test_the_declaration_is_valid_toml_in_this_projects_pyproject"
-)
 
 # It exists only so a hung resolution or download fails this test by name.
 _UV_TIMEOUT_SECS = 900
@@ -127,7 +114,7 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
 
     env = {
         **isolated_uv_env(tmp_path / "venv"),
-        "PYTEST_ADDOPTS": f"--deselect={_FLOOR_TEST} --deselect={_DECLARATION_TEST}",
+        "PYTEST_ADDOPTS": shlex.join(f"--deselect={deselected.node_id}" for deselected in NEWEST_RELEASES_DESELECTIONS),
     }
     result = run_verify_suite(project, env, variant="on the newest releases")
 

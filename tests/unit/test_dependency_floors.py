@@ -50,9 +50,9 @@ def uv_lock() -> dict[str, Any]:
 def test_every_declared_floor_is_the_locked_release(table: str, requirement: str, uv_lock: dict[str, Any]) -> None:
     """The requirement's >= floor is the lowest release uv.lock pins for its distribution.
 
-    tests/newest_releases deselects this test by its node id, because its copy upgrades uv.lock past the floors on
-    purpose, so a rename changes both. --deselect matches by node-id prefix, so no other test in this module may
-    begin with this test's name.
+    tests/_newest_releases_deselections.py names this test for the newest-releases check to deselect, because its copy
+    upgrades uv.lock past the floors on purpose. tests/unit/test_newest_releases_lane.py fails until a rename of this
+    test renames that entry too, and while another test of this module begins with this test's name.
     """
     name = Requirement(requirement).name
     pinned = locked_versions(uv_lock, name)
