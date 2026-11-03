@@ -85,8 +85,9 @@ def surface_form(obj: object) -> str:
     class or routine held in a constant raises TypeError naming it, and a key whose type
     is not exactly one of those _spelled_key spells, or a list, tuple or mapping held
     inside itself, raises TypeError naming its type. Any other class's or routine's is
-    its signature, a class's being its constructor's without self and a partial's the
-    one it leaves of the callable it wraps.
+    its signature, each default in it as _spelled_value spells it, a class's being its
+    constructor's without self and a partial's the one it leaves of the callable it
+    wraps.
     A class's constructor is the __call__ its metaclass resolves if that is not defined
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
@@ -123,10 +124,13 @@ def surface_form(obj: object) -> str:
     text = str(
         signature.replace(
             parameters=[
-                parameter.replace(annotation=_spelled(parameter.annotation))
+                parameter.replace(
+                    annotation=_spelled_annotation(parameter.annotation),
+                    default=_spelled_default(parameter.default),
+                )
                 for parameter in signature.parameters.values()
             ],
-            return_annotation=_spelled(signature.return_annotation),
+            return_annotation=_spelled_annotation(signature.return_annotation),
         )
     )
     if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
@@ -327,16 +331,22 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 
 
 class _Spelling(str):
-    """An annotation's spelling, which inspect prints unquoted, as it prints an annotation it does not know by its repr."""
+    """An annotation's or a default's spelling, which inspect prints as given, as it prints a default, and an annotation it does not know, by its repr."""
 
     def __repr__(self) -> str:
         return str(self)
 
 
-def _spelled(annotation: object) -> object:
+def _spelled_annotation(annotation: object) -> object:
     if annotation is inspect.Parameter.empty:
         return annotation
     return _Spelling(_parsed(annotation, frozenset()).text())
+
+
+def _spelled_default(default: object) -> object:
+    if default is inspect.Parameter.empty:
+        return default
+    return _Spelling(_spelled_value(default))
 
 
 def _spelled_value(value: object) -> str:
