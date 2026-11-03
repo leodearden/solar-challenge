@@ -257,7 +257,11 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
         "@dataclass\n"
         "class BlockSubmeter(Meter):\n"
         "    if Meter:\n"
-        "        def __init__(self, valve: 'Valve') -> None: ...\n",
+        "        def __init__(self, valve: 'Valve') -> None: ...\n"
+        "\n"
+        "@dataclass(init=False)\n"
+        "class UnwrittenSubmeter(Meter):\n"
+        "    def __init__(self, valve: 'Valve') -> None: ...\n",
     )
 
     assert named_classes(revalving.Submeter) == {decimal.Decimal}
@@ -265,6 +269,7 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     assert named_classes(revalving.Resubmeter) == {decimal.Decimal}
     assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
     assert named_classes(revalving.BlockSubmeter) == {decimal.Decimal}
+    assert named_classes(revalving.UnwrittenSubmeter) == {decimal.Decimal}
 
 
 def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statement_names_the_classes_the_module_defining_it_binds_the_names_to(
@@ -300,6 +305,43 @@ def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statemen
     )
 
     assert named_classes(submetering.Submeter) == {decimal.Decimal}
+
+
+def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_in_a_class_it_last_processed_with_init_off_raises_type_error_naming_the_class_and_the_function(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    retapping = imported_module(
+        tmp_path,
+        monkeypatch,
+        "retapping",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass(init=False)\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    pass\n",
+    )
+
+    with pytest.raises(TypeError) as raised:
+        named_classes(retapping.Submeter)
+
+    assert str(raised.value).startswith(
+        "retapping.Submeter is constructed through retapping.Submeter.__init__, "
+    )
 
 
 def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_a_line_left_of_its_class_statement_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(

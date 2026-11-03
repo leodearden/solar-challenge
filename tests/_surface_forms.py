@@ -60,6 +60,7 @@ from tests._surface_forms_module_lookup import (
 from tests._surface_forms_signatures import (
     ModuleOrUnspelled,
     Unspelled,
+    dataclass_parameter,
     is_enum,
     namespace_holders,
     refuse_member_without_a_portable_form,
@@ -902,10 +903,10 @@ _DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "fr
 
 
 def _dataclass_kind(cls: type) -> str:
-    """The kind of the dataclass *cls*: dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from."""
-    parameters = cls.__dataclass_params__  # type: ignore[attr-defined]  # typeshed declares no __dataclass_params__
+    """The kind of the dataclass *cls*: dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from, as dataclass_parameter reads them."""
     return _qualified_kind(
-        "dataclass", [name for name in _DATACLASS_KIND_PARAMETERS if getattr(parameters, name)]
+        "dataclass",
+        [name for name in _DATACLASS_KIND_PARAMETERS if dataclass_parameter(cls, name)],
     )
 
 
