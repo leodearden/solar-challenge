@@ -14,7 +14,7 @@ import sys
 import types
 import typing
 import weakref
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 from tests._surface_forms_class_reads import own_namespace
 from tests._surface_forms_generators import may_be_generated
@@ -267,28 +267,54 @@ def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
 def _class_statements(module: types.ModuleType) -> Mapping[str, tuple[ast.ClassDef, ...]]:
     """The class statements in *module*'s source, parsed once while *module* lives, grouped in source order by the qualified name each gives the class it defines, as _class_statements_in spells it."""
     statements: dict[str, tuple[ast.ClassDef, ...]] = {}
-    for name, statement in _class_statements_in(ast.parse(inspect.getsource(module)).body, ""):
+    for name, statement in _class_statements_in(
+        ast.parse(inspect.getsource(module)).body, "", frozenset()
+    ):
         statements[name] = (*statements.get(name, ()), statement)
     return statements
 
 
 def _class_statements_in(
-    nodes: Iterable[ast.AST], scope: str
+    nodes: Iterable[ast.AST], scope: str, declared_global: Collection[str]
 ) -> Iterator[tuple[str, ast.ClassDef]]:
-    """Each class statement among *nodes*, or in any block or body of theirs, with the qualified name it gives the class it defines, as the compiler spells it in *scope*: after the name of each class enclosing it, dotted, and of each function enclosing it, dotted with <locals>."""
+    """Each class statement among *nodes*, or in any block or body of theirs, with the qualified name it gives the class it defines, as the compiler spells it: _qualified_name spells each class or function name from the scope of the body holding its statement and the names that body's global statements declare, *scope* and *declared_global* for the body *nodes* belong to; a class's body has its qualified name, dotted, as its scope, and a function's its qualified name, dotted with <locals>."""
     for node in nodes:
         match node:
             case ast.ClassDef(name=name, body=body) as statement:
-                yield f"{scope}{name}", statement
-                yield from _class_statements_in(body, f"{scope}{name}.")
+                qualified_name = _qualified_name(name, scope, declared_global)
+                yield qualified_name, statement
+                yield from _class_statements_in(
+                    body, f"{qualified_name}.", frozenset(_global_names(body))
+                )
             case ast.FunctionDef(name=name, body=body) | ast.AsyncFunctionDef(
                 name=name, body=body
             ):
-                yield from _class_statements_in(body, f"{scope}{name}.<locals>.")
+                yield from _class_statements_in(
+                    body,
+                    f"{_qualified_name(name, scope, declared_global)}.<locals>.",
+                    frozenset(_global_names(body)),
+                )
             case ast.expr():
                 pass
             case _:
-                yield from _class_statements_in(ast.iter_child_nodes(node), scope)
+                yield from _class_statements_in(ast.iter_child_nodes(node), scope, declared_global)
+
+
+def _qualified_name(name: str, scope: str, declared_global: Collection[str]) -> str:
+    """The qualified name the compiler gives the class or function a statement named *name* defines in a body of *scope*: *name* alone if a global statement of that body declares it, as *declared_global* holds each name one does, else *name* after *scope*."""
+    return name if name in declared_global else f"{scope}{name}"
+
+
+def _global_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
+    """The names the global statements among *nodes*, or in any block of theirs, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
+    for node in nodes:
+        match node:
+            case ast.Global(names=names):
+                yield from names
+            case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
+                pass
+            case _:
+                yield from _global_names(ast.iter_child_nodes(node))
 
 
 @_cached_while_alive

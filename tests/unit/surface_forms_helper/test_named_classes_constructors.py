@@ -364,29 +364,53 @@ def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_
     assert named_classes(nesting.Outer.Commented) == {fractions.Fraction}
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "import sys\n"
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "if sys.version_info < (3, 0):\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n"
+            "else:\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        pass\n",
+            id="branches-of-an-if",
+        ),
+        pytest.param(
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "@dataclass\n"
+            "class Submeter(Meter):\n"
+            "    def __init__(self, tap: 'Tap') -> None: ...\n"
+            "\n"
+            "def rebuild() -> None:\n"
+            "    global Submeter\n"
+            "\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        pass\n"
+            "\n"
+            "rebuild()\n",
+            id="a-function-declaring-it-global",
+        ),
+    ],
+)
 def test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
-    branching = imported_module(
-        tmp_path,
-        monkeypatch,
-        "branching",
-        "import sys\n"
-        "from dataclasses import dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "from tapping import Meter\n"
-        "\n"
-        "if sys.version_info < (3, 0):\n"
-        "    @dataclass\n"
-        "    class Submeter(Meter):\n"
-        "        def __init__(self, tap: 'Tap') -> None: ...\n"
-        "else:\n"
-        "    @dataclass\n"
-        "    class Submeter(Meter):\n"
-        "        pass\n",
-    )
+    branching = imported_module(tmp_path, monkeypatch, "branching", source)
 
     with pytest.raises(
         TypeError, match=r"^branching\.Submeter is defined by one of several class statements"
@@ -592,6 +616,51 @@ def test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_n
 
     assert named_classes(rehoming.Submeter) == {decimal.Decimal}
     assert named_classes(rehoming.Plain) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "def build() -> None:\n"
+            "    global Submeter\n"
+            "\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n"
+            "\n"
+            "build()\n",
+            id="a-function",
+        ),
+        pytest.param(
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "class Building:\n"
+            "    if True:\n"
+            "        global Submeter\n"
+            "\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n",
+            id="a-block-of-a-class-body",
+        ),
+    ],
+)
+def test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    declaring = imported_module(tmp_path, monkeypatch, "declaring", source)
+
+    assert named_classes(declaring.Submeter) == {decimal.Decimal}
 
 
 @pytest.mark.parametrize(

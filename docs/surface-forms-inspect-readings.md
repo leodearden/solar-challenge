@@ -175,17 +175,29 @@ class statement defines `Submeter`, it raises `OSError`. Assigning `__qualname__
 `__firstlineno__`. 3.11 and 3.12 find the statement by the class's qualified name in the
 source of the module its `__module__` names. So with `Real.__qualname__ = 'Decoy'` and
 `Decoy = Real` below a `class Decoy` statement, 3.11 and 3.12 read `class Decoy:` for
-`Real`, and 3.13 and 3.14 read `class Real:`. A class whose `__module__` names a module
-that re-exports it, as `from implementing import Submeter` and then
+`Real`, and 3.13 and 3.14 read `class Real:`. 3.11 and 3.12 spell the qualified name of
+each statement without the compiler's rule for a `global` statement. Under that rule, a
+class or function whose name a `global` statement of the function or class body holding
+it declares takes that name alone, wherever in that body the declaration stands: after
+`global Gauge` in a function `build`, `class Gauge:` there defines `Gauge`, not
+`build.<locals>.Gauge`, on every minor. So 3.11 and 3.12 find no statement for such a
+class, and 3.13 and 3.14 find it by `__firstlineno__`. A class whose `__module__` names a
+module that re-exports it, as `from implementing import Submeter` and then
 `Submeter.__module__ = __name__` in a module `facade` make it, gets no statement from
 `inspect` on any minor. For a class that text given to `exec` defines, `inspect` from 3.13
 reads the block at line `__firstlineno__` of the module's own file, whatever is there, as
 that module's first import; 3.11 and 3.12 find none.
 
 The helper finds a class's statement by its qualified name in the source of the module
-its `__module__` names, alike on every minor, as 3.11 and 3.12 find it. So
+its `__module__` names, alike on every minor, as 3.11 and 3.12 find it, and spells the
+qualified name of each statement as the compiler does, its `global` rule included. So
 `named_classes`, `undeclared_attributes` and `unset_attributes` read by its own statement,
-on every minor, a class whose own module assigns its `__module__`. They read a class whose
+on every minor, a class whose own module assigns its `__module__`, and one a `global`
+statement declares. Where its module also holds a statement under the same qualified
+name, as a module-level `class Gauge:` above `build` makes it, the helper reads neither:
+`named_classes` raises `TypeError` naming the class as defined by one of several class
+statements under that name, as it does for two branches of an `if`, since 3.11 and 3.12
+read the first and 3.13 and 3.14 the one `__firstlineno__` gives. They read a class whose
 `__qualname__` was assigned another statement's qualified name by that other statement,
 as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
 `class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
@@ -223,6 +235,9 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
@@ -974,9 +989,9 @@ it meets 4.6's or 4.7's reading, and on 3.14 where `inspect.get_annotations` rea
 namespace the class holds; otherwise it rests on no minor: it names readings no rule
 reads. 4.9's refusal rests on no minor either, since every minor reads `_fields` alike: it
 names a `_fields` from which no rule reads the fields' names. 3.5's lookup stays whatever
-the admitted minors: it is how 3.11 and 3.12 find a class's statement, and the lookup
-3.13 and 3.14 make reads none for a class whose `__module__` was assigned. Whether to
-lift one is for the task that changes `requires-python`.
+the admitted minors: it finds a class's statement by qualified name, as 3.11 and 3.12 do,
+and the lookup 3.13 and 3.14 make reads none for a class whose `__module__` was assigned.
+Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
 

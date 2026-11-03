@@ -402,3 +402,35 @@ def test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_it
     )
 
     assert scan(rehoming.Meter) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, {"site"}, id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+def test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    declaring = imported_module(
+        tmp_path,
+        monkeypatch,
+        "declaring",
+        "def build() -> None:\n"
+        "    global Meter\n"
+        "\n"
+        "    class Meter:\n"
+        "        rate: float\n"
+        "\n"
+        "        def __init__(self) -> None:\n"
+        "            self.site = 1\n"
+        "\n"
+        "build()\n",
+    )
+
+    assert scan(declaring.Meter) == expected
