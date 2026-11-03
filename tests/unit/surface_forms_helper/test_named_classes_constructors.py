@@ -455,8 +455,26 @@ def test_a_generated_dataclass_constructor_of_a_class_whose_module_inspect_reads
     assert raised.value.__cause__ is not None
 
 
+@pytest.mark.parametrize(
+    ("source", "constructed"),
+    [
+        pytest.param(
+            "from facade import Submeter as Read\n", r"facade\.Submeter", id="the-dataclass"
+        ),
+        pytest.param(
+            "from facade import Submeter\n\nclass Read(Submeter):\n    pass\n",
+            r"reading\.Read",
+            id="a-subclass-inheriting-it",
+        ),
+        pytest.param(
+            "from facade import Submeter\n\nclass Read:\n    __init__ = Submeter.__init__\n",
+            r"reading\.Read",
+            id="a-class-assigning-it",
+        ),
+    ],
+)
 def test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str, constructed: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     imported_module(
@@ -472,19 +490,24 @@ def test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_i
         "class Submeter(Meter):\n"
         "    def __init__(self, tap: 'Tap') -> None: ...\n",
     )
-    facade = imported_module(
+    imported_module(
         tmp_path,
         monkeypatch,
         "facade",
         "from implementing import Submeter\n\nSubmeter.__module__ = __name__\n",
     )
+    reading = imported_module(tmp_path, monkeypatch, "reading", source)
 
     with pytest.raises(
         TypeError,
-        match=r"^facade\.Submeter holds implementing\.Submeter\.__init__ as __init__, "
-        r".*\bmodule 'facade' holds no class statement\b",
+        match=rf"^{constructed} is constructed through implementing\.Submeter\.__init__, "
+        r"which carries the name the dataclass decorator gives the __init__ it writes into "
+        r"facade\.Submeter, and inspect reads a source for it\b"
+        r".*\bmodule 'facade' holds no class statement under the qualified name 'Submeter'"
+        r".*: make the name private, or leave the __module__ and __qualname__ of "
+        r"facade\.Submeter as its class statement set them$",
     ):
-        named_classes(facade.Submeter)
+        named_classes(reading.Read)
 
 
 def test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(

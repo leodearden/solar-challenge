@@ -207,9 +207,13 @@ its module, names `{Fraction}`, its base's field declaration, on every minor, wh
 `{Decimal}` is right. Only that function's `co_qualname` tells it from a written one, and
 no rule of the helper reads `co_qualname`. If `inspect` reads a source for the
 constructor, as for any function a `def` statement in a source file wrote, `named_classes`
-raises `TypeError` naming the class, the constructor and the module whose source holds no
-statement for the class, since the statement that defined it is elsewhere and may define
-that constructor. The re-homed `Submeter` above, a dataclass whose body defines
+raises `TypeError`, since the statement that defined the class the constructor is named
+after is elsewhere and may define that constructor. The error names the class read, the
+constructor, the class it is named after and the module whose source holds no statement
+for that class, whether the class read is that class, a subclass inheriting the
+constructor, or a class whose body assigns it. Its remedy leaves both `__module__` and
+`__qualname__` as the class statement set them, since the helper finds a statement by
+both. The re-homed `Submeter` above, a dataclass whose body defines
 `def __init__(self, tap: 'Tap')`, is refused so; read as the decorator's, it would name
 `{Fraction}` where `{Decimal}` is right.
 
