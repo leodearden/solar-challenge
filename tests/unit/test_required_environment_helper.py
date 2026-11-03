@@ -140,7 +140,9 @@ def test_the_declaration_is_valid_toml_in_this_projects_pyproject(project_root: 
     [tool.uv] table to its copy of pyproject.toml.
 
     A [tool.uv] table added to pyproject.toml would therefore fail here, in the per-task verify, rather than in the
-    post-merge lane, and the declaration would then have to move into that table.
+    post-merge lane, and the declaration would then have to move into that table. That check's copy holds the table on
+    purpose, so it deselects this test by its node id, and a rename changes both. --deselect matches by node-id prefix,
+    so no other test in this module may begin with this test's name.
     """
     copy = tmp_path / "project"
     copy.mkdir()
