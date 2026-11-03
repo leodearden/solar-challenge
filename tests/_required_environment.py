@@ -28,6 +28,7 @@ from pathlib import Path
 from packaging.markers import Marker, default_environment
 
 from tests._interpreters import python_version_pin
+from tests._pyproject import load_pyproject
 
 
 def pinned_environment(project_root: Path) -> Marker:
@@ -41,6 +42,14 @@ def pinned_environment(project_root: Path) -> Marker:
 
 
 def declare_required_environment(project: Path, environment: Marker) -> None:
-    """Append to *project*'s pyproject.toml a [tool.uv] table declaring *environment* its uv required environment, so `uv lock` pins for that environment only releases with a wheel for it wherever a release has no source distribution."""
-    with (project / "pyproject.toml").open("a", encoding="utf-8") as pyproject:
-        pyproject.write(f"\n[tool.uv]\nrequired-environments = [{json.dumps(str(environment))}]\n")
+    """Append to *project*'s pyproject.toml a [tool.uv] table declaring *environment* its uv required environment, so `uv lock` pins for that environment only releases with a wheel for it wherever a release has no source distribution.
+
+    The pyproject.toml must exist and have no tool.uv table yet, since TOML refuses a second.
+    """
+    pyproject = project / "pyproject.toml"
+    assert "uv" not in load_pyproject(project).get("tool", {}), (
+        f"{pyproject} already has a tool.uv table, and TOML refuses a second: declare_required_environment must add "
+        "its required-environments to the one already there instead of appending its own"
+    )
+    with pyproject.open("a", encoding="utf-8") as file:
+        file.write(f"\n[tool.uv]\nrequired-environments = [{json.dumps(str(environment))}]\n")

@@ -4,12 +4,14 @@
 import base64
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.markers import Marker
 from packaging.version import Version
 
 from tests._collect_only import requires_uv
@@ -154,3 +156,28 @@ def test_the_declaration_is_valid_toml_in_this_projects_pyproject(project_root: 
 
     assert load_pyproject(copy)["tool"]["uv"]["required-environments"] == [str(environment)]
     assert load_project_table(copy) == load_project_table(project_root)
+
+
+@pytest.mark.parametrize(
+    "uv_settings",
+    ['[tool.uv]\nrequired-version = ">=0.11"\n', '[tool]\nuv.required-version = ">=0.11"\n'],
+    ids=["table", "dotted-key"],
+)
+def test_the_declaration_refuses_a_pyproject_that_already_has_a_tool_uv_table(tmp_path: Path, uv_settings: str) -> None:
+    """TOML refuses a second tool.uv table, however the first is written, so the declaration's own would make the file
+    invalid."""
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(f'[project]\nname = "consumer"\nversion = "0"\n\n{uv_settings}', encoding="utf-8")
+    before = pyproject.read_text(encoding="utf-8")
+
+    with pytest.raises(AssertionError, match=re.escape(str(pyproject))):
+        declare_required_environment(tmp_path, Marker("sys_platform == 'linux'"))
+
+    assert pyproject.read_text(encoding="utf-8") == before
+
+
+def test_the_declaration_refuses_a_project_with_no_pyproject(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        declare_required_environment(tmp_path, Marker("sys_platform == 'linux'"))
+
+    assert not (tmp_path / "pyproject.toml").exists()
