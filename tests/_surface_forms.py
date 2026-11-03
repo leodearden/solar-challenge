@@ -618,9 +618,8 @@ def _spelled_key(key: object) -> str:
         names = ", ".join(kind.__qualname__ for kind in _LITERAL_KEY_TYPES)
         raise TypeError(
             f"a key of type {label_of(type(key))} is held in a constant, and a constant's "
-            f"form spells a key only if its type is exactly one of {names}, as such a "
-            "key's ascii() is the same on every admitted minor: key the mapping by one of "
-            "those types, or make the constant private"
+            f"form spells a key only if its type is exactly one of {names}: key the mapping "
+            "by one of those types, or make the constant private"
         )
     return ascii(key)
 
