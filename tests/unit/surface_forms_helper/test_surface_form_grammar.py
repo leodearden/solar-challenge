@@ -370,6 +370,13 @@ def test_a_mapping_key_whose_type_is_not_exactly_str_int_float_bool_or_none_rais
         named_classes({Level.LOW: 1})
 
 
+def test_a_mapping_keys_type_error_names_the_key_types_a_form_spells_then_at_once_its_remedy() -> None:
+    with pytest.raises(
+        TypeError, match=r"\bbuiltins\.object\b.*\bstr, int, float, bool, NoneType: "
+    ):
+        surface_form({object(): 1})
+
+
 def test_a_list_or_tuple_constant_is_spelled_by_its_type_then_its_items_forms_in_order() -> None:
     assert surface_form([1.0, "kWh", Preset(rate=0.1)]) == "list [float, str, Preset]"
     assert surface_form((Outer.Inner(),)) == "tuple [Outer.Inner]"
