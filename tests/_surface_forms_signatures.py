@@ -25,6 +25,7 @@ from tests._surface_forms_class_reads import (
     own_namespace,
     recorded_mro,
 )
+from tests._surface_forms_generators import DATACLASS_DECORATOR, NAMEDTUPLE, MethodGenerator
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     bound_under,
@@ -1052,15 +1053,15 @@ def _constructor_spelling_modules(
     assigns from another module, or that wraps one there as functools.wraps records one,
     is spelled in that other module. If the constructor is the one
     _first_read_constructor gives, and the function whose annotations that end holds, as
-    _annotations_author gives it, is named as the generator _generator_of finds for the
-    class holding it names the constructor it writes there, as the dataclass decorator
-    names an __init__ and collections.namedtuple a __new__, the constructor is spelled as
-    that generator spells what it wrote, unless
-    _refuse_constructor_its_generator_records_unwritten refuses it; if that function was
-    generated for another class, TypeError names *cls* and the function. A constructor
-    defined in C, or one that wraps a callable defined in C, spells no annotation, so the
-    class's is spelled where _spelling_modules_over says; _signature_holder checks every
-    class that carries a signature before the constructor is read.
+    _annotations_author gives it, is one _generated_constructor_of finds a generator wrote
+    into the class holding it, as the dataclass decorator writes an __init__ and
+    collections.namedtuple a __new__, the constructor is spelled as that generator spells
+    what it wrote, unless _refuse_constructor_its_generator_records_unwritten refuses it;
+    if that function was generated for another class, TypeError names *cls* and the
+    function. A constructor defined in C, or one that wraps a callable defined in C,
+    spells no annotation, so the class's is spelled where _spelling_modules_over says;
+    _signature_holder checks every class that carries a signature before the constructor
+    is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
@@ -1071,10 +1072,10 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     author = _annotations_author(_chain_end(constructor))
-    generator = _generator_of(holder, name, author)
-    if generator is not None:
-        _refuse_constructor_its_generator_records_unwritten(cls, holder, author, generator)
-        return generator.spelling_modules(holder, names)
+    generated = _generated_constructor_of(holder, name, author)
+    if generated is not None:
+        _refuse_constructor_its_generator_records_unwritten(cls, holder, author, generated)
+        return generated.spelling_modules(holder, names)
     _refuse_constructor_generated_for_another_class(cls, holder, author)
     return _spelling_modules_over(constructor, signature_holder, names)
 
@@ -1107,7 +1108,7 @@ def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspell
 def _refuse_constructor_generated_for_another_class(
     cls: type, holder: type, author: object
 ) -> None:
-    """Raise TypeError naming *cls* and *author*, the _annotations_author of the end of the constructor *holder* holds, if _class_named_by finds a class other than *holder* for which _generator_of finds a generator that names *author* as the constructor it writes there.
+    """Raise TypeError naming *cls* and *author*, the _annotations_author of the end of the constructor *holder* holds, if _class_named_by finds a class other than *holder* into which _generated_constructor_of finds a generator wrote *author* as its constructor.
 
     A generated function assigned into *holder* keeps the name the generator gave it in
     the class it was generated for, and no module is known to spell the fields that
@@ -1117,7 +1118,7 @@ def _refuse_constructor_generated_for_another_class(
     if named is None:
         return
     owner, name = named
-    if owner is not holder and _generator_of(owner, name, author) is not None:
+    if owner is not holder and _generated_constructor_of(owner, name, author) is not None:
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(author)}, a function generated "
             f"for another class and assigned in the body of {label_of(holder)}, so no module is "
@@ -1238,59 +1239,64 @@ def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
 
 
 @dataclasses.dataclass(frozen=True)
-class _Generator:
-    """A generator of a constructor, by the rule it documents: it writes *constructor* into each class it processes, unless that class's statement defines one, which it leaves in place; _GENERATORS holds one for each constructor such a generator writes, by that constructor's name.
+class _GeneratedConstructor:
+    """The constructor *generator* writes into each class it processes, by the rule it documents: its method *name*, unless that class's statement defines one, which it leaves in place; _GENERATED_CONSTRUCTORS holds one for each constructor such a generator writes, by that constructor's name.
 
-    *label* names the generator. It names the function it writes after the class, as
-    *named_after* gives the class's name, dotted with the constructor's. *processed*
-    finds each class it processed, *writes* whether its record of such a class says it
-    writes the constructor there, and *spelling_modules* gives the module spelling each
-    parameter of the one it wrote.
+    *writes* finds whether the generator's record of a class it processed says it writes
+    the constructor there, and *spelling_modules* gives the module spelling each parameter
+    of the one it wrote.
     """
 
-    label: str
-    constructor: str
-    named_after: Callable[[type], str]
-    processed: Callable[[type], bool]
+    generator: MethodGenerator
+    name: str
     writes: Callable[[type], bool]
     spelling_modules: Callable[[type, Iterable[str]], Mapping[str, types.ModuleType]]
 
+    def __post_init__(self) -> None:
+        """Refuse a constructor its generator's methods do not list, which _generated_constructor_of would never find written."""
+        if self.name not in self.generator.methods:
+            raise ValueError(
+                f"The constructor {self.name} is recorded as written by "
+                f"{self.generator.label}, whose methods do not list it, so no {self.name} "
+                f"would be read as one it wrote: list {self.name} among its methods"
+            )
 
-def _generator_of(holder: type, name: str, author: object) -> _Generator | None:
-    """The generator _GENERATORS holds for the constructor *name*, if it processed *holder*, *author* is a function named as it names the one it writes there, and *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
+
+def _generated_constructor_of(
+    holder: type, name: str, author: object
+) -> _GeneratedConstructor | None:
+    """The constructor _GENERATED_CONSTRUCTORS holds under *name*, if its generator may have written *author* into *holder* as that constructor, as MethodGenerator.may_have_written finds, and *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
 
     A function assigned from elsewhere keeps its own name. A function that records
     __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
     """
-    generator = _GENERATORS.get(name)
+    constructor = _GENERATED_CONSTRUCTORS.get(name)
     if (
-        generator is None
-        or not isinstance(author, types.FunctionType)
+        constructor is None
         or hasattr(author, "__wrapped__")
-        or author.__qualname__ != f"{generator.named_after(holder)}.{name}"
-        or not generator.processed(holder)
+        or not constructor.generator.may_have_written(holder, name, author)
         or name in _defined_in_body(holder)
     ):
         return None
-    return generator
+    return constructor
 
 
 def _refuse_constructor_its_generator_records_unwritten(
-    cls: type, holder: type, author: object, generator: _Generator
+    cls: type, holder: type, author: object, constructor: _GeneratedConstructor
 ) -> None:
-    """Raise TypeError naming *cls* and *author*, the constructor *holder* holds that _generator_of finds named as *generator* names the one it writes, if *generator*'s record of *holder* says it writes none there.
+    """Raise TypeError naming *cls* and *author*, the constructor *holder* holds that _generated_constructor_of finds *constructor*'s generator may have written there, if that generator's record of *holder* says it writes none there.
 
     The dataclass decorator's says so once it last processed *holder* with init off,
     though an earlier decoration may have written *author*: no rule tells what wrote it,
     so no module is known to spell its parameters.
     """
-    if not generator.writes(holder):
+    if not constructor.writes(holder):
         raise TypeError(
             f"{label_of(cls)} is constructed through {label_of(author)}, which carries the "
-            f"name {generator.label} gives the {generator.constructor} it writes, though its "
-            f"record of {label_of(holder)} says it writes none there, so no module is known to "
-            "spell its parameters: make the name private, or define "
-            f"{generator.constructor} with def"
+            f"name {constructor.generator.label} gives the {constructor.name} it writes, "
+            f"though its record of {label_of(holder)} says it writes none there, so no module "
+            "is known to spell its parameters: make the name private, or define "
+            f"{constructor.name} with def"
         )
 
 
@@ -1312,11 +1318,6 @@ def _def_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
                 yield from _def_names(ast.iter_child_nodes(node))
 
 
-def _is_decorated_dataclass(cls: type) -> bool:
-    """Whether the dataclass decorator processed *cls* itself; is_dataclass is true as well of an undecorated subclass of a dataclass, whose annotations the decorator never read."""
-    return "__dataclass_fields__" in own_namespace(cls)
-
-
 def dataclass_parameter(cls: type, name: str) -> bool:
     """Whether the dataclass decorator recorded its parameter *name* as on, in the __dataclass_params__ of the first class in *cls*'s MRO whose own namespace holds one: *cls*, if the decorator processed it, else the base it inherits the record from, as attribute lookup reads it."""
     holder = next(namespace_holders(recorded_mro(cls), "__dataclass_params__"))
@@ -1327,7 +1328,7 @@ def _field_declaration_modules(
     holder: type, names: Iterable[str]
 ) -> dict[str, types.ModuleType]:
     """The module spelling each of *names* in the __init__ the dataclass decorator wrote into *holder*: that of the nearest class in *holder*'s MRO that the decorator processed and whose own body annotates the name, or *holder*'s if none does."""
-    decorated = tuple(base for base in recorded_mro(holder) if _is_decorated_dataclass(base))
+    decorated = tuple(base for base in recorded_mro(holder) if DATACLASS_DECORATOR.processed(base))
     return {
         name: defining_module(
             next((base for base in decorated if name in own_annotations(base)), holder)
@@ -1336,22 +1337,18 @@ def _field_declaration_modules(
     }
 
 
-_GENERATORS: Mapping[str, _Generator] = {
-    generator.constructor: generator
-    for generator in (
-        _Generator(
-            label="the dataclass decorator",
-            constructor="__init__",
-            named_after=lambda cls: cls.__qualname__,
-            processed=_is_decorated_dataclass,
+_GENERATED_CONSTRUCTORS: Mapping[str, _GeneratedConstructor] = {
+    constructor.name: constructor
+    for constructor in (
+        _GeneratedConstructor(
+            generator=DATACLASS_DECORATOR,
+            name="__init__",
             writes=lambda cls: dataclass_parameter(cls, "init"),
             spelling_modules=_field_declaration_modules,
         ),
-        _Generator(
-            label="collections.namedtuple",
-            constructor="__new__",
-            named_after=lambda cls: cls.__name__,
-            processed=lambda cls: "_fields" in own_namespace(cls),
+        _GeneratedConstructor(
+            generator=NAMEDTUPLE,
+            name="__new__",
             writes=lambda cls: True,
             spelling_modules=lambda cls, names: dict.fromkeys(names, defining_module(cls)),
         ),

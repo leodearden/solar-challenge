@@ -175,8 +175,23 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
+def _name_each_code_as_if_compiled_at_module_level(
+    cls: type, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give the code of each function *cls* holds, until *monkeypatch* is undone, its function's own name as its qualified name, as the compiler names the code of a function at module level."""
+    for function in vars(cls).values():
+        if isinstance(function, types.FunctionType):
+            monkeypatch.setattr(
+                function, "__code__", function.__code__.replace(co_qualname=function.__name__)
+            )
+
+
+@pytest.mark.parametrize(
+    "rename_codes",
+    [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
+)
 def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_both(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
     """Local's __init__ annotates nothing, so only Local's own module is looked up, for its attribute, and __init__ carries the globals of the module that built Local."""
     earlier = imported_module(
@@ -211,6 +226,105 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
         "        share: 'Share'\n"
         "\n"
         "        def __init__(self): ...\n"
+        "\n"
+        "    return Local\n",
+    )
+    if rename_codes:
+        _name_each_code_as_if_compiled_at_module_level(local, monkeypatch)
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(local)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "slots", [pytest.param(False, id="dataclass"), pytest.param(True, id="slots-dataclass")]
+)
+def test_a_dataclass_whose_body_compiled_no_function_is_read_in_its_own_module_though_the_decorator_wrote_its_methods_while_another_module_of_that_name_held_its_place_in_sys_modules(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, slots: bool
+) -> None:
+    """The module imports annotations from __future__, so on every minor, 3.14 included, Local's body compiles no function, not even __annotate__: only the functions the decorator wrote, which carry later's globals, could check its module."""
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from __future__ import annotations\n"
+        "\n"
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def build():\n"
+        f"    @dataclass(order=True, frozen=True, slots={slots})\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        "    return Local\n",
+    )
+    imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from __future__ import annotations\n"
+        "\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def build():\n"
+        f"    @dataclass(order=True, frozen=True, slots={slots})\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        "    return Local\n",
+    )
+    local = earlier.build()
+    monkeypatch.setitem(sys.modules, "auditing", earlier)
+
+    assert named_classes(local) == {fractions.Fraction}
+
+
+@pytest.mark.parametrize(
+    "method", [pytest.param("__post_init__", id="post-init"), pytest.param("__repr__", id="repr")]
+)
+def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_writes_or_writes_as_a_wrapper_of_a_function_named_after_no_class_raises_a_lookup_error_naming_both_modules_once_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    """The module imports annotations from __future__, so on every minor, 3.14 included, *method* is the only function Local's body compiles. The decorator writes no __post_init__, and the __repr__ it writes, which this one keeps it from writing, unwraps to a function named after no class."""
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "auditing",
+        "from __future__ import annotations\n"
+        "\n"
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def build():\n"
+        "    @dataclass\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        f"        def {method}(self): ...\n"
+        "\n"
+        "    return Local\n",
+    )
+    local = earlier.build()
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "auditing",
+        "from __future__ import annotations\n"
+        "\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "def build():\n"
+        "    @dataclass\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        f"        def {method}(self): ...\n"
         "\n"
         "    return Local\n",
     )
@@ -422,8 +536,12 @@ def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_for
     assert named_classes(_json.make_scanner) == {int, types.MemberDescriptorType}
 
 
+@pytest.mark.parametrize(
+    "rename_codes",
+    [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
+)
 def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_its_body_compiled_a_function(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
     """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__ carries the globals of the module that defined Audit."""
     auditing = imported_module(
@@ -433,12 +551,31 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
         "class Audit:\n    share: int\n\n    def __init__(self): ...\n",
     )
     monkeypatch.setitem(sys.modules, "auditing", types.ModuleType("auditing"))
+    if rename_codes:
+        _name_each_code_as_if_compiled_at_module_level(auditing.Audit, monkeypatch)
 
     with pytest.raises(LookupError) as raised:
         named_classes(auditing.Audit)
 
     assert "auditing.Audit" in str(raised.value)
     assert auditing.__file__ in str(raised.value)
+
+
+def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Of the functions collections.namedtuple wrote into Point, __new__ carries the globals of a namespace named 'namedtuple_Point' and the others collections', so none of them carries unsourced's."""
+    unsourced = types.ModuleType("unsourced")
+    monkeypatch.setitem(sys.modules, "unsourced", unsourced)
+    exec(
+        "from typing import NamedTuple\n\nReading = NamedTuple('Point', [('share', int)])\n",
+        vars(unsourced),
+    )
+
+    with pytest.raises(
+        TypeError, match=r"unsourced\.Point\b.*\bno class statement inspect can read\b"
+    ):
+        named_classes(unsourced.Reading)
 
 
 def test_a_routine_or_class_whose_signature_annotates_nothing_names_no_class_though_another_module_of_the_same_name_has_since_replaced_its_own(
