@@ -110,7 +110,7 @@ def _class_module(cls: type) -> types.ModuleType:
         return module
     if "<locals>" in cls.__qualname__:
         return _checked_by_body_function(cls, module)
-    bound = _bound_under(cls.__qualname__, module)
+    bound = bound_under(cls.__qualname__, module)
     if bound is cls:
         return module
     if not _has_source(module):
@@ -161,7 +161,7 @@ def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
     )
 
 
-def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
+def bound_under(qualified_name: str, module: types.ModuleType) -> object:
     """What *module* binds under the dotted *qualified_name*, one attribute at a time; None if it binds nothing there."""
     bound: object = module
     for name in qualified_name.split("."):

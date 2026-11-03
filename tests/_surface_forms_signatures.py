@@ -8,6 +8,7 @@ this module refuses: a new refusal gets a rule test, then an entry there.
 """
 
 import abc
+import ast
 import dataclasses
 import enum
 import functools
@@ -26,6 +27,8 @@ from tests._surface_forms_class_reads import (
 )
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
+    bound_under,
+    class_statement,
     defining_module,
     is_get_delete_descriptor,
     is_routine,
@@ -1049,14 +1052,14 @@ def _constructor_spelling_modules(
     assigns from another module, or that wraps one there as functools.wraps records one,
     is spelled in that other module. If the constructor is the one
     _first_read_constructor gives, and the function whose annotations that end holds, as
-    _annotations_author gives it, was compiled outside the class body and renamed into
-    it, as the dataclass decorator generates an __init__ and collections.namedtuple a
-    __new__, the constructor is spelled as _generated_constructor_modules spells it; if
-    that function was renamed into another class and assigned here, TypeError names
-    *cls* and the function. A constructor defined in C, or one that wraps a callable
-    defined in C, spells no annotation, so the class's is spelled where
-    _spelling_modules_over says; _signature_holder checks every class that carries a
-    signature before the constructor is read.
+    _annotations_author gives it, is the one a generator wrote into the class holding
+    it, as _is_generated_for finds the __init__ the dataclass decorator writes and the
+    __new__ collections.namedtuple writes, the constructor is spelled as
+    _generated_constructor_modules spells it; if that function was generated for another
+    class, TypeError names *cls* and the function. A constructor defined in C, or one
+    that wraps a callable defined in C, spells no annotation, so the class's is spelled
+    where _spelling_modules_over says; _signature_holder checks every class that carries
+    a signature before the constructor is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))
@@ -1067,9 +1070,9 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     author = _annotations_author(_chain_end(constructor))
-    if _is_generated(author):
-        _refuse_constructor_generated_for_another_class(cls, holder, author)
+    if _is_generated_for(holder, name, author):
         return _generated_constructor_modules(holder, names)
+    _refuse_constructor_generated_for_another_class(cls, holder, author)
     return _spelling_modules_over(constructor, signature_holder, names)
 
 
@@ -1099,26 +1102,36 @@ def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspell
 
 
 def _refuse_constructor_generated_for_another_class(
-    cls: type, holder: type, generated: types.FunctionType
+    cls: type, holder: type, author: object
 ) -> None:
-    """Raise TypeError naming *cls* and *generated*, the function _is_generated finds as the _annotations_author of the end of the constructor *holder* holds, unless it was renamed into *holder*.
+    """Raise TypeError naming *cls* and *author*, the _annotations_author of the end of the constructor *holder* holds, if _class_named_by finds a class other than *holder* that _is_generated_for finds *author* generated for.
 
-    The dataclass decorator renames a function into a class by the class's qualified
-    name, collections.namedtuple by its name. A function renamed into another class and
-    assigned in *holder*'s body keeps that class's name, and no module is known to spell
-    the fields that class declares.
+    A generated function assigned into *holder* keeps the name the generator gave it in
+    the class it was generated for, and no module is known to spell the fields that
+    class declares.
     """
-    renamed_into_holder = (
-        f"{holder.__qualname__}.{generated.__name__}",
-        f"{holder.__name__}.{generated.__name__}",
-    )
-    if generated.__qualname__ not in renamed_into_holder:
+    named = _class_named_by(author)
+    if named is None:
+        return
+    owner, name = named
+    if owner is not holder and _is_generated_for(owner, name, author):
         raise TypeError(
-            f"{label_of(cls)} is constructed through {label_of(generated)}, a function generated "
+            f"{label_of(cls)} is constructed through {label_of(author)}, a function generated "
             f"for another class and assigned in the body of {label_of(holder)}, so no module is "
             "known to spell the fields of the class it was generated for: make the name "
-            f"private, or define {generated.__name__} with def"
+            f"private, or define {name} with def"
         )
+
+
+def _class_named_by(author: object) -> tuple[type, str] | None:
+    """The class *author*'s qualified name names before its last dot, as bound_under finds it in the module defining_module gives for *author*, with the name after that dot; None if *author* is no function, its qualified name holds no dot, or no class is bound there, as for a class defined inside a function."""
+    if not isinstance(author, types.FunctionType):
+        return None
+    owner_path, _, name = author.__qualname__.rpartition(".")
+    if not owner_path:
+        return None
+    owner = bound_under(owner_path, defining_module(author))
+    return (owner, name) if inspect.isclass(owner) else None
 
 
 def _constructor_as_read(cls: type, name: str, constructor: object) -> object:
@@ -1234,19 +1247,51 @@ def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
     return (cls for cls in classes if not own_namespace(cls).keys().isdisjoint(names))
 
 
-def _is_generated(routine: object) -> typing.TypeGuard[types.FunctionType]:
-    """Whether *routine* is a function compiled outside a class body and renamed into a class, as the dataclass decorator generates __init__ and collections.namedtuple __new__.
+def _is_generated_for(holder: type, name: str, author: object) -> bool:
+    """Whether *author* is the constructor *name* a generator wrote into *holder*, where _holds_generated_constructor finds one wrote *name*: a function named as the dataclass decorator names one, by *holder*'s qualified name dotted with *name*, or as collections.namedtuple does, by *holder*'s name.
 
-    The code of such a function keeps another qualified name than the function; one the
-    body defines, or one assigned from elsewhere, keeps its own. A function that records
-    __wrapped__ is none, though its code keeps another name: functools.wraps renamed it
-    after what it wraps, not into a class.
+    A function assigned from elsewhere keeps its own name. A function that records
+    __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
     """
     return (
-        isinstance(routine, types.FunctionType)
-        and not hasattr(routine, "__wrapped__")
-        and routine.__code__.co_qualname != routine.__qualname__
+        isinstance(author, types.FunctionType)
+        and not hasattr(author, "__wrapped__")
+        and author.__qualname__ in (f"{holder.__qualname__}.{name}", f"{holder.__name__}.{name}")
+        and _holds_generated_constructor(holder, name)
     )
+
+
+def _holds_generated_constructor(cls: type, name: str) -> bool:
+    """Whether a generator wrote *cls*'s constructor *name*, by the rule it documents: an __init__ if the dataclass decorator processed *cls* with init on; a __new__ if *cls* holds _fields, as each class collections.namedtuple makes does, typing.NamedTuple's included; in either case only if *cls*'s class statement defines no *name*, as _defined_in_body reads it, which the generator then leaves in place."""
+    namespace = own_namespace(cls)
+    match name:
+        case "__init__":
+            written = _is_decorated_dataclass(cls) and bool(
+                getattr(namespace["__dataclass_params__"], "init")
+            )
+        case "__new__":
+            written = "_fields" in namespace
+        case _:
+            written = False
+    return written and name not in _defined_in_body(cls)
+
+
+def _defined_in_body(cls: type) -> set[str]:
+    """The names the def statements in any block of *cls*'s class statement, as class_statement reads it, bind in *cls*'s namespace, as _def_names finds them; none if inspect reads no class statement for *cls*, which then defined nothing."""
+    statement = class_statement(cls)
+    return set() if statement is None else set(_def_names(statement.body))
+
+
+def _def_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
+    """The names bound by the def and async def statements among *nodes* and in the blocks of each other statement among them, such as an if, for, while, try, with or match statement; never by one inside a def or class statement, which binds in its own namespace."""
+    for node in nodes:
+        match node:
+            case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name):
+                yield name
+            case ast.ClassDef() | ast.expr():
+                pass
+            case _:
+                yield from _def_names(ast.iter_child_nodes(node))
 
 
 def _is_decorated_dataclass(cls: type) -> bool:
