@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The module that defined an object, as sys.modules holds it, checked to be that object's own, and a string annotation evaluated there as a type checker reads it.
+"""The module that defined an object, as sys.modules holds it, checked to be that object's own, and what is read there: a string annotation, evaluated as a type checker reads it, and the class statement that defines a class, parsed from that module's source.
 
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
 is_immutable_type and spelled_function, which the helper's other modules read objects
@@ -11,6 +11,7 @@ import ast
 import functools
 import inspect
 import sys
+import textwrap
 import types
 import typing
 import weakref
@@ -166,6 +167,19 @@ def _bound_under(qualified_name: str, module: types.ModuleType) -> object:
     for name in qualified_name.split("."):
         bound = getattr(bound, name, None)
     return bound
+
+
+def class_statement(cls: type) -> ast.ClassDef | None:
+    """The class statement that defines *cls*, parsed from its source, read only once defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; None if inspect reads no source for *cls*, as for a class defined in C or one that collections.namedtuple or dataclasses.make_dataclass makes; TypeError naming *cls* if its source is not a single class statement."""
+    defining_module(cls)
+    try:
+        source = inspect.getsource(cls)
+    except (OSError, TypeError):
+        return None
+    match ast.parse(textwrap.dedent(source)).body:
+        case [ast.ClassDef() as statement]:
+            return statement
+    raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
 
 
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:

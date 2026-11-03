@@ -43,7 +43,6 @@ import collections
 import dataclasses
 import inspect
 import itertools
-import textwrap
 import types
 import typing
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
@@ -51,6 +50,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
+    class_statement,
     defining_module,
     evaluated_in,
     is_immutable_type,
@@ -979,29 +979,19 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ statements of *cls*'s own body, never another method nor anything a class nested in it defines."""
-    match ast.parse(_class_source(cls)).body:
-        case [ast.ClassDef(body=body)]:
-            return [
-                statement
-                for statement in body
-                if isinstance(statement, ast.FunctionDef) and statement.name in _INITIALISERS
-            ]
-    raise TypeError(f"inspect.getsource({cls.__qualname__}) is not a single class statement")
-
-
-def _class_source(cls: type) -> str:
-    """*cls*'s source, dedented, read only once defining_module has looked *cls*'s module up, since inspect.getsource finds a class's file through sys.modules by the name its __module__ records; TypeError naming *cls* if inspect can read no class statement for it."""
-    defining_module(cls)
-    try:
-        source = inspect.getsource(cls)
-    except (OSError, TypeError) as unread:
+    """The __init__ and __post_init__ statements of *cls*'s own body, as class_statement reads it, never another method nor anything a class nested in it defines; TypeError naming *cls* if class_statement finds no class statement for it."""
+    statement = class_statement(cls)
+    if statement is None:
         raise TypeError(
             f"{label_of(cls)} has no class statement inspect can read, so the scan has no "
             "__init__ or __post_init__ to read: pass a class that a class statement in a "
             "source file defines"
-        ) from unread
-    return textwrap.dedent(source)
+        )
+    return [
+        node
+        for node in statement.body
+        if isinstance(node, ast.FunctionDef) and node.name in _INITIALISERS
+    ]
 
 
 @dataclasses.dataclass(frozen=True)
