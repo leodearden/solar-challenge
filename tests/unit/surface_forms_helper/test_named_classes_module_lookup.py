@@ -326,10 +326,13 @@ def test_a_dataclass_whose_body_compiled_no_function_is_read_in_its_own_module_t
     assert named_classes(local) == {fractions.Fraction}
 
 
-def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_writes_raises_a_lookup_error_naming_both_modules_once_another_module_of_the_same_name_has_since_replaced_its_own(
-    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "method", [pytest.param("__post_init__", id="post-init"), pytest.param("__repr__", id="repr")]
+)
+def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_writes_or_writes_as_a_wrapper_of_a_function_named_after_no_class_raises_a_lookup_error_naming_both_modules_once_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
-    """The module imports annotations from __future__, so on every minor, 3.14 included, __post_init__ is the only function Local's body compiles."""
+    """The module imports annotations from __future__, so on every minor, 3.14 included, *method* is the only function Local's body compiles. The decorator writes no __post_init__, and the __repr__ it writes, which this one keeps it from writing, unwraps to a function named after no class."""
     earlier = imported_module(
         tmp_path_factory.mktemp("earlier"),
         monkeypatch,
@@ -344,7 +347,7 @@ def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_wri
         "    class Local:\n"
         "        share: Share\n"
         "\n"
-        "        def __post_init__(self): ...\n"
+        f"        def {method}(self): ...\n"
         "\n"
         "    return Local\n",
     )
@@ -363,7 +366,7 @@ def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_wri
         "    class Local:\n"
         "        share: Share\n"
         "\n"
-        "        def __post_init__(self): ...\n"
+        f"        def {method}(self): ...\n"
         "\n"
         "    return Local\n",
     )

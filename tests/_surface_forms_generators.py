@@ -18,7 +18,9 @@ class MethodGenerator:
 
     *label* names the generator. *methods* holds the name of each function it writes into
     a class it processed and names after that class, as *named_after* gives the class's
-    name, dotted with the function's own. *processed* finds each class it processed.
+    name, dotted with the function's own, once unwrapped from any decorator that records it
+    as __wrapped__: never the dataclass decorator's __repr__, which wraps a function named
+    after no class. *processed* finds each class it processed.
     """
 
     label: str
@@ -50,7 +52,6 @@ DATACLASS_DECORATOR = MethodGenerator(
     methods=frozenset(
         {
             "__init__",
-            "__repr__",
             "__eq__",
             "__lt__",
             "__le__",
