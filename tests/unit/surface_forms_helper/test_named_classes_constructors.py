@@ -505,6 +505,113 @@ def test_a_generated_dataclass_constructor_of_a_class_whose_module_inspect_reads
     assert raised.value.__cause__ is not None
 
 
+def test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "implementing",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n",
+    )
+    facade = imported_module(
+        tmp_path,
+        monkeypatch,
+        "facade",
+        "from implementing import Submeter\n\nSubmeter.__module__ = __name__\n",
+    )
+
+    with pytest.raises(
+        TypeError,
+        match=r"^facade\.Submeter holds implementing\.Submeter\.__init__ as __init__, "
+        r".*\bmodule 'facade' holds no class statement\b",
+    ):
+        named_classes(facade.Submeter)
+
+
+def test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "implementing",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    pass\n",
+    )
+    facade = imported_module(
+        tmp_path,
+        monkeypatch,
+        "facade",
+        "from implementing import Submeter\n\nSubmeter.__module__ = __name__\n",
+    )
+    making = imported_module(
+        tmp_path,
+        monkeypatch,
+        "making",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "Typed = dataclass(type('Typed', (Meter,), {'__annotations__': {'spare': 'Tap'}}))\n",
+    )
+
+    assert named_classes(facade.Submeter) == {fractions.Fraction}
+    assert named_classes(making.Typed) == {fractions.Fraction, decimal.Decimal}
+
+
+def test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "pointing",
+        "from decimal import Decimal as Share\n"
+        "from typing import NamedTuple\n"
+        "\n"
+        "Pointed = NamedTuple('Pointed', [('share', 'Share')])\n",
+    )
+
+    assert named_classes(pointing.Pointed) == {decimal.Decimal}
+
+
 @pytest.mark.parametrize(
     "name",
     [
