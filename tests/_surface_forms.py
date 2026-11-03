@@ -518,8 +518,8 @@ def _each_parsed(
 
 
 def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
-    """A Literal's values: each spelled by its repr, naming no class."""
-    return tuple(_Leaf(repr(value)) for value in values)
+    """A Literal's values: each as _spelled_value spells it, naming no class."""
+    return tuple(_Leaf(_spelled_value(value)) for value in values)
 
 
 class _Constant(abc.ABC):
