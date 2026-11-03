@@ -11,6 +11,10 @@ for it, and every other environment keeps the newest. The environment names the
 Python minor as well as the OS and machine, because a wheel for another minor on
 this platform would satisfy an OS and machine alone.
 
+The fork lasts for as long as the release lacks a wheel for the pin, not only while
+it uploads: a release that never ships one stays held back on the pin, and no
+failure reports it.
+
 Two windows stay open. uv assumes a source distribution builds anywhere, so a
 release whose sdist reaches the index before its wheel for the pin is still
 pinned; and markers cannot tell glibc from musl, or one glibc floor from another.
