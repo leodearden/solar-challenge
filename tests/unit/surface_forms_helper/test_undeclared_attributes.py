@@ -373,3 +373,32 @@ def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_na
     """None is an immutable type: ast.AST's module has a source, _random.Random's has none, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
     with pytest.raises(TypeError, match=naming_it):
         scan(cls)
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, {"site"}, id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+def test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rehoming = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rehoming",
+        "class Meter:\n"
+        "    rate: float\n"
+        "\n"
+        "    def __init__(self) -> None:\n"
+        "        self.site = 1\n"
+        "\n"
+        "Meter.__module__ = __name__\n",
+    )
+
+    assert scan(rehoming.Meter) == expected

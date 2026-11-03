@@ -612,6 +612,45 @@ def test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_
     assert named_classes(pointing.Pointed) == {decimal.Decimal}
 
 
+def test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "tapping",
+        "from dataclasses import dataclass\n"
+        "from fractions import Fraction as Tap\n"
+        "\n"
+        "@dataclass\n"
+        "class Meter:\n"
+        "    tap: 'Tap'\n",
+    )
+    rehoming = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rehoming",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Plain(Meter):\n"
+        "    pass\n"
+        "\n"
+        "Submeter.__module__ = __name__\n"
+        "Plain.__module__ = __name__\n",
+    )
+
+    assert named_classes(rehoming.Submeter) == {decimal.Decimal}
+    assert named_classes(rehoming.Plain) == {fractions.Fraction}
+
+
 @pytest.mark.parametrize(
     "name",
     [
