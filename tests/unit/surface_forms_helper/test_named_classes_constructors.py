@@ -336,12 +336,13 @@ def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_
         "    pass\n",
     )
 
-    with pytest.raises(TypeError) as raised:
+    with pytest.raises(
+        TypeError,
+        match=r"^retapping\.Submeter is constructed through retapping\.Submeter\.__init__, "
+        r"which carries the name the dataclass decorator gives the __init__ it writes, though "
+        r"its record of retapping\.Submeter says it writes none there, ",
+    ):
         named_classes(retapping.Submeter)
-
-    assert str(raised.value).startswith(
-        "retapping.Submeter is constructed through retapping.Submeter.__init__, "
-    )
 
 
 def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_a_line_left_of_its_class_statement_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
