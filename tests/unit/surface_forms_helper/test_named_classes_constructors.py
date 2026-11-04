@@ -791,8 +791,50 @@ def test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or
     assert named_classes(declaring.Submeter) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    "definition",
+    [
+        pytest.param(
+            "@dataclass\n"
+            "class Submeter(Meter):\n"
+            "    global __init__\n"
+            "    def __init__(self, tap: 'Tap') -> None: ...\n",
+            id="global",
+        ),
+        pytest.param(
+            "@dataclass\n"
+            "class Submeter(Meter):\n"
+            "    if Meter:\n"
+            "        global __init__\n"
+            "    def __init__(self, tap: 'Tap') -> None: ...\n",
+            id="global-in-a-block",
+        ),
+        pytest.param(
+            "@dataclass\n"
+            "class Submeter(Meter):\n"
+            "    if False:\n"
+            "        global __init__\n"
+            "    def __init__(self, tap: 'Tap') -> None: ...\n",
+            id="global-in-a-block-that-never-runs",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    __init__ = None\n"
+            "\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        nonlocal __init__\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n"
+            "\n"
+            "    return Submeter\n"
+            "\n"
+            "Submeter = build()\n",
+            id="nonlocal",
+        ),
+    ],
+)
 def test_a_generated_dataclass_constructor_whose_name_its_class_body_declares_global_or_nonlocal_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, definition: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     rebinding = imported_module(
@@ -803,32 +845,10 @@ def test_a_generated_dataclass_constructor_whose_name_its_class_body_declares_gl
         "from decimal import Decimal as Tap\n"
         "\n"
         "from tapping import Meter\n"
-        "\n"
-        "@dataclass\n"
-        "class Submeter(Meter):\n"
-        "    global __init__\n"
-        "    def __init__(self, tap: 'Tap') -> None: ...\n"
-        "\n"
-        "@dataclass\n"
-        "class BlockSubmeter(Meter):\n"
-        "    if Meter:\n"
-        "        global __init__\n"
-        "    def __init__(self, tap: 'Tap') -> None: ...\n"
-        "\n"
-        "def build():\n"
-        "    __init__ = None\n"
-        "\n"
-        "    @dataclass\n"
-        "    class NonlocalSubmeter(Meter):\n"
-        "        nonlocal __init__\n"
-        "        def __init__(self, tap: 'Tap') -> None: ...\n"
-        "\n"
-        "    return NonlocalSubmeter\n",
+        "\n" + definition,
     )
 
     assert named_classes(rebinding.Submeter) == {fractions.Fraction}
-    assert named_classes(rebinding.BlockSubmeter) == {fractions.Fraction}
-    assert named_classes(rebinding.build()) == {fractions.Fraction}
 
 
 @pytest.mark.parametrize(
