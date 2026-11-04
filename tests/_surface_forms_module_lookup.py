@@ -14,7 +14,7 @@ import sys
 import types
 import typing
 import weakref
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator
 
 from tests._surface_forms_class_reads import own_namespace
 from tests._surface_forms_generators import may_be_generated
@@ -194,7 +194,7 @@ def class_statement(cls: type) -> ast.ClassDef | None:
     """
     module = defining_module(cls)
     try:
-        statements = _class_statements(module)
+        source = inspect.getsource(module)
     except (OSError, TypeError) as unread:
         raise TypeError(
             f"{label_of(cls)} has no class statement inspect can read, since inspect reads no "
@@ -202,7 +202,7 @@ def class_statement(cls: type) -> ast.ClassDef | None:
             "module, so what a class statement there defined is not known: pass a class that "
             "a class statement in a source file defines"
         ) from unread
-    match statements.get(cls.__qualname__, ()):
+    match _class_statements_named(cls.__qualname__, source):
         case ():
             return None
         case (statement,):
@@ -263,15 +263,13 @@ def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
     return compile(ast.Module(body=imports, type_ignores=[]), module.__name__, "exec")
 
 
-@_cached_while_alive
-def _class_statements(module: types.ModuleType) -> Mapping[str, tuple[ast.ClassDef, ...]]:
-    """The class statements in *module*'s source, parsed once while *module* lives, grouped in source order by the qualified name each gives the class it defines, as _class_statements_in spells it."""
-    statements: dict[str, tuple[ast.ClassDef, ...]] = {}
-    for name, statement in _class_statements_in(
-        ast.parse(inspect.getsource(module)).body, "", frozenset()
-    ):
-        statements[name] = (*statements.get(name, ()), statement)
-    return statements
+def _class_statements_named(qualified_name: str, source: str) -> tuple[ast.ClassDef, ...]:
+    """The class statements in *source*, in source order, that give the class each defines *qualified_name*, as _class_statements_in spells it, parsed afresh on each call so each caller owns the statements it gets."""
+    return tuple(
+        statement
+        for name, statement in _class_statements_in(ast.parse(source).body, "", frozenset())
+        if name == qualified_name
+    )
 
 
 def _class_statements_in(
