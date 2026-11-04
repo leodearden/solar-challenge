@@ -241,8 +241,9 @@ finite duration need no change when they re-pin.
 `timestep_minutes`, whatever its context. The 0.5.0 tag refuses only negative
 values, and a capacity or timestep of 0 or less, and returns a decision for
 these: an infinite generation asks the battery to charge at `inf` kW, an
-infinite demand asks `SelfConsumptionStrategy` and `PeakShavingStrategy` to
-discharge at `inf` kW, and a NaN generation or demand asks for nothing. On the
+infinite demand asks `SelfConsumptionStrategy`, `PeakShavingStrategy` and, in
+a peak hour, `TOUOptimizedStrategy` to discharge at `inf` kW, and a NaN
+generation or demand asks for nothing. On the
 tag, `compute_grid_charge_power_kw` returns NaN for a NaN timestep when its
 gates would grid-charge, and 0.0 for any other NaN or infinite one. Every
 refusal of these inputs, a negative value or a 0 included, now names
