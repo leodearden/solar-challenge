@@ -176,11 +176,13 @@ def _written_by_an_unlisted_generator(
 def _body_witness(cls: type) -> types.FunctionType | None:
     """The first function in *cls*'s own namespace, read through spelled_function and unwrapped from any decorator that records it as __wrapped__, whose globals may check the module *cls*'s body ran in, as _witnesses_its_body finds; None if there is none.
 
-    There is none if *cls*'s body compiled no function, as an annotation-only body
-    compiles none before Python 3.14, which compiles its __annotate__ unless the module
-    imports annotations from __future__; or if may_be_generated finds a generator may
-    have written each function named after *cls*, as for a dataclass body whose only
-    method is a hand-written __init__.
+    There is none if no function there is named after *cls*, as when its body compiled
+    none (an annotation-only body before Python 3.14, which compiles its __annotate__
+    unless the module imports annotations from __future__) and nothing since wrote one
+    there; or if may_be_generated finds a generator may have written each one that is,
+    as for a dataclass body whose only method is a hand-written __init__. So a function
+    a generator wrote there after the body ran is the witness unless may_be_generated
+    finds it, even where the body compiled none.
     """
     functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
