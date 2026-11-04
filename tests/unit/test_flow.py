@@ -1431,19 +1431,19 @@ class TestStepRefusesANegativeFlow:
 # A timestep that is not finite
 # ---------------------------------------------------------------------------
 
+NAN_OR_INFINITE = [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")]
+
 
 class TestStepWithATimestepThatIsNotFinite:
     """A step refuses a NaN or infinite timestep, naming it, before its battery moves any energy."""
 
-    @pytest.mark.parametrize(
-        "timestep_minutes",
-        [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
-    )
+    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
     @pytest.mark.parametrize(
         ("generation_kw", "demand_kw"),
         [
             pytest.param(2.0, 1.0, id="surplus-charges"),
             pytest.param(1.0, 2.0, id="shortfall-discharges"),
+            pytest.param(1.0, 1.0, id="balanced-moves-nothing"),
         ],
     )
     def test_the_step_refuses_the_timestep_and_leaves_the_battery_s_soc_unchanged(
@@ -1451,8 +1451,8 @@ class TestStepWithATimestepThatIsNotFinite:
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        refusal = f"must be positive and finite, got {timestep_minutes} minutes"
-        with pytest.raises(ValueError, match=re.escape(refusal)):
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             simulate_timestep(
                 generation_kw=generation_kw,
                 demand_kw=demand_kw,
