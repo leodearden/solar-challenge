@@ -339,17 +339,19 @@ def _qualified_name(name: str, scope: str, declared_global: Collection[str]) -> 
 
 
 def names_declared_by(
-    nodes: Iterable[ast.AST], *declarations: type[ast.Global] | type[ast.Nonlocal]
+    nodes: Iterable[ast.AST],
+    kind: type[ast.Global] | type[ast.Nonlocal],
+    *other_kinds: type[ast.Global] | type[ast.Nonlocal],
 ) -> Iterator[str]:
-    """The names that the statements among *nodes*, or in any block of theirs, that are one of *declarations*, global or nonlocal statements, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
+    """The names that the statements among *nodes*, or in any block of theirs, that are of *kind* or one of *other_kinds*, global or nonlocal statements, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
     for node in nodes:
         match node:
             case ast.Global() | ast.Nonlocal():
-                yield from node.names if isinstance(node, declarations) else ()
+                yield from node.names if isinstance(node, (kind, *other_kinds)) else ()
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
                 pass
             case _:
-                yield from names_declared_by(ast.iter_child_nodes(node), *declarations)
+                yield from names_declared_by(ast.iter_child_nodes(node), kind, *other_kinds)
 
 
 class _NoSourceError(Exception):
