@@ -464,6 +464,22 @@ def test_a_class_its_enclosing_function_declares_global_has_its_class_statement_
         ),
         pytest.param(
             "def build():\n"
+            "    class Housing:\n"
+            "        global Meter\n"
+            "\n"
+            "    class Meter:\n"
+            "        rate: float\n"
+            "\n"
+            "        def __init__(self) -> None:\n"
+            "            self.site = 1\n"
+            "\n"
+            "    return Meter\n"
+            "\n"
+            "Local = build()\n",
+            id="a-class-body-in-the-function-holding-it",
+        ),
+        pytest.param(
+            "def build():\n"
             "    global Meter\n"
             "\n"
             "    class Housing:\n"
@@ -477,6 +493,24 @@ def test_a_class_its_enclosing_function_declares_global_has_its_class_statement_
             "\n"
             "Local = build().Meter\n",
             id="the-function-holding-the-class-body-holding-it",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    global Meter\n"
+            "\n"
+            "    def make():\n"
+            "        class Meter:\n"
+            "            rate: float\n"
+            "\n"
+            "            def __init__(self) -> None:\n"
+            "                self.site = 1\n"
+            "\n"
+            "        return Meter\n"
+            "\n"
+            "    return make\n"
+            "\n"
+            "Local = build()()\n",
+            id="the-function-holding-the-function-body-holding-it",
         ),
     ],
 )
