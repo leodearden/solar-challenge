@@ -791,6 +791,46 @@ def test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or
     assert named_classes(declaring.Submeter) == {decimal.Decimal}
 
 
+def test_a_generated_dataclass_constructor_whose_name_its_class_body_declares_global_or_nonlocal_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    rebinding = imported_module(
+        tmp_path,
+        monkeypatch,
+        "rebinding",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Submeter(Meter):\n"
+        "    global __init__\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class BlockSubmeter(Meter):\n"
+        "    if Meter:\n"
+        "        global __init__\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "def build():\n"
+        "    __init__ = None\n"
+        "\n"
+        "    @dataclass\n"
+        "    class NonlocalSubmeter(Meter):\n"
+        "        nonlocal __init__\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "    return NonlocalSubmeter\n",
+    )
+
+    assert named_classes(rebinding.Submeter) == {fractions.Fraction}
+    assert named_classes(rebinding.BlockSubmeter) == {fractions.Fraction}
+    assert named_classes(rebinding.build()) == {fractions.Fraction}
+
+
 @pytest.mark.parametrize(
     "name",
     [
