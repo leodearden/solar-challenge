@@ -5,6 +5,7 @@
 - **Binding rulings:** D9 (the shared checker raises `ConfigurationError` from every domain `__post_init__`; config's readers add the key path on the way up), D26 (fk-f2f8a5512feb and fk-606a9211b34d are S4's), D29 (additive and behavioural surface edits land in-leaf with their `FROZEN_*` entry and an "Unreleased on main" line; only renames and retirements wait for S29), D27 (invariant 1 is promoted; S4 owns its test), L1 (S4 also converts the non-numeric `ValueError` refusals of the input types, and invariant 1's test asserts the type), L2 (S1 ships the bare type; S4 extends it only if a reader needs the path as data).
 - **Session rulings (Leo, this session, 2026-10-15):** R1 the key path is added by wrapping construction, not by pre-reading every number; R2 an input type stores the value it read; R3 both `SummaryStatistics` and `EnergyFlowResult` are frozen, paying the measured per-step cost.
 - **Status:** authored 2026-10-15 by an author-only /prd session; not committed.
+- **Amendment (2026-11-04, task 1300):** `is_boolean`, the bool test the readers share, moved from `whole_numbers` to `boolean_fields` (task 559's boolean reader), which imports only `errors`. So `whole_numbers` imports `boolean_fields`, and `number_fields` loads `errors`, `boolean_fields` and `whole_numbers`. §4 decision 1, §5.1's import comment, N1 and P1 read accordingly; every import still points down, so the leaf can still be imported by any module.
 - **Approach:** B + H. The seam (the number rule and its refusal) is read by every input type in 14 modules, by config's grammar, by the web readers and by six other streams, so it gets a contract (§5) and two-way boundary tests (§6).
 - **Code anchors** verified against main `962552956508` (2026-10-15). Main moves fast — cite-by-symbol; re-locate lines at implementation time. `config.py` is unchanged since the review's pin `7dfea36e`; `dispatch.py`, `flow.py`, `home.py`, `battery.py`, `load.py`, `seg.py` and the web readers have moved, and every anchor below was re-read at `962552956508`.
 
@@ -102,7 +103,7 @@ The finding holds. S4 acts only on its number half (§4 decision 9).
 
 ## 4. Resolved design decisions
 
-1. **The leaf is `solar_challenge/number_fields.py`, moved from `web/`.** It is not a new quantities module (synthesis). It imports `errors` and `whole_numbers` only; `whole_numbers` stays the Optional-returning rule for counts.
+1. **The leaf is `solar_challenge/number_fields.py`, moved from `web/`.** It is not a new quantities module (synthesis). It imports `errors`, `boolean_fields` and `whole_numbers` only; `whole_numbers` stays the Optional-returning rule for counts.
 2. **Intervals are values.** A frozen `Interval(low, high, low_open, high_open)` has `admits(number)` and a `__str__` that phrases the bound ("greater than 0", "at least 0 and less than 1", "between 0 and 360").
    - Named intervals `POSITIVE`, `NON_NEGATIVE`, `FRACTION` and `UNIT_INTERVAL` replace the repeated idioms (heuristic 11).
    - The interval is the rule's one home, and every enforcement point calls it (heuristic 10, *uniformly*).
@@ -139,7 +140,7 @@ The finding holds. S4 acts only on its number half (§4 decision 9).
 ### 5.1 `solar_challenge.number_fields` (α)
 
 ```python
-# src/solar_challenge/number_fields.py — imports solar_challenge.errors and solar_challenge.whole_numbers only
+# src/solar_challenge/number_fields.py — imports solar_challenge.errors, solar_challenge.boolean_fields and solar_challenge.whole_numbers only
 @dataclass(frozen=True)
 class Interval:
     low: float = -math.inf
@@ -164,7 +165,7 @@ def read_field(instance: object, field: str, read: Callable[[object, str, Interv
 
 | # | Rule | Enforced by |
 |---|---|---|
-| N1 | `import solar_challenge.number_fields` loads, from the package, only `solar_challenge`, `errors`, `whole_numbers` and itself | α's fresh-interpreter test |
+| N1 | `import solar_challenge.number_fields` loads, from the package, only `solar_challenge`, `errors`, `boolean_fields`, `whole_numbers` and itself | α's fresh-interpreter test |
 | N2 | A reader refuses a bool (Python's or numpy's), a value `float()` cannot read (including an int too large for a float), NaN and ±inf, with `{field} must be a finite number, got {value!r}`; `as_whole_number` also refuses a fraction with `{field} must be a whole number, got {value!r}` | α's tests (moved and extended from `test_web_number_fields.py`) |
 | N3 | A value outside `within` is refused with `{field} must be {within}, got {value!r}`; a closed finite interval reads `between {low} and {high}`, the web's wording today | α's tests; the existing web tests pass unchanged |
 | N4 | Every refusal is `errors.ConfigurationError` | α's tests; ι |
@@ -249,7 +250,7 @@ Field-level exclusions:
 
 | # | Side | Scenario | Preconditions | Postconditions | Leaf |
 |---|---|---|---|---|---|
-| P1 | producer | import the leaf alone | fresh `-I` interpreter (pattern of `test_init_lazy_surface.py`) | `solar_challenge.*` in `sys.modules` is exactly `solar_challenge`, `errors`, `whole_numbers`, `number_fields` | α |
+| P1 | producer | import the leaf alone | fresh `-I` interpreter (pattern of `test_init_lazy_surface.py`) | `solar_challenge.*` in `sys.modules` is exactly `solar_challenge`, `errors`, `boolean_fields`, `whole_numbers`, `number_fields` | α |
 | P2 | producer | interval phrasing | — | `str(POSITIVE) == "greater than 0"`, `str(Interval(0, 1, high_open=True)) == "at least 0 and less than 1"`, `str(Interval(0, 360)) == "between 0 and 360"`, `str(Interval()) == ""`; `POSITIVE.admits(nan)` and `.admits(inf)` are False | α |
 | P3 | producer | readers | — | each N2–N6 row; `as_whole_numbers([1, 2.5], "months")` raises naming `months[1]` and `2.5`; every refusal `isinstance` `ConfigurationError` | α |
 | W1 | consumer: web | wording unchanged | existing web tests (`test_web_number_fields` cases moved, fleet form, builder, simulation params) | pass with only import-line edits | α |

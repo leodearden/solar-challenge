@@ -14,6 +14,8 @@ Every RED premise was observed at `962552956508`. Each check that expects an old
 
 ## α — `number_fields` moves to the package leaf with intervals and `ConfigurationError` (intermediate)
 
+*Amended 2026-11-04, task 1300: the row below saying `whole_numbers` imports only numpy is authoring-time evidence, kept as history, as is the YAML twin's `leaf-imports-only-errors-and-whole-numbers` capability. `is_boolean` has since moved to `boolean_fields`, so `whole_numbers` imports `boolean_fields`, which imports only `errors`; the leaf still has no cycle, and P1's test pins the amended set (see the PRD's header amendment).*
+
 | Capability asserted by signal | Evidence binding | Status |
 |---|---|---|
 | The four readers exist to move, with tests | grep: `web/number_fields.py` defines `as_finite_float`, `as_finite_float_within`, `as_whole_number`, `as_whole_number_within`; `tests/unit/test_web_number_fields.py`; 20 references to `solar_challenge.web.number_fields` in src and tests | PASS |
