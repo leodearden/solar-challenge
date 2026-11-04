@@ -17,7 +17,7 @@ import weakref
 from collections.abc import Callable, Collection, Iterable, Iterator
 
 from tests._surface_forms_class_reads import own_namespace
-from tests._surface_forms_generators import may_be_generated
+from tests._surface_forms_generators import MethodGenerator, may_be_generated
 from tests._surface_forms_labels import label_of
 
 
@@ -126,11 +126,19 @@ def _class_module(cls: type) -> types.ModuleType:
 
 
 def _checked_by_body_function(cls: type, module: types.ModuleType) -> types.ModuleType:
-    """*module*, checked to hold as its globals those the function _function_compiled_in_body finds *cls*'s body compiled carries: LookupError naming *cls* and both modules if it does not; unchecked if it finds none."""
+    """*module*, checked to hold as its globals those the function _function_compiled_in_body finds *cls*'s body compiled carries; unchecked if it finds none.
+
+    Otherwise LookupError. If the globals that function carries name no file, as the globals
+    a generator compiles the methods it writes with name none, the error names that
+    function's code file and a MethodGenerator record; if they do, it names *cls* and both
+    modules.
+    """
     function = _function_compiled_in_body(cls)
-    if function is not None and function.__globals__ is not vars(module):
+    if function is None or function.__globals__ is vars(module):
+        return module
+    if "__file__" in function.__globals__:
         raise _defined_elsewhere(label_of(cls), function.__globals__, module, cls.__module__)
-    return module
+    raise _written_by_an_unlisted_generator(cls, function, module)
 
 
 def _defined_elsewhere(
@@ -141,6 +149,21 @@ def _defined_elsewhere(
         f"{label} is defined in the module at {namespace.get('__file__')}, but sys.modules "
         f"holds the module at {getattr(module, '__file__', None)} under the name {name!r}: "
         "read each module's objects before importing another module of that name"
+    )
+
+
+def _written_by_an_unlisted_generator(
+    cls: type, function: types.FunctionType, module: types.ModuleType
+) -> LookupError:
+    """The error for *cls*, whose method *function*, named after it, carries globals that name no file and are not those of *module*, which sys.modules holds under *cls*'s module name: a generator that no MethodGenerator record lists may have written that method with globals of its own, or *cls*'s module, one with no file, may since have been replaced there."""
+    return LookupError(
+        f"{label_of(cls)}.{function.__name__} was compiled from "
+        f"{function.__code__.co_filename!r} with globals that name no file and are not those "
+        f"of the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+        f"the name {cls.__module__!r}. If a generator wrote it, list that generator in "
+        f"{MethodGenerator.__module__} as a {label_of(MethodGenerator)} record. If a module "
+        f"with no file defined {label_of(cls)}, read each module's objects before importing "
+        "another module of that name"
     )
 
 
