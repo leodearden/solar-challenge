@@ -24,6 +24,7 @@ from solar_challenge.tariff import TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
+from tests._repository_paths import SCENARIOS_DIR
 
 
 #: A fleet page form with every value away from the form converter's defaults and every overlay set.
@@ -401,7 +402,7 @@ class TestImportFleetYAML:
 _BUILTIN_SCENARIO_STEMS = sorted(
     {
         path.stem
-        for path in (Path(__file__).resolve().parents[3] / "scenarios").iterdir()
+        for path in SCENARIOS_DIR.iterdir()
         if path.suffix in (".yaml", ".yml") and path.is_file()
     }
 )

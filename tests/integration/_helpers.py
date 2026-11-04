@@ -12,8 +12,6 @@ Usage::
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
@@ -22,8 +20,9 @@ from solar_challenge.config import (
     parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig
+from tests._repository_paths import SCENARIOS_DIR
 
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+SCENARIO = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
 
 
 def board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:

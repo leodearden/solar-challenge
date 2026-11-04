@@ -16,6 +16,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from tests._cli_table_text import table_text
 from tests._names_as_a_word import names_as_a_word
+from tests._repository_paths import SCENARIOS_DIR
 
 runner = CliRunner()
 
@@ -200,7 +201,7 @@ _TOU_ADVISORY = (
 
 def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
     """scenarios/bristol-phase1-flex.yaml as loaded, its first event window's event_hours infinite."""
-    flex = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-phase1-flex.yaml"
+    flex = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
     document: dict[str, Any] = yaml.safe_load(flex.read_text())
     document["finance"]["grid_services_events"]["event_windows"][0]["event_hours"] = float("inf")
     return document
@@ -208,7 +209,7 @@ def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
 
 def _committed_scenario_with_seg_rate(scenario_name: str, rate: float) -> str:
     """scenarios/<scenario_name> as YAML, its seg: block's rate_pence_per_kwh set to *rate*."""
-    scenario = Path(__file__).resolve().parents[2] / "scenarios" / scenario_name
+    scenario = SCENARIOS_DIR / scenario_name
     document: dict[str, Any] = yaml.safe_load(scenario.read_text())
     document["seg"]["rate_pence_per_kwh"] = rate
     return yaml.safe_dump(document)
@@ -409,7 +410,7 @@ home:
 
     @pytest.mark.parametrize(
         "scenario_file",
-        sorted((Path(__file__).resolve().parents[2] / "scenarios").glob("*.yaml")),
+        sorted(SCENARIOS_DIR.glob("*.yaml")),
         ids=lambda path: path.name,
     )
     def test_every_committed_scenario_is_valid(self, scenario_file: Path) -> None:
@@ -528,7 +529,7 @@ home:
         self, tmp_path: Path
     ) -> None:
         """scenarios/dispatch-comparison.yaml with its first home's battery strategy_type misspelt."""
-        scenario = Path(__file__).resolve().parents[2] / "scenarios" / "dispatch-comparison.yaml"
+        scenario = SCENARIOS_DIR / "dispatch-comparison.yaml"
         committed = scenario.read_text()
         misspelt = committed.replace("strategy_type: self_consumption", "strategy_type: tou_optimised", 1)
         assert misspelt != committed

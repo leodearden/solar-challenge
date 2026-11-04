@@ -48,6 +48,7 @@ from tests._fin_calibration import (
     simulate_physics_column,
 )
 from tests._finance_builders import make_scenario_of, make_sized_home
+from tests._repository_paths import SCENARIOS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +224,7 @@ class TestFinCalibrationScenarioParses:
     CLI parses it, and its rate is FIN_GOLDEN's [FIN] export rate.
     """
 
-    _SCENARIO_PATH = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-fin-calibration.yaml"
+    _SCENARIO_PATH = SCENARIOS_DIR / "bristol-fin-calibration.yaml"
 
     def _load_finance(self) -> FinanceConfig:
         """Parse the finance block from the calibration scenario YAML."""
