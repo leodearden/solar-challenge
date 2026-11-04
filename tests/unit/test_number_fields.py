@@ -2,10 +2,7 @@
 """Tests for solar_challenge.number_fields, the package's number readers."""
 
 import dataclasses
-import json
 import math
-import subprocess
-import sys
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -25,36 +22,17 @@ from solar_challenge.number_fields import (
     as_whole_numbers,
     read_field,
 )
-
-_IMPORT_PROBE = """\
-import json
-import sys
-
-import solar_challenge.number_fields
-
-print(json.dumps(sorted(
-    name for name in sys.modules if name == "solar_challenge" or name.startswith("solar_challenge.")
-)))
-"""
+from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 
 
 def test_importing_the_module_loads_only_errors_and_whole_numbers_from_the_package() -> None:
-    """A fresh ``python -I`` interpreter that imports the readers loads no other package module, so any module can import them."""
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _IMPORT_PROBE],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-
-    assert result.returncode == 0, f"importing solar_challenge.number_fields failed:\n{result.stderr}"
-    assert json.loads(result.stdout) == [
+    """A fresh interpreter that imports the readers loads no other package module, so any module can import them."""
+    assert package_modules_loaded_by_importing("solar_challenge.number_fields") == {
         "solar_challenge",
         "solar_challenge.errors",
         "solar_challenge.number_fields",
         "solar_challenge.whole_numbers",
-    ]
+    }
 
 
 class TestInterval:

@@ -9,11 +9,9 @@ Each case imports in a fresh ``python -I`` interpreter, so modules imported earl
 cannot hide what the import loads.
 """
 
-import json
-import subprocess
-import sys
-
 import pytest
+
+from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 
 pytest.importorskip("flask")
 
@@ -21,31 +19,14 @@ _SERVICE_MODULES = frozenset(
     {"solar_challenge.web.database", "solar_challenge.web.jobs", "solar_challenge.web.storage"}
 )
 
-_PROBE = """\
-import importlib
-import json
-import sys
-
-importlib.import_module(sys.argv[1])
-print(json.dumps(sorted(
-    name for name in sys.modules if name == "solar_challenge.web" or name.startswith("solar_challenge.web.")
-)))
-"""
-
 
 def _web_modules_loaded_by_importing(module: str) -> set[str]:
     """The solar_challenge.web modules a fresh interpreter has loaded once it has imported *module*."""
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _PROBE, module],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-    assert result.returncode == 0, f"importing {module} failed:\n{result.stderr}"
-    loaded = set(json.loads(result.stdout))
-    assert module in loaded, f"the probe reported {sorted(loaded)}, without {module} itself"
-    return loaded
+    return {
+        name
+        for name in package_modules_loaded_by_importing(module)
+        if name == "solar_challenge.web" or name.startswith("solar_challenge.web.")
+    }
 
 
 @pytest.mark.parametrize(
