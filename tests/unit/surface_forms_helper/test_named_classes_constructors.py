@@ -335,6 +335,47 @@ def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_
         named_classes(retapping.Submeter)
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("Meter", id="init-named-as-the-dataclass-decorator-names-it"),
+        pytest.param("Point", id="new-named-as-collections-namedtuple-names-it"),
+    ],
+)
+def test_a_constructor_named_as_a_generator_names_the_one_it_writes_in_a_class_it_never_processed_names_the_classes_the_module_defining_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "lending",
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "class Meter:\n"
+        "    def __init__(self, share: 'Share') -> None: ...\n"
+        "\n"
+        "class Point:\n"
+        "    def __new__(cls, share: 'Share'):\n"
+        "        return object.__new__(cls)\n",
+    )
+    relending = imported_module(
+        tmp_path,
+        monkeypatch,
+        "relending",
+        "from decimal import Decimal as Share\n"
+        "\n"
+        "import lending\n"
+        "\n"
+        "class Meter:\n"
+        "    __init__ = lending.Meter.__init__\n"
+        "\n"
+        "class Point:\n"
+        "    __new__ = lending.Point.__new__\n",
+    )
+
+    assert named_classes(getattr(relending, name)) == {fractions.Fraction}
+
+
 def test_a_generated_dataclass_constructor_of_a_nested_class_whose_source_holds_a_line_left_of_its_class_statement_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
