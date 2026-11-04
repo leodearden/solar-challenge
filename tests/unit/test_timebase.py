@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
+"""How long simulated time lasts: the minutes in an hour and in a day; which durations in minutes are refused; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
 
+import math
+import re
+import sys
 from datetime import date, timedelta
 
 import numpy as np
@@ -15,6 +18,7 @@ from solar_challenge.timebase import (
     LocalDay,
     SimulationWindow,
     covered_days,
+    require_valid_duration,
 )
 
 
@@ -126,6 +130,21 @@ def test_minutes_per_hour_is_the_whole_minutes_in_an_hour() -> None:
     """An int, since its readers build whole minute counts from it: range and slice bounds, an index into a minute table, and a divmod whose quotient and remainder are formatted :02d."""
     assert MINUTES_PER_HOUR == timedelta(hours=1) // ONE_MINUTE
     assert isinstance(MINUTES_PER_HOUR, int)
+
+
+@pytest.mark.parametrize("quantity", ["Timestep", "Charge duration"])
+@pytest.mark.parametrize("minutes", [math.nan, math.inf, -math.inf, 0.0, -0.0, -60.0])
+def test_a_duration_that_is_not_positive_and_finite_is_refused_naming_its_quantity_and_value(
+    quantity: str, minutes: float
+) -> None:
+    message = f"{quantity} must be positive and finite, got {minutes} minutes"
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        require_valid_duration(minutes, quantity)
+
+
+@pytest.mark.parametrize("minutes", [math.ulp(0.0), 1.0, 60.0, sys.float_info.max])
+def test_a_positive_finite_duration_is_accepted(minutes: float) -> None:
+    require_valid_duration(minutes, "Timestep")
 
 
 def test_row_energy_kwh_is_each_rows_kw_times_the_hours_it_lasts_and_energy_kwh_their_sum() -> None:

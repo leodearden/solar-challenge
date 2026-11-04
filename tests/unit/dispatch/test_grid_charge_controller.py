@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the rate-aware grid-charge controller, from its GridChargeContext to the grid_charge_ctx keyword every strategy takes."""
 
+import dataclasses
+import math
+import re
 from datetime import datetime
 
 import pytest
@@ -297,6 +300,23 @@ class TestComputeGridChargePowerKw:
                 capacity_kwh=10.0,
                 pv_charge_power_kw=0.0,
                 timestep_minutes=-1.0,
+            )
+
+    @pytest.mark.parametrize("is_cheap_period", [True, False], ids=["cheap", "not-cheap"])
+    @pytest.mark.parametrize("timestep_minutes", [math.nan, math.inf, -math.inf])
+    def test_a_timestep_that_is_not_finite_is_refused_whatever_the_gates_decide(
+        self, is_cheap_period: bool, timestep_minutes: float
+    ) -> None:
+        """The cheap context passes every gate; the not-cheap one would return 0.0 at Gate 1."""
+        ctx = dataclasses.replace(self._CTX_FAVOURABLE, is_cheap_period=is_cheap_period)
+        message = f"timestep_minutes must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+            compute_grid_charge_power_kw(
+                ctx,
+                battery_soc_kwh=2.0,
+                capacity_kwh=10.0,
+                pv_charge_power_kw=0.0,
+                timestep_minutes=timestep_minutes,
             )
 
     def test_residual_clamp_is_battery_side(self):

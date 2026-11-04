@@ -233,6 +233,37 @@ passes the battery such a duration only with a negative power, which the battery
 refuses as on the tag. Consumers that pass a power of 0 or more and a positive,
 finite duration need no change when they re-pin.
 
+**Unreleased on main** (task 659): `SelfConsumptionStrategy`,
+`TOUOptimizedStrategy` and `PeakShavingStrategy` raise `ValueError` from
+`decide_action` for a NaN or infinite `generation_kw`, `demand_kw`,
+`battery_soc_kwh`, `battery_capacity_kwh` or `timestep_minutes`, and
+`compute_grid_charge_power_kw` raises it for a NaN or infinite
+`timestep_minutes`, whatever its context. The 0.5.0 tag refuses only negative
+values, and a capacity or timestep of 0 or less, and returns a decision for
+these: an infinite generation asks the battery to charge at `inf` kW, an
+infinite demand asks `SelfConsumptionStrategy`, `PeakShavingStrategy` and, in
+a peak hour, `TOUOptimizedStrategy` to discharge at `inf` kW, and a NaN
+generation or demand asks for nothing. On the
+tag, `compute_grid_charge_power_kw` returns NaN for a NaN timestep when its
+gates would grid-charge, and 0.0 for any other NaN or infinite one. Every
+refusal of these inputs, a negative value or a 0 included, now names
+finiteness, as in `Timestep must be positive and finite, got nan minutes`, and
+`compute_grid_charge_power_kw`'s also ends in its unit:
+`timestep_minutes must be positive and finite, got nan minutes`. So
+`simulate_timestep` with a battery and a built-in dispatch strategy raises the
+strategy's `ValueError` for a NaN or infinite timestep, generation or demand,
+before the battery moves any energy, whatever the strategy would decide. That
+covers the step the task 633 line describes, now refused by the strategy, and a
+step that neither charges nor discharges, which the tag returns with NaN or
+infinite flows and the task 590 line's check refuses only when a flow is NaN.
+For an infinite power, the tag also returns a step with infinite generation and
+grid export, or infinite demand and grid import, the battery charging or
+discharging at its maximum rate. `simulate_timestep_tou` raises the
+controller's `ValueError` for such a timestep in a cheap period when the
+battery's config sets `grid_charging`; the tag returns that step, with NaN or
+infinite flows. Consumers that pass finite powers, SOCs and capacities and a
+positive, finite timestep need no change when they re-pin.
+
 **Unreleased on main** (task 436): `SimulationResults`, reached through
 `FleetResults.per_home_results`, is frozen, so that each of its series stays
 named the column `to_dataframe()` writes it under. Assigning to one of its
