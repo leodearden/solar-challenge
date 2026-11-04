@@ -308,7 +308,7 @@ def test_a_class_whose_module_another_module_of_the_same_name_has_replaced_in_sy
 
 
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
-def test_a_class_whose_module_one_with_no_source_has_replaced_in_sys_modules_raises_a_lookup_error_naming_its_own_module_from_undeclared_attributes_and_unset_attributes_if_its_body_compiled_a_function(
+def test_a_class_whose_module_one_with_no_source_has_replaced_in_sys_modules_raises_a_lookup_error_naming_its_own_module_from_undeclared_attributes_and_unset_attributes_if_it_has_a_witness(
     scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     metering = imported_module(
