@@ -181,8 +181,15 @@ class or function whose name a `global` statement of the function or class body 
 it declares takes that name alone, wherever in that body the declaration stands: after
 `global Gauge` in a function `build`, `class Gauge:` there defines `Gauge`, not
 `build.<locals>.Gauge`, on every minor. So 3.11 and 3.12 find no statement for such a
-class, and 3.13 and 3.14 find it by `__firstlineno__`. A class whose `__module__` names a
-module that re-exports it, as `from implementing import Submeter` and then
+class, and 3.13 and 3.14 find it by `__firstlineno__`. A `global` statement declares names
+for the body holding it alone: after `global Gauge` in a `def` inside `build`, the
+`class Gauge:` in `build` itself defines `build.<locals>.Gauge`, and after `global Gauge`
+in `build`, a `class Gauge:` inside a `class Housing:` there defines
+`build.<locals>.Housing.Gauge`; and a function whose name a `global` statement declares
+scopes the classes of its own body by that name alone: after `global make` in `build`,
+`class Gauge:` in `make` defines `make.<locals>.Gauge`, not
+`build.<locals>.make.<locals>.Gauge`. A class whose `__module__` names a module that
+re-exports it, as `from implementing import Submeter` and then
 `Submeter.__module__ = __name__` in a module `facade` make it, gets no statement from
 `inspect` on any minor. For a class that text given to `exec` defines, `inspect` from 3.13
 reads the block at line `__firstlineno__` of the module's own file, whatever is there, as
@@ -238,6 +245,8 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_name_a_global_statement_in_another_body_declares_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
