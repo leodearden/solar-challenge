@@ -32,6 +32,7 @@ import pandas as pd
 import yaml
 
 from solar_challenge.battery import BatteryConfig, has_battery
+from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig, GridChargeConfig
@@ -262,7 +263,8 @@ DistributionSpec = Union[
     None,
 ]
 
-#: The value a fleet gives every home for a SETTING key, as written or as its sub-block reads it.
+#: The value a fleet gives every home for a SETTING or FLAG key: a SETTING's as written or as its
+#: sub-block reads it, a FLAG's as true or false.
 SettingValue = Union[bool, str, GridChargeConfig, DispatchStrategyConfig, None]
 
 
@@ -270,8 +272,8 @@ SettingValue = Union[bool, str, GridChargeConfig, DispatchStrategyConfig, None]
 class ComponentDistribution:
     """How a fleet gives each home one component: the specs it draws and the settings it gives every home.
 
-    *draws* maps each key a home draws to its spec, and *settings* each SETTING key to the value
-    every home is given. A key in neither takes its dataclass's default. Both are held as
+    *draws* maps each key a home draws to its spec, and *settings* each SETTING or FLAG key to the
+    value every home is given. A key in neither takes its dataclass's default. Both are held as
     read-only copies; a ComponentDistribution pickles and deep-copies, but dataclasses.asdict
     of one raises TypeError.
     """
@@ -669,7 +671,14 @@ class FieldKind(Enum):
     """One of its FleetField's choices: fixed, null, or a weighted_discrete or shuffled_pool of them."""
 
     SETTING = "setting"
-    """Not drawn: one value, as written (a bool, a string or a sub-block), given to every home."""
+    """Not drawn: one value, as written (a string or a sub-block), given to every home."""
+
+    FLAG = "flag"
+    """Not drawn: true or false, read as boolean_fields.as_boolean reads it, given to every home."""
+
+
+#: The kinds a fleet gives every home as one value, never drawn.
+_GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKind.FLAG})
 
 
 @dataclass(frozen=True)
@@ -1049,7 +1058,7 @@ LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
     fleet=MappingProxyType({
         "annual_consumption_kwh": _NUMBER_FIELD,
         "household_occupants": _COUNT_FIELD,
-        "use_stochastic": _SETTING_FIELD,
+        "use_stochastic": FleetField(FieldKind.FLAG),
     }),
     not_in_fleet=MappingProxyType({
         "name": _UNNAMED_IN_A_FLEET,
@@ -1541,15 +1550,30 @@ def _parse_choice_spec(data: object, choices: tuple[str, ...], key_path: str) ->
     return spec
 
 
+def _read_setting(
+    block: ComponentBlock[Any], key: str, kind: FieldKind, value: Any, key_path: str
+) -> SettingValue:
+    """The value every home is given for *block*'s *key*, a SETTING or FLAG, read from *value*, not null, at *key_path*.
+
+    A FLAG is read as true or false, naming *key_path*. A SETTING is read by its sub-block's
+    reader when the key has a sub-block, and is otherwise the value as written.
+    """
+    if kind is FieldKind.FLAG:
+        return as_boolean(value, key_path)
+    sub_block = block.sub_blocks.get(key)
+    return value if sub_block is None else sub_block.read(value, block_path=key_path)
+
+
 def _parse_component_distribution(
     block: ComponentBlock[Any], data: object, *, block_path: str
 ) -> ComponentDistribution:
     """Read a fleet_distribution: component block by *block*'s fleet rows.
 
     A key outside the rows is refused, and so is a required key left out, naming its path. A
-    SETTING key is read as written, or by its sub-block's reader, and a null one reads as
-    absent. Any other key is a spec, kept even when null: a CHOICE's as _parse_choice_spec
-    reads it, any other's as _parse_distribution_spec does.
+    SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
+    false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
+    even when null: a CHOICE's as _parse_choice_spec reads it, any other's as
+    _parse_distribution_spec does.
     """
     mapping = _refuse_unrecognised_keys(block_path, data, block.fleet)
     _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in mapping])
@@ -1561,11 +1585,10 @@ def _parse_component_distribution(
         value, key_path = mapping[key], _child_path(block_path, key)
         if row.kind is FieldKind.CHOICE:
             draws[key] = _parse_choice_spec(value, row.choices, key_path)
-        elif row.kind is not FieldKind.SETTING:
+        elif row.kind not in _GIVEN_EVERY_HOME:
             draws[key] = _parse_distribution_spec(value, key_path)
         elif value is not None:
-            sub_block = block.sub_blocks.get(key)
-            settings[key] = value if sub_block is None else sub_block.read(value, block_path=key_path)
+            settings[key] = _read_setting(block, key, row.kind, value, key_path)
     return ComponentDistribution(draws, settings)
 
 
@@ -1849,10 +1872,10 @@ def _drawn_component(
     """Draw home *home_number*'s *name* component by *block*'s fleet rows, and build it; None when the home has none.
 
     Each row *component* draws is drawn in the table's order, and recorded in *drawn* under its
-    path; SETTING rows and rows it does not draw are skipped. The home has no such component
-    when the presence field is not drawn, draws null, or draws a value the table's presence rule
-    says asks for none. The dataclass is built from the non-null draws, the settings and *given*,
-    so each field drawn null or not drawn takes its default.
+    path; SETTING and FLAG rows, and rows it does not draw, are skipped. The home has no such
+    component when the presence field is not drawn, draws null, or draws a value the table's
+    presence rule says asks for none. The dataclass is built from the non-null draws, the
+    settings and *given*, so each field drawn null or not drawn takes its default.
 
     Raises:
         ConfigurationError: As sampler.draw refuses a draw, naming its path; as the table's
@@ -1865,7 +1888,7 @@ def _drawn_component(
         return None
     values: dict[str, object] = {}
     for key, row in block.fleet.items():
-        if row.kind is FieldKind.SETTING:
+        if row.kind in _GIVEN_EVERY_HOME:
             continue
         path = f"{name}.{key}"
         value: SpecValue = None
