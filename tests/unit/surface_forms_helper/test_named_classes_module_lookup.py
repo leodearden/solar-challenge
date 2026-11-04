@@ -237,6 +237,7 @@ def test_a_class_a_function_of_a_module_built_once_another_module_of_the_same_na
 
     assert earlier.__file__ in str(raised.value)
     assert later.__file__ in str(raised.value)
+    assert "MethodGenerator" not in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -334,6 +335,84 @@ def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_wri
 
     assert earlier.__file__ in str(raised.value)
     assert later.__file__ in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "generator_globals",
+    [pytest.param("{}", id="no-file-key"), pytest.param("{'__file__': None}", id="file-is-none")],
+)
+def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_globals_naming_no_file_raises_a_lookup_error_naming_that_functions_code_file_and_a_method_generator_record_as_the_remedy(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, generator_globals: str
+) -> None:
+    """The module imports annotations from __future__, so on every minor, 3.14 included, Local's body compiles no function, not even __annotate__: the __init__ that generate writes, with globals of its own, is the only function named after Local. Those globals name no file, whether they hold no __file__ or hold one that is None."""
+    generating = imported_module(
+        tmp_path,
+        monkeypatch,
+        "generating",
+        "from __future__ import annotations\n"
+        "\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def generate(cls):\n"
+        "    namespace = {}\n"
+        "    exec(compile('def __init__(self): ...\\n', '<unlisted generator>', 'exec'), "
+        f"{generator_globals}, namespace)\n"
+        "    namespace['__init__'].__qualname__ = f'{cls.__qualname__}.__init__'\n"
+        "    cls.__init__ = namespace['__init__']\n"
+        "    return cls\n"
+        "\n"
+        "def build():\n"
+        "    @generate\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        "    return Local\n",
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(generating.build())
+
+    message = str(raised.value)
+    assert "generating.build.<locals>.Local" in message
+    assert "'<unlisted generator>'" in message
+    assert "add a MethodGenerator record" in message
+    assert "module at None" not in message
+    assert "None.build.<locals>.Local" not in message
+
+
+def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_with_no_file_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_the_replacement_by_its_repr_and_the_remedy_of_reading_each_modules_objects_before_importing_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The earlier module's source imports annotations from __future__, so on every minor, 3.14 included, Local's __init__ is the only function its body compiles, and it carries the globals of the module that built Local. Neither module names a file, so the error names the replacement by its repr and the code file of that __init__, which exec compiles as '<string>'."""
+    earlier = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", earlier)
+    exec(
+        "from __future__ import annotations\n"
+        "\n"
+        "from fractions import Fraction as Share\n"
+        "\n"
+        "def build():\n"
+        "    class Local:\n"
+        "        share: Share\n"
+        "\n"
+        "        def __init__(self): ...\n"
+        "\n"
+        "    return Local\n",
+        vars(earlier),
+    )
+    local = earlier.build()
+    later = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", later)
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(local)
+
+    message = str(raised.value)
+    assert "fileless.build.<locals>.Local.__init__" in message
+    assert "'<string>'" in message
+    assert repr(later) in message
+    assert "module at None" not in message
+    assert "before importing another module of that name" in message
 
 
 def test_a_routine_that_wraps_a_class_whose_module_another_module_of_the_same_name_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_the_class_and_the_replacement(
