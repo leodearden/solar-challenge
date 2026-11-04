@@ -4,12 +4,7 @@
 import math
 from typing import Optional
 
-import numpy as np
-
-
-def is_boolean(value: object) -> bool:
-    """Whether *value* is a bool, Python's or numpy's, which is never a number setting though it compares equal to 1 or 0."""
-    return isinstance(value, (bool, np.bool_))
+from solar_challenge.boolean_fields import is_boolean
 
 
 def whole_number(value: float) -> Optional[int]:

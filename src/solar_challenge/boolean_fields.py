@@ -1,11 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The reader of boolean settings: a boolean setting is true or false, never a value read by its truthiness.
+"""Booleans as the package's settings hold them: a bool is Python's or numpy's, and a boolean setting is true or false, never a value read by its truthiness.
 
-The module imports no package module but errors and whole_numbers, so any module can import it.
+The module imports no package module but errors, so any module can import it.
 """
 
+import numpy as np
+
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.whole_numbers import is_boolean
+
+
+def is_boolean(value: object) -> bool:
+    """Whether *value* is a bool, Python's or numpy's, which is never a number setting though it compares equal to 1 or 0."""
+    return isinstance(value, (bool, np.bool_))
 
 
 def as_boolean(value: object, field: str) -> bool:

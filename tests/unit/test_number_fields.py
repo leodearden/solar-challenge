@@ -25,10 +25,11 @@ from solar_challenge.number_fields import (
 from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 
 
-def test_importing_the_module_loads_only_errors_and_whole_numbers_from_the_package() -> None:
+def test_importing_the_module_loads_only_errors_boolean_fields_and_whole_numbers_from_the_package() -> None:
     """A fresh interpreter that imports the readers loads no other package module, so any module can import them."""
     assert package_modules_loaded_by_importing("solar_challenge.number_fields") == {
         "solar_challenge",
+        "solar_challenge.boolean_fields",
         "solar_challenge.errors",
         "solar_challenge.number_fields",
         "solar_challenge.whole_numbers",
