@@ -630,6 +630,60 @@ def test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_
     assert named_classes(pointing.Pointed) == {decimal.Decimal}
 
 
+def test_a_constructor_named_as_generated_in_a_class_whose_modules_source_holds_no_class_statement_for_it_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    execing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "execing",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "exec(\n"
+        "    '@dataclass\\n'\n"
+        "    'class Submeter(Meter):\\n'\n"
+        "    '    def __init__(self, tap: \"Tap\") -> None: ...\\n'\n"
+        ")\n",
+    )
+    requalifying = imported_module(
+        tmp_path,
+        monkeypatch,
+        "requalifying",
+        "from decimal import Decimal as Share\n"
+        "from typing import NamedTuple\n"
+        "\n"
+        "Pointed = NamedTuple('Pointed', [('share', 'Share')])\n",
+    )
+    new = requalifying.Pointed.__new__
+    monkeypatch.setattr(new, "__code__", new.__code__.replace(co_qualname="Pointed.__new__"))
+
+    with pytest.raises(
+        TypeError,
+        match=r"^execing\.Submeter is constructed through execing\.Submeter\.__init__, "
+        r"which carries the name the dataclass decorator gives the __init__ it writes into "
+        r"execing\.Submeter, and its code carries the qualified name 'Submeter\.__init__'"
+        r".*\bmodule 'execing' holds no class statement under the qualified name 'Submeter'"
+        r".*: make the name private, or define execing\.Submeter by a class statement in "
+        r"the source of the module 'execing'$",
+    ):
+        named_classes(execing.Submeter)
+    with pytest.raises(
+        TypeError,
+        match=r"^requalifying\.Pointed is constructed through "
+        r"namedtuple_Pointed\.Pointed\.__new__, which carries the name collections\.namedtuple "
+        r"gives the __new__ it writes into requalifying\.Pointed, and its code carries the "
+        r"qualified name 'Pointed\.__new__'"
+        r".*\bmodule 'requalifying' holds no class statement under the qualified name 'Pointed'"
+        r".*: make the name private, or define requalifying\.Pointed by a class statement in "
+        r"the source of the module 'requalifying'$",
+    ):
+        named_classes(requalifying.Pointed)
+
+
 def test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
