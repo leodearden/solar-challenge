@@ -94,27 +94,27 @@ def _class_module(cls: type) -> types.ModuleType:
     """The module sys.modules holds under the name *cls*'s __module__ records, where typing and inspect read a class's annotations and source, checked to be the module that defined *cls*.
 
     A class defined outside any function must be bound there under its qualified name,
-    and one defined inside a function must find there the globals the function
-    _function_compiled_in_body finds its body compiled carries. A module inspect reads no
-    source for, such as a built-in or extension module, holds no class statement to
-    misread, and evaluated_in refuses a string read there, so a class such a module does
-    not bind under its qualified name, as _json binds _json.Scanner as make_scanner, is
-    checked as one defined inside a function is. Otherwise, as once another module of the
-    same name has replaced its own in sys.modules, LookupError names *cls* and the module
-    found. An immutable type carries no source or annotation to misread, and a class so
-    checked for which _function_compiled_in_body finds no function carries nothing to
-    check it by, so their module is looked up unchecked.
+    and one defined inside a function must find there the globals its body witness
+    carries, as _body_witness finds it. A module inspect reads no source for, such as a
+    built-in or extension module, holds no class statement to misread, and evaluated_in
+    refuses a string read there, so a class such a module does not bind under its
+    qualified name, as _json binds _json.Scanner as make_scanner, is checked as one
+    defined inside a function is. Otherwise, as once another module of the same name has
+    replaced its own in sys.modules, LookupError names *cls* and the module found. An
+    immutable type carries no source or annotation to misread, and a class so checked
+    for which _body_witness finds no witness carries nothing to check it by, so their
+    module is looked up unchecked.
     """
     module = _module_named(cls.__module__, cls)
     if is_immutable_type(cls):
         return module
     if "<locals>" in cls.__qualname__:
-        return _checked_by_body_function(cls, module)
+        return _checked_by_body_witness(cls, module)
     bound = bound_under(cls.__qualname__, module)
     if bound is cls:
         return module
     if not _has_source(module):
-        return _checked_by_body_function(cls, module)
+        return _checked_by_body_witness(cls, module)
     raise LookupError(
         f"{label_of(cls)} is not bound under {cls.__qualname__!r} in "
         f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
@@ -125,20 +125,20 @@ def _class_module(cls: type) -> types.ModuleType:
     )
 
 
-def _checked_by_body_function(cls: type, module: types.ModuleType) -> types.ModuleType:
-    """*module*, checked to hold as its globals those the function _function_compiled_in_body finds *cls*'s body compiled carries; unchecked if it finds none.
+def _checked_by_body_witness(cls: type, module: types.ModuleType) -> types.ModuleType:
+    """*module*, checked to hold as its globals those *cls*'s body witness carries, as _body_witness finds it; unchecked if it finds none.
 
-    Otherwise LookupError. If the globals that function carries name no file, as the globals
-    a generator may compile a method it writes with name none, the error names that
-    function's code file and a MethodGenerator record; if they name one, it names *cls* and
-    both modules.
+    Otherwise LookupError. If the globals the witness carries name no file, as the
+    globals a generator may compile a method it writes with name none, the error names
+    the witness's code file and a MethodGenerator record; if they name one, it names
+    *cls* and both modules.
     """
-    function = _function_compiled_in_body(cls)
-    if function is None or function.__globals__ is vars(module):
+    witness = _body_witness(cls)
+    if witness is None or witness.__globals__ is vars(module):
         return module
-    if function.__globals__.get("__file__") is None:
-        raise _written_by_an_unlisted_generator(cls, function, module)
-    raise _defined_elsewhere(label_of(cls), function.__globals__, module, cls.__module__)
+    if witness.__globals__.get("__file__") is None:
+        raise _written_by_an_unlisted_generator(cls, witness, module)
+    raise _defined_elsewhere(label_of(cls), witness.__globals__, module, cls.__module__)
 
 
 def _defined_elsewhere(
@@ -173,14 +173,16 @@ def _written_by_an_unlisted_generator(
     )
 
 
-def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
-    """The first function *cls*'s own body compiled, read through spelled_function and unwrapped from any decorator that records it as __wrapped__: one named after *cls*, as the compiler names each function a class body compiles, that no generator may have written there, as may_be_generated finds, since only *cls*'s class statement, read once its module is checked, could tell those apart.
+def _body_witness(cls: type) -> types.FunctionType | None:
+    """The first function in *cls*'s own namespace, read through spelled_function and unwrapped from any decorator that records it as __wrapped__, whose globals may check the module *cls*'s body ran in, as _witnesses_its_body finds; None if there is none.
 
-    None if the body compiled no function, as an annotation-only body compiles none
-    before Python 3.14, which compiles its __annotate__ unless the module imports
-    annotations from __future__; or if may_be_generated finds a generator may have
-    written each function it compiled, as for a dataclass body whose only method is a
-    hand-written __init__.
+    There is none if no function there is named after *cls*, as when its body compiled
+    none (an annotation-only body before Python 3.14, which compiles its __annotate__
+    unless the module imports annotations from __future__) and nothing since wrote one
+    there; or if may_be_generated finds a generator may have written each one that is,
+    as for a dataclass body whose only method is a hand-written __init__. So a function
+    a generator wrote there after the body ran, named after *cls*, can be the witness
+    unless may_be_generated finds it, even where the body compiled none.
     """
     functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
@@ -197,7 +199,11 @@ def _function_compiled_in_body(cls: type) -> types.FunctionType | None:
 
 
 def _witnesses_its_body(cls: type, function: types.FunctionType) -> bool:
-    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__."""
+    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__.
+
+    Only *cls*'s class statement, read once its module is checked, could tell a function
+    its body compiled from one a generator wrote.
+    """
     return (
         function.__qualname__ == f"{cls.__qualname__}.{function.__name__}"
         and not may_be_generated(cls, function)
