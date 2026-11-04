@@ -129,9 +129,9 @@ def _checked_by_body_function(cls: type, module: types.ModuleType) -> types.Modu
     """*module*, checked to hold as its globals those the function _function_compiled_in_body finds *cls*'s body compiled carries; unchecked if it finds none.
 
     Otherwise LookupError. If the globals that function carries name no file, as the globals
-    a generator compiles the methods it writes with name none, the error names that
-    function's code file and a MethodGenerator record; if they do, it names *cls* and both
-    modules.
+    a generator may compile a method it writes with name none, the error names that
+    function's code file and a MethodGenerator record; if they name one, it names *cls* and
+    both modules.
     """
     function = _function_compiled_in_body(cls)
     if function is None or function.__globals__ is vars(module):
