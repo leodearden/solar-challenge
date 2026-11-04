@@ -152,6 +152,12 @@ def _defined_elsewhere(
     )
 
 
+def _located(module: types.ModuleType) -> str:
+    """How an error names *module*: by the file it was read from, which tells two modules of one name apart; by its repr if it names none, as a module types.ModuleType makes names none."""
+    file = getattr(module, "__file__", None)
+    return repr(module) if file is None else f"the module at {file}"
+
+
 def _written_by_an_unlisted_generator(
     cls: type, function: types.FunctionType, module: types.ModuleType
 ) -> LookupError:
@@ -159,7 +165,7 @@ def _written_by_an_unlisted_generator(
     return LookupError(
         f"{label_of(cls)}.{function.__name__} was compiled from "
         f"{function.__code__.co_filename!r} with globals that name no file and are not those "
-        f"of the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+        f"of {_located(module)}, which sys.modules holds under "
         f"the name {cls.__module__!r}. If a generator wrote it, list that generator in "
         f"{MethodGenerator.__module__} as a {label_of(MethodGenerator)} record. If a module "
         f"with no file defined {label_of(cls)}, read each module's objects before importing "
