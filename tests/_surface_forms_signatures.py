@@ -1333,24 +1333,22 @@ def _defined_in_body(
 def _refuse_def_written_member_of_statementless_class(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> None:
-    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, or if its code carries *holder*'s qualified name dotted with the constructor's, the qualified name PEP 3155 gives a function a def statement in *holder*'s class body writes.
+    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, or if its code carries *holder*'s __qualname__ dotted with the constructor's name, as a def statement in *holder*'s class body compiles it.
 
     A generator compiles each function it writes from text it writes, for which inspect
-    reads no source, under a qualified name of its own: '__create_fn__.<locals>.__init__'
-    for the dataclass decorator, '<lambda>' for collections.namedtuple. A def statement
-    in a source file writes a function inspect reads a source for, and one in *holder*'s
-    class body, in text given to exec too, compiles it under that dotted name. A
-    function with either sign may be one the class statement that defined *holder*
-    defines, and that statement is elsewhere, as for a class whose __module__ names a
-    module that re-exports it, or in text given to exec, so whether it defines that
-    constructor is not known. The dotted name only refuses: a generated function whose
-    code was given it is refused too, so the rule fails closed. class_statement looks
-    that statement up by *holder*'s __module__ and __qualname__ in the source of the
-    module they name; the remedy leaves those as the statement set them where inspect
-    reads a source for *function*, and puts the statement in that source where only its
-    code carries the dotted name.
+    reads no source, under a qualified name of its own; a def statement in a source file
+    wrote any function inspect reads a source for. A function with either sign may be
+    one the class statement that defined *holder* defines, and that statement is
+    elsewhere, as for a class whose __module__ names a module that re-exports it, or in
+    text given to exec, so whether it defines that constructor is not known. The dotted
+    name only refuses, so a generated function whose code was given it is refused too:
+    the rule fails closed. class_statement looks that statement up by *holder*'s
+    __module__ and __qualname__ in the source of the module they name; the remedy leaves
+    those as the statement set them where inspect reads a source for *function*, and
+    puts the statement in that source otherwise.
     docs/surface-forms-inspect-readings.md §3.5 says how each minor reads the source of
-    such a class and of the functions a generator writes.
+    such a class and of the functions a generator writes, and what qualified name their
+    code carries.
     """
     module = defining_module(holder).__name__
     try:
