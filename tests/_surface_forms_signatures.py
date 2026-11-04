@@ -34,6 +34,7 @@ from tests._surface_forms_module_lookup import (
     defining_module,
     is_get_delete_descriptor,
     is_routine,
+    names_declared_by,
 )
 
 
@@ -1322,12 +1323,13 @@ def _refuse_constructor_its_generator_records_unwritten(
 def _defined_in_body(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> bool:
-    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace, as _def_names finds them; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds no sign that a def statement wrote *function*, the one *cls* is constructed through: inspect reads no source for it, and its code carries another qualified name than *holder*'s dotted with the constructor's."""
+    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace: one _def_names finds whose name no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds no sign that a def statement wrote *function*, the one *cls* is constructed through: inspect reads no source for it, and its code carries another qualified name than *holder*'s dotted with the constructor's."""
     statement = class_statement(holder)
     if statement is None:
         _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
         return False
-    return constructor.name in _def_names(statement.body)
+    bound_outside = names_declared_by(statement.body, ast.Global, ast.Nonlocal)
+    return constructor.name in set(_def_names(statement.body)).difference(bound_outside)
 
 
 def _refuse_def_written_member_of_statementless_class(
