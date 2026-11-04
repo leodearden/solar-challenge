@@ -1048,6 +1048,13 @@ handing the value to the home, or to every home of the fleet. A null in either
 block still reads as absent, the default true, as the task 914 and 919 lines
 say. Consumers that pass such values give `true` or `false` when they re-pin.
 
+**Unreleased on main** (task 778): `SummaryStatistics` gains a last keyword,
+`window`, defaulting to `None`: the `SimulationWindow`, imported from
+`solar_challenge.timebase`, that its totals were computed over. Building one
+raises `ValueError`, naming both values, when `window` is set and
+`simulation_days` is not its `days`. Code that builds one without a window
+needs no change.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
