@@ -29,7 +29,7 @@ from solar_challenge.number_fields import (
     read_field,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ def compute_grid_charge_power_kw(
             battery in this timestep (kW). Reduces the residual charging
             headroom available for grid charging.
         timestep_minutes: Duration of the timestep in minutes. Must be
-            positive (raises ``ValueError`` if not).
+            positive and finite (raises ``ValueError`` if not).
 
     Returns:
         Recommended grid-to-battery charge power in kW: at least 0.0 and at
@@ -164,12 +164,9 @@ def compute_grid_charge_power_kw(
         - the battery is already at or above the target SOC.
 
     Raises:
-        ValueError: If ``timestep_minutes`` is not positive.
+        ValueError: If ``timestep_minutes`` is not positive and finite.
     """
-    if timestep_minutes <= 0.0:
-        raise ValueError(
-            f"timestep_minutes must be positive, got {timestep_minutes}"
-        )
+    require_valid_duration(timestep_minutes, "timestep_minutes")
 
     # Gate 1: only charge from grid during cheap periods
     if not ctx.is_cheap_period:
