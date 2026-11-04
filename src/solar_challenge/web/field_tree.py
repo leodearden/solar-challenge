@@ -2,24 +2,24 @@
 """A dataclass's field tree in JSON, written by field_tree and read back strictly by read_field_tree, as the class's annotations declare.
 
 A field tree is a dataclass's fields as a JSON object, each value in its JSON form: a dataclass
-as an object, a list or tuple as an array, a dict as an object of its keys, a pd.Timestamp as
-its ISO text. read_field_tree reads one strictly: each JSON value must be one its field's
-annotation can be, and the dataclass built from them must accept them. A key no field has, a
-missing field that has no default, a value its annotation cannot be (an object for a
-dataclass, an array for a sequence, a number but no bool for an int, such a number a float can
-hold for a float, null only for an Optional field, one of a Literal's values), an unknown union
-tag, or a dataclass that refuses its values is refused with a FieldTreeRefused naming the
-value's dotted path, with [i] for an item and None for the root, and the reason. A missing
-field that has a default takes it.
+as an object, a list or tuple as an array, a dict as an object of its keys, a pd.Timestamp or a
+date as its ISO 8601 text, a timedelta as its ISO 8601 duration. read_field_tree reads one
+strictly: each JSON value must be one its field's annotation can be, and the dataclass built
+from them must accept them. A key no field has, a missing field that has no default, a value
+its annotation cannot be (an object for a dataclass, an array for a sequence, a number but no
+bool for an int, such a number a float can hold for a float, null only for an Optional field,
+one of a Literal's values), an unknown union tag, or a dataclass that refuses its values is
+refused with a FieldTreeRefused naming the value's dotted path, with [i] for an item and None
+for the root, and the reason. A missing field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
 as an UnknownKey.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
 and _stored_form all take the containers stored as an array from _ARRAY_CONTAINERS, so a new such
-container is one entry of it. A new leaf codec, such as a date or a timedelta, is a branch of
-_read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string. Neither
-needs an edit of the drop.
+container is one entry of it. A leaf codec, as the pd.Timestamp, date and timedelta ones, is a
+branch of _read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string.
+Neither needs an edit of the drop.
 
 The module imports no solar_challenge module. web/stored_runs.py writes and reads a run's
 documents through it, and its StoredDocument.read maps a FieldTreeRefused to a
@@ -29,6 +29,7 @@ StoredRunUnreadable.
 import functools
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
+from datetime import date, timedelta
 from types import MappingProxyType, UnionType
 from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
@@ -63,14 +64,21 @@ def field_tree(obj: Any) -> dict[str, Any]:
 def _field_tree_value(value: Any) -> Any:
     """Emit one value in its JSON-compatible form.
 
-    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string. A value of one of
-    _ARRAY_CONTAINERS becomes a list, and a dict keeps its keys, with every item serialized
-    the same way. Anything else, None included, is returned unchanged.
+    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string, a date its ISO 8601
+    text and a timedelta its ISO 8601 duration, such as 'P0DT0H1M0S'; another subclass of
+    either, as a datetime or a pd.Timedelta, is no type the reader reads back as itself, so it
+    is returned unchanged. A value of one of _ARRAY_CONTAINERS becomes a list, and a dict keeps
+    its keys, with every item serialized the same way. Anything else, None included, is
+    returned unchanged.
     """
     if is_dataclass(value):
         return field_tree(value)
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
+    if type(value) is date:
+        return value.isoformat()
+    if type(value) is timedelta:
+        return pd.Timedelta(value).isoformat()
     if isinstance(value, _ARRAY_CONTAINERS):
         return [_field_tree_value(item) for item in value]
     if isinstance(value, dict):
@@ -334,7 +342,8 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
 
     Any admits anything as it is. A Literal, bool, int, float and str admit only values of their
     JSON type; an int is any number but a bool, and a float any such number a float can hold,
-    each kept as decoded. A pd.Timestamp is read from its ISO text.
+    each kept as decoded. A pd.Timestamp is read from its ISO text, a date from its ISO 8601
+    text, and a timedelta from its ISO 8601 duration as _timedelta_of reads it.
 
     Raises:
         FieldTreeRefused: *value* cannot be *annotation*, or *annotation* has no stored form.
@@ -362,9 +371,36 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
                 return pd.Timestamp(value)
             except ValueError as refusal:
                 raise FieldTreeRefused(path, f"is {_json_value(value)}, not a timestamp: {refusal}") from refusal
+    elif annotation is date:
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError as refusal:
+                raise FieldTreeRefused(path, f"is {_json_value(value)}, not a date: {refusal}") from refusal
+    elif annotation is timedelta:
+        if isinstance(value, str):
+            return _timedelta_of(value, path)
     else:
         raise FieldTreeRefused(path, f"has no stored form: the stored-run format reads no {annotation!r}")
     raise FieldTreeRefused(path, f"is {_json_value(value)}, not {_stored_form(annotation)}")
+
+
+def _timedelta_of(text: str, path: str | None) -> timedelta:
+    """The timedelta that *text*, an ISO 8601 duration at *path* in its document, is, as pd.Timedelta reads it.
+
+    Raises:
+        FieldTreeRefused: pandas reads no duration from *text*, its ValueError the cause; or the
+            one it reads is none a timedelta holds: NaT, which it reads from '' or 'NaT', or one
+            with nanoseconds, which a timedelta's microseconds would drop.
+    """
+    try:
+        duration = pd.Timedelta(text)
+    except ValueError as refusal:
+        raise FieldTreeRefused(path, f"is {_json_value(text)}, not a duration: {refusal}") from refusal
+    if pd.isna(duration) or duration.nanoseconds:
+        raise FieldTreeRefused(path, f"is {_json_value(text)}, not a duration a timedelta holds")
+    converted: timedelta = duration.to_pytimedelta()
+    return converted
 
 
 def _is_number(value: Any) -> bool:
