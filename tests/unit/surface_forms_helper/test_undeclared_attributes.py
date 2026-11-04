@@ -434,3 +434,95 @@ def test_a_class_its_enclosing_function_declares_global_has_its_class_statement_
     )
 
     assert scan(declaring.Meter) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, {"site"}, id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "def build():\n"
+            "    def inner() -> None:\n"
+            "        global Meter\n"
+            "\n"
+            "    class Meter:\n"
+            "        rate: float\n"
+            "\n"
+            "        def __init__(self) -> None:\n"
+            "            self.site = 1\n"
+            "\n"
+            "    return Meter\n"
+            "\n"
+            "Local = build()\n",
+            id="a-def-in-the-function-holding-it",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    global Meter\n"
+            "\n"
+            "    class Housing:\n"
+            "        class Meter:\n"
+            "            rate: float\n"
+            "\n"
+            "            def __init__(self) -> None:\n"
+            "                self.site = 1\n"
+            "\n"
+            "    return Housing\n"
+            "\n"
+            "Local = build().Meter\n",
+            id="the-function-holding-the-class-body-holding-it",
+        ),
+    ],
+)
+def test_a_class_whose_name_a_global_statement_in_another_body_declares_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    source: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enclosing = imported_module(tmp_path, monkeypatch, "enclosing", source)
+
+    assert scan(enclosing.Local) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, {"site"}, id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+def test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exporting = imported_module(
+        tmp_path,
+        monkeypatch,
+        "exporting",
+        "def build() -> None:\n"
+        "    global make\n"
+        "\n"
+        "    def make():\n"
+        "        class Meter:\n"
+        "            rate: float\n"
+        "\n"
+        "            def __init__(self) -> None:\n"
+        "                self.site = 1\n"
+        "\n"
+        "        return Meter\n"
+        "\n"
+        "build()\n"
+        "Local = make()\n",
+    )
+
+    assert scan(exporting.Local) == expected
