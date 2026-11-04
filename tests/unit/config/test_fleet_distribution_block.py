@@ -6,6 +6,7 @@ import pickle
 from collections.abc import Callable
 from typing import Any
 
+import numpy as np
 import pytest
 
 from solar_challenge.config import (
@@ -21,6 +22,7 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
+from tests._non_booleans import NON_BOOLEANS
 
 
 def _parsed_fleet_distribution(n_homes: int = 1, **sections: Any) -> FleetDistributionConfig:
@@ -653,6 +655,38 @@ class TestANullSettingReadsAsAbsent:
         with_null = _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: {**block, setting: None}})
 
         assert with_null == _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, **{component: block})
+
+
+class TestUseStochasticIsTrueOrFalse:
+    """A fleet's load.use_stochastic is a flag: true or false, read when the block is read and given to every home; null reads as absent, the default true."""
+
+    @pytest.mark.parametrize("value", NON_BOOLEANS)
+    def test_a_value_that_is_not_a_bool_is_refused_at_read_naming_its_key_path(self, value: object) -> None:
+        """The refusal comes from parsing the block; no home is generated."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(
+                pv={"capacity_kw": 4.0}, load={"annual_consumption_kwh": 3400.0, "use_stochastic": value}
+            )
+        assert str(refusal.value) == f"fleet_distribution.load.use_stochastic must be true or false, got {value!r}"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(True, True, id="true"),
+            pytest.param(False, False, id="false"),
+            pytest.param(np.False_, False, id="numpy-false"),
+            pytest.param(None, True, id="null"),
+        ],
+    )
+    def test_each_home_is_given_the_flag_as_the_python_bool(self, value: object, expected: bool) -> None:
+        config = _parsed_fleet_distribution(
+            2, pv={"capacity_kw": 4.0}, load={"annual_consumption_kwh": 3400.0, "use_stochastic": value}
+        )
+
+        flags = [home.load_config.use_stochastic for home in generate_homes_from_distribution(config, Location.bristol())]
+
+        assert flags == [expected, expected]
+        assert all(type(flag) is bool for flag in flags)
 
 
 class TestAFleetDistributionPicklesAndDeepCopies:
