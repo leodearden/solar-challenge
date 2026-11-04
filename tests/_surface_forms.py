@@ -208,17 +208,21 @@ def named_classes(obj: object) -> set[type]:
     found there, and one whose module has since left sys.modules, LookupError naming it
     and that module's name. Where inspect reads no source for the module found, a class
     it does not bind under its qualified name, as _json binds _json.Scanner as
-    make_scanner, is checked only by the functions its body compiled, which must carry
-    that module's globals. A signature carried over a callable that spells no
-    annotation, such as one defined in C or a class constructed by object or in C, is
-    read where the def or lambda given it is defined. A string in one given to a link
-    that records no module, as a functools.partial records none, or to a function that
-    wraps a link carrying a signature of its own, which the new one may copy, raises
-    TypeError naming the link and the string. A string in one carried over an Enum
-    raises TypeError naming that Enum and the string;
-    docs/surface-forms-inspect-readings.md §4.2 says why. A signature that annotates
-    nothing, as that of each routine CPython defines in C such as str.join, names no
-    class, and no module is looked up for it.
+    make_scanner, is checked only by a function in its own namespace that is named after
+    it and that no generator may have written there, which must carry that module's
+    globals. A class with no such function carries nothing to check its module by, so
+    the module is looked up unchecked, though a string read there still raises TypeError
+    as above. A dataclass whose only method is a hand-written __init__ has no such
+    function in a module that imports annotations from __future__.
+    A signature carried over a callable that spells no annotation, such as one defined
+    in C or a class constructed by object or in C, is read where the def or lambda given
+    it is defined. A string in one given to a link that records no module, as a
+    functools.partial records none, or to a function that wraps a link carrying a
+    signature of its own, which the new one may copy, raises TypeError naming the link
+    and the string. A string in one carried over an Enum raises TypeError naming that
+    Enum and the string; docs/surface-forms-inspect-readings.md §4.2 says why. A
+    signature that annotates nothing, as that of each routine CPython defines in C such
+    as str.join, names no class, and no module is looked up for it.
     Met again inside its own evaluation in the same module, as each "JSON" is in
     JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
     there: that evaluation names them all.
