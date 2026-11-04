@@ -14,7 +14,6 @@ Every simulation is given a sunless winter day as its weather, so these tests ru
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 
 import pandas as pd
 from typer.testing import CliRunner
@@ -22,11 +21,12 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.home import calculate_summary, simulate_home
+from tests._repository_paths import SCENARIOS_DIR
 from tests._synthetic_weather import sunless_weather, weather_for
 
 runner = CliRunner()
 
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-arbitrage.yaml"
+SCENARIO = SCENARIOS_DIR / "bristol-arbitrage.yaml"
 
 
 # ---------------------------------------------------------------------------

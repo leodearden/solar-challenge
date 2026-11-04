@@ -33,10 +33,11 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff
+from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
-SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "bristol-community.yaml"
+SCENARIO = SCENARIOS_DIR / "bristol-community.yaml"
 
 
 # ---------------------------------------------------------------------------
