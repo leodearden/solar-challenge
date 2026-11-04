@@ -238,6 +238,10 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
         "    def __init__(self, valve: 'Valve') -> None: ...\n"
         "\n"
         "@dataclass\n"
+        "class AsyncSubmeter(Meter):\n"
+        "    async def __init__(self, valve: 'Valve') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
         "class LoggedSubmeter(Meter):\n"
         "    @logged\n"
         "    def __init__(self, valve: 'Valve') -> None: ...\n"
@@ -265,6 +269,7 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     )
 
     assert named_classes(revalving.Submeter) == {decimal.Decimal}
+    assert named_classes(revalving.AsyncSubmeter) == {decimal.Decimal}
     assert named_classes(revalving.LoggedSubmeter) == {decimal.Decimal}
     assert named_classes(revalving.Resubmeter) == {decimal.Decimal}
     assert named_classes(revalving.CalledSubmeter) == {decimal.Decimal}
