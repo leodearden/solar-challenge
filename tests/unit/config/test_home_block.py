@@ -678,7 +678,7 @@ class TestPVBlockParsing:
 
 
 class TestLoadBlockUseStochastic:
-    """A load block's use_stochastic is true or false; null reads as absent (test_component_blocks.py pins that)."""
+    """A load block's use_stochastic is true or false; null reads as absent, as tests/unit/config/test_component_blocks.py::test_a_null_key_reads_as_absent pins."""
 
     @pytest.mark.parametrize("value", NON_BOOLEANS)
     def test_a_value_that_is_not_a_bool_is_refused_naming_it(self, value: object) -> None:
