@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Paths of the repository's committed directories, absolute and computed once from this module's location, for tests that read the files in them.
+"""The repository's committed scenarios directory, as an absolute path computed once from this module's location, for tests that read the scenario files in it.
 
 Usage::
 
