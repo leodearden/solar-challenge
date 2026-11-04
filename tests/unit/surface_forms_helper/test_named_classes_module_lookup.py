@@ -375,7 +375,7 @@ def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_gl
     message = str(raised.value)
     assert "generating.build.<locals>.Local" in message
     assert "'<unlisted generator>'" in message
-    assert "MethodGenerator" in message
+    assert "add a MethodGenerator record" in message
     assert "module at None" not in message
     assert "None.build.<locals>.Local" not in message
 

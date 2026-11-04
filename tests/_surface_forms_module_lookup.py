@@ -165,9 +165,9 @@ def _written_by_an_unlisted_generator(
     return LookupError(
         f"{label_of(cls)}.{function.__name__} was compiled from "
         f"{function.__code__.co_filename!r} with globals that name no file and are not those "
-        f"of {_located(module)}, which sys.modules holds under "
-        f"the name {cls.__module__!r}. If a generator wrote it, list that generator in "
-        f"{MethodGenerator.__module__} as a {label_of(MethodGenerator)} record. If a module "
+        f"of {_located(module)}, which sys.modules holds under the name {cls.__module__!r}. "
+        f"If a generator wrote it, add a {MethodGenerator.__qualname__} record for that "
+        f"generator to the generators that {MethodGenerator.__module__} lists. If a module "
         f"with no file defined {label_of(cls)}, read each module's objects before importing "
         "another module of that name"
     )
