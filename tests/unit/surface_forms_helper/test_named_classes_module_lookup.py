@@ -7,6 +7,8 @@ import decimal
 import fractions
 import functools
 import gc
+import importlib.machinery
+import importlib.util
 import inspect
 import pathlib
 import sys
@@ -383,7 +385,7 @@ def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_gl
 def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_with_no_file_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_the_replacement_by_its_repr_and_the_remedy_of_reading_each_modules_objects_before_importing_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The earlier module's source imports annotations from __future__, so on every minor, 3.14 included, Local's __init__ is the only function its body compiles, and it carries the globals of the module that built Local. Neither module names a file, so the error names the replacement by its repr and the code file of that __init__, which exec compiles as '<string>'."""
+    """The earlier module's source imports annotations from __future__, so on every minor, 3.14 included, Local's __init__ is the only function its body compiles, and it carries the globals of the module that built Local. Neither module names a file, so the error names the replacement by its repr and the code file of that __init__, which exec compiles as '<string>'. The replacement's spec gives it an origin but no location, so it still names no file and its repr is not the earlier module's."""
     earlier = types.ModuleType("fileless")
     monkeypatch.setitem(sys.modules, "fileless", earlier)
     exec(
@@ -401,7 +403,9 @@ def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_w
         vars(earlier),
     )
     local = earlier.build()
-    later = types.ModuleType("fileless")
+    later = importlib.util.module_from_spec(
+        importlib.machinery.ModuleSpec("fileless", None, origin="the replacement")
+    )
     monkeypatch.setitem(sys.modules, "fileless", later)
 
     with pytest.raises(LookupError) as raised:
@@ -411,6 +415,7 @@ def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_w
     assert "fileless.build.<locals>.Local.__init__" in message
     assert "'<string>'" in message
     assert repr(later) in message
+    assert repr(earlier) not in message
     assert "module at None" not in message
     assert "before importing another module of that name" in message
 
