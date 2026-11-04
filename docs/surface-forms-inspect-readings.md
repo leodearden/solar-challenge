@@ -19,15 +19,15 @@ on every minor (§2). `named_classes`, which gives the classes a form names, rea
 string annotation in the module that spells it, and raises `TypeError` where that module
 could differ by minor (4.2). It also raises `TypeError` for a constructor named as the
 dataclass decorator or `collections.namedtuple` names the one it writes, but written by a
-`def` statement in a source file, in a class whose module's source holds no class
-statement for it (3.5). `member_forms`, which spells the public members a class's own
-body defines, raises `TypeError` for one that is a `functools.partial` (4.4, 4.6). Both
-raise `TypeError` for a class whose metaclass shadows `__dict__` or overrides `type`'s
-`__getattribute__` (4.8). `member_forms` also raises `TypeError` for a named tuple whose
-`_fields` holder holds anything but a tuple of strings (4.9), though every minor reads
-such a class alike. Each entry says how each minor reads its objects, and names the rule
-tests that pin what `surface_form`, `member_forms` and `named_classes` do. Each
-`TypeError` also states its own case's reading.
+`def` statement, in a source file or in text given to `exec`, in a class whose module's
+source holds no class statement for it (3.5). `member_forms`, which spells the public
+members a class's own body defines, raises `TypeError` for one that is a
+`functools.partial` (4.4, 4.6). Both raise `TypeError` for a class whose metaclass shadows
+`__dict__` or overrides `type`'s `__getattribute__` (4.8). `member_forms` also raises
+`TypeError` for a named tuple whose `_fields` holder holds anything but a tuple of strings
+(4.9), though every minor reads such a class alike. Each entry says how each minor reads
+its objects, and names the rule tests that pin what `surface_form`, `member_forms` and
+`named_classes` do. Each `TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -55,7 +55,9 @@ on 2026-10-31, and 4.8's readings of a class whose metaclass's MRO holds a class
 other than `type` and `object` that holds a `__getattribute__`, its reading of where
 `inspect.getsource` finds a class's statement, and 4.9's readings on those releases on
 2026-11-01. 3.5's readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on
-2026-11-03. A new refusal gets its rule test first, then its entry here.
+2026-11-03, and its reading of a constructor's code's qualified name on CPython 3.11.15,
+3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-11-04. A new refusal gets its rule test first,
+then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -220,26 +222,35 @@ minor `inspect` reads none for any function the two write, which they compile fr
 they write. So a dataclass that `dataclass(type(...))` makes, a named tuple that
 `typing.NamedTuple('Pointed', [('share', 'Share')])` makes, and a re-homed dataclass whose
 body defines no `__init__` read alike on every minor. A constructor that a `def` statement
-in text given to `exec` wrote has no source either, so it reads as one the decorator
-wrote: such a dataclass whose own `__init__` takes `tap: 'Tap'`, `Tap` being `Decimal` in
-its module, names `{Fraction}`, its base's field declaration, on every minor, where
-`{Decimal}` is right. Only that function's `co_qualname` tells it from a written one, and
-no rule of the helper reads `co_qualname`. If `inspect` reads a source for the
-constructor, as for any function a `def` statement in a source file wrote, `named_classes`
-raises `TypeError`, since the statement that defined the class the constructor is named
-after is elsewhere and may define that constructor. The error names the class read, the
-constructor, the class it is named after and the module whose source holds no statement
-for that class, whether the class read is that class, a subclass inheriting the
-constructor, or a class whose body assigns it. Its remedy leaves both `__module__` and
-`__qualname__` as the class statement set them, since the helper finds a statement by
-both. The re-homed `Submeter` above, a dataclass whose body defines
-`def __init__(self, tap: 'Tap')`, is refused so; read as the decorator's, it would name
-`{Fraction}` where `{Decimal}` is right.
+in text given to `exec` wrote has no source either. Its code carries the qualified name
+that statement compiles it under, the class's qualified name dotted with its own, as
+`Submeter.__init__`, on every minor, while the code of the `__init__` the decorator writes
+carries `__create_fn__.<locals>.__init__`, and that of the `__new__`
+`collections.namedtuple` writes carries `<lambda>`. So `named_classes` raises `TypeError`
+for a constructor whose code carries the qualified name a `def` statement in the body of
+the class it is named after gives it: read as the decorator's, a dataclass `Submeter`
+whose class statement is text given to `exec`, and whose own `__init__` takes
+`tap: 'Tap'`, `Tap` being `Decimal` in its module, would name `{Fraction}`, its base's
+field declaration, where `{Decimal}` is right. The code's qualified name is read only to
+refuse: a constructor a generator wrote whose code was given that name, as `code.replace`
+gives it, is refused too, and one a `def` statement wrote whose code carries another still
+reads as one the generator wrote. That error's remedy defines the class by a class
+statement in its module's source. If `inspect` reads a source for the constructor, as for
+any function a `def` statement in a source file wrote, `named_classes` raises `TypeError`,
+since the statement that defined the class the constructor is named after is elsewhere and
+may define that constructor. The error names the class read, the constructor, the class it
+is named after and the module whose source holds no statement for that class, whether the
+class read is that class, a subclass inheriting the constructor, or a class whose body
+assigns it. Its remedy leaves both `__module__` and `__qualname__` as the class statement
+set them, since the helper finds a statement by both. The re-homed `Submeter` above, a
+dataclass whose body defines `def __init__(self, tap: 'Tap')`, is refused so; read as the
+decorator's, it would name `{Fraction}` where `{Decimal}` is right.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_in_a_class_whose_modules_source_holds_no_class_statement_for_it_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
