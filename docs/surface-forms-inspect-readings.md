@@ -184,9 +184,9 @@ it declares takes that name alone, wherever in that body the declaration stands:
 `global Gauge` in a function `build`, `class Gauge:` there defines `Gauge`, not
 `build.<locals>.Gauge`, on every minor. So 3.11 and 3.12 find no statement for such a
 class, and 3.13 and 3.14 find it by `__firstlineno__`. A `global` statement declares names
-for the body holding it alone: after `global Gauge` in a `def` inside `build`, the
-`class Gauge:` in `build` itself defines `build.<locals>.Gauge`, and after `global Gauge`
-in `build`, a `class Gauge:` inside a `class Housing:` there defines
+for the body holding it alone: after `global Gauge` in a `def` or an `async def` inside
+`build`, the `class Gauge:` in `build` itself defines `build.<locals>.Gauge`, and after
+`global Gauge` in `build`, a `class Gauge:` inside a `class Housing:` there defines
 `build.<locals>.Housing.Gauge`; and a function whose name a `global` statement declares
 scopes the classes of its own body by that name alone: after `global make` in `build`,
 `class Gauge:` in `make` defines `make.<locals>.Gauge`, not
@@ -199,16 +199,17 @@ that module's first import; 3.11 and 3.12 find none.
 
 The helper finds a class's statement by its qualified name in the source of the module
 its `__module__` names, alike on every minor, as 3.11 and 3.12 find it, and spells the
-qualified name of each statement as the compiler does, its `global` rule included. So
-`named_classes`, `undeclared_attributes` and `unset_attributes` read by its own statement,
-on every minor, a class whose own module assigns its `__module__`, and one a `global`
-statement declares. Where its module also holds a statement under the same qualified
-name, as a module-level `class Gauge:` above `build` makes it, the helper reads neither:
-`named_classes` raises `TypeError` naming the class as defined by one of several class
-statements under that name, as it does for two branches of an `if`, since 3.11 and 3.12
-read the first and 3.13 and 3.14 the one `__firstlineno__` gives. They read a class whose
-`__qualname__` was assigned another statement's qualified name by that other statement,
-as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
+qualified name of each statement as the compiler does, its `global` rule included, and
+scopes a class statement in an `async def` by that function's `<locals>`, as one in a
+`def`. So `named_classes`, `undeclared_attributes` and `unset_attributes` read by its own
+statement, on every minor, a class whose own module assigns its `__module__`, and one a
+`global` statement declares. Where its module also holds a statement under the same
+qualified name, as a module-level `class Gauge:` above `build` makes it, the helper reads
+neither: `named_classes` raises `TypeError` naming the class as defined by one of several
+class statements under that name, as it does for two branches of an `if`, since 3.11 and
+3.12 read the first and 3.13 and 3.14 the one `__firstlineno__` gives. They read a class
+whose `__qualname__` was assigned another statement's qualified name by that other
+statement, as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
 `class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
 `__name__` was assigned, so no rule could refuse the one and still read the other.
 
@@ -258,6 +259,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_name_a_global_statement_in_another_body_declares_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
