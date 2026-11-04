@@ -1428,22 +1428,22 @@ class TestStepRefusesANegativeFlow:
 
 
 # ---------------------------------------------------------------------------
-# A timestep that is not finite
+# A timestep or a power that is not finite
 # ---------------------------------------------------------------------------
+
+NAN_OR_INFINITE = [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")]
 
 
 class TestStepWithATimestepThatIsNotFinite:
     """A step refuses a NaN or infinite timestep, naming it, before its battery moves any energy."""
 
-    @pytest.mark.parametrize(
-        "timestep_minutes",
-        [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
-    )
+    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
     @pytest.mark.parametrize(
         ("generation_kw", "demand_kw"),
         [
             pytest.param(2.0, 1.0, id="surplus-charges"),
             pytest.param(1.0, 2.0, id="shortfall-discharges"),
+            pytest.param(1.0, 1.0, id="balanced-moves-nothing"),
         ],
     )
     def test_the_step_refuses_the_timestep_and_leaves_the_battery_s_soc_unchanged(
@@ -1451,12 +1451,61 @@ class TestStepWithATimestepThatIsNotFinite:
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        refusal = f"must be positive and finite, got {timestep_minutes} minutes"
-        with pytest.raises(ValueError, match=re.escape(refusal)):
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             simulate_timestep(
                 generation_kw=generation_kw,
                 demand_kw=demand_kw,
                 battery=battery,
                 timestep_minutes=timestep_minutes,
             )
+        assert battery.soc_kwh == soc_kwh
+
+    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(2.0, 1.0, id="surplus-charges-from-pv-and-grid"),
+            pytest.param(1.0, 1.0, id="balanced-charges-from-grid"),
+        ],
+    )
+    def test_a_grid_charging_tou_step_in_a_cheap_period_refuses_it_with_the_controller_s_message(
+        self,
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
+        grid_charge_battery: Battery,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+    ) -> None:
+        soc_kwh = grid_charge_battery.soc_kwh
+        refusal = f"timestep_minutes must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            simulate_timestep_tou(
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery=grid_charge_battery,
+                timestamp=off_peak_ts,
+                tariff=economy7_tariff,
+                timestep_minutes=timestep_minutes,
+            )
+        assert grid_charge_battery.soc_kwh == soc_kwh
+
+
+class TestStepWithAPowerThatIsNotFinite:
+    """With a battery, a step refuses a NaN or infinite generation or demand, naming it, before its battery moves any energy."""
+
+    @pytest.mark.parametrize("value", NAN_OR_INFINITE)
+    @pytest.mark.parametrize(
+        ("power", "quantity"), [("generation_kw", "Generation"), ("demand_kw", "Demand")]
+    )
+    def test_the_step_refuses_the_power_and_leaves_the_battery_s_soc_unchanged(
+        self, power: str, quantity: str, value: float
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        powers = {"generation_kw": 1.0, "demand_kw": 1.0, power: value}
+        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            simulate_timestep(**powers, battery=battery, timestep_minutes=1.0)
         assert battery.soc_kwh == soc_kwh
