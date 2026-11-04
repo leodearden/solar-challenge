@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for a home: block and the battery, pv, heat_pump and ev sub-blocks inside it."""
+"""Tests for a home: block and the battery, pv, load, heat_pump and ev sub-blocks inside it."""
 
 import json
 import math
@@ -30,6 +30,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from tests._non_booleans import NON_BOOLEANS
 
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
@@ -674,3 +675,14 @@ class TestPVBlockParsing:
         path.write_text("home:\n  pv:\n    capacity_kw: 4\n    system_losses: 0.05\n", encoding="utf-8")
 
         assert home_config_for_run(path).pv_config == PVConfig(capacity_kw=4, system_losses=0.05)
+
+
+class TestLoadBlockUseStochastic:
+    """A load block's use_stochastic is true or false; null reads as absent (test_component_blocks.py pins that)."""
+
+    @pytest.mark.parametrize("value", NON_BOOLEANS)
+    def test_a_value_that_is_not_a_bool_is_refused_naming_it(self, value: object) -> None:
+        """The refusal ends naming the field and the value, whatever block path task 866 puts ahead of them."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            _parsed_home(load={"use_stochastic": value})
+        assert str(exc_info.value).endswith(f"use_stochastic must be true or false, got {value!r}")
