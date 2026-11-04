@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock; and which durations in minutes are refused."""
+"""How long simulated time lasts: the minutes in an hour and in a day; which durations in minutes are refused; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
 
 import math
 import re

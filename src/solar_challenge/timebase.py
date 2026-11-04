@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What a simulated window is: the calendar days a series covers, how long each of its rows lasts, its clock's zone, and the one rule that turns the window's totals into a year's; the rows a window gives, over its local calendar days; and the one bound on a duration in minutes: positive and finite."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; and a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's."""
 
 import calendar
 import itertools
