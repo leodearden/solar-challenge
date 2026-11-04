@@ -42,12 +42,21 @@ VALID_INPUTS = {
     "timestep_minutes": 1.0,
 }
 
+NOT_NON_NEGATIVE_AND_FINITE = (math.nan, math.inf, -math.inf, -1.0)
+NOT_POSITIVE_AND_FINITE = (*NOT_NON_NEGATIVE_AND_FINITE, 0.0, -0.0)
+
+INPUT_BOUNDS = [
+    ("generation_kw", "Generation must be non-negative and finite", "kW", NOT_NON_NEGATIVE_AND_FINITE),
+    ("demand_kw", "Demand must be non-negative and finite", "kW", NOT_NON_NEGATIVE_AND_FINITE),
+    ("battery_soc_kwh", "Battery SOC must be non-negative and finite", "kWh", NOT_NON_NEGATIVE_AND_FINITE),
+    ("battery_capacity_kwh", "Battery capacity must be positive and finite", "kWh", NOT_POSITIVE_AND_FINITE),
+    ("timestep_minutes", "Timestep must be positive and finite", "minutes", NOT_POSITIVE_AND_FINITE),
+]
+
 REFUSALS = [
-    pytest.param("generation_kw", "Generation must be non-negative and finite", "kW", id="generation"),
-    pytest.param("demand_kw", "Demand must be non-negative and finite", "kW", id="demand"),
-    pytest.param("battery_soc_kwh", "Battery SOC must be non-negative and finite", "kWh", id="soc"),
-    pytest.param("battery_capacity_kwh", "Battery capacity must be positive and finite", "kWh", id="capacity"),
-    pytest.param("timestep_minutes", "Timestep must be positive and finite", "minutes", id="timestep"),
+    pytest.param(name, bound, unit, value, id=f"{name}={value}")
+    for name, bound, unit, refused in INPUT_BOUNDS
+    for value in refused
 ]
 
 
@@ -56,10 +65,9 @@ def test_the_valid_inputs_get_a_decision(strategy: DispatchStrategy) -> None:
     assert isinstance(strategy.decide_action(timestamp=TIMESTAMP, **VALID_INPUTS), DispatchDecision)
 
 
-@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
-@pytest.mark.parametrize(("name", "bound", "unit"), REFUSALS)
+@pytest.mark.parametrize(("name", "bound", "unit", "value"), REFUSALS)
 @pytest.mark.parametrize("strategy", STRATEGIES)
-def test_an_input_that_is_not_finite_is_refused_naming_its_bound_and_value(
+def test_an_input_outside_its_bound_is_refused_naming_the_bound_and_value(
     strategy: DispatchStrategy, name: str, bound: str, unit: str, value: float
 ) -> None:
     message = f"{bound}, got {value} {unit}"
