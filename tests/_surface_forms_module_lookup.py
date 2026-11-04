@@ -136,9 +136,9 @@ def _checked_by_body_function(cls: type, module: types.ModuleType) -> types.Modu
     function = _function_compiled_in_body(cls)
     if function is None or function.__globals__ is vars(module):
         return module
-    if "__file__" in function.__globals__:
-        raise _defined_elsewhere(label_of(cls), function.__globals__, module, cls.__module__)
-    raise _written_by_an_unlisted_generator(cls, function, module)
+    if function.__globals__.get("__file__") is None:
+        raise _written_by_an_unlisted_generator(cls, function, module)
+    raise _defined_elsewhere(label_of(cls), function.__globals__, module, cls.__module__)
 
 
 def _defined_elsewhere(
