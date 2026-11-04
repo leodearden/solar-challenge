@@ -1460,3 +1460,33 @@ class TestStepWithATimestepThatIsNotFinite:
                 timestep_minutes=timestep_minutes,
             )
         assert battery.soc_kwh == soc_kwh
+
+    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(2.0, 1.0, id="surplus-charges-from-pv-and-grid"),
+            pytest.param(1.0, 1.0, id="balanced-charges-from-grid"),
+        ],
+    )
+    def test_a_grid_charging_tou_step_in_a_cheap_period_refuses_it_with_the_controller_s_message(
+        self,
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
+        grid_charge_battery: Battery,
+        economy7_tariff: TariffConfig,
+        off_peak_ts: pd.Timestamp,
+    ) -> None:
+        soc_kwh = grid_charge_battery.soc_kwh
+        refusal = f"timestep_minutes must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            simulate_timestep_tou(
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery=grid_charge_battery,
+                timestamp=off_peak_ts,
+                tariff=economy7_tariff,
+                timestep_minutes=timestep_minutes,
+            )
+        assert grid_charge_battery.soc_kwh == soc_kwh
