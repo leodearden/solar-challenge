@@ -13,6 +13,7 @@ import dataclasses
 import enum
 import functools
 import inspect
+import itertools
 import operator
 import types
 import typing
@@ -1240,7 +1241,7 @@ def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
 
 @dataclasses.dataclass(frozen=True)
 class _GeneratedConstructor:
-    """The constructor *generator* writes into each class it processes, by the rule it documents: its method *name*, unless that class's statement defines one, which it leaves in place; _GENERATED_CONSTRUCTORS holds one for each constructor such a generator writes, by that constructor's name.
+    """The constructor *generator* writes into each class it processes, by the rule it documents: its method *name*, unless that class's statement defines one, which it leaves in place; _GENERATED_CONSTRUCTORS holds one for each constructor such a generator writes, and _refuse_constructor_recorded_twice refuses two for one constructor.
 
     *writes* finds whether the generator's record of a class it processed says it writes
     the constructor there, and *spelling_modules* gives the module spelling each parameter
@@ -1262,24 +1263,39 @@ class _GeneratedConstructor:
             )
 
 
+def _refuse_constructor_recorded_twice(constructors: Iterable[_GeneratedConstructor]) -> None:
+    """Raise ValueError naming the constructor and the generators of two of *constructors* that name the same constructor, since _generated_constructor_of could not tell which of those generators wrote a function both may have written, as into a class both processed."""
+    for earlier, later in itertools.combinations(constructors, 2):
+        if earlier.name == later.name:
+            raise ValueError(
+                f"The constructor {later.name} is recorded as written by both "
+                f"{earlier.generator.label} and {later.generator.label}, so which of them "
+                f"wrote a function both may have written into a class as its {later.name} "
+                "is not known: record each constructor once, or give "
+                "_generated_constructor_of a rule that tells which of them wrote it"
+            )
+
+
 def _generated_constructor_of(
     cls: type, holder: type, name: str, author: object
 ) -> _GeneratedConstructor | None:
-    """The constructor _GENERATED_CONSTRUCTORS holds under *name*, if its generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, and *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
+    """The constructor _GENERATED_CONSTRUCTORS holds that is named *name* and whose generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, if *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
 
     A function assigned from elsewhere keeps its own name. A function that records
     __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
     _defined_in_body refuses, naming *cls*, the class constructed through *author*, where
     it cannot tell whether that statement defines *name*.
     """
-    constructor = _GENERATED_CONSTRUCTORS.get(name)
-    if (
-        constructor is None
-        or not isinstance(author, types.FunctionType)
-        or hasattr(author, "__wrapped__")
-        or not constructor.generator.may_have_written(holder, name, author)
-        or _defined_in_body(cls, holder, constructor, author)
-    ):
+    if not isinstance(author, types.FunctionType) or hasattr(author, "__wrapped__"):
+        return None
+    written = tuple(
+        constructor
+        for constructor in _GENERATED_CONSTRUCTORS
+        if constructor.name == name and constructor.generator.may_have_written(holder, name, author)
+    )
+    _refuse_constructor_recorded_twice(written)
+    constructor = next(iter(written), None)
+    if constructor is None or _defined_in_body(cls, holder, constructor, author):
         return None
     return constructor
 
@@ -1377,23 +1393,21 @@ def _field_declaration_modules(
     }
 
 
-_GENERATED_CONSTRUCTORS: Mapping[str, _GeneratedConstructor] = {
-    constructor.name: constructor
-    for constructor in (
-        _GeneratedConstructor(
-            generator=DATACLASS_DECORATOR,
-            name="__init__",
-            writes=lambda cls: dataclass_parameter(cls, "init"),
-            spelling_modules=_field_declaration_modules,
-        ),
-        _GeneratedConstructor(
-            generator=NAMEDTUPLE,
-            name="__new__",
-            writes=lambda cls: True,
-            spelling_modules=lambda cls, names: dict.fromkeys(names, defining_module(cls)),
-        ),
-    )
-}
+_GENERATED_CONSTRUCTORS: tuple[_GeneratedConstructor, ...] = (
+    _GeneratedConstructor(
+        generator=DATACLASS_DECORATOR,
+        name="__init__",
+        writes=lambda cls: dataclass_parameter(cls, "init"),
+        spelling_modules=_field_declaration_modules,
+    ),
+    _GeneratedConstructor(
+        generator=NAMEDTUPLE,
+        name="__new__",
+        writes=lambda cls: True,
+        spelling_modules=lambda cls, names: dict.fromkeys(names, defining_module(cls)),
+    ),
+)
+_refuse_constructor_recorded_twice(_GENERATED_CONSTRUCTORS)
 
 
 def refuse_member_without_a_portable_form(label: str, member: object) -> None:
