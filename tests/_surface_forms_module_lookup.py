@@ -194,8 +194,8 @@ def class_statement(cls: type) -> ast.ClassDef | None:
     """
     module = defining_module(cls)
     try:
-        source = inspect.getsource(module)
-    except (OSError, TypeError) as unread:
+        source = _source(module)
+    except _NoSourceError as unread:
         raise TypeError(
             f"{label_of(cls)} has no class statement inspect can read, since inspect reads no "
             f"source for its module {module.__name__!r}, as for a built-in or extension "
@@ -249,7 +249,7 @@ def _cached_while_alive(function: Callable[[_Argument], _Result]) -> Callable[[_
 def _type_checking_imports(module: types.ModuleType) -> types.CodeType:
     """The Import and ImportFrom statements of *module*'s top-level `if TYPE_CHECKING:` blocks, compiled, so running them binds each name as Python binds it."""
     imports: list[ast.stmt] = []
-    for node in ast.parse(inspect.getsource(module)).body:
+    for node in ast.parse(_source(module)).body:
         match node:
             case ast.If(
                 test=ast.Name(id="TYPE_CHECKING") | ast.Attribute(attr="TYPE_CHECKING"),
@@ -315,12 +315,24 @@ def _global_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
                 yield from _global_names(ast.iter_child_nodes(node))
 
 
+class _NoSourceError(Exception):
+    """The error _source raises, from the OSError or TypeError inspect.getsource raised, when inspect reads no source for a module."""
+
+
+def _source(module: types.ModuleType) -> str:
+    """The source inspect reads for *module*, read afresh on each call, the one place this helper reads a module's source; _NoSourceError if inspect reads none, as for a built-in or extension module, or for one with no file, as a module types.ModuleType makes has none."""
+    try:
+        return inspect.getsource(module)
+    except (OSError, TypeError) as unread:
+        raise _NoSourceError from unread
+
+
 @_cached_while_alive
 def _has_source(module: types.ModuleType) -> bool:
-    """Whether inspect reads a source for *module*: not for a built-in or extension module, nor for one with no file, as a module types.ModuleType makes has none."""
+    """Whether inspect reads a source for *module*, as _source finds, computed once and kept while *module* lives."""
     try:
-        inspect.getsource(module)
-    except (OSError, TypeError):
+        _source(module)
+    except _NoSourceError:
         return False
     return True
 
