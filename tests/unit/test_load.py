@@ -27,6 +27,7 @@ from solar_challenge.load import (
     scale_profile_to_energy,
 )
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from tests._non_booleans import NON_BOOLEANS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
@@ -233,6 +234,22 @@ class TestLoadConfigSeed:
 
     def test_no_seed_stays_none(self) -> None:
         assert LoadConfig(seed=None).seed is None
+
+
+class TestLoadConfigUseStochastic:
+    """LoadConfig reads use_stochastic as true or false, holding the Python bool; any other value is refused, not read by its truthiness."""
+
+    @pytest.mark.parametrize("value", (*NON_BOOLEANS, pytest.param(None, id="null")))
+    def test_a_value_that_is_not_a_bool_is_refused_naming_it(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            LoadConfig(use_stochastic=value)
+        assert str(exc_info.value) == f"use_stochastic must be true or false, got {value!r}"
+
+    @pytest.mark.parametrize(
+        "value", [pytest.param(np.True_, id="numpy-true"), pytest.param(np.False_, id="numpy-false")]
+    )
+    def test_a_numpy_bool_is_held_as_the_python_bool_it_is(self, value: np.bool_) -> None:
+        assert LoadConfig(use_stochastic=value).use_stochastic is bool(value)
 
 
 class TestGenerateLoadProfile:

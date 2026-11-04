@@ -237,7 +237,11 @@ _SETTING = FleetField(FieldKind.SETTING)
         ),
         pytest.param(
             LOAD_BLOCK,
-            {"annual_consumption_kwh": _NUMBER, "household_occupants": _COUNT, "use_stochastic": _SETTING},
+            {
+                "annual_consumption_kwh": _NUMBER,
+                "household_occupants": _COUNT,
+                "use_stochastic": FleetField(FieldKind.FLAG),
+            },
             None,
             {"name", "seed"},
             None,

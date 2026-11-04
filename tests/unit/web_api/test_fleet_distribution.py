@@ -1069,6 +1069,11 @@ class TestFleetFromDistribution:
                 "'orientation'",
                 id="pv-mapping-setting-the-grammar-has-no-key-for",
             ),
+            pytest.param(
+                {"load": {"annual_consumption_kwh": 3500.0, "use_stochastic": {}}},
+                "load.use_stochastic",
+                id="load-use-stochastic-empty-mapping",
+            ),
         ],
     )
     def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(

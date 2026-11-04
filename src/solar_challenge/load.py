@@ -16,6 +16,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
+from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.number_fields import POSITIVE, Interval, as_finite_float, as_whole_number, read_field
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, ONE_MINUTE, LocalDay, SimulationWindow
 
@@ -70,7 +71,9 @@ class LoadConfig:
         name: Optional identifier for the load profile
         use_stochastic: Use the windowed richardsonpy stochastic model (default True).
             richardsonpy is a hard dependency so this path is always available.
-            Set False to force the deterministic Elexon Profile Class 1 shape.
+            Set False to force the deterministic Elexon Profile Class 1 shape. Read as
+            true or false: a bool, Python's or numpy's, is held as the Python bool it
+            is, and any other value is refused
         seed: Seed of the stochastic profile, read as a whole number and held as the
             int it is: any int reproduces its profile, and None draws fresh entropy on
             each call
@@ -85,9 +88,10 @@ class LoadConfig:
     seed: Optional[int] = None  # Seed for reproducible stochastic profiles
 
     def __post_init__(self) -> None:
-        """Read each number setting."""
+        """Read each number setting and the use_stochastic flag."""
         read_field(self, "annual_consumption_kwh", as_finite_float, POSITIVE, optional=True)
         read_field(self, "household_occupants", as_whole_number, _HOUSEHOLD_OCCUPANTS)
+        object.__setattr__(self, "use_stochastic", as_boolean(self.use_stochastic, "use_stochastic"))
         read_field(self, "seed", as_whole_number, optional=True)
 
     def get_annual_consumption(self) -> float:

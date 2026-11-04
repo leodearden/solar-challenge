@@ -1004,6 +1004,19 @@ without the scenario's rate on a home that has no tariff of its own.
 `baseline_outlay_gbp` is unchanged, since the householder bill reads no export
 income.
 
+**Unreleased on main** (task 559): `LoadConfig` refuses a `use_stochastic` that
+is not a bool, `None` included, raising `ConfigurationError`, a `ValueError`:
+`LoadConfig(use_stochastic="no")` raises `use_stochastic must be true or false,
+got 'no'`. The 0.5.0 tag accepts any value and reads it by its truthiness:
+`None`, `0`, `""`, `[]` and `{}` select the deterministic Elexon profile, and
+`"no"` or `"false"` the stochastic one. A numpy bool is held as the Python bool
+it equals. A `load:` block's `use_stochastic` is refused the same way, and a
+`fleet_distribution:` block's `load.use_stochastic` is refused as the block is
+read, naming `fleet_distribution.load.use_stochastic`; the tag accepts both,
+handing the value to the home, or to every home of the fleet. A null in either
+block still reads as absent, the default true, as the task 914 and 919 lines
+say. Consumers that pass such values give `true` or `false` when they re-pin.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
