@@ -585,7 +585,9 @@ def test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attr
         "\n"
         "    return Meter\n"
         "\n"
-        "Local = asyncio.run(build())\n",
+        "_loop = asyncio.new_event_loop()\n"
+        "Local = _loop.run_until_complete(build())\n"
+        "_loop.close()\n",
     )
 
     assert scan(awaiting.Local) == expected
