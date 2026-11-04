@@ -1550,15 +1550,13 @@ def _parse_choice_spec(data: object, choices: tuple[str, ...], key_path: str) ->
     return spec
 
 
-def _read_setting(
-    block: ComponentBlock[Any], key: str, kind: FieldKind, value: Any, key_path: str
-) -> SettingValue:
+def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
     """The value every home is given for *block*'s *key*, a SETTING or FLAG, read from *value*, not null, at *key_path*.
 
     A FLAG is read as true or false, naming *key_path*. A SETTING is read by its sub-block's
     reader when the key has a sub-block, and is otherwise the value as written.
     """
-    if kind is FieldKind.FLAG:
+    if block.fleet[key].kind is FieldKind.FLAG:
         return as_boolean(value, key_path)
     sub_block = block.sub_blocks.get(key)
     return value if sub_block is None else sub_block.read(value, block_path=key_path)
@@ -1588,7 +1586,7 @@ def _parse_component_distribution(
         elif row.kind not in _GIVEN_EVERY_HOME:
             draws[key] = _parse_distribution_spec(value, key_path)
         elif value is not None:
-            settings[key] = _read_setting(block, key, row.kind, value, key_path)
+            settings[key] = _read_setting(block, key, value, key_path)
     return ComponentDistribution(draws, settings)
 
 
