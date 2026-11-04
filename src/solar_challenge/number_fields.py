@@ -2,8 +2,8 @@
 """Readers of number settings: each takes a value and its field's name, and returns the number read or refuses the value with a ConfigurationError naming the field and the value.
 
 A valid number setting is a finite number, never a bool, a whole number where a count is
-meant, and inside the field's Interval. The module imports no package module but errors and
-whole_numbers, so any module can import it.
+meant, and inside the field's Interval. The module imports no package module but errors,
+boolean_fields and whole_numbers, so any module can import it.
 
 An integer field reads through as_whole_number, so a fraction or a boolean is refused, not
 truncated or read as 1.
@@ -15,8 +15,9 @@ from collections.abc import Callable, Iterable, Mapping, Set
 from dataclasses import dataclass
 from typing import Any, Final, TypeVar
 
+from solar_challenge.boolean_fields import is_boolean
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.whole_numbers import is_boolean, whole_number
+from solar_challenge.whole_numbers import whole_number
 
 _Number = TypeVar("_Number", int, float)
 
