@@ -455,6 +455,22 @@ def test_a_class_its_enclosing_function_declares_global_has_its_class_statement_
         ),
         pytest.param(
             "def build():\n"
+            "    async def inner() -> None:\n"
+            "        global Meter\n"
+            "\n"
+            "    class Meter:\n"
+            "        rate: float\n"
+            "\n"
+            "        def __init__(self) -> None:\n"
+            "            self.site = 1\n"
+            "\n"
+            "    return Meter\n"
+            "\n"
+            "Local = build()\n",
+            id="an-async-def-in-the-function-holding-it",
+        ),
+        pytest.param(
+            "def build():\n"
             "    class Housing:\n"
             "        global Meter\n"
             "\n"
@@ -545,3 +561,31 @@ def test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_cl
     )
 
     assert scan(exporting.Local) == expected
+
+
+@_EACH_SCAN_OF_A_CLASS_THAT_SETS_SITE_AND_DECLARES_RATE
+def test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    awaiting = imported_module(
+        tmp_path,
+        monkeypatch,
+        "awaiting",
+        "import asyncio\n"
+        "\n"
+        "async def build():\n"
+        "    class Meter:\n"
+        "        rate: float\n"
+        "\n"
+        "        def __init__(self) -> None:\n"
+        "            self.site = 1\n"
+        "\n"
+        "    return Meter\n"
+        "\n"
+        "Local = asyncio.run(build())\n",
+    )
+
+    assert scan(awaiting.Local) == expected
