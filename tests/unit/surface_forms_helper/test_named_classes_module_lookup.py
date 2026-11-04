@@ -380,24 +380,13 @@ def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_gl
     assert "None.build.<locals>.Local" not in message
 
 
-def _module_with_no_file(
-    monkeypatch: pytest.MonkeyPatch, name: str, code_file: str, source: str
-) -> types.ModuleType:
-    """The module *name*, made by types.ModuleType, so that it names no file, and run from *source*, compiled as *code_file*; left in sys.modules until *monkeypatch* is undone or a later call makes another module of that name."""
-    module = types.ModuleType(name)
-    monkeypatch.setitem(sys.modules, name, module)
-    exec(compile(source, code_file, "exec", dont_inherit=True), vars(module))
-    return module
-
-
 def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_with_no_file_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_the_replacement_by_its_repr_and_the_remedy_of_reading_each_modules_objects_before_importing_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The module imports annotations from __future__, so on every minor, 3.14 included, Local's __init__ is the only function its body compiles, and it carries the globals of the module that built Local. Neither module names a file, so the error names the replacement by its repr."""
-    earlier = _module_with_no_file(
-        monkeypatch,
-        "fileless",
-        "<earlier module>",
+    """The earlier module's source imports annotations from __future__, so on every minor, 3.14 included, Local's __init__ is the only function its body compiles, and it carries the globals of the module that built Local. Neither module names a file, so the error names the replacement by its repr and the code file of that __init__, which exec compiles as '<string>'."""
+    earlier = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", earlier)
+    exec(
         "from __future__ import annotations\n"
         "\n"
         "from fractions import Fraction as Share\n"
@@ -409,31 +398,18 @@ def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_w
         "        def __init__(self): ...\n"
         "\n"
         "    return Local\n",
+        vars(earlier),
     )
     local = earlier.build()
-    later = _module_with_no_file(
-        monkeypatch,
-        "fileless",
-        "<later module>",
-        "from __future__ import annotations\n"
-        "\n"
-        "from decimal import Decimal as Share\n"
-        "\n"
-        "def build():\n"
-        "    class Local:\n"
-        "        share: Share\n"
-        "\n"
-        "        def __init__(self): ...\n"
-        "\n"
-        "    return Local\n",
-    )
+    later = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", later)
 
     with pytest.raises(LookupError) as raised:
         named_classes(local)
 
     message = str(raised.value)
     assert "fileless.build.<locals>.Local.__init__" in message
-    assert "'<earlier module>'" in message
+    assert "'<string>'" in message
     assert repr(later) in message
     assert "module at None" not in message
     assert "before importing another module of that name" in message
