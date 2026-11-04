@@ -6,6 +6,9 @@ Tests cover:
   reloads it as None
 - total_grid_charge_kwh survives a home roundtrip, and a summary saved without it
   loads it as 0.0
+- A summary's window survives home and fleet roundtrips and is stored as ISO 8601
+  text; a summary saved without one loads it as None, and one whose simulation_days
+  is not its window's days is refused
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
@@ -30,6 +33,7 @@ Tests cover:
 import dataclasses
 import json
 import shutil
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +55,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -343,6 +348,129 @@ class TestGridChargeKwhRoundtrip:
         loaded_summary = storage.load_run("no-grid-charge-kwh-001").summary
 
         assert loaded_summary.total_grid_charge_kwh == 0.0
+
+
+_ZONED_MINUTE_WINDOW = SimulationWindow(
+    date(2024, 10, 1), date(2024, 11, 30), timedelta(minutes=1), "Europe/London"
+)
+_NAIVE_HALF_HOURLY_WINDOW = SimulationWindow(
+    date(2023, 6, 1), date(2023, 6, 7), timedelta(minutes=30), None
+)
+
+
+def _make_summary_over(window: SimulationWindow) -> SummaryStatistics:
+    """_make_summary's summary, computed over *window*: simulation_days is its days."""
+    return dataclasses.replace(_make_summary(), simulation_days=window.days, window=window)
+
+
+class TestSummaryWindowRoundtrip:
+    """A summary keeps its window when reloaded, stored as ISO 8601 text; a summary
+    saved before the field existed loads it as None, and one whose simulation_days is
+    not its window's days is refused."""
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            pytest.param(_ZONED_MINUTE_WINDOW, id="zoned-minute"),
+            pytest.param(_NAIVE_HALF_HOURLY_WINDOW, id="naive-half-hourly"),
+        ],
+    )
+    def test_home_run_reloads_its_summarys_window(
+        self, storage: RunStorage, window: SimulationWindow
+    ) -> None:
+        summary = _make_summary_over(window)
+        storage.save_home_run(
+            run_id="window-home-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=summary,
+            name="Saved Run",
+        )
+
+        loaded_summary = storage.load_run("window-home-001").summary
+
+        assert loaded_summary.window == window
+        assert loaded_summary.simulation_days == summary.simulation_days
+
+    def test_fleet_run_reloads_each_home_summarys_window(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="window-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results() for _ in range(2)],
+                home_configs=[_make_home_config(f"Home {i}") for i in range(2)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary_over(_ZONED_MINUTE_WINDOW) for _ in range(2)],
+            name="Saved Run",
+        )
+
+        loaded_home_summaries = storage.load_run("window-fleet-001").home_summaries
+
+        assert [summary.window for summary in loaded_home_summaries] == [_ZONED_MINUTE_WINDOW] * 2
+
+    def test_a_summarys_window_is_stored_as_iso_8601_text(self, storage: RunStorage) -> None:
+        """Its days are ISO 8601 dates and its cadence an ISO 8601 duration, in summary.json
+        and in the runs row alike."""
+        storage.save_home_run(
+            run_id="window-text-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary_over(_ZONED_MINUTE_WINDOW),
+            name="Saved Run",
+        )
+        run = storage.run_record("window-text-001")
+        assert run is not None and run.summary_json is not None
+
+        stored_window = {
+            "first_day": "2024-10-01",
+            "last_day": "2024-11-30",
+            "cadence": "P0DT0H1M0S",
+            "timezone": "Europe/London",
+        }
+        summary_path = stored_run_dir(storage, "window-text-001") / "summary.json"
+        assert _read_json(summary_path)["window"] == stored_window
+        assert json.loads(run.summary_json)["window"] == stored_window
+
+    def test_summary_saved_without_a_window_loads_none(self, storage: RunStorage) -> None:
+        """Every summary.json written before the window field existed lacks its key, and the
+        field's default reads it with no RunDocumentStep."""
+        storage.save_home_run(
+            run_id="no-window-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary_over(_ZONED_MINUTE_WINDOW),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-window-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["window"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded_summary = storage.load_run("no-window-001").summary
+
+        assert loaded_summary.window is None
+        assert loaded_summary.simulation_days == 61
+
+    def test_a_stored_summary_whose_days_disagree_with_its_window_is_refused(
+        self, storage: RunStorage
+    ) -> None:
+        """SummaryStatistics refuses it as it loads, as it refuses it at construction, naming both."""
+        storage.save_home_run(
+            run_id="window-days-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary_over(_ZONED_MINUTE_WINDOW),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "window-days-001") / "summary.json"
+        stored = _read_json(summary_path)
+        stored["simulation_days"] = 62
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        with pytest.raises(StoredRunUnreadable, match=r"simulation_days=62 for a window of 61 days") as refused:
+            storage.load_run("window-days-001")
+
+        assert refused.value.document == "summary.json"
 
 
 class TestCompletedAtTimestamp:
