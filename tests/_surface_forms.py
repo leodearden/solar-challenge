@@ -208,8 +208,11 @@ def named_classes(obj: object) -> set[type]:
     found there, and one whose module has since left sys.modules, LookupError naming it
     and that module's name. Where inspect reads no source for the module found, a class
     it does not bind under its qualified name, as _json binds _json.Scanner as
-    make_scanner, is checked only by the functions its body compiled, which must carry
-    that module's globals. A signature carried over a callable that spells no
+    make_scanner, is checked only by a function in its own namespace that is named after
+    it and that no generator may have written there, which must carry that module's
+    globals. A class with no such function, as a dataclass whose only method is a
+    hand-written __init__ is, carries nothing to check its module by, so the module is
+    looked up unchecked. A signature carried over a callable that spells no
     annotation, such as one defined in C or a class constructed by object or in C, is
     read where the def or lambda given it is defined. A string in one given to a link
     that records no module, as a functools.partial records none, or to a function that
