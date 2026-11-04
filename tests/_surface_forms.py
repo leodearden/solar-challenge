@@ -211,9 +211,9 @@ def named_classes(obj: object) -> set[type]:
     make_scanner, is checked only by a function in its own namespace that is named after
     it and that no generator may have written there, which must carry that module's
     globals. A class with no such function carries nothing to check its module by, so
-    the module is looked up unchecked, as for a dataclass whose only method is a
-    hand-written __init__ in a module that imports annotations from __future__: without
-    that import, Python 3.14 compiles the body's __annotate__, which is such a function.
+    the module is looked up unchecked, though a string read there still raises TypeError
+    as above. A dataclass whose only method is a hand-written __init__ has no such
+    function in a module that imports annotations from __future__.
     A signature carried over a callable that spells no annotation, such as one defined
     in C or a class constructed by object or in C, is read where the def or lambda given
     it is defined. A string in one given to a link that records no module, as a
