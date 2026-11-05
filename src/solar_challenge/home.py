@@ -11,6 +11,7 @@ import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
@@ -26,6 +27,10 @@ from solar_challenge.weather import WeatherProvider, align_tmy_to_index
 _YEAR_LENGTHS_IN_HOURS = reference_year_lengths(rows_per_day=24)
 
 
+HOME_DISPATCH_STRATEGIES: tuple[str, ...] = ("greedy", "tou_optimized")
+"""The values of HomeConfig.dispatch_strategy, the dispatch a home asks for by name."""
+
+
 @dataclass(frozen=True)
 class HomeConfig:
     """Configuration for a single home simulation.
@@ -39,7 +44,10 @@ class HomeConfig:
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
-        dispatch_strategy: Battery dispatch strategy ("greedy" or "tou_optimized")
+        dispatch_strategy: Battery dispatch strategy, one of HOME_DISPATCH_STRATEGIES
+
+    Raises:
+        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES.
     """
 
     pv_config: PVConfig
@@ -57,6 +65,14 @@ class HomeConfig:
     When set, simulate_home prices export_revenue using calculate_seg_revenue()
     at this SEG rate (pence/kWh); when None, export_revenue is 0.
     """
+
+    def __post_init__(self) -> None:
+        if self.dispatch_strategy not in HOME_DISPATCH_STRATEGIES:
+            raise ConfigurationError.must_be(
+                "dispatch_strategy",
+                f"one of {' or '.join(repr(name) for name in HOME_DISPATCH_STRATEGIES)}",
+                got=self.dispatch_strategy,
+            )
 
 
 _COLUMN = "column"
