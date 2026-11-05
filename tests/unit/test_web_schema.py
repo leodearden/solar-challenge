@@ -618,7 +618,7 @@ _FIXTURES_IN_FORMAT_2 = ("pre_469_home", "legacy_fleet", "pre_787_dispatch_fleet
 """The legacy stored-run fixtures whose documents version 2's step leaves as they are, so a store at schema version 2 holds them as committed.
 
 pre_787_dispatch_fleet is the one a solar-challenge at format 2 saved. pre_786_dispatch_home is
-left out: it holds the null keys of the dispatch variants it is not, which v2 drops.
+left out: its dispatch strategy holds the other variants' null keys, which v2 drops.
 """
 
 
