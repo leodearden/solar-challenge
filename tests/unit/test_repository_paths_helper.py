@@ -4,6 +4,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from tests._repository_paths import REPOSITORY_ROOT, SCENARIOS_DIR
 
 
@@ -36,21 +38,17 @@ def test_the_project_root_fixture_is_the_repository_root(project_root: Path) -> 
 
 
 def _is_a_path_of_the_modules_own_file(node: ast.expr) -> bool:
-    """Whether node is a call given __file__ alone, as Path(__file__) and pathlib.Path(__file__) are, or that call's resolve()."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "resolve"
-        and not node.args
-        and not node.keywords
-    ):
-        node = node.func.value
-    return (
-        isinstance(node, ast.Call)
-        and len(node.args) == 1
-        and isinstance(node.args[0], ast.Name)
-        and node.args[0].id == "__file__"
-    )
+    """Whether node is a call given only __file__, as Path(__file__) is, or only another such call, as Path(os.path.abspath(__file__)) is, or the resolve(...) or absolute() of such a call."""
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "absolute"}:
+        return _is_a_path_of_the_modules_own_file(node.func.value)
+    if len(node.args) != 1:
+        return False
+    (argument,) = node.args
+    if isinstance(argument, ast.Name):
+        return argument.id == "__file__"
+    return _is_a_path_of_the_modules_own_file(argument)
 
 
 def _climbs_from_its_own_file(node: ast.Attribute) -> bool:
@@ -65,16 +63,25 @@ def _climbs_from_its_own_file(node: ast.Attribute) -> bool:
     )
 
 
+def _lines_climbing_from_the_modules_own_file(tree: ast.Module) -> list[int]:
+    """The line of each expression in a module's tree that works out a directory above the module's own from its own __file__, in line order."""
+    return sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and _climbs_from_its_own_file(node)
+    )
+
+
 def test_only_the_helper_works_out_a_directory_above_its_own_from_its_file() -> None:
     helper = "tests/_repository_paths.py"
     sites: list[tuple[str, str]] = []
     for path in sorted((REPOSITORY_ROOT / "tests").rglob("*.py")):
         module = path.relative_to(REPOSITORY_ROOT).as_posix()
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        source = path.read_text(encoding="utf-8")
+        lines = source.split("\n")
         sites.extend(
-            (module, f"{module}:{node.lineno}: {ast.unparse(node)}")
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and _climbs_from_its_own_file(node)
+            (module, f"{module}:{lineno}: {lines[lineno - 1].strip()}")
+            for lineno in _lines_climbing_from_the_modules_own_file(ast.parse(source, filename=str(path)))
         )
 
     others = "\n".join(site for module, site in sites if module != helper)
@@ -84,3 +91,36 @@ def test_only_the_helper_works_out_a_directory_above_its_own_from_its_file() -> 
         f"Build the path from REPOSITORY_ROOT or SCENARIOS_DIR, imported from {helper}, so the repository root is "
         "stated once; a test function may request the project_root fixture, which returns REPOSITORY_ROOT"
     )
+
+
+@pytest.mark.parametrize(
+    "climb",
+    [
+        pytest.param("Path(__file__).parents[1]", id="parents"),
+        pytest.param("pathlib.Path(__file__).parents[1]", id="pathlib-parents"),
+        pytest.param("Path(__file__).resolve().parents[1]", id="resolved-parents"),
+        pytest.param("Path(__file__).parent.parent", id="parent-of-parent"),
+        pytest.param("Path(__file__).resolve().parent.parent", id="resolved-parent-of-parent"),
+        pytest.param("Path(__file__).resolve(strict=True).parents[1]", id="strictly-resolved-parents"),
+        pytest.param("Path(__file__).absolute().parents[1]", id="absolute-parents"),
+        pytest.param("Path(os.path.abspath(__file__)).parents[1]", id="abspath-parents"),
+        pytest.param("Path(os.path.realpath(__file__)).parents[1]", id="realpath-parents"),
+    ],
+)
+def test_a_climb_from_the_modules_own_file_is_found_on_its_line(climb: str) -> None:
+    tree = ast.parse(f"from pathlib import Path\n\nROOT = {climb}\n")
+
+    assert _lines_climbing_from_the_modules_own_file(tree) == [3], f"{climb} is not found on its line, 3"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("Path(__file__).resolve().parent", id="own-directory"),
+        pytest.param("Path(solar_challenge.__file__).resolve().parents[1]", id="another-modules-file"),
+    ],
+)
+def test_the_modules_own_directory_and_another_modules_file_are_not_climbs(path: str) -> None:
+    tree = ast.parse(f"from pathlib import Path\n\nPATH = {path}\n")
+
+    assert _lines_climbing_from_the_modules_own_file(tree) == [], f"{path} is found as a climb"
