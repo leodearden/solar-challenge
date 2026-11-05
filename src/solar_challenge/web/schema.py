@@ -155,6 +155,7 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         _schema_v1,
     ),
     _carrying(2),
+    _carrying(3),
 )
 """Every step of the store's schema, in order: MIGRATIONS[N - 1] is the step to version N."""
 

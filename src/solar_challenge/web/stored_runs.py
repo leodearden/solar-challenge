@@ -35,7 +35,8 @@ read_run_documents reads them, from the version before its own to its own. Its a
 pure, and applying it to its own result changes nothing and drops nothing. v2, the first,
 drops each key a document's dataclass does not have, by without_unknown_keys, as the reader
 skipped such keys before runs carried a format version, and reports each dropped value that is
-not null.
+not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
+dispatch ignores, and reports each value it changes.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` applies each step to every stored run's files and runs row
 through step_run_documents, which checks that the documents it brings forward will read once
@@ -738,12 +739,83 @@ def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
     _each_document(run_type, documents, read)
 
 
+_FORMAT_2_HOME_DISPATCH = ("greedy", "tou_optimized")
+"""The home dispatch strategies a run at format 2 could ask for by name; it dispatched any other as greedy."""
+
+_Changes = list[tuple[str, Any]]
+
+
+def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v3's step: *documents* with each home's config set to the dispatch its run ran by, and each value it changed.
+
+    A home run's config is one home's object and a fleet run's holds one in each item of its
+    homes; _home_as_it_ran brings each forward. The summaries and any content that is not such
+    an object are left as they are.
+    """
+    config = documents.config
+    changes: _Changes = []
+    if run_type == "home":
+        content = _home_as_it_ran(config.content, "", changes)
+    else:
+        content = _fleet_homes_as_they_ran(config.content, changes)
+    dropped = tuple(DroppedValue(config.run_id, config.name, field, value) for field, value in changes)
+    return StepResult(documents=replace(documents, config=replace(config, content=content)), dropped=dropped)
+
+
+def _fleet_homes_as_they_ran(config: Any, changes: _Changes) -> Any:
+    """A fleet run's *config* with each home of its homes brought forward by _home_as_it_ran, at homes[i]."""
+    if not isinstance(config, dict) or not isinstance(config.get("homes"), list):
+        return config
+    homes = [_home_as_it_ran(home, f"homes[{index}].", changes) for index, home in enumerate(config["homes"])]
+    return config if homes == config["homes"] else {**config, "homes": homes}
+
+
+def _home_as_it_ran(home: Any, path: str, changes: _Changes) -> Any:
+    """*home*, a stored HomeConfig object whose fields are named *path* + field, set to the dispatch its run ran by.
+
+    Each field it changes is appended to *changes* with its old value. A home dispatch_strategy
+    outside _FORMAT_2_HOME_DISPATCH ran greedy. A battery home asking for tou_optimized, whose
+    battery names no strategy, ran the tariff's rates when it had a tariff, which honours
+    grid_charging, and greedy when it had none. Otherwise its battery ran its own strategy,
+    self-consumption when it names none, which ignored grid_charging under self-consumption or
+    with no tariff.
+    """
+    if not isinstance(home, dict):
+        return home
+    strategy = home.get("dispatch_strategy")
+    if isinstance(strategy, str) and strategy not in _FORMAT_2_HOME_DISPATCH:
+        changes.append((f"{path}dispatch_strategy", strategy))
+        home = {**home, "dispatch_strategy": "greedy"}
+    battery = home.get("battery_config")
+    if not isinstance(battery, dict):
+        return home
+    battery_strategy, tariff = battery.get("dispatch_strategy"), home.get("tariff_config")
+    if home.get("dispatch_strategy") == "tou_optimized" and battery_strategy is None:
+        if tariff is not None:
+            return home
+        changes.append((f"{path}dispatch_strategy", "tou_optimized"))
+        home = {**home, "dispatch_strategy": "greedy"}
+    tag = battery_strategy.get("strategy_type") if isinstance(battery_strategy, dict) else "self_consumption"
+    grid_charging = battery.get("grid_charging")
+    if grid_charging is None or (tag != "self_consumption" and tariff is not None):
+        return home
+    changes.append((f"{path}battery_config.grid_charging", grid_charging))
+    return {**home, "battery_config": {**battery, "grid_charging": None}}
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
         "Drop each key of a stored run's documents that its dataclass no longer has, "
         "as runs were read before they carried a format version",
         _drop_unknown_keys,
+    ),
+    RunDocumentStep(
+        3,
+        "Read each stored home's dispatch as it ran: drop each battery's grid_charging that its run "
+        "ignored, under self-consumption dispatch or with no tariff, and read as greedy a home "
+        "dispatch_strategy its run did not dispatch by",
+        _dispatch_as_it_ran,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""
