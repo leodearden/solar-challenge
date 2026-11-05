@@ -36,7 +36,7 @@ pure, and applying it to its own result changes nothing and drops nothing. v2, t
 drops each key a document's dataclass does not have, by without_unknown_keys, as the reader
 skipped such keys before runs carried a format version, and reports each dropped value that is
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
-dispatch ignores, and reports each value it changes.
+dispatch ignores, and reports each value it rewrites, with the value it holds now.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` applies each step to every stored run's files and runs row
 through step_run_documents, which checks that the documents it brings forward will read once
@@ -642,6 +642,24 @@ class DroppedValue:
 
 
 @dataclass(frozen=True)
+class RewrittenValue:
+    """A value that a run-document step rewrote, a field its document still holds: the run's id, the document, the field's dotted path, the value it held and the one it holds now."""
+
+    run_id: str
+    document: str
+    field: str
+    was: Any
+    now: Any
+
+    def __str__(self) -> str:
+        """The rewritten value as `solar-challenge web migrate` reports it: the run, the document's field and both values, in JSON."""
+        return (
+            f"run {self.run_id!r}: {_refused_value(self.document, self.field)} was {json.dumps(self.was)}, "
+            f"now {json.dumps(self.now)}"
+        )
+
+
+@dataclass(frozen=True)
 class UnmigratedRun:
     """A stored run that a run-document step left as it was, as its documents cannot be brought to a format the strict reader reads.
 
@@ -666,10 +684,11 @@ class UnmigratedRun:
 
 @dataclass(frozen=True)
 class StepResult:
-    """What a run-document step made of a run's documents: the documents, brought forward, and each value it dropped that is not null."""
+    """What a run-document step made of a run's documents: the documents, brought forward, each value it dropped that is not null, and each value it rewrote."""
 
     documents: StoredRunDocuments
     dropped: tuple[DroppedValue, ...] = ()
+    rewritten: tuple[RewrittenValue, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -680,7 +699,7 @@ class RunDocumentStep:
         version: The format version the step's result is in.
         description: What the step changes, as `solar-challenge web migrate` reports it.
         apply: The documents of a run of a type, brought forward. It is pure: it changes none
-            of its input, and applying it to its own result changes nothing and drops nothing.
+            of its input, and applying it to its own result changes nothing, and drops and rewrites nothing.
     """
 
     version: int
@@ -742,12 +761,12 @@ def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
 _FORMAT_2_HOME_DISPATCH = ("greedy", "tou_optimized")
 """The home dispatch strategies a run at format 2 could ask for by name; it dispatched any other as greedy."""
 
-_FieldChange = tuple[str, Any]
-"""A field a step changed, as its dotted path, and the value it held before."""
+_FieldChange = tuple[str, Any, Any]
+"""A field a step rewrote, as its dotted path, the value it held before and the value it holds now."""
 
 
 def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """v3's step: *documents* with each home's config set to the dispatch its run ran by, and each value it changed.
+    """v3's step: *documents* with each home's config set to the dispatch its run ran by, and each value it rewrote.
 
     A home run's config is one home's object and a fleet run's holds one in each item of its
     homes; _home_as_it_ran brings each forward. The summaries and any content that is not such
@@ -758,8 +777,8 @@ def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> Ste
         content, changes = _home_as_it_ran(config.content)
     else:
         content, changes = _fleet_homes_as_they_ran(config.content)
-    dropped = tuple(DroppedValue(config.run_id, config.name, field, value) for field, value in changes)
-    return StepResult(documents=replace(documents, config=replace(config, content=content)), dropped=dropped)
+    rewritten = tuple(RewrittenValue(config.run_id, config.name, field, was, now) for field, was, now in changes)
+    return StepResult(documents=replace(documents, config=replace(config, content=content)), rewritten=rewritten)
 
 
 def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
@@ -768,9 +787,9 @@ def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
         return config, []
     brought_forward = [_home_as_it_ran(home) for home in config["homes"]]
     changes = [
-        (f"homes[{index}].{field}", value)
+        (f"homes[{index}].{field}", was, now)
         for index, (_, home_changes) in enumerate(brought_forward)
-        for field, value in home_changes
+        for field, was, now in home_changes
     ]
     if not changes:
         return config, []
@@ -791,7 +810,7 @@ def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
     changes: list[_FieldChange] = []
     strategy = home.get("dispatch_strategy")
     if isinstance(strategy, str) and strategy not in _FORMAT_2_HOME_DISPATCH:
-        changes.append(("dispatch_strategy", strategy))
+        changes.append(("dispatch_strategy", strategy, "greedy"))
         home = {**home, "dispatch_strategy": "greedy"}
     battery = home.get("battery_config")
     if not isinstance(battery, dict):
@@ -800,13 +819,13 @@ def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
     if home.get("dispatch_strategy") == "tou_optimized" and battery_strategy is None:
         if tariff is not None:
             return home, changes
-        changes.append(("dispatch_strategy", "tou_optimized"))
+        changes.append(("dispatch_strategy", "tou_optimized", "greedy"))
         home = {**home, "dispatch_strategy": "greedy"}
     tag = battery_strategy.get("strategy_type") if isinstance(battery_strategy, dict) else "self_consumption"
     grid_charging = battery.get("grid_charging")
     if grid_charging is None or (tag != "self_consumption" and tariff is not None):
         return home, changes
-    changes.append(("battery_config.grid_charging", grid_charging))
+    changes.append(("battery_config.grid_charging", grid_charging, None))
     return {**home, "battery_config": {**battery, "grid_charging": None}}, changes
 
 

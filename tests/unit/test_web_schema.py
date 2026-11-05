@@ -62,6 +62,7 @@ from solar_challenge.web.stored_runs import (
     RUN_KINDS,
     RUN_TYPES,
     DroppedValue,
+    RewrittenValue,
     RunType,
     StoredHomeRun,
     UnmigratedRun,
@@ -653,20 +654,20 @@ def _storage_of(database_path: Path) -> RunStorage:
 
 
 _PRE_787_FLEET_FIELDS_V3_CHANGES = (
-    ("homes[0].battery_config.grid_charging", {"target_soc_fraction": 0.8}),
-    ("homes[1].battery_config.grid_charging", {"target_soc_fraction": 0.8}),
-    ("homes[2].dispatch_strategy", "tou_optimized"),
-    ("homes[2].battery_config.grid_charging", {"target_soc_fraction": 0.8}),
+    ("homes[0].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
+    ("homes[1].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
+    ("homes[2].dispatch_strategy", "tou_optimized", "greedy"),
+    ("homes[2].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None),
 )
-"""Each field of pre_787_dispatch_fleet's config that v3 sets to the dispatch its home ran by, and the value it held."""
+"""Each field of pre_787_dispatch_fleet's config that v3 sets to the dispatch its home ran by, the value it held and the one it holds now."""
 
 
-def _values_v3_changes_in_the_pre_787_fleet(run_id: str) -> tuple[DroppedValue, ...]:
-    """The values migrate_store reports v3 changed in pre_787_dispatch_fleet, installed as run *run_id*: its config.json's, then its runs row's."""
+def _values_v3_changes_in_the_pre_787_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports v3 rewrote in pre_787_dispatch_fleet, installed as run *run_id*: its config.json's, then its runs row's."""
     return tuple(
-        DroppedValue(run_id, document, field, value)
+        RewrittenValue(run_id, document, field, was, now)
         for document in ("config.json", "runs.config_json")
-        for field, value in _PRE_787_FLEET_FIELDS_V3_CHANGES
+        for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
     )
 
 
@@ -681,7 +682,7 @@ def test_migrate_store_brings_a_store_at_version_1_to_the_schema_version_reporti
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        dropped_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
     )
     assert _user_version(store_at_version_1) == SCHEMA_VERSION
 
@@ -927,7 +928,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        dropped_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
     )
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
@@ -970,7 +971,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        dropped_values=_values_v3_changes_in_the_pre_787_fleet(pre_787),
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(pre_787),
     )
     for run_id, before in files_brought_forward.items():
         after = _files_of(_run_dir(store_at_version_1, run_id))
@@ -1000,9 +1001,12 @@ def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_it
     assert _files_of(stored_run_dir(storage, "home-1")) == files_before
 
 
-def test_a_migration_report_lists_each_value_dropped_and_each_run_left_unmigrated_after_the_steps(tmp_path: Path) -> None:
+def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "store.db"
     dropped = DroppedValue("run-1", "summary.json", "retired_figure", 12.5)
+    rewritten = RewrittenValue("run-3", "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy")
     unmigrated = UnmigratedRun(
         "run-2", "runs.summary_json", "total_generation_kwh", "is missing, and SummaryStatistics has no default for it"
     )
@@ -1013,6 +1017,7 @@ def test_a_migration_report_lists_each_value_dropped_and_each_run_left_unmigrate
         applied_steps=MIGRATIONS[1:],
         dropped_values=(dropped,),
         unmigrated_runs=(unmigrated,),
+        rewritten_values=(rewritten,),
     )
 
     lines = str(report).splitlines()
@@ -1024,11 +1029,14 @@ def test_a_migration_report_lists_each_value_dropped_and_each_run_left_unmigrate
     ]
     [dropped_line] = [line for line in lines if "run-1" in line]
     [unmigrated_line] = [line for line in lines if "run-2" in line]
+    [rewritten_line] = [line for line in lines if "run-3" in line]
     for named in ["summary.json", "retired_figure", "12.5"]:
         assert named in dropped_line, (named, dropped_line)
+    assert rewritten_line == '  run \'run-3\': config.json\'s homes[2].dispatch_strategy was "tou_optimized", now "greedy"'
+    assert lines[lines.index(rewritten_line) - 1].startswith("Rewrote each value below"), lines
     for named in ["runs.summary_json", "total_generation_kwh", unmigrated.reason]:
         assert named in unmigrated_line, (named, unmigrated_line)
-    assert len(steps) < lines.index(dropped_line) < lines.index(unmigrated_line)
+    assert len(steps) < lines.index(dropped_line) < lines.index(rewritten_line) < lines.index(unmigrated_line)
 
 
 RUNS_COLUMN_VALUES = [

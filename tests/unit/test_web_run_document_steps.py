@@ -41,6 +41,7 @@ from solar_challenge.web.stored_runs import (
     RUN_DOCUMENT_STEPS,
     RUN_FORMAT_VERSION,
     DroppedValue,
+    RewrittenValue,
     FleetRunConfig,
     RunDocumentStep,
     StoredDocument,
@@ -161,6 +162,7 @@ def test_every_step_is_idempotent_on_the_fixture(name: str) -> None:
 
         assert twice.documents == once.documents, f"step {step.version} changes its own result"
         assert twice.dropped == (), f"step {step.version} drops from its own result"
+        assert twice.rewritten == (), f"step {step.version} rewrites its own result"
         documents = once.documents
 
 
@@ -411,11 +413,12 @@ def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_
 
     result = _V3.apply("fleet", _documents_before(_V3, name))
 
-    assert result.dropped == (
-        DroppedValue(name, "config.json", "homes[0].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
-        DroppedValue(name, "config.json", "homes[1].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
-        DroppedValue(name, "config.json", "homes[2].dispatch_strategy", "tou_optimized"),
-        DroppedValue(name, "config.json", "homes[2].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
+    assert result.dropped == ()
+    assert result.rewritten == (
+        RewrittenValue(name, "config.json", "homes[0].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
+        RewrittenValue(name, "config.json", "homes[1].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
+        RewrittenValue(name, "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy"),
+        RewrittenValue(name, "config.json", "homes[2].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
     )
     assert result.documents.config.read(FleetRunConfig).homes == (
         _elm_row_home(
@@ -435,25 +438,28 @@ _RAN_DIFFERENTLY = [
     pytest.param(
         [(("battery_config", "dispatch_strategy"), {"strategy_type": "self_consumption"})],
         [(("battery_config", "grid_charging"), None)],
-        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None)],
         id="grid-charging-under-self-consumption",
     ),
     pytest.param(
         [(("tariff_config",), None)],
         [(("battery_config", "grid_charging"), None)],
-        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None)],
         id="grid-charging-without-a-tariff",
     ),
     pytest.param(
         [(("dispatch_strategy",), "tou_optimized"), (("battery_config", "dispatch_strategy"), None), (("tariff_config",), None)],
         [(("dispatch_strategy",), "greedy"), (("battery_config", "grid_charging"), None)],
-        [("dispatch_strategy", "tou_optimized"), ("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        [
+            ("dispatch_strategy", "tou_optimized", "greedy"),
+            ("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
+        ],
         id="home-tou-optimized-without-a-tariff",
     ),
     pytest.param(
         [(("dispatch_strategy",), "tou_optimised")],
         [(("dispatch_strategy",), "greedy")],
-        [("dispatch_strategy", "tou_optimised")],
+        [("dispatch_strategy", "tou_optimised", "greedy")],
         id="unknown-home-dispatch-strategy",
     ),
 ]
@@ -461,13 +467,14 @@ _RAN_DIFFERENTLY = [
 
 @pytest.mark.parametrize(("edits", "as_it_ran", "reported"), _RAN_DIFFERENTLY)
 def test_v3_reads_a_home_run_s_dispatch_as_it_ran_reporting_each_value_it_changes(
-    edits: list[tuple[Keys, Any]], as_it_ran: list[tuple[Keys, Any]], reported: list[tuple[str, Any]]
+    edits: list[tuple[Keys, Any]], as_it_ran: list[tuple[Keys, Any]], reported: list[tuple[str, Any, Any]]
 ) -> None:
     result = _V3.apply("home", _home_run_before_v3(*edits))
 
     assert result.documents == _home_run_before_v3(*edits, *as_it_ran)
-    assert result.dropped == tuple(
-        DroppedValue("pre_786_dispatch_home", "config.json", field, value) for field, value in reported
+    assert result.dropped == ()
+    assert result.rewritten == tuple(
+        RewrittenValue("pre_786_dispatch_home", "config.json", field, was, now) for field, was, now in reported
     )
 
 
