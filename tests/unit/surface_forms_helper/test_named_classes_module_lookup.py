@@ -645,7 +645,7 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
     assert auditing.__file__ in str(raised.value)
 
 
-def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry_from_an_error_naming_that_module_raised_from_the_error_inspect_raised(
+def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry_from_an_error_naming_the_module_with_no_source_raised_from_the_error_inspect_raised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Of the functions collections.namedtuple wrote into Point, __new__ carries the globals of a namespace named 'namedtuple_Point' and the others collections', so none of them carries unsourced's."""
