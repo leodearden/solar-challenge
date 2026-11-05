@@ -87,9 +87,6 @@ def test_mobile_menu_opens(page: Page, live_server: str) -> None:
     hamburger = page.locator('button[aria-label="Open menu"]')
     hamburger.click()
 
-    # Wait for the slide-in transition
-    page.wait_for_timeout(400)
-
     # The mobile sidebar (the <aside> with class "lg:hidden" that has
     # x-show="mobileMenuOpen") should now be visible
     mobile_sidebar = page.locator("aside.lg\\:hidden")
