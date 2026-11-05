@@ -27,6 +27,7 @@ from typing import Any, Optional
 
 from solar_challenge.config import detect_fleet_sweep_spec, load_config, parse_fleet_config, parse_sweep_fleet_configs
 from solar_challenge.home import HomeConfig
+from tests._repository_paths import REPOSITORY_ROOT
 
 SHIPPED_FLEETS: tuple[str, ...] = (
     "scenarios/bristol-phase1.yaml",
@@ -142,12 +143,11 @@ def _component_record(
 
 
 def main() -> None:
-    """Write the golden of every pinned fleet, generated in the current directory, which must be the worktree root."""
-    project_root = Path.cwd()
+    """Write the golden of every pinned fleet of the checkout at REPOSITORY_ROOT."""
     for fleet in PINNED_FLEETS:
-        path = golden_path(project_root, fleet)
+        path = golden_path(REPOSITORY_ROOT, fleet)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(golden_text(fleet_pin(project_root, fleet)), encoding="utf-8")
+        path.write_text(golden_text(fleet_pin(REPOSITORY_ROOT, fleet)), encoding="utf-8")
         print(path)
 
 
