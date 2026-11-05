@@ -41,7 +41,7 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HOME_DISPATCH_STRATEGIES, HomeConfig
+from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
@@ -326,10 +326,9 @@ class FleetDistributionConfig:
                 f"FleetDistributionConfig: random_order must be "
                 f"{' or '.join(repr(order) for order in _RANDOM_ORDERS)}, got '{self.random_order}'"
             )
-        if self.dispatch_strategy is not None and self.dispatch_strategy not in HOME_DISPATCH_STRATEGIES:
-            raise ConfigurationError(
-                f"FleetDistributionConfig: dispatch_strategy must be "
-                f"{' or '.join(repr(name) for name in HOME_DISPATCH_STRATEGIES)} or None, got {self.dispatch_strategy!r}"
+        if self.dispatch_strategy is not None:
+            refuse_unknown_home_dispatch_strategy(
+                self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
@@ -1289,18 +1288,13 @@ def _read_dispatch_strategy_key(block: Mapping[str, Any], *, block_path: str) ->
     """The dispatch_strategy the block at *block_path* sets: None when it is absent or null, else one of HOME_DISPATCH_STRATEGIES.
 
     Raises:
-        ConfigurationError: It is set to another value, naming its key's path, the value and the
-            valid values.
+        ConfigurationError: It is set to another value, as refuse_unknown_home_dispatch_strategy
+            refuses it, naming its key's path.
     """
     value = block.get("dispatch_strategy")
     if value is None:
         return None
-    if not isinstance(value, str) or value not in HOME_DISPATCH_STRATEGIES:
-        raise ConfigurationError(
-            f"Invalid {_child_path(block_path, 'dispatch_strategy')} {value!r}; "
-            f"valid values: {sorted(HOME_DISPATCH_STRATEGIES)}"
-        )
-    return value
+    return refuse_unknown_home_dispatch_strategy(value, field=_child_path(block_path, "dispatch_strategy"))
 
 
 def parse_home_block(

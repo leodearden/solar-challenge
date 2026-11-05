@@ -14,7 +14,13 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import PeakShavingStrategyConfig, SelfConsumptionStrategy, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.home import HOME_DISPATCH_STRATEGIES, HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import (
+    HOME_DISPATCH_STRATEGIES,
+    HomeConfig,
+    SimulationResults,
+    refuse_unknown_home_dispatch_strategy,
+    simulate_home,
+)
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
@@ -163,3 +169,14 @@ def test_a_home_dispatch_strategy_it_cannot_dispatch_by_is_refused(value: object
 
     for named in ["dispatch_strategy", repr(value), "'greedy'", "'tou_optimized'"]:
         assert named in str(refused.value), (named, str(refused.value))
+
+
+@pytest.mark.parametrize("value", ["tou_optimised", "", None, 3, {"strategy_type": "tou_optimized"}], ids=repr)
+def test_the_home_dispatch_vocabulary_refusal_names_the_field_the_value_and_the_valid_values(value: object) -> None:
+    """The one refusal HomeConfig, FleetDistributionConfig and the scenario grammar's block reader each raise, under the field it is given."""
+    with pytest.raises(ConfigurationError) as refused:
+        refuse_unknown_home_dispatch_strategy(value, field="homes[2].dispatch_strategy")
+
+    assert str(refused.value) == (
+        f"Invalid homes[2].dispatch_strategy {value!r}; valid values: ['greedy', 'tou_optimized']"
+    )

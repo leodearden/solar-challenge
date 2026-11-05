@@ -31,6 +31,17 @@ HOME_DISPATCH_STRATEGIES: tuple[str, ...] = ("greedy", "tou_optimized")
 """The values of HomeConfig.dispatch_strategy, the dispatch a home asks for by name."""
 
 
+def refuse_unknown_home_dispatch_strategy(value: object, *, field: str) -> str:
+    """Return *value*, given for the home dispatch strategy that *field* names, refusing it unless it is one of HOME_DISPATCH_STRATEGIES.
+
+    Raises:
+        ConfigurationError: "Invalid <field> <value!r>; valid values: [...]".
+    """
+    if not isinstance(value, str) or value not in HOME_DISPATCH_STRATEGIES:
+        raise ConfigurationError(f"Invalid {field} {value!r}; valid values: {sorted(HOME_DISPATCH_STRATEGIES)}")
+    return value
+
+
 @dataclass(frozen=True)
 class HomeConfig:
     """Configuration for a single home simulation.
@@ -69,14 +80,8 @@ class HomeConfig:
     """
 
     def __post_init__(self) -> None:
-        if self.dispatch_strategy not in HOME_DISPATCH_STRATEGIES:
-            raise ConfigurationError.must_be(
-                "dispatch_strategy",
-                f"one of {' or '.join(repr(name) for name in HOME_DISPATCH_STRATEGIES)}",
-                got=self.dispatch_strategy,
-            )
-        battery = self.battery_config
-        if battery is None:
+        refuse_unknown_home_dispatch_strategy(self.dispatch_strategy, field="dispatch_strategy")
+        if self.battery_config is None:
             return
         if _runs_tariff_tou(self):
             if self.tariff_config is None:
@@ -85,17 +90,31 @@ class HomeConfig:
                     "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
                 )
             return
-        build_dispatch_strategy(
-            battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
-            grid_charging=battery.grid_charging,
-            tariff=self.tariff_config,
-        )
+        _configured_strategy(self)
 
 
 def _runs_tariff_tou(config: HomeConfig) -> bool:
-    """Whether the home asks for tou_optimized and its battery, if any, names no strategy of its own: the tariff-rate TOU path's homes."""
+    """Whether the home asks for the tariff-rate TOU path: tou_optimized, and its battery, if any, names no strategy of its own.
+
+    The home runs that path only when it has a tariff.
+    """
     return config.dispatch_strategy == "tou_optimized" and (
         config.battery_config is None or config.battery_config.dispatch_strategy is None
+    )
+
+
+def _configured_strategy(config: HomeConfig) -> DispatchStrategy:
+    """The strategy the home's battery names, self-consumption when it names none or there is no battery, built for its grid_charging at the home's tariff.
+
+    Raises:
+        ConfigurationError: build_dispatch_strategy refuses the battery's grid_charging, which
+            the strategy would ignore.
+    """
+    battery = config.battery_config
+    return build_dispatch_strategy(
+        (None if battery is None else battery.dispatch_strategy) or SelfConsumptionStrategyConfig(),
+        grid_charging=None if battery is None else battery.grid_charging,
+        tariff=config.tariff_config,
     )
 
 
@@ -464,13 +483,7 @@ def _dispatch_path(
         return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
     if _runs_tariff_tou(config) and tariff is not None:
         return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
-    battery = config.battery_config
-    battery_strategy = None if battery is None else battery.dispatch_strategy
-    strategy = build_dispatch_strategy(
-        battery_strategy or SelfConsumptionStrategyConfig(),
-        grid_charging=None if battery is None else battery.grid_charging,
-        tariff=tariff,
-    )
+    strategy = _configured_strategy(config)
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
 
 

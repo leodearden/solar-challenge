@@ -359,7 +359,7 @@ class TestFleetDistributionConfig:
                 n_homes=1, pv=ComponentDistribution({"capacity_kw": 4.0}), dispatch_strategy="tou_optimised"
             )
 
-        for named in ["FleetDistributionConfig: dispatch_strategy", "'tou_optimised'", "'greedy'", "'tou_optimized'"]:
+        for named in ["FleetDistributionConfig.dispatch_strategy", "'tou_optimised'", "'greedy'", "'tou_optimized'"]:
             assert named in str(refused.value), (named, str(refused.value))
 
     @pytest.mark.parametrize("dispatch_strategy", [None, "greedy", "tou_optimized"])
