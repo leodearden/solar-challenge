@@ -308,6 +308,14 @@ def class_statement(cls: type) -> ast.ClassDef | None:
     )
 
 
+def missing_class_statement(cls: type) -> str:
+    """What the helper's errors say where class_statement returns None for *cls*: that the source of the module defining_module gives for *cls* holds no class statement under *cls*'s qualified name."""
+    return (
+        f"the source of the module {defining_module(cls).__name__!r} holds no class statement "
+        f"under the qualified name {cls.__qualname__!r}"
+    )
+
+
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:
     """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them.
 

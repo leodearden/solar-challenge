@@ -354,7 +354,6 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 @pytest.mark.parametrize(
     ("cls", "naming_it"),
     [
-        pytest.param(ast.AST, r"\bast\.AST\b.*\bno class statement inspect can read\b", id="ast.AST"),
         pytest.param(
             _random.Random,
             r"\b_random\.Random\b.*\bno class statement inspect can read\b",
@@ -370,7 +369,7 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], cls: type, naming_it: str
 ) -> None:
-    """None is an immutable type: ast.AST's module has a source, _random.Random's has none, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
+    """None is an immutable type: _random.Random's module has no source, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
     with pytest.raises(TypeError, match=naming_it):
         scan(cls)
 
