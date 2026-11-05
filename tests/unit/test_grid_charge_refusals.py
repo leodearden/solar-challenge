@@ -9,6 +9,7 @@ settings that ran storing 0 kWh from the grid, with no warning.
 import dataclasses
 import datetime
 import warnings
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
@@ -62,11 +63,15 @@ def _simulate_the_day(home: HomeConfig) -> SimulationResults:
 _PEAK_SHAVING = PeakShavingStrategyConfig(import_limit_kw=3.0)
 
 # Each home whose dispatch grid-charges, by its id, with the strategy its results name.
-_HONOURED: dict[str, tuple[HomeConfig, str]] = {
-    "home-tou_optimized-on-e7": (_home(_battery(), tariff=_E7, dispatch_strategy="tou_optimized"), "tou_optimized"),
-    "battery-peak_shaving-on-e7": (_home(_battery(_PEAK_SHAVING), tariff=_E7), "peak_shaving"),
+# Each test builds its home, so a home refused by mistake fails its own cases and not the module's collection.
+_HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
+    "home-tou_optimized-on-e7": (
+        lambda: _home(_battery(), tariff=_E7, dispatch_strategy="tou_optimized"),
+        "tou_optimized",
+    ),
+    "battery-peak_shaving-on-e7": (lambda: _home(_battery(_PEAK_SHAVING), tariff=_E7), "peak_shaving"),
     "both-levels-the-battery-s-strategy-wins": (
-        _home(_battery(_PEAK_SHAVING), tariff=_E7, dispatch_strategy="tou_optimized"),
+        lambda: _home(_battery(_PEAK_SHAVING), tariff=_E7, dispatch_strategy="tou_optimized"),
         "peak_shaving",
     ),
 }
@@ -116,18 +121,20 @@ def test_a_home_whose_dispatch_would_ignore_its_grid_charging_is_refused_when_bu
         assert name in str(refused.value), (name, str(refused.value))
 
 
-@pytest.mark.parametrize(("home", "strategy_name"), list(_HONOURED.values()), ids=list(_HONOURED))
+@pytest.mark.parametrize(("build_home", "strategy_name"), list(_HONOURED.values()), ids=list(_HONOURED))
 def test_a_home_whose_dispatch_honours_its_grid_charging_charges_from_the_grid(
-    home: HomeConfig, strategy_name: str
+    build_home: Callable[[], HomeConfig], strategy_name: str
 ) -> None:
-    results = _simulate_the_day(home)
+    results = _simulate_the_day(build_home())
 
     assert results.strategy_name == strategy_name
     assert calculate_summary(results).total_grid_charge_kwh > 0
 
 
-@pytest.mark.parametrize("home", [home for home, _ in _HONOURED.values()], ids=list(_HONOURED))
-def test_an_honoured_home_without_its_tariff_is_refused(home: HomeConfig) -> None:
+@pytest.mark.parametrize("build_home", [build for build, _ in _HONOURED.values()], ids=list(_HONOURED))
+def test_an_honoured_home_without_its_tariff_is_refused(build_home: Callable[[], HomeConfig]) -> None:
+    home = build_home()
+
     with pytest.raises(ConfigurationError, match="tariff"):
         dataclasses.replace(home, tariff_config=None)
 
