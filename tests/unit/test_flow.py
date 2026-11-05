@@ -863,6 +863,29 @@ class TestSimulateTimestepGridCharge:
         assert result_none.grid_import == pytest.approx(result_omit.grid_import)
         assert result_none.self_consumption == pytest.approx(result_omit.self_consumption)
 
+    def test_a_decision_that_charges_from_pv_and_the_grid_stores_the_pv_charge_first_when_the_battery_cannot_take_both(
+        self,
+    ) -> None:
+        """The PV charge runs before the grid charge, so when the battery has room for only part of the two, PV takes it and the grid stores nothing."""
+        battery = Battery(
+            BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5),
+            initial_soc_kwh=4.0,
+        )
+        stub = _RecordingStrategy(charge_kw=1.0, grid_charge_kw=1.0)
+
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.0,
+            battery=battery,
+            timestep_minutes=60,
+            strategy=stub,
+        )
+
+        assert result.grid_charge == 0.0
+        assert result.grid_import == 0.0
+        assert result.battery_soc == pytest.approx(battery.max_soc_kwh)
+        assert result.grid_export < 1.0
+
 
 # ---------------------------------------------------------------------------
 # EnergyFlowResult.grid_charge field
