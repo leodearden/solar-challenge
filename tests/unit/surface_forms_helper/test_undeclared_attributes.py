@@ -591,3 +591,47 @@ def test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attr
     )
 
     assert scan(awaiting.Local) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, {"site"}, id="undeclared_attributes"),
+        pytest.param(unset_attributes, set(), id="unset_attributes"),
+    ],
+)
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param("    if True:\n", id="an-if-block"),
+        pytest.param(
+            "    try:\n        raise LookupError\n    except LookupError:\n", id="an-except-handler"
+        ),
+        pytest.param("    match 'roof':\n      case str():\n", id="a-match-case"),
+        pytest.param("    with contextlib.nullcontext():\n", id="a-with-block"),
+    ],
+)
+def test_an_initialiser_the_class_body_defines_in_a_block_of_another_statement_is_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    block: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "blocking",
+        "import contextlib\n"
+        "\n"
+        "class Meter:\n"
+        "    rate: float\n"
+        "\n"
+        + block
+        + "        def __init__(self) -> None:\n"
+        "            self.rate = 1.0\n"
+        "            self.site = 'roof'\n",
+    )
+
+    assert vars(blocking.Meter()).keys() == {"rate", "site"}
+    assert scan(blocking.Meter) == expected
