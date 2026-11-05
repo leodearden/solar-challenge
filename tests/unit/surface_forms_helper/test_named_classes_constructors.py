@@ -333,7 +333,7 @@ def test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_d
 
 
 @pytest.mark.parametrize(
-    ("source", "constructor"),
+    "source",
     [
         pytest.param(
             "from dataclasses import dataclass\n"
@@ -352,7 +352,6 @@ def test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_d
             "    @dataclass\n"
             "    class Submeter(Meter):\n"
             "        def __init__(self, tap: 'Tap') -> None: ...\n",
-            r"decoyed\.Submeter\.__init__",
             id="exec-written-def-below-a-stub-under-type-checking",
         ),
         pytest.param(
@@ -369,20 +368,20 @@ def test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_d
             "\n"
             "init = Submeter.__init__\n"
             "init.__code__ = init.__code__.replace(co_qualname='Submeter.__init__')\n",
-            r"\S+\.Submeter\.__init__",
             id="generated-code-renamed",
         ),
     ],
 )
 def test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str, constructor: str
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str
 ) -> None:
     imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
     decoyed = imported_module(tmp_path, monkeypatch, "decoyed", source)
 
     with pytest.raises(
         TypeError,
-        match=rf"^decoyed\.Submeter is constructed through {constructor}, which carries the "
+        match=r"^decoyed\.Submeter is constructed through "
+        r"decoyed\.Submeter\.__init__, which carries the "
         r"name the dataclass decorator gives the __init__ it writes into decoyed\.Submeter, "
         r"and its code carries the qualified name 'Submeter\.__init__', as for a function a "
         r"def statement in a class body wrote, but inspect reads no source for it\b"
