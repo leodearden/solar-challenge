@@ -78,32 +78,32 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
 
 
 @pytest.mark.parametrize(
-    ("battery", "tariff", "dispatch_strategy", "named"),
+    ("battery_strategy", "tariff", "dispatch_strategy", "named"),
     [
-        pytest.param(_battery(), None, "greedy", ["grid_charging", "self_consumption"], id="default-dispatch"),
+        pytest.param(None, None, "greedy", ["grid_charging", "self_consumption"], id="default-dispatch"),
         pytest.param(
-            _battery(SelfConsumptionStrategyConfig()),
+            SelfConsumptionStrategyConfig(),
             None,
             "greedy",
             ["grid_charging", "self_consumption"],
             id="battery-self_consumption",
         ),
         pytest.param(
-            _battery(SelfConsumptionStrategyConfig()),
+            SelfConsumptionStrategyConfig(),
             _E7,
             "greedy",
             ["grid_charging", "self_consumption"],
             id="battery-self_consumption-on-e7",
         ),
         pytest.param(
-            _battery(),
+            None,
             None,
             "tou_optimized",
             ["dispatch_strategy 'tou_optimized'", "tariff"],
             id="home-tou_optimized-without-a-tariff",
         ),
         pytest.param(
-            _battery(_PEAK_SHAVING),
+            _PEAK_SHAVING,
             None,
             "greedy",
             ["grid_charging", "peak_shaving", "tariff"],
@@ -112,8 +112,13 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
     ],
 )
 def test_a_home_whose_dispatch_would_ignore_its_grid_charging_is_refused_when_built(
-    battery: BatteryConfig, tariff: TariffConfig | None, dispatch_strategy: str, named: list[str]
+    battery_strategy: DispatchStrategyConfig | None,
+    tariff: TariffConfig | None,
+    dispatch_strategy: str,
+    named: list[str],
 ) -> None:
+    battery = _battery(battery_strategy)
+
     with pytest.raises(ConfigurationError) as refused:
         _home(battery, tariff=tariff, dispatch_strategy=dispatch_strategy)
 
