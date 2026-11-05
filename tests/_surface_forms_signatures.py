@@ -1315,12 +1315,18 @@ def _refuse_constructor_its_generator_records_unwritten(
     """
     if not constructor.writes(holder):
         raise TypeError(
-            f"{label_of(cls)} is constructed through {label_of(author)}, which carries the "
-            f"name {constructor.generator.label} gives the {constructor.name} it writes, "
-            f"though its record of {label_of(holder)} says it writes none there, so no module "
-            "is known to spell its parameters: make the name private, or define "
-            f"{constructor.name} with def"
+            f"{_generated_name_clause(cls, author, constructor)}, though its record of "
+            f"{label_of(holder)} says it writes none there, so no module is known to spell its "
+            f"parameters: make the name private, or define {constructor.name} with def"
         )
+
+
+def _generated_name_clause(cls: type, author: object, constructor: _GeneratedConstructor) -> str:
+    """The clause opening a refusal of *cls*, constructed through *author*, that states *author* carries the name *constructor*'s generator gives the constructor it writes."""
+    return (
+        f"{label_of(cls)} is constructed through {label_of(author)}, which carries the name "
+        f"{constructor.generator.label} gives the {constructor.name} it writes"
+    )
 
 
 def _defined_in_body(
@@ -1398,16 +1404,14 @@ def _refuse_def_written_member_of_another_class_statement(
         return
     module = defining_module(holder).__name__
     raise TypeError(
-        f"{label_of(cls)} is constructed through {label_of(function)}, which carries the "
-        f"name {constructor.generator.label} gives the {constructor.name} it writes into "
-        f"{label_of(holder)}, and its code carries the qualified name "
-        f"{function.__code__.co_qualname!r}, as for a function a def statement in a class "
-        "body wrote, but inspect reads no source for it, though it reads one for each "
-        f"function a def statement in the source of the module {module!r} wrote, so the "
-        f"class statement that source holds under the qualified name {holder.__qualname__!r} "
-        f"may not be the one that defined {label_of(holder)}, and whether that one defines "
-        f"{constructor.name} is not known: make the name private, or define "
-        f"{label_of(holder)} by the class statement that source holds"
+        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and its "
+        f"code carries the qualified name {function.__code__.co_qualname!r}, as for a function "
+        "a def statement in a class body wrote, but inspect reads no source for it, though it "
+        f"reads one for each function a def statement in the source of the module {module!r} "
+        "wrote, so the class statement that source holds under the qualified name "
+        f"{holder.__qualname__!r} may not be the one that defined {label_of(holder)}, and "
+        f"whether that one defines {constructor.name} is not known: make the name private, or "
+        f"define {label_of(holder)} by the class statement that source holds"
     )
 
 
@@ -1444,12 +1448,11 @@ def _refuse_def_written_member_of_statementless_class(
     else:
         return
     raise TypeError(
-        f"{label_of(cls)} is constructed through {label_of(function)}, which carries the "
-        f"name {constructor.generator.label} gives the {constructor.name} it writes into "
-        f"{label_of(holder)}, and {evidence}, but the source of the module {module!r} holds "
-        f"no class statement under the qualified name {holder.__qualname__!r}, so whether "
-        f"the class statement that defined {label_of(holder)} defines {constructor.name} is "
-        f"not known: make the name private, or {remedy}"
+        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and "
+        f"{evidence}, but the source of the module {module!r} holds no class statement under "
+        f"the qualified name {holder.__qualname__!r}, so whether the class statement that "
+        f"defined {label_of(holder)} defines {constructor.name} is not known: make the name "
+        f"private, or {remedy}"
     )
 
 
