@@ -1026,10 +1026,13 @@ No rule reads such a class alike on every minor. A uniform reading would have to
 3.11's calling module from a record, and none names it: a search of `sys.modules` for a
 module that binds the class would be a guess, which a re-export, as
 `from making import Made` makes one, leaves ambiguous. A uniform refusal would need a
-record that tells the class `make_dataclass` makes on 3.12 and 3.13 from one
-`dataclass(type(...))` makes, and none does there: refusing every dataclass with no class
-statement would drop a reading that is alike on every minor. So the refusal is 3.11's
-alone.
+record that tells the class `make_dataclass` makes from one `dataclass(type(...))` makes.
+On 3.12 and 3.13 none does. On 3.14 the two store their annotations differently, the one
+`make_dataclass` makes holding `__annotate_func__` and `__annotations_cache__` in its own
+namespace and the other `__annotations__`, but the helper reads the two alike, and a
+refusal keyed on that would still leave 3.12 and 3.13 reading the class. Refusing every
+dataclass with no class statement would drop a reading that is alike on every minor. So
+the refusal is 3.11's alone.
 
 For a class whose `__module__` names a module that never bound it, the error's remedy is
 to assign the class the `__module__` of the module that binds it under its qualified name,
