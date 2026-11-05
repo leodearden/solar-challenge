@@ -295,6 +295,26 @@ def test_web_migrate_brings_the_runs_of_a_store_at_version_1_forward_reporting_e
     assert _a_line_naming(result.stdout, lacking, "summary.json", "total_generation_kwh"), result.stdout
 
 
+def test_web_migrate_reports_each_value_v3_rewrites_in_the_pre_787_fleet_with_the_value_it_holds_now(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """v3's values are rewritten, not dropped: each line says what the field holds now, under a heading that says so."""
+    run_id = legacy_run_ids["pre_787_dispatch_fleet"]
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    heading = lines.index("Rewrote each value below to the setting its run actually ran by:")
+    rewritten = [line for line in lines[heading + 1 :] if line.startswith(f"  run {run_id!r}: ")]
+    assert f"  run {run_id!r}: config.json's homes[2].dispatch_strategy was \"tou_optimized\", now \"greedy\"" in rewritten
+    assert (
+        f"""  run {run_id!r}: config.json's homes[0].battery_config.grid_charging was {{"target_soc_fraction": 0.8}}, now null"""
+        in rewritten
+    )
+    assert not any(run_id in line for line in lines[:heading]), result.stdout
+
+
 def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_step_and_the_fault(
     legacy_run_ids: dict[str, str], tmp_path: Path
 ) -> None:

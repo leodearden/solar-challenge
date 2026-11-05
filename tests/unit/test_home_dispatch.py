@@ -13,7 +13,14 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import PeakShavingStrategyConfig, SelfConsumptionStrategy, TOUOptimizedStrategyConfig
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.home import (
+    HOME_DISPATCH_STRATEGIES,
+    HomeConfig,
+    SimulationResults,
+    refuse_unknown_home_dispatch_strategy,
+    simulate_home,
+)
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
@@ -46,9 +53,9 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
             id="tou_optimized-with-a-tariff-and-no-battery",
         ),
         pytest.param(
-            dataclasses.replace(_TOU_HOME, tariff_config=None),
+            dataclasses.replace(_TOU_HOME, tariff_config=None, battery_config=None),
             "self_consumption",
-            id="tou_optimized-without-a-tariff",
+            id="tou_optimized-without-a-tariff-or-a-battery",
         ),
         pytest.param(
             dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"),
@@ -143,3 +150,33 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
     assert (results.battery_discharge > 0).any()
     assert results.window == window
     pd.testing.assert_series_equal(results.demand, load_profile, check_names=False, rtol=1e-12, atol=0.0)
+
+
+def test_a_home_dispatches_by_name_greedy_or_tou_optimized() -> None:
+    assert HOME_DISPATCH_STRATEGIES == ("greedy", "tou_optimized")
+
+
+@pytest.mark.parametrize("battery", [BatteryConfig(capacity_kwh=5.0), None], ids=["a-battery", "no-battery"])
+@pytest.mark.parametrize("value", ["tou_optimised", "self_consumption", None, 3], ids=repr)
+def test_a_home_dispatch_strategy_it_cannot_dispatch_by_is_refused(value: object, battery: BatteryConfig | None) -> None:
+    with pytest.raises(ConfigurationError) as refused:
+        HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+            battery_config=battery,
+            dispatch_strategy=value,
+        )
+
+    for named in ["dispatch_strategy", repr(value), "'greedy'", "'tou_optimized'"]:
+        assert named in str(refused.value), (named, str(refused.value))
+
+
+@pytest.mark.parametrize("value", ["tou_optimised", "", None, 3, {"strategy_type": "tou_optimized"}], ids=repr)
+def test_the_home_dispatch_vocabulary_refusal_names_the_field_the_value_and_the_valid_values(value: object) -> None:
+    """The one refusal HomeConfig, FleetDistributionConfig and the scenario grammar's block reader each raise, under the field it is given."""
+    with pytest.raises(ConfigurationError) as refused:
+        refuse_unknown_home_dispatch_strategy(value, field="homes[2].dispatch_strategy")
+
+    assert str(refused.value) == (
+        f"Invalid homes[2].dispatch_strategy {value!r}; valid values: ['greedy', 'tou_optimized']"
+    )

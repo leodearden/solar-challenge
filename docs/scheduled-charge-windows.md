@@ -72,9 +72,23 @@ decides it, given every argument unchanged.
 `ChargeWindow` and `ScheduledChargeStrategy` are outside `solar_challenge.__all__`, so
 import them from `solar_challenge.dispatch`. `simulate_home`'s keyword-only `strategy` runs
 the battery under them in place of the dispatch the `HomeConfig` selects, through
-`flow.simulate_timestep` at the home's tariff; the windows therefore grid-charge only on a
-home with a tariff and `BatteryConfig.grid_charging`. The results' `strategy_name` is the
+`flow.simulate_timestep` at the home's tariff. The results' `strategy_name` is the
 strategy's name, `scheduled_charge(<base name>)`.
+
+The windows grid-charge only on a home with a tariff and `BatteryConfig.grid_charging`
+(rule 1). `HomeConfig` refuses that `grid_charging` when the home is built unless the
+dispatch the home selects itself grid-charges (task 787). The home must therefore select
+one, which `strategy` then replaces: either `dispatch_strategy='tou_optimized'` with a
+tariff and a battery that names no strategy, as `scenarios/bristol-arbitrage.yaml`'s home
+does, or a battery `tou_optimized` or `peak_shaving` strategy. A home on the default
+`'greedy'` dispatch whose battery names no strategy is refused with a `ConfigurationError`
+naming `grid_charging` and `self_consumption`. That refusal's first remedy, "remove
+grid_charging", is the wrong one on this path: the windows are then offered no
+`GridChargeContext`, so they hold and never grid-charge.
+
+The `home` below is such a home, e.g. bristol-arbitrage's, which
+[`tests/_bristol_arbitrage_home.py`](../tests/_bristol_arbitrage_home.py) reads as `home run`
+does.
 
 ```python
 from datetime import time, timedelta

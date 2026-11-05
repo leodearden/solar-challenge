@@ -8,7 +8,6 @@ fleet page's counterpart of builder_form.py.
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
-from functools import partial
 from types import MappingProxyType
 from typing import Any
 
@@ -27,6 +26,8 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     apply_fleet_overlay,
@@ -85,25 +86,26 @@ class ParsedFleetForm:
 def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     """The fleet the fleet *form* describes, as POST /api/simulate/fleet-from-distribution runs it, with its scenario document.
 
-    The form's distributions are the fleet_distribution: block in config.py's grammar, from
-    which the homes are generated at the form's location.  Every home gets the form's
-    tariff and SEG, and every home with a battery its dispatch strategy.  The document
-    writes the form's name only when it can name a run, the tariff: and seg: blocks as
-    given, null when the form sends none, and the dispatch strategy in the battery block,
-    where load_fleet_config gives it to every battery; a form without a battery gives it
-    to none.
+    The form's distributions, with its dispatch strategy in the battery block, are the
+    fleet_distribution: block in config.py's grammar that the document writes, where
+    load_fleet_config gives that strategy to every battery; a form without a battery gives
+    it to none.  The homes are generated once from that block at the form's location, each
+    with the form's tariff, and are then given its SEG.  The document writes the form's
+    name only when it can name a run, and the tariff: and seg: blocks as given, null when
+    the form sends none.
 
     The form's six blocks, the pv, battery and load distributions and the tariff,
     dispatch_strategy and seg overlays, share one presence rule: absent or null means none,
     which pv and load refuse as a missing distribution, and any other value must be a
     mapping its grammar reads.
 
-    Each value is read once, as given, by the reader the loaders read it with, so the
-    simulate endpoint and the export, which both read the form here, refuse it at the same
-    value with the same message.  A form with a top-level key the fleet form does not have
-    is refused, naming it, before any value is read.  The values are read in the order
-    Raises lists them, the name first, and every one before any home is generated, so a
-    value a reader refuses costs no home generation.
+    Each value is read as given by the reader the loaders read it with, so the simulate
+    endpoint and the export, which both read the form here, refuse it at the same value
+    with the same message.  A form with a top-level key the fleet form does not have is
+    refused, naming it, before any value is read.  The values are read in the order Raises
+    lists them, the name first, and every one before any home is generated, so a value a
+    reader refuses costs no home generation; the block the homes are generated from is
+    read last, when each of its values has been accepted.
 
     Raises:
         ValueError: For a top-level key the fleet form does not have, naming each one and
@@ -120,23 +122,24 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     refuse_unencodable_text(sent_name, "name")
     name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(dict(form))
-    fleet = parse_fleet_distribution_config(distribution)
+    parse_fleet_distribution_config(distribution)
     location = _fleet_form_location(form)
-    apply_overlay = _read_fleet_overlay(form)
+    overlay = _read_fleet_overlay(form)
     start, end = parse_date_range(form)
-    homes = apply_overlay(generate_homes_from_distribution(fleet, location))
+    fleet_distribution = _with_battery_dispatch_strategy(distribution, form.get("dispatch_strategy"))
+    homes = generate_homes_from_distribution(
+        parse_fleet_distribution_config(fleet_distribution), location, fleet_tariff=overlay.tariff_config
+    )
     return ParsedFleetForm(
         name=name,
-        homes=tuple(homes),
+        homes=tuple(apply_fleet_overlay(homes, seg_tariff=overlay.seg_tariff)),
         start_date=pd.Timestamp(start, tz=location.timezone),
         end_date=pd.Timestamp(end, tz=location.timezone),
         scenario={
             **({} if name is None else {"name": name}),
             "period": {"start_date": start, "end_date": end},
             "location": location_block(location),
-            "fleet_distribution": _with_battery_dispatch_strategy(
-                distribution, form.get("dispatch_strategy")
-            ),
+            "fleet_distribution": fleet_distribution,
             "tariff": form.get("tariff"),
             "seg": form.get("seg"),
         },
@@ -158,19 +161,25 @@ def _fleet_form_location(form: Mapping[str, Any]) -> Location:
     return resolve_location(form.get("location", "bristol"))
 
 
-def _read_fleet_overlay(form: Mapping[str, Any]) -> Callable[[list[HomeConfig]], list[HomeConfig]]:
-    """The overlay of the fleet *form*, read: the function that gives each home it is given the form's tariff and SEG and, with a battery, its dispatch strategy.
+@dataclass(frozen=True)
+class _FleetOverlay:
+    """The tariff and SEG a fleet form gives every home it describes."""
+
+    tariff_config: TariffConfig | None
+    seg_tariff: SEGTariff | None
+
+
+def _read_fleet_overlay(form: Mapping[str, Any]) -> _FleetOverlay:
+    """The tariff and SEG of the fleet *form*, read with its dispatch strategy, which the homes take from their battery block.
 
     Raises:
         ValueError, ConfigurationError: For a tariff, dispatch strategy or SEG the loaders
-            refuse, read in that order.
+            refuse, read in that order; the dispatch strategy is read even when no battery
+            carries it.
     """
-    return partial(
-        apply_fleet_overlay,
-        tariff_config=parse_tariff_config(form.get("tariff")),
-        dispatch_strategy=parse_dispatch_strategy_config(form.get("dispatch_strategy")),
-        seg_tariff=parse_seg_tariff(form.get("seg")),
-    )
+    tariff_config = parse_tariff_config(form.get("tariff"))
+    parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+    return _FleetOverlay(tariff_config=tariff_config, seg_tariff=parse_seg_tariff(form.get("seg")))
 
 
 def _with_battery_dispatch_strategy(

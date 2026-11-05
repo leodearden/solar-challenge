@@ -828,18 +828,38 @@ class TestExportAPI:
         path.write_bytes(response.data)
         assert load_fleet_config(path).homes == home_configs
 
-    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
+    @pytest.mark.parametrize(
+        ("strategy", "grid_charging"),
+        [
+            pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
+            pytest.param(
+                TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+                GridChargeConfig(target_soc_fraction=0.8),
+                id="tou_optimized",
+            ),
+            pytest.param(
+                PeakShavingStrategyConfig(import_limit_kw=3.0),
+                GridChargeConfig(target_soc_fraction=0.8),
+                id="peak_shaving",
+            ),
+        ],
+    )
     def test_export_of_a_home_run_with_battery_dispatch_and_grid_charging_loads_back(
-        self, storage: RunStorage, client: FlaskClient, tmp_path: Path, strategy: object
+        self,
+        storage: RunStorage,
+        client: FlaskClient,
+        tmp_path: Path,
+        strategy: object,
+        grid_charging: GridChargeConfig | None,
     ) -> None:
-        """A battery's dispatch strategy, whichever it is, and its grid charging survive the export."""
+        """A battery's dispatch strategy, whichever it is, and the grid charging of one that charges from the grid survive the export."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3500.0),
             battery_config=BatteryConfig(
                 capacity_kwh=5.0,
                 dispatch_strategy=strategy,
-                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                grid_charging=grid_charging,
             ),
             tariff_config=TariffConfig.economy_7(),
             dispatch_strategy="tou_optimized",

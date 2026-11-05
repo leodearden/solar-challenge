@@ -42,6 +42,7 @@ from solar_challenge.web.stored_runs import (
     RUN_KINDS,
     RUN_TYPES,
     DroppedValue,
+    RewrittenValue,
     RunDocumentStep,
     RunKind,
     RunType,
@@ -312,14 +313,17 @@ def _run_dir(data_dir: Path, run_id: str) -> Path:
 
 @dataclass(frozen=True)
 class RunDocumentsOutcome:
-    """What a run-document step did to a store's runs: each value it dropped that is not null, and each run it left unmigrated, in order."""
+    """What a run-document step did to a store's runs: each value it dropped that is not null, each value it rewrote, and each run it left unmigrated, in order."""
 
     dropped: tuple[DroppedValue, ...] = ()
     unmigrated: tuple[UnmigratedRun, ...] = ()
+    rewritten: tuple[RewrittenValue, ...] = ()
 
     def __add__(self, later: "RunDocumentsOutcome") -> "RunDocumentsOutcome":
         """This outcome followed by *later*'s."""
-        return RunDocumentsOutcome(self.dropped + later.dropped, self.unmigrated + later.unmigrated)
+        return RunDocumentsOutcome(
+            self.dropped + later.dropped, self.unmigrated + later.unmigrated, self.rewritten + later.rewritten
+        )
 
 
 def migrate_stored_run_files(database: Database, data_dir: Path, step: RunDocumentStep) -> RunDocumentsOutcome:
@@ -368,7 +372,7 @@ def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, ste
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated=(UnmigratedRun.of(refusal),))
     write_run_documents(run_dir, result.documents.changed_from(documents), step.version)
-    return RunDocumentsOutcome(dropped=result.dropped)
+    return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten)
 
 
 _DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
@@ -407,7 +411,7 @@ def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, step: RunDocum
     for column, was, document in zip(_DOCUMENT_COLUMNS, (documents.config, documents.summary), stepped, strict=True):
         if document.content != was.content:
             conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
-    return RunDocumentsOutcome(dropped=result.dropped)
+    return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten)
 
 
 @dataclass(frozen=True)

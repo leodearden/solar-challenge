@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -130,38 +131,21 @@ class TestSimulateHomeStrategyPathGridCharging:
             f"max={results.battery_soc.max():.3f}"
         )
 
-    def test_grid_charge_inert_without_tariff(self, night_weather_data):
-        """Without tariff_config, grid-charging stays inert (battery_charge == 0 with zero PV).
-
-        Guard/non-regression: pins the 'tariff_config=None → no behaviour change' contract.
-        The Strategy path threads config.tariff_config, which is None here.
-        """
-        config_no_tariff = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
-            battery_config=BatteryConfig(
-                capacity_kwh=5.0,
-                max_charge_kw=2.5,
-                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
-                grid_charging=GridChargeConfig(target_soc_fraction=0.9),
-            ),
-            tariff_config=None,
-            location=Location.bristol(),
-        )
-        results = simulate_home(
-            config_no_tariff,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            validate_balance=True,
-            weather=weather_for(config_no_tariff, night_weather_data),
-        )
-        assert results.battery_charge.sum() == pytest.approx(0.0), (
-            "Expected battery_charge == 0: without tariff, grid charging should be inert"
-        )
-        initial_soc = results.battery_soc.iloc[0]
-        assert results.battery_soc.max() <= initial_soc + 1e-9, (
-            "Expected SOC to not rise above observed initial SOC without tariff"
-        )
+    def test_grid_charging_without_a_tariff_is_refused(self):
+        """Without tariff_config there is no cheap period to grid-charge in, so building the home refuses the battery's grid_charging, not left inert."""
+        with pytest.raises(ConfigurationError, match="grid_charging"):
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+                battery_config=BatteryConfig(
+                    capacity_kwh=5.0,
+                    max_charge_kw=2.5,
+                    dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
+                    grid_charging=GridChargeConfig(target_soc_fraction=0.9),
+                ),
+                tariff_config=None,
+                location=Location.bristol(),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -541,8 +525,19 @@ class TestSimulateHomeGridCharge:
         assert (results.grid_charge <= results.grid_import).all()
 
     def test_an_untariffed_run_has_no_grid_charge_series(self, night_weather_data: pd.DataFrame) -> None:
-        """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost."""
-        home = dataclasses.replace(bristol_arbitrage_home(), tariff_config=None)
+        """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost.
+
+        Its home is the arbitrage home without the settings a tariff is needed for: its tariff,
+        its battery's grid_charging and its tou_optimized dispatch.
+        """
+        arbitrage = bristol_arbitrage_home()
+        assert arbitrage.battery_config is not None
+        home = dataclasses.replace(
+            arbitrage,
+            battery_config=dataclasses.replace(arbitrage.battery_config, grid_charging=None),
+            tariff_config=None,
+            dispatch_strategy="greedy",
+        )
         results = simulate_home(
             home,
             start_date=pd.Timestamp("2024-06-21"),

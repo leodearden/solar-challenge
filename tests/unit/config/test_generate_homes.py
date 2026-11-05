@@ -1052,21 +1052,23 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config == tariff
 
     def test_battery_grid_charging_reaches_every_battery(self) -> None:
-        """A battery's grid_charging setting is the grid charging of every generated battery."""
+        """A battery's grid_charging setting is the grid charging of every generated battery, on homes that dispatch tou_optimized by a tariff."""
         gc = GridChargeConfig(target_soc_fraction=0.9)
         homes = generate_homes_from_distribution(
-            self._base_config(grid_charging=gc), Location.bristol()
+            self._base_config(grid_charging=gc, dispatch_strategy="tou_optimized"),
+            Location.bristol(),
+            fleet_tariff=TariffConfig.economy_7(),
         )
         for home in homes:
             assert home.battery_config is not None
             assert home.battery_config.grid_charging == gc
 
     def test_fleet_tariff_and_battery_grid_charging_both_reach_every_home(self) -> None:
-        """The fleet_tariff keyword and the battery's grid_charging reach every home together."""
+        """The fleet_tariff keyword and the battery's grid_charging reach every home together, on homes that dispatch tou_optimized by that tariff."""
         tariff = TariffConfig.economy_7()
         gc = GridChargeConfig(target_soc_fraction=0.85)
         homes = generate_homes_from_distribution(
-            self._base_config(grid_charging=gc),
+            self._base_config(grid_charging=gc, dispatch_strategy="tou_optimized"),
             Location.bristol(),
             fleet_tariff=tariff,
         )
@@ -1085,9 +1087,11 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.battery_config.grid_charging is None
 
     def test_config_dispatch_strategy_reaches_every_home(self) -> None:
-        """FleetDistributionConfig.dispatch_strategy='tou_optimized' is the dispatch strategy of every home."""
+        """FleetDistributionConfig.dispatch_strategy='tou_optimized' is the dispatch strategy of every home, each given the tariff it dispatches by."""
         homes = generate_homes_from_distribution(
-            self._base_config(dispatch_strategy="tou_optimized"), Location.bristol()
+            self._base_config(dispatch_strategy="tou_optimized"),
+            Location.bristol(),
+            fleet_tariff=TariffConfig.economy_7(),
         )
         assert len(homes) == 5
         for home in homes:

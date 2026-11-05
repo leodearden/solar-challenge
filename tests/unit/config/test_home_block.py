@@ -85,7 +85,7 @@ class TestBatteryGridChargeParsing:
             )
 
     def test_yaml_round_trip_grid_charging(self, tmp_path: Path) -> None:
-        """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
+        """YAML with battery.grid_charging, on a home that dispatches tou_optimized by its tariff, round-trips into home.battery_config.grid_charging."""
         yaml_content = """
 home:
   pv:
@@ -96,6 +96,9 @@ home:
     capacity_kwh: 5.0
     grid_charging:
       target_soc_fraction: 0.8
+  tariff:
+    type: economy_7
+  dispatch_strategy: tou_optimized
 """
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
@@ -243,9 +246,8 @@ class TestOmittedAndNullKeys:
 
     An omitted key takes the dataclass's declared default, or the table's when-omitted value where
     the dataclass declares none, and a key written as null reads as absent; tests/unit/config/test_component_blocks.py
-    sweeps every key of every table. Two nulls are kept gaps, each owned by a task: a null home
-    dispatch_strategy is held as None (task 787), and a null grid_charging target_soc_fraction is
-    refused by GridChargeConfig itself (task 866).
+    sweeps every key of every table. One null is a kept gap, owned by a task: a null grid_charging
+    target_soc_fraction is refused by GridChargeConfig itself (task 866).
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -269,8 +271,12 @@ class TestOmittedAndNullKeys:
         assert _parsed_home(load={}).load_config == LoadConfig()
 
     def test_omitted_grid_charging_keys_take_the_declared_defaults(self) -> None:
-        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default."""
-        battery = _parsed_home(battery={"capacity_kwh": 5.0, "grid_charging": {}}).battery_config
+        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default, on a home that dispatches tou_optimized by its tariff."""
+        battery = _parsed_home(
+            battery={"capacity_kwh": 5.0, "grid_charging": {}},
+            tariff={"type": "economy_7"},
+            dispatch_strategy="tou_optimized",
+        ).battery_config
         assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
 
     @pytest.mark.parametrize(
@@ -305,9 +311,20 @@ class TestOmittedAndNullKeys:
         """A null home name takes HomeConfig's declared empty name."""
         assert _parsed_home(name=None).name == ""
 
-    def test_a_null_home_dispatch_strategy_is_held_as_none(self) -> None:
-        """Kept gap, task 787's: HomeConfig checks no value, so a null home dispatch_strategy is held as None, not defaulted."""
-        assert _parsed_home(dispatch_strategy=None).dispatch_strategy is None
+    def test_a_null_home_dispatch_strategy_reads_as_absent(self) -> None:
+        assert _parsed_home(dispatch_strategy=None).dispatch_strategy == "greedy"
+
+    def test_a_home_dispatch_strategy_no_home_dispatches_by_is_refused_naming_the_block(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            _parsed_home(dispatch_strategy="tou_optimised")
+
+        assert str(refused.value).startswith("Invalid home.dispatch_strategy 'tou_optimised';"), str(refused.value)
+        for named in ["'greedy'", "'tou_optimized'"]:
+            assert named in str(refused.value), (named, str(refused.value))
+
+    def test_a_homes_entry_s_dispatch_strategy_no_home_dispatches_by_is_refused_naming_the_entry(self) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape("Invalid homes[0].dispatch_strategy 'tou_optimised';")):
+            parse_home_block({"dispatch_strategy": "tou_optimised"}, Location.bristol(), block_path="homes[0]")
 
     def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
         """Kept gap, task 866's: the null reaches GridChargeConfig, whose refusal names its key but not its block."""

@@ -44,7 +44,13 @@ from solar_challenge.web.storage import (
     migrate_runs_table_v1,
     migrate_stored_run_files,
 )
-from solar_challenge.web.stored_runs import RUN_DOCUMENT_STEPS, DroppedValue, RunDocumentStep, UnmigratedRun
+from solar_challenge.web.stored_runs import (
+    RUN_DOCUMENT_STEPS,
+    DroppedValue,
+    RewrittenValue,
+    RunDocumentStep,
+    UnmigratedRun,
+)
 
 
 class SchemaVersionMismatch(Exception):
@@ -155,6 +161,7 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         _schema_v1,
     ),
     _carrying(2),
+    _carrying(3),
 )
 """Every step of the store's schema, in order: MIGRATIONS[N - 1] is the step to version N."""
 
@@ -223,8 +230,9 @@ def open_database(path: Path) -> Database:
 class MigrationReport:
     """What migrate_store did to the store at *path*: the schema version it found it at, the one it left it at, and each step it applied, in order.
 
-    dropped_values are the values its run-document steps dropped that are not null, and
-    unmigrated_runs the stored runs they left as they were, each once.
+    dropped_values are the values its run-document steps dropped that are not null,
+    rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
+    they were, each once.
     """
 
     path: Path
@@ -233,12 +241,14 @@ class MigrationReport:
     applied_steps: tuple[MigrationStep, ...]
     dropped_values: tuple[DroppedValue, ...] = ()
     unmigrated_runs: tuple[UnmigratedRun, ...] = ()
+    rewritten_values: tuple[RewrittenValue, ...] = ()
 
     def __str__(self) -> str:
         """The report as `solar-challenge web migrate` prints it.
 
         That is the store's database, both versions and each step applied, then each value
-        dropped and each run left unmigrated; or that there was nothing to migrate.
+        dropped, each value rewritten and each run left unmigrated; or that there was nothing to
+        migrate.
         """
         if not self.applied_steps:
             return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
@@ -246,6 +256,7 @@ class MigrationReport:
             f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
             *(f"  {step.version}. {step.description}" for step in self.applied_steps),
             *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
+            *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
             *_listed(
                 "Left each run below as it was, as its documents cannot be read; it cannot be loaded until they are fixed:",
                 self.unmigrated_runs,
@@ -253,7 +264,7 @@ class MigrationReport:
         ])
 
 
-def _listed(heading: str, items: Sequence[DroppedValue] | Sequence[UnmigratedRun]) -> list[str]:
+def _listed(heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun]) -> list[str]:
     """*heading*, then each of *items* on a line of its own; no line at all when there is no item."""
     return [heading, *(f"  {item}" for item in items)] if items else []
 
@@ -301,6 +312,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         to_version=SCHEMA_VERSION,
         applied_steps=pending,
         dropped_values=outcome.dropped,
+        rewritten_values=outcome.rewritten,
         unmigrated_runs=tuple(dict.fromkeys(outcome.unmigrated)),
     )
 

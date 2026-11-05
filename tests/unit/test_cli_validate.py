@@ -3,7 +3,7 @@
 
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -193,10 +193,11 @@ fleet_distribution:
       multiplier: {type: sweep, min: 0.5, max: 2.0, steps: 3}
 """
 
-# The UserWarning load_fleet_config raises for a tou_optimized fleet with no top-level tariff:.
-_TOU_ADVISORY = (
-    "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
-)
+def _bristol_arbitrage_with_its_home(edit_home: Callable[[dict[str, Any]], object]) -> str:
+    """scenarios/bristol-arbitrage.yaml as YAML, its home: block changed by *edit_home*."""
+    document: dict[str, Any] = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
+    edit_home(document["home"])
+    return yaml.safe_dump(document)
 
 
 def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
@@ -545,6 +546,32 @@ home:
             assert strategy in error_row
 
     @pytest.mark.parametrize(
+        ("edit_home", "named"),
+        [
+            pytest.param(
+                lambda home: home.update(dispatch_strategy="greedy"),
+                ["grid_charging", "self_consumption"],
+                id="dispatched-greedy",
+            ),
+            pytest.param(lambda home: home.pop("tariff"), ["tou_optimized", "tariff"], id="without-its-tariff"),
+        ],
+    )
+    def test_a_grid_charging_home_whose_dispatch_would_ignore_it_is_an_error_row(
+        self, tmp_path: Path, edit_home: Callable[[dict[str, Any]], object], named: list[str]
+    ) -> None:
+        """scenarios/bristol-arbitrage.yaml, whose battery grid-charges as its home dispatches tou_optimized by its tariff."""
+        result = self._validate_config(
+            tmp_path, _bristol_arbitrage_with_its_home(edit_home), file_name="bristol-arbitrage.yaml"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        for name in named:
+            assert name in error_row
+
+    @pytest.mark.parametrize(
         ("tariff", "named"),
         [
             pytest.param(
@@ -747,38 +774,37 @@ home:
                 "fleet_distribution:\n"
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: 5.0}\n"
                 "  dispatch_strategy: tou_optimized\n",
                 id="fleet-distribution",
             ),
             pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
         ],
     )
-    def test_a_loader_advisory_is_a_warning_row_not_a_python_warning(
-        self, tmp_path: Path, recwarn: pytest.WarningsRecorder, document: str
+    def test_a_tou_optimized_fleet_with_batteries_and_no_tariff_is_an_error_row(
+        self, tmp_path: Path, document: str
     ) -> None:
-        """The advisory is one row for the whole file, however many sweep points it builds."""
         result = self._validate_config(tmp_path, document)
 
-        assert result.exit_code == 0
-        assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)
-        assert table_text(result.stdout).count(_TOU_ADVISORY) == 1
-        assert "OK Configuration is valid" not in table_text(result.stdout)
-        assert [w for w in recwarn if issubclass(w.category, UserWarning)] == []
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert "tou_optimized" in error_row
+        assert "tariff" in error_row
+        assert "WARNING" not in text
 
-    def test_a_loader_advisory_raised_before_a_refusal_is_shown_beside_it(
+    def test_a_tou_optimized_fleet_without_batteries_needs_no_tariff(
         self, tmp_path: Path
     ) -> None:
         result = self._validate_config(
             tmp_path,
             "fleet_distribution:\n"
             "  n_homes: 2\n"
-            "  pv: {capacity_kw: 4.0, tilt: 100}\n"
+            "  pv: {capacity_kw: 4.0}\n"
             "  dispatch_strategy: tou_optimized\n",
         )
 
-        assert result.exit_code == 1
-        assert (
-            "ERROR fleet_distribution.pv, home 1: tilt must be between 0 and 90, got 100.0"
-            in table_text(result.stdout)
-        )
-        assert f"WARNING {_TOU_ADVISORY}" in table_text(result.stdout)
+        assert result.exit_code == 0
+        assert "OK Configuration is valid" in table_text(result.stdout)
+        assert "WARNING" not in table_text(result.stdout)

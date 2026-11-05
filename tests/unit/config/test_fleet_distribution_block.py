@@ -352,6 +352,24 @@ class TestFleetDistributionConfig:
                 pv=ComponentDistribution({"capacity_kw": 4.0}),
             )
 
+    def test_a_dispatch_strategy_no_home_dispatches_by_is_refused(self) -> None:
+        """Task 568: the fleet's copy of the home-level dispatch strategy is checked where it is built."""
+        with pytest.raises(ConfigurationError) as refused:
+            FleetDistributionConfig(
+                n_homes=1, pv=ComponentDistribution({"capacity_kw": 4.0}), dispatch_strategy="tou_optimised"
+            )
+
+        for named in ["FleetDistributionConfig.dispatch_strategy", "'tou_optimised'", "'greedy'", "'tou_optimized'"]:
+            assert named in str(refused.value), (named, str(refused.value))
+
+    @pytest.mark.parametrize("dispatch_strategy", [None, "greedy", "tou_optimized"])
+    def test_no_dispatch_strategy_or_one_a_home_dispatches_by_builds(self, dispatch_strategy: str | None) -> None:
+        fleet = FleetDistributionConfig(
+            n_homes=1, pv=ComponentDistribution({"capacity_kw": 4.0}), dispatch_strategy=dispatch_strategy
+        )
+
+        assert fleet.dispatch_strategy == dispatch_strategy
+
 
 class TestShuffledPoolHoldsOneValuePerHome:
     """A fleet distribution's shuffled pool holds exactly one value per home, so its counts total n_homes."""

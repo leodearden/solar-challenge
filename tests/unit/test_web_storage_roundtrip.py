@@ -944,32 +944,34 @@ class TestRunStoredWithModuleSettings:
         assert loaded_config.pv_config != config.pv_config
 
 
-_STRATEGIES = (
-    SelfConsumptionStrategyConfig(),
-    TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-    PeakShavingStrategyConfig(import_limit_kw=3.0),
+_GRID_CHARGE_TO_80_PERCENT = GridChargeConfig(target_soc_fraction=0.8)
+
+_DISPATCHED_BATTERY_SETTINGS = (
+    pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
+    pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized"),
+    pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), _GRID_CHARGE_TO_80_PERCENT, id="peak_shaving"),
 )
-"""One example of each dispatch strategy."""
+"""One example of each dispatch strategy, with grid charging to 0.8 for those that charge from the grid."""
 
 
-def _dispatching_home(strategy: Any, name: str = "Dispatching home") -> HomeConfig:
-    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges to 0.8."""
+def _dispatching_home(
+    strategy: Any, grid_charging: GridChargeConfig | None, name: str = "Dispatching home"
+) -> HomeConfig:
+    """A home on Economy 7 whose battery dispatches by *strategy* with *grid_charging*."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        battery_config=BatteryConfig(
-            capacity_kwh=5.0,
-            dispatch_strategy=strategy,
-            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-        ),
+        battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=grid_charging),
         tariff_config=TariffConfig.economy_7(),
         name=name,
     )
 
 
-def _save_dispatching_home_run(storage: RunStorage, run_id: str, strategy: Any) -> HomeConfig:
-    """Save a home run of _dispatching_home(*strategy*) under *run_id*, and return its config."""
-    config = _dispatching_home(strategy)
+def _save_dispatching_home_run(
+    storage: RunStorage, run_id: str, strategy: Any, grid_charging: GridChargeConfig | None
+) -> HomeConfig:
+    """Save a home run of _dispatching_home(*strategy*, *grid_charging*) under *run_id*, and return its config."""
+    config = _dispatching_home(strategy, grid_charging)
     storage.save_home_run(
         run_id=run_id, config=config, results=_make_simulation_results(), summary=_make_summary(), name="Saved Run"
     )
@@ -979,9 +981,11 @@ def _save_dispatching_home_run(storage: RunStorage, run_id: str, strategy: Any) 
 class TestRunWithEachDispatchStrategy:
     """A home run's battery dispatch strategy, whichever variant it is, loads back as that variant."""
 
-    @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-    def test_a_saved_run_loads_equal_with_an_equal_hash(self, storage: RunStorage, strategy: Any) -> None:
-        config = _save_dispatching_home_run(storage, "dispatch-001", strategy)
+    @pytest.mark.parametrize(("strategy", "grid_charging"), _DISPATCHED_BATTERY_SETTINGS)
+    def test_a_saved_run_loads_equal_with_an_equal_hash(
+        self, storage: RunStorage, strategy: Any, grid_charging: GridChargeConfig | None
+    ) -> None:
+        config = _save_dispatching_home_run(storage, "dispatch-001", strategy, grid_charging)
 
         loaded_config = storage.load_run("dispatch-001").config
 

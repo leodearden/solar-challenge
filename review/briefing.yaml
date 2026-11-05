@@ -109,6 +109,15 @@ conventions:
       migrate` brings older runs forward (D27 invariant 6; D-S19-5;
       docs/prds/run-store-one-owner.md §3.10).
 
+  - rule: "A battery's grid_charging is honoured or refused when its HomeConfig is built, never run and ignored: building a home whose dispatch would ignore it, or a battery home asking for tou_optimized with no tariff, raises ConfigurationError (tests/unit/test_grid_charge_refusals.py)"
+    why: >
+      Three of f44's five combinations ran and stored 0 kWh from the grid with no warning:
+      default dispatch, a battery's self_consumption, and home tou_optimized without a tariff.
+      The grid_charging refusals sit in build_dispatch_strategy, which HomeConfig.__post_init__
+      and simulate_home both call, so a later dispatch variant states once whether it
+      grid-charges; __post_init__ refuses the tariff-rate TOU route's missing tariff beside them
+      (D27 invariant 10; D3; docs/prds/dispatch-configuration-below-config.md §5.7).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are
@@ -347,8 +356,8 @@ subprojects:
         why: "The TMY is a synthetic 'typical year', so aligning by time of year lets a sim over real dates use typical conditions; that is intentional, not a date bug. The match uses the UTC clock because the PVGIS TMY is UTC-indexed and pvlib places the sun at those UTC instants. Matching the demand's local wall clock ran BST PV output and heat-pump temperature an hour early (fixed by task 166). Forward-fill preserves hourly energy totals exactly and deliberately does NOT synthesise sub-hourly variability. Repeating 28 February is the usual TMY practice for a leap year; the former 0.0 fill gave every default (leap-year 2024) run a 29 February with no PV and 0 °C air for the heat pump (task 190)."
       - decision: "get_tmy_data scales the PVGIS TMY's ghi, dni and dhi by one factor, so its annual GHI equals PVGIS's 2005-2020 mean at the point."
         why: "PVGIS's TMY month picks do not preserve annual irradiation, and Bristol's sat below every year (992 vs a mean of 1069 kWh/m²), so the scaling is deliberate, not a bug. With the PV model's system losses, Bristol's per-kWp yields sit inside validation's band (the default 4 kW reads about 1012 kWh/kWp under NOCT-SAM, re-measured by task 823). docs/tmy-irradiation-scaling.md has the measurements and scripts/measure_tmy_irradiation.py re-measures them; re-measure before re-flagging."
-      - decision: "Two dispatch paths coexist (a Strategy-pattern family and a rate-aware TOU path), and BOTH now support grid-charging; SelfConsumptionStrategy deliberately accepts-but-ignores the grid-charge context."
-        why: "A home only grid-charges if it uses a tou_optimized or peak_shaving strategy with a tariff AND a GridChargeConfig — self-consumption homes never grid-charge even if GridChargeConfig is set. There are also TWO unrelated TariffPeriod symbols (dispatch.py enum vs tariff.py dataclass). Both are intentional; don't unify them."
+      - decision: "Both dispatch paths (a Strategy-pattern family and a rate-aware TOU path) grid-charge, and a setting the chosen dispatch would ignore is refused when the HomeConfig is built (D3): grid_charging under self-consumption dispatch or without a tariff, home-level tou_optimized without a tariff, and an unknown home-level dispatch_strategy."
+        why: "Such homes used to run and store 0 kWh from the grid with no warning (f44). HomeConfig.__post_init__ calls build_dispatch_strategy, the factory simulate_home calls, so building and running refuse grid_charging by one definition. It is transitional: the home-level key and the tariff-rate TOU route stay until S3/ε retire them, and when both levels are set the battery's strategy wins (lead ruling L7). Runs stored before it load as they ran, through the stored-run format's v3 step. There are also TWO unrelated TariffPeriod symbols (dispatch.py enum vs tariff.py dataclass). Both are intentional; don't unify them."
       - decision: "community.py is a POST-HOC aggregation layer: it consumes FleetResults' public aggregate API and does NOT re-simulate homes or feed back into per-home dispatch; fleet.py's public API is left unchanged."
         why: "Sharing is a value-allocation/aggregation layer over independently-simulated homes (matches the Energy-Local legal model). A reviewer expecting community results to influence home dispatch should know it's intentionally downstream. NOTE: the community battery currently hardcodes SelfConsumptionStrategy — it cannot yet dispatch on TOU/peak-shaving."
       - decision: "PV degradation lives on PVConfig (system_age_years, degradation_rate_per_year), not HomeConfig; applied linearly inside simulate_pv_output."

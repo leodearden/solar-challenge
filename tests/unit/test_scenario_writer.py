@@ -281,21 +281,23 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "strategy",
+    ("strategy", "grid_charging"),
     [
-        pytest.param(SelfConsumptionStrategyConfig(), id="self_consumption"),
-        pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))), id="tou_optimized"),
-        pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), id="peak_shaving"),
+        pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
+        pytest.param(
+            TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))), GridChargeConfig(0.8), id="tou_optimized"
+        ),
+        pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), GridChargeConfig(0.8), id="peak_shaving"),
     ],
 )
-def test_a_battery_with_each_dispatch_strategy_loads_back_equal(strategy: object, tmp_path: Path) -> None:
-    """Each strategy's dispatch_strategy: block, grid charging beside it, survives the round trip."""
+def test_a_battery_with_each_dispatch_strategy_loads_back_equal(
+    strategy: object, grid_charging: GridChargeConfig | None, tmp_path: Path
+) -> None:
+    """Each strategy's dispatch_strategy: block, with grid charging beside it when the strategy charges from the grid, survives the round trip."""
     home = HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(),
-        battery_config=BatteryConfig(
-            capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=GridChargeConfig(0.8)
-        ),
+        battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=grid_charging),
         tariff_config=TariffConfig.economy_7(),
     )
 

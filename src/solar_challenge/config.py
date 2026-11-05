@@ -9,7 +9,6 @@ import json
 import math
 import random
 import re
-import warnings
 from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
@@ -42,18 +41,13 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HomeConfig
+from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from solar_challenge.tariff import TariffConfig, TariffPeriod
-
-
-#: Dispatch strategy names recognised by the simulation engine.
-#: Used to validate fleet_distribution.dispatch_strategy in YAML configs.
-_VALID_DISPATCH_STRATEGIES: frozenset[str] = frozenset({"greedy", "tou_optimized"})
 
 
 # --- Distribution Types for Fleet Generation ---
@@ -331,6 +325,10 @@ class FleetDistributionConfig:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be "
                 f"{' or '.join(repr(order) for order in _RANDOM_ORDERS)}, got '{self.random_order}'"
+            )
+        if self.dispatch_strategy is not None:
+            refuse_unknown_home_dispatch_strategy(
+                self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
@@ -1279,15 +1277,24 @@ def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Opti
     return _read_component_block(EV_BLOCK, data, block_path=block_path)
 
 
-_HOME_SCALAR_KEYS: tuple[str, ...] = ("name", "dispatch_strategy")
-
-#: The home scalars whose null parse_home_block hands on to HomeConfig rather than reading it as
-#: absent: a null dispatch_strategy is held as None until task 787's reader reads it.
-_HOME_SCALARS_HANDING_ON_NULL: frozenset[str] = frozenset({"dispatch_strategy"})
+_HOME_SCALAR_KEYS: tuple[str, ...] = ("name",)
 
 _HOME_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_HOME_SCALAR_KEYS, "pv", "battery", "load", "tariff", "heat_pump", "ev",
+    *_HOME_SCALAR_KEYS, "dispatch_strategy", "pv", "battery", "load", "tariff", "heat_pump", "ev",
 })
+
+
+def _read_dispatch_strategy_key(block: Mapping[str, Any], *, block_path: str) -> Optional[str]:
+    """The dispatch_strategy the block at *block_path* sets: None when it is absent or null, else one of HOME_DISPATCH_STRATEGIES.
+
+    Raises:
+        ConfigurationError: It is set to another value, as refuse_unknown_home_dispatch_strategy
+            refuses it, naming its key's path.
+    """
+    value = block.get("dispatch_strategy")
+    if value is None:
+        return None
+    return refuse_unknown_home_dispatch_strategy(value, field=_child_path(block_path, "dispatch_strategy"))
 
 
 def parse_home_block(
@@ -1295,9 +1302,8 @@ def parse_home_block(
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
-    A key the block omits takes HomeConfig's declared default, and so does a null scalar other than
-    those _HOME_SCALARS_HANDING_ON_NULL names, which are handed on. An omitted pv or load block
-    reads as an empty one.
+    A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
+    omitted pv or load block reads as an empty one.
     """
     home = _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
     return HomeConfig(
@@ -1316,12 +1322,14 @@ def parse_home_block(
             home.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
         ),
         ev_config=_parse_ev_config(home.get("ev"), block_path=_child_path(block_path, "ev")),
-        **{
-            key: home[key]
-            for key in _HOME_SCALAR_KEYS
-            if key in home and (home[key] is not None or key in _HOME_SCALARS_HANDING_ON_NULL)
-        },
+        **{key: home[key] for key in _HOME_SCALAR_KEYS if home.get(key) is not None},
+        **_dispatch_strategy_argument(_read_dispatch_strategy_key(home, block_path=block_path)),
     )
+
+
+def _dispatch_strategy_argument(dispatch_strategy: Optional[str]) -> dict[str, Any]:
+    """HomeConfig's dispatch_strategy argument for *dispatch_strategy*: none when it is None, so the field takes its default."""
+    return {} if dispatch_strategy is None else {"dispatch_strategy": dispatch_strategy}
 
 
 _PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
@@ -1603,17 +1611,6 @@ _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 })
 
 
-def _parse_fleet_dispatch_strategy(data: object, *, key_path: str) -> Optional[str]:
-    """Read a fleet's dispatch strategy: absent, or one of _VALID_DISPATCH_STRATEGIES."""
-    if data is None:
-        return None
-    if not isinstance(data, str) or data not in _VALID_DISPATCH_STRATEGIES:
-        raise ConfigurationError(
-            f"Invalid {key_path} {data!r}; valid values: {sorted(_VALID_DISPATCH_STRATEGIES)}"
-        )
-    return data
-
-
 def parse_fleet_distribution_config(
     data: dict[str, Any], *, block_path: str = "fleet_distribution"
 ) -> FleetDistributionConfig:
@@ -1641,9 +1638,7 @@ def parse_fleet_distribution_config(
         ),
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
-        dispatch_strategy=_parse_fleet_dispatch_strategy(
-            data.get("dispatch_strategy"), key_path=_child_path(block_path, "dispatch_strategy")
-        ),
+        dispatch_strategy=_read_dispatch_strategy_key(data, block_path=block_path),
     )
 
 
@@ -2631,21 +2626,11 @@ def _read_fleet_distribution_file(
     """Read the fleet_distribution: block of *document*, with what the file gives every home it generates.
 
     The one place that decides which top-level blocks those homes get. It reads location:,
-    fleet_distribution: and tariff: in that order, and warns when the block dispatches
-    tou_optimized with no tariff to dispatch by.
+    fleet_distribution: and tariff: in that order.
     """
     location = parse_location_block(document.get("location"))
     distribution = parse_fleet_distribution_config(document["fleet_distribution"])
     tariff = parse_tariff_config(document.get("tariff"))
-    if distribution.dispatch_strategy == "tou_optimized" and tariff is None:
-        warnings.warn(
-            "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
-            "is configured; homes will fall back to self-consumption dispatch at "
-            "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
-            "enable Economy-7 grid-charging.",
-            UserWarning,
-            stacklevel=3,
-        )
     return distribution, _FleetFileSettings(location=location, tariff=tariff)
 
 
