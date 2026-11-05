@@ -55,6 +55,7 @@ from tests._surface_forms_module_lookup import (
     evaluated_in,
     is_immutable_type,
     is_routine,
+    scope_statements,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
@@ -988,7 +989,7 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ statements of *cls*'s own body, as class_statement reads it, never another method nor anything a class nested in it defines; TypeError naming *cls* if class_statement finds no class statement for it."""
+    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* if class_statement finds no class statement for it."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
@@ -998,7 +999,7 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
         )
     return [
         node
-        for node in statement.body
+        for node in scope_statements(statement.body)
         if isinstance(node, ast.FunctionDef) and node.name in _INITIALISERS
     ]
 

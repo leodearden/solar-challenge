@@ -354,6 +354,18 @@ def names_declared_by(
                 yield from names_declared_by(ast.iter_child_nodes(node), kind, *other_kinds)
 
 
+def scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
+    """Each statement among *nodes*, or in any block of theirs, in source order, even a block that never runs: an if, for, while, try, with or match statement's blocks, its except handlers and match cases included, so each statement of the scope *nodes* run in; never one in a def or class statement's body, which runs in a scope of its own, nor in an expression, which holds none."""
+    for node in nodes:
+        if isinstance(node, ast.stmt):
+            yield node
+        match node:
+            case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
+                pass
+            case _:
+                yield from scope_statements(ast.iter_child_nodes(node))
+
+
 class NoSourceError(Exception):
     """The error source_of raises, from the OSError or TypeError inspect.getsource raised, when inspect reads no source for a module or a function; its message names that module or function."""
 
