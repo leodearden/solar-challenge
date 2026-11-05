@@ -858,6 +858,18 @@ def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_sour
     assert isinstance(naming_the_module.__cause__, (OSError, TypeError))
 
 
+def test_a_class_its_module_does_not_bind_under_its_qualified_name_is_checked_by_its_witness_once_inspect_has_stopped_reading_that_modules_source(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit's __init__, its witness, carries lapsing's globals, so once lapsing has no file, Audit is read as a class a module with no source binds under another name is read."""
+    lapsing = imported_module(tmp_path, monkeypatch, "lapsing", _LAPSING_SOURCE)
+    with pytest.raises(LookupError, match=r"^lapsing\.Audit is not bound under 'Audit'"):
+        named_classes(lapsing.Audited)
+    monkeypatch.delattr(lapsing, "__file__")
+
+    assert named_classes(lapsing.Audited) == {int}
+
+
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
     def f(a: "Nowhere") -> None: ...  # noqa: F821
 
