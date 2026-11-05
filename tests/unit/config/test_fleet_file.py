@@ -30,6 +30,18 @@ def scenarios_dir(project_root: Path) -> Path:
     return project_root / "scenarios"
 
 
+def _assert_refused_naming_tou_optimized_and_the_tariff(read: Callable[[], object]) -> None:
+    """*read* raises a ConfigurationError naming tou_optimized and the tariff, and no UserWarning."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ConfigurationError) as refused:
+            read()
+
+    assert "tou_optimized" in str(refused.value)
+    assert "tariff" in str(refused.value)
+    assert [str(warning.message) for warning in caught if issubclass(warning.category, UserWarning)] == []
+
+
 class TestLoadFleetConfig:
     """Tests for loading fleet configuration."""
 
@@ -507,15 +519,10 @@ fleet_distribution:
         with pytest.raises(ConfigurationError, match="tou-optimised"):
             load_fleet_config(path)
 
-    def test_dispatch_strategy_tou_without_tariff_warns(self, tmp_path: Path) -> None:
-        """tou_optimized without a tariff block emits a UserWarning.
-
-        Strategy is still threaded to all homes so the config-layer assertion
-        passes, but the warning surfaces the tariff omission early rather than
-        letting the simulation silently fall back to self-consumption dispatch.
-        """
+    def test_dispatch_strategy_tou_without_tariff_is_refused(self, tmp_path: Path) -> None:
+        """tou_optimized dispatches each battery by the file's tariff, so a fleet of batteries without a tariff: block is refused."""
         yaml_content = """
-name: TOU No Tariff Warning Test
+name: TOU No Tariff Test
 fleet_distribution:
   n_homes: 2
   seed: 42
@@ -530,11 +537,7 @@ fleet_distribution:
         path = tmp_path / "fleet.yaml"
         path.write_text(yaml_content)
 
-        with pytest.warns(UserWarning, match="tou_optimized"):
-            fleet = load_fleet_config(path)
-        # Strategy is still threaded despite the warning.
-        for home in fleet.homes:
-            assert home.dispatch_strategy == "tou_optimized"
+        _assert_refused_naming_tou_optimized_and_the_tariff(lambda: load_fleet_config(path))
 
 
 class TestLoadFleetConfigBatteryDispatchStrategy:
@@ -568,6 +571,7 @@ fleet_distribution:
     def test_a_fleet_battery_dispatch_strategy_reaches_every_home_with_a_battery(
         self, tmp_path: Path
     ) -> None:
+        """The file has no tariff: a battery's own tou_optimized dispatches by its peak_hours, and needs none."""
         fleet = self._load_fleet(tmp_path, "{strategy_type: tou_optimized, peak_hours: [[16, 21]]}")
 
         batteries = [home.battery_config for home in fleet.homes]
@@ -576,20 +580,6 @@ fleet_distribution:
         assert batteries.count(None) == 2, "premise: the pool leaves two homes without a battery"
         for battery in with_battery:
             assert battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
-
-    def test_a_fleet_battery_tou_dispatch_strategy_needs_no_tariff_so_loads_without_warning(
-        self, tmp_path: Path
-    ) -> None:
-        """A battery's own tou_optimized dispatches by its peak_hours, needing no tariff, so it loads without the no-tariff warning.
-
-        That warning is for fleet_distribution.dispatch_strategy's tou_optimized, which
-        dispatches by the scenario's tariff and falls back to self-consumption without one.
-        """
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._load_fleet(tmp_path, "{strategy_type: tou_optimized, peak_hours: [[16, 21]]}")
-
-        assert [str(warning.message) for warning in caught if "tariff" in str(warning.message)] == []
 
     def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_none(
         self, tmp_path: Path
@@ -734,23 +724,6 @@ class TestParseSweepFleetConfigs:
             )
             assert fleet.homes == load_fleet_config(fixed_capacity_file).homes
 
-    def test_a_tou_optimized_sweep_without_a_tariff_warns_once_for_the_whole_file(self) -> None:
-        sweep = {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            points = parse_sweep_fleet_configs(_fleet_file(_proportional_to_pv(sweep)))
-
-        assert len(points) == 3, "premise: the sweep has three points"
-        advisories = [
-            warning
-            for warning in caught
-            if issubclass(warning.category, UserWarning)
-            and "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff is configured"
-            in str(warning.message)
-        ]
-        assert len(advisories) == 1
-
     @pytest.mark.parametrize(
         ("document", "refusal"),
         [
@@ -843,13 +816,7 @@ class TestFleetDistributionFileReaders:
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
-    def test_the_tou_advisory_names_the_code_that_called_the_reader(
+    def test_a_file_dispatching_tou_optimized_without_a_tariff_is_refused(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
-        """The warning's file is the caller's, not config.py's."""
-        with pytest.warns(UserWarning, match="no tariff is configured") as caught:
-            read(_fleet_file(capacity_kwh))
-
-        assert [
-            warning.filename for warning in caught if "no tariff is configured" in str(warning.message)
-        ] == [__file__]
+        _assert_refused_naming_tou_optimized_and_the_tariff(lambda: read(_fleet_file(capacity_kwh)))

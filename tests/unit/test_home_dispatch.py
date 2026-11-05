@@ -47,9 +47,9 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
             id="tou_optimized-with-a-tariff-and-no-battery",
         ),
         pytest.param(
-            dataclasses.replace(_TOU_HOME, tariff_config=None),
+            dataclasses.replace(_TOU_HOME, tariff_config=None, battery_config=None),
             "self_consumption",
-            id="tou_optimized-without-a-tariff",
+            id="tou_optimized-without-a-tariff-or-a-battery",
         ),
         pytest.param(
             dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"),

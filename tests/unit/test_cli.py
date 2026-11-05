@@ -43,6 +43,7 @@ from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.weather import WeatherCache, WeatherDataError
 from tests._cli_fleet_simulator import invoke_cli
 from tests._cli_table_text import table_text
+from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
@@ -326,6 +327,23 @@ class TestErrorHandling:
         assert " ".join(result.stderr.split()).endswith(
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
+
+    @pytest.mark.usefixtures("bristol_june_tmy")
+    def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
+        """scenarios/bristol-arbitrage.yaml dispatched greedy: stderr starts with the refusal, ahead of the status line a run prints."""
+        document = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
+        document["home"]["dispatch_strategy"] = "greedy"
+        config_file = tmp_path / "bristol-arbitrage.yaml"
+        config_file.write_text(yaml.safe_dump(document))
+
+        result = runner.invoke(
+            app, ["home", "run", str(config_file), "--start", _DAY, "--end", _DAY], catch_exceptions=False
+        )
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 1
+        assert stderr.startswith("Configuration error:")
+        assert "grid_charging" in stderr
 
     @staticmethod
     def _write_one_home_scenario(**blocks: object) -> None:
