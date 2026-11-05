@@ -647,7 +647,8 @@ def calculate_summary(
             negative number).
 
     Returns:
-        SummaryStatistics with totals and ratios
+        SummaryStatistics with totals and ratios, carrying the window its results
+        cover, whose calendar days are its simulation_days
 
     Notes:
         **Two-path SEG design** — ``total_export_revenue_gbp`` and
@@ -689,8 +690,7 @@ def calculate_summary(
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
-    # Calculate simulation duration
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
+    window = results.window
 
     # Calculate SEG revenue if tariff is provided.
     # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
@@ -728,7 +728,7 @@ def calculate_summary(
         self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
         grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
         export_ratio=_share(total_export, total_gen),
-        simulation_days=sim_days,
+        simulation_days=window.days,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
@@ -739,4 +739,5 @@ def calculate_summary(
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
+        window=window,
     )
