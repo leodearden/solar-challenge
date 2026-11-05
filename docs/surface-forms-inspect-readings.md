@@ -230,8 +230,8 @@ its own, as `Submeter.__init__`, on every minor, while the code of the `__init__
 decorator writes carries `__create_fn__.<locals>.__init__`, and that of the `__new__`
 `collections.namedtuple` writes carries `<lambda>`. The helper reads the code's qualified
 name only to refuse: a constructor a generator wrote whose code was given that name, as
-`code.replace` gives it, is refused too, and one a `def` statement wrote whose code
-carries another reads as one the generator wrote.
+`code.replace` gives it, is refused too, and one a `def` statement in text given to
+`exec` wrote, whose code carries another, reads as one the generator wrote.
 
 Where the source of the module the class's `__module__` names holds its statement, and
 that statement defines the constructor by a `def` or an `async def` anywhere in its body,
