@@ -36,6 +36,7 @@ from tests._surface_forms_module_lookup import (
     is_get_delete_descriptor,
     is_routine,
     names_declared_by,
+    scope_statements,
     source_of,
 )
 
@@ -1325,13 +1326,18 @@ def _refuse_constructor_its_generator_records_unwritten(
 def _defined_in_body(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> bool:
-    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace: one _def_names finds whose name no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds no sign that a def statement wrote *function*, the one *cls* is constructed through: inspect reads no source for it, and its code carries another qualified name than *holder*'s dotted with the constructor's."""
+    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace: a def or async def statement that scope_statements finds in that body, whose name no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds no sign that a def statement wrote *function*, the one *cls* is constructed through: inspect reads no source for it, and its code carries another qualified name than *holder*'s dotted with the constructor's."""
     statement = class_statement(holder)
     if statement is None:
         _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
         return False
+    def_names = {
+        node.name
+        for node in scope_statements(statement.body)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     bound_outside = names_declared_by(statement.body, ast.Global, ast.Nonlocal)
-    return constructor.name in set(_def_names(statement.body)).difference(bound_outside)
+    return constructor.name in def_names.difference(bound_outside)
 
 
 def _refuse_def_written_member_of_statementless_class(
@@ -1383,18 +1389,6 @@ def _refuse_def_written_member_of_statementless_class(
         f"the class statement that defined {label_of(holder)} defines {constructor.name} is "
         f"not known: make the name private, or {remedy}"
     )
-
-
-def _def_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
-    """The names bound by the def and async def statements among *nodes* and in the blocks of each other statement among them, such as an if, for, while, try, with or match statement; never by one inside a def or class statement, which binds in its own namespace."""
-    for node in nodes:
-        match node:
-            case ast.FunctionDef(name=name) | ast.AsyncFunctionDef(name=name):
-                yield name
-            case ast.ClassDef() | ast.expr():
-                pass
-            case _:
-                yield from _def_names(ast.iter_child_nodes(node))
 
 
 def dataclass_parameter(cls: type, name: str) -> bool:

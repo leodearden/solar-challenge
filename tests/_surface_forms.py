@@ -55,6 +55,7 @@ from tests._surface_forms_module_lookup import (
     evaluated_in,
     is_immutable_type,
     is_routine,
+    scope_statements,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
@@ -328,6 +329,10 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
+    Another: each write to self in each __init__ and __post_init__ *cls*'s own body
+    defines counts as made, as if every branch around it ran, so an attribute that only a
+    branch not taken sets goes unreported too, as when each branch of an if statement in
+    the class body defines its own __init__.
     """
     _refuse_immutable_type(cls)
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
@@ -988,7 +993,7 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ statements of *cls*'s own body, as class_statement reads it, never another method nor anything a class nested in it defines; TypeError naming *cls* if class_statement finds no class statement for it."""
+    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* if class_statement finds no class statement for it."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
@@ -998,7 +1003,7 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
         )
     return [
         node
-        for node in statement.body
+        for node in scope_statements(statement.body)
         if isinstance(node, ast.FunctionDef) and node.name in _INITIALISERS
     ]
 

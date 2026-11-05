@@ -2,8 +2,9 @@
 """The module that defined an object, as sys.modules holds it, checked to be that object's own, and what is read there: a string annotation, evaluated as a type checker reads it, and the class statement that defines a class, parsed from that module's source.
 
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
-is_immutable_type and spelled_function, which the helper's other modules read objects
-through too. Of the helper, this module imports only the modules below it in
+is_immutable_type and spelled_function, and the statements of a scope through
+scope_statements; the helper's other modules read objects and scopes through them too.
+Of the helper, this module imports only the modules below it in
 tests/unit/test_surface_forms_layers.py's LAYERS, which checks that.
 """
 
@@ -310,10 +311,10 @@ def _class_statements_named(qualified_name: str, source: str) -> tuple[ast.Class
 def _class_statements_in(
     nodes: Iterable[ast.AST], scope: str, declared_global: Collection[str]
 ) -> Iterator[tuple[str, ast.ClassDef]]:
-    """Each class statement among *nodes*, or in any block or body of theirs, with the qualified name it gives the class it defines, as the compiler spells it: _qualified_name spells each class or function name from the scope of the body holding its statement and the names that body's global statements declare, *scope* and *declared_global* for the body *nodes* belong to; a class's body has its qualified name, dotted, as its scope, and a function's its qualified name, dotted with <locals>."""
-    for node in nodes:
-        match node:
-            case ast.ClassDef(name=name, body=body) as statement:
+    """Each class statement that scope_statements finds among *nodes*, or in the body of a class or def statement it finds, at any depth, with the qualified name it gives the class it defines, as the compiler spells it: _qualified_name spells each class or function name from the scope of the body holding its statement and the names that body's global statements declare, *scope* and *declared_global* for the body *nodes* belong to; a class's body has its qualified name, dotted, as its scope, and a function's its qualified name, dotted with <locals>."""
+    for statement in scope_statements(nodes):
+        match statement:
+            case ast.ClassDef(name=name, body=body):
                 qualified_name = _qualified_name(name, scope, declared_global)
                 yield qualified_name, statement
                 yield from _class_statements_in(
@@ -327,10 +328,6 @@ def _class_statements_in(
                     f"{_qualified_name(name, scope, declared_global)}.<locals>.",
                     frozenset(names_declared_by(body, ast.Global)),
                 )
-            case ast.expr():
-                pass
-            case _:
-                yield from _class_statements_in(ast.iter_child_nodes(node), scope, declared_global)
 
 
 def _qualified_name(name: str, scope: str, declared_global: Collection[str]) -> str:
@@ -343,15 +340,25 @@ def names_declared_by(
     kind: type[ast.Global] | type[ast.Nonlocal],
     *other_kinds: type[ast.Global] | type[ast.Nonlocal],
 ) -> Iterator[str]:
-    """The names that the statements among *nodes*, or in any block of theirs, that are of *kind* or one of *other_kinds*, global or nonlocal statements, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
+    """The names that the global or nonlocal statements of *kind* or one of *other_kinds* that scope_statements finds among *nodes* declare in the body *nodes* belong to, wherever in it they stand, even in a block that never runs; never those of one in a def or class statement among them, whose body declares its own."""
+    for statement in scope_statements(nodes):
+        match statement:
+            case ast.Global(names=names) | ast.Nonlocal(names=names) if isinstance(
+                statement, (kind, *other_kinds)
+            ):
+                yield from names
+
+
+def scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
+    """Each statement among *nodes*, or in any block of theirs, in source order, even a block that never runs: an if, for, while, try, with or match statement's blocks, its except handlers and match cases included, so each statement of the scope *nodes* run in; never one in a def or class statement's body, which runs in a scope of its own, nor in an expression, which holds none."""
     for node in nodes:
+        if isinstance(node, ast.stmt):
+            yield node
         match node:
-            case ast.Global() | ast.Nonlocal():
-                yield from node.names if isinstance(node, (kind, *other_kinds)) else ()
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
                 pass
             case _:
-                yield from names_declared_by(ast.iter_child_nodes(node), kind, *other_kinds)
+                yield from scope_statements(ast.iter_child_nodes(node))
 
 
 class NoSourceError(Exception):
