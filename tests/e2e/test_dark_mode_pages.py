@@ -80,11 +80,16 @@ def _toggle_theme(page: Page) -> None:
     page.get_by_role("button", name="Toggle dark mode").click()
 
 
+def _expect_titled_in(chart: Locator, theme: str) -> None:
+    """Wait until the chart in the container chart has its title in theme's text colour, the mark of a chart drawn in theme's chrome."""
+    expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
+
+
 def _expect_drawn_in(page: Page, chart_id: str, theme: str) -> None:
     """Wait until the chart in the container chart_id shows theme's chrome: its title in the text colour and its first y grid line in the grid colour."""
-    chrome = _CHROME[theme]
-    expect(page.locator(f"#{chart_id} .gtitle")).to_have_css("fill", chrome.text)
-    expect(page.locator(f"#{chart_id} path.ygrid").first).to_have_css("stroke", chrome.grid)
+    chart = page.locator(f"#{chart_id}")
+    _expect_titled_in(chart, theme)
+    expect(chart.locator("path.ygrid").first).to_have_css("stroke", _CHROME[theme].grid)
 
 
 def _chart_tab_panels(tablist: Locator) -> Locator:
@@ -93,9 +98,9 @@ def _chart_tab_panels(tablist: Locator) -> Locator:
 
 
 def _expect_each_chart_titled_in(panel: Locator, theme: str) -> None:
-    """Wait until each chart in panel has its title in theme's text colour, so each is drawn in theme's chrome."""
+    """Wait until each chart in panel has its title in theme's text colour."""
     for chart in panel.locator("[data-chart-figure]").all():
-        expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
+        _expect_titled_in(chart, theme)
 
 
 def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
@@ -168,7 +173,8 @@ def test_dark_mode_results_page_charts(
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
 
-    _expect_each_chart_titled_in(_chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first, "dark")
+    opening_panel = _chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first
+    _expect_each_chart_titled_in(opening_panel, "dark")
     expect(page.locator(".plot-container .bg").first).to_be_attached()
 
     backgrounds = _plotly_background_colors(page)
