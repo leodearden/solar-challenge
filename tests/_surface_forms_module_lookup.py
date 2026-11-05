@@ -120,7 +120,7 @@ def _class_module(cls: type) -> types.ModuleType:
         return _checked_by_body_witness(cls, module)
     raise LookupError(
         f"{label_of(cls)} is not bound under {cls.__qualname__!r} in "
-        f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
+        f"{_located(module)}, which sys.modules holds under "
         f"the name {cls.__module__!r}: that module binds "
         f"{'nothing' if bound is None else 'another object'} there. Read each module's "
         "objects before importing another module of that name, or bind the class under its "
@@ -151,8 +151,8 @@ def _defined_elsewhere(
 ) -> LookupError:
     """The error for *label*, defined in the module whose globals are *namespace*, once sys.modules holds *module* in its place under *name*."""
     return LookupError(
-        f"{label} is defined in the module at {namespace.get('__file__')}, but sys.modules "
-        f"holds the module at {getattr(module, '__file__', None)} under the name {name!r}: "
+        f"{label} is defined in {_located_by_globals(namespace)}, but sys.modules "
+        f"holds {_located(module)} under the name {name!r}: "
         "read each module's objects before importing another module of that name"
     )
 
@@ -161,6 +161,13 @@ def _located(module: types.ModuleType) -> str:
     """How an error names *module*: by the file it was read from, which tells two modules of one name apart; by its repr if it names none, as a module types.ModuleType makes names none."""
     file = getattr(module, "__file__", None)
     return repr(module) if file is None else f"the module at {file}"
+
+
+def _located_by_globals(namespace: dict[str, object]) -> str:
+    """How an error names the module whose globals are *namespace*, as _located names a module holding a copy of them, since a module's file and repr are read from its globals alone and a function carries only its module's globals, never the module."""
+    holder = types.ModuleType("?")
+    vars(holder).update(namespace)
+    return _located(holder)
 
 
 def _written_by_an_unlisted_generator(
