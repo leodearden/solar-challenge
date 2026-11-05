@@ -841,33 +841,32 @@ _LAPSING_SOURCE = (
 )
 
 
-def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_source_for_before_its_imports_were_read_raises_a_type_error_naming_it_and_that_module(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Audit, which lapsing binds only as Audited, had lapsing's source read for it while lapsing still had its file."""
+@pytest.fixture
+def lapsed(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    """The module 'lapsing', whose source was read for Audit, which it binds only as Audited, while it still had its file, and which has since lost its __file__."""
     lapsing = imported_module(tmp_path, monkeypatch, "lapsing", _LAPSING_SOURCE)
     with pytest.raises(LookupError, match=r"^lapsing\.Audit is not bound under 'Audit'"):
         named_classes(lapsing.Audited)
     monkeypatch.delattr(lapsing, "__file__")
+    return lapsing
 
+
+def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_source_for_before_its_imports_were_read_raises_a_type_error_naming_it_and_that_module(
+    lapsed: types.ModuleType,
+) -> None:
     with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'lapsing'.*\bno source\b") as raised:
-        named_classes(lapsing.settle)
+        named_classes(lapsed.settle)
 
     naming_the_module = raised.value.__cause__
-    assert str(naming_the_module) == f"inspect reads no source for {lapsing!r}"
+    assert str(naming_the_module) == f"inspect reads no source for {lapsed!r}"
     assert isinstance(naming_the_module.__cause__, (OSError, TypeError))
 
 
 def test_a_class_its_module_does_not_bind_under_its_qualified_name_is_checked_by_its_witness_once_inspect_has_stopped_reading_that_modules_source(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    lapsed: types.ModuleType,
 ) -> None:
     """Audit's __init__, its witness, carries lapsing's globals, so once lapsing has no file, Audit is read as a class a module with no source binds under another name is read."""
-    lapsing = imported_module(tmp_path, monkeypatch, "lapsing", _LAPSING_SOURCE)
-    with pytest.raises(LookupError, match=r"^lapsing\.Audit is not bound under 'Audit'"):
-        named_classes(lapsing.Audited)
-    monkeypatch.delattr(lapsing, "__file__")
-
-    assert named_classes(lapsing.Audited) == {int}
+    assert named_classes(lapsed.Audited) == {int}
 
 
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
