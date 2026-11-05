@@ -837,6 +837,31 @@ def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_eac
         ]
 
 
+def test_migrate_store_rewrites_only_the_pre_787_fleet_s_config_and_each_run_s_format_marker_in_a_store_at_version_2_leaving_no_other_file(
+    store_at_version_2: Path, format_2_run_ids: dict[str, str]
+) -> None:
+    """Every document and runs column v3 does not change is left byte for byte, and no temporary file is left behind.
+
+    Each run's format.json is there before the migration, naming 2, so none is added.
+    """
+    files_before = {run_id: _files_of(_run_dir(store_at_version_2, run_id)) for run_id in format_2_run_ids.values()}
+    rows_before = _runs_rows(store_at_version_2)
+    pre_787 = format_2_run_ids["pre_787_dispatch_fleet"]
+
+    migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    rows_after = _runs_rows(store_at_version_2)
+    for run_id, before in files_before.items():
+        after = _files_of(_run_dir(store_at_version_2, run_id))
+        assert set(after) == set(before), run_id
+        assert {path for path in before if after[path] != before[path]} == (
+            {"config.json", "format.json"} if run_id == pre_787 else {"format.json"}
+        )
+        assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == (
+            {"config_json"} if run_id == pre_787 else set()
+        )
+
+
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
