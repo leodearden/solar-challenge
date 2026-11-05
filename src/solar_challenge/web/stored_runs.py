@@ -39,10 +39,11 @@ not null. v3 reads each stored home's dispatch as it ran before HomeConfig refus
 dispatch ignores, and reports each value it rewrites, with the value it holds now.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` applies each step to every stored run's files and runs row
-through step_run_documents, which checks that the documents it brings forward will read once
-at RUN_FORMAT_VERSION; write_run_documents then writes the documents a step changed and the
-run's format.json last. A run whose documents cannot be brought forward is left as it was, an
-UnmigratedRun naming it.
+that no earlier step of the same migration left unmigrated, through step_run_documents,
+which checks that the documents it brings forward will read once at RUN_FORMAT_VERSION;
+write_run_documents then writes the documents a step changed and the run's format.json
+last. A run whose documents cannot be brought forward is left as it was, an UnmigratedRun
+naming it.
 
 A change to a stored dataclass's shape, such as a renamed or retired field or a new field
 with no default, ships with a RunDocumentStep of the next version appended to
