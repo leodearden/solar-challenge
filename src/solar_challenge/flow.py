@@ -158,24 +158,21 @@ def _build_grid_charge_context(
     battery: "Battery",
     tariff: TariffConfig,
     timestamp: pd.Timestamp,
+    *,
+    target_soc_kwh: float,
 ) -> GridChargeContext:
-    """Build a GridChargeContext from a battery and tariff for the given timestamp.
+    """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh.
 
     Its cheap-period classification is TariffConfig.is_cheap_at's, which
     :func:`simulate_timestep_tou` also reads, so both dispatch paths classify each
     minute alike; a tariff with no rate spread has no cheap minute.
-
-    Requires battery.config.grid_charging is not None.
     """
-    assert battery.config.grid_charging is not None
-    gc = battery.config.grid_charging
-
     return GridChargeContext(
         current_rate=tariff.get_rate(timestamp),
         peak_rate=tariff.peak_rate,
         is_cheap_period=tariff.is_cheap_at(timestamp),
-        target_soc_fraction=gc.target_soc_fraction,
-        max_charge_kw=battery.config.max_charge_kw,
+        target_soc_kwh=target_soc_kwh,
+        max_charge_kw=battery.max_charge_kw,
         round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
         charge_efficiency=battery.charge_efficiency,
     )
@@ -247,8 +244,8 @@ def simulate_timestep(
         strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy).
             Its ``decide_action`` is given the battery's effective (SOH-derated)
             capacity, ``Battery.effective_capacity_kwh``, as ``battery_capacity_kwh``.
-        tariff: Optional tariff configuration.  When provided together with
-            ``battery.config.grid_charging``, a :class:`~solar_challenge.dispatch.GridChargeContext`
+        tariff: Optional tariff configuration.  When provided while
+            ``battery.grid_charge_target_kwh`` is not None, a :class:`~solar_challenge.dispatch.GridChargeContext`
             is built and forwarded to ``strategy.decide_action`` so strategies
             can emit ``grid_charge_kw > 0``.  When ``None`` (default), the
             grid-charge context is not built and results are bit-identical to
@@ -276,10 +273,10 @@ def simulate_timestep(
         if timestamp is None:
             timestamp = datetime(1970, 1, 1)
 
-        # Build grid-charge context when both tariff and grid_charging are configured
+        target_soc_kwh = battery.grid_charge_target_kwh
         grid_charge_ctx = (
-            _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp))
-            if tariff is not None and battery.config.grid_charging is not None
+            _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp), target_soc_kwh=target_soc_kwh)
+            if tariff is not None and target_soc_kwh is not None
             else None
         )
 
@@ -337,8 +334,9 @@ def simulate_timestep_tou(
     3. During cheap periods (off-peak):
        - Excess PV charges battery aggressively
        - Remaining excess exports to grid
-       - When ``battery.config.grid_charging`` is set, the battery tops up from
-         the grid by the power :func:`compute_grid_charge_power_kw` returns
+       - When ``battery.grid_charge_target_kwh`` is not None, the battery tops up
+         from the grid toward it by the power :func:`compute_grid_charge_power_kw`
+         returns
     4. During expensive periods (peak):
        - Discharge battery to meet demand before importing from grid
        - Excess PV charges battery (saving for later peak use)
@@ -380,16 +378,16 @@ def simulate_timestep_tou(
                 excess_power_kw = excess_kwh / duration_hours
                 pv_charge_stored_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
-            if battery.config.grid_charging is not None:
+            target_soc_kwh = battery.grid_charge_target_kwh
+            if target_soc_kwh is not None:
                 pv_charge_power_kw = min(
                     excess_kwh / duration_hours if excess_kwh > 0 else 0.0,
-                    battery.config.max_charge_kw,
+                    battery.max_charge_kw,
                 )
-                ctx = _build_grid_charge_context(battery, tariff, timestamp)
+                ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
                 grid_power = compute_grid_charge_power_kw(
                     ctx,
                     battery_soc_kwh=battery.soc_kwh,  # post-PV-charge SOC
-                    capacity_kwh=battery.config.capacity_kwh,
                     pv_charge_power_kw=pv_charge_power_kw,
                     timestep_minutes=timestep_minutes,
                 )

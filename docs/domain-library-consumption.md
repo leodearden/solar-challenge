@@ -1084,6 +1084,22 @@ still has to select a grid-charging dispatch of its own, as
 `grid_charging` instead leaves the override no grid-charge context. The platform
 needs no change: its `HomeConfig`s set none of these.
 
+**Unreleased on main** (task 788): `GridChargeConfig.target_soc_fraction` is a
+fraction of the battery's effective (SOH-derated) capacity, capped at its
+`max_soc_fraction`, where the 0.5.0 tag measures it against the nominal
+`capacity_kwh`, uncapped. So grid-charge results change for batteries below SOH
+1, multi-year projections included: a 10 kWh battery at SOH 0.7 with target 0.5
+charges to 3.5 kWh, not 5.0. A target above `max_soc_fraction` charges the
+battery to `max_soc_kwh` and then asks for no grid power, where the tag keeps
+asking for `max_charge_kw`. `GridChargeContext.target_soc_fraction` becomes
+`target_soc_kwh`, the target in kWh, and `compute_grid_charge_power_kw` drops
+`capacity_kwh`. `simulate_timestep` passes the effective capacity as
+`decide_action`'s `battery_capacity_kwh`, so a strategy's capacity-relative
+targets, `ScheduledChargeStrategy`'s windows included, follow SOH. `Battery`
+gains `grid_charge_target_kwh` and `max_charge_kw`. The platform's planner
+workaround of `soh=1.0` (task 875) stays correct and can go; it needs no other
+change.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

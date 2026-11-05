@@ -97,10 +97,13 @@ class GridChargeContext:
             round-trip arbitrage profit is positive)
         is_cheap_period: True when the current tariff period is considered
             cheap enough to warrant grid charging
-        target_soc_fraction: Target state-of-charge as a fraction of
-            capacity (0.0–1.0) to fill up to during cheap periods
+        target_soc_kwh: The SOC in kWh that grid charging fills the battery
+            to in cheap periods; the engine sets it from
+            Battery.grid_charge_target_kwh, a fraction of effective capacity
+            capped at max_soc_kwh
         max_charge_kw: Maximum charge power in kW (hardware C-rate limit of
-            the battery/inverter), shared by PV and grid charging
+            the battery/inverter), shared by PV and grid charging; the engine
+            sets it from Battery.max_charge_kw
         round_trip_efficiency: Round-trip charge/discharge efficiency in
             (0, 1], used in the spread gate calculation
         charge_efficiency: One-way charge efficiency in (0, 1], used to
@@ -111,7 +114,7 @@ class GridChargeContext:
     current_rate: float
     peak_rate: float
     is_cheap_period: bool
-    target_soc_fraction: float
+    target_soc_kwh: float
     max_charge_kw: float
     round_trip_efficiency: float
     charge_efficiency: float
@@ -134,7 +137,6 @@ def compute_grid_charge_power_kw(
     ctx: GridChargeContext,
     *,
     battery_soc_kwh: float,
-    capacity_kwh: float,
     pv_charge_power_kw: float,
     timestep_minutes: float,
 ) -> float:
@@ -149,7 +151,6 @@ def compute_grid_charge_power_kw(
             ``ctx.round_trip_efficiency`` and ``ctx.charge_efficiency`` must
             be in (0, 1] (enforced by ``GridChargeContext.__post_init__``).
         battery_soc_kwh: Current battery state of charge in kWh.
-        capacity_kwh: Total battery capacity in kWh.
         pv_charge_power_kw: PV charging power already being consumed by the
             battery in this timestep (kW). Reduces the residual charging
             headroom available for grid charging.
@@ -162,7 +163,7 @@ def compute_grid_charge_power_kw(
         Returns 0.0 when:
         - it is not a cheap period (ctx.is_cheap_period is False), or
         - the spread gate fails (peak saving does not cover round-trip losses),
-        - the battery is already at or above the target SOC.
+        - the battery is already at or above ``ctx.target_soc_kwh``.
 
     Raises:
         ValueError: If ``timestep_minutes`` is not positive and finite.
@@ -180,10 +181,9 @@ def compute_grid_charge_power_kw(
         return 0.0
 
     # Gate 3: how much energy is still needed to reach the target SOC?
-    target_kwh = ctx.target_soc_fraction * capacity_kwh
     return _grid_power_for_gap_kw(
         ctx,
-        gap_kwh=target_kwh - battery_soc_kwh,
+        gap_kwh=ctx.target_soc_kwh - battery_soc_kwh,
         pv_charge_kw=pv_charge_power_kw,
         timestep_minutes=timestep_minutes,
     )
@@ -232,7 +232,7 @@ def _grid_power_to_target_kw(
 
 
 _TARGET_SOC_FRACTION = FRACTION
-"""The grid-charge targets, as fractions of the battery's capacity, that GridChargeConfig and ChargeWindow admit."""
+"""The grid-charge targets, as fractions of the battery's effective (SOH-derated) capacity, that GridChargeConfig and ChargeWindow admit."""
 
 
 @dataclass(frozen=True)
@@ -241,8 +241,11 @@ class GridChargeConfig:
 
     Attributes:
         target_soc_fraction: Target state-of-charge to reach via grid charging,
-            expressed as a fraction of usable capacity: a finite number greater than 0
-            and at most 1, held as the float read. Defaults to 0.9.
+            expressed as a fraction of the battery's effective (SOH-derated) capacity,
+            the basis of Battery.soc_fraction: a finite number greater than 0 and at
+            most 1, held as the float read. Defaults to 0.9. A target above the
+            battery's max_soc_fraction charges it to max_soc_kwh
+            (Battery.grid_charge_target_kwh).
 
     Raises:
         ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
@@ -396,7 +399,9 @@ class DispatchStrategy(ABC):
             generation_kw: PV generation power in kW
             demand_kw: Demand/consumption power in kW
             battery_soc_kwh: Current battery state of charge in kWh
-            battery_capacity_kwh: Total battery capacity in kWh
+            battery_capacity_kwh: The battery's effective (SOH-derated) capacity in kWh, the
+                basis of its SOC fractions, which simulate_timestep passes as
+                Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.
                 A strategy that grid-charges passes it to
@@ -472,7 +477,9 @@ class SelfConsumptionStrategy(DispatchStrategy):
             generation_kw: PV generation power in kW
             demand_kw: Demand/consumption power in kW
             battery_soc_kwh: Current battery state of charge in kWh
-            battery_capacity_kwh: Total battery capacity in kWh
+            battery_capacity_kwh: The battery's effective (SOH-derated) capacity in kWh, the
+                basis of its SOC fractions, which simulate_timestep passes as
+                Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context
                 (accepted but not used in this strategy).
@@ -585,7 +592,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
             generation_kw: PV generation power in kW
             demand_kw: Demand/consumption power in kW
             battery_soc_kwh: Current battery state of charge in kWh
-            battery_capacity_kwh: Total battery capacity in kWh
+            battery_capacity_kwh: The battery's effective (SOH-derated) capacity in kWh, the
+                basis of its SOC fractions, which simulate_timestep passes as
+                Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.  When
                 supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
@@ -652,7 +661,6 @@ class TOUOptimizedStrategy(DispatchStrategy):
             grid_charge_kw = compute_grid_charge_power_kw(
                 grid_charge_ctx,
                 battery_soc_kwh=battery_soc_kwh,
-                capacity_kwh=battery_capacity_kwh,
                 pv_charge_power_kw=charge_kw,
                 timestep_minutes=timestep_minutes,
             )
@@ -713,7 +721,9 @@ class PeakShavingStrategy(DispatchStrategy):
             generation_kw: PV generation power in kW
             demand_kw: Demand/consumption power in kW
             battery_soc_kwh: Current battery state of charge in kWh
-            battery_capacity_kwh: Total battery capacity in kWh
+            battery_capacity_kwh: The battery's effective (SOH-derated) capacity in kWh, the
+                basis of its SOC fractions, which simulate_timestep passes as
+                Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.  When
                 supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
@@ -775,7 +785,6 @@ class PeakShavingStrategy(DispatchStrategy):
             grid_charge_kw = compute_grid_charge_power_kw(
                 grid_charge_ctx,
                 battery_soc_kwh=battery_soc_kwh,
-                capacity_kwh=battery_capacity_kwh,
                 pv_charge_power_kw=charge_kw,
                 timestep_minutes=timestep_minutes,
             )
