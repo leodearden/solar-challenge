@@ -4,6 +4,9 @@
 The home is f44's probe: 4 kW of PV, a deterministic 3400 kWh a year and a 5 kWh battery that
 grid-charges to 0.9, simulated on 2024-06-15 in synthetic June weather. The probe found three
 settings that ran storing 0 kWh from the grid, with no warning.
+
+No HomeConfig or BatteryConfig is built at import: each test builds its own, so a config
+refused by mistake fails its own cases and not the module's collection.
 """
 
 import dataclasses
@@ -63,7 +66,6 @@ def _simulate_the_day(home: HomeConfig) -> SimulationResults:
 _PEAK_SHAVING = PeakShavingStrategyConfig(import_limit_kw=3.0)
 
 # Each home whose dispatch grid-charges, by its id, with the strategy its results name.
-# Each test builds its home, so a home refused by mistake fails its own cases and not the module's collection.
 _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
     "home-tou_optimized-on-e7": (
         lambda: _home(_battery(), tariff=_E7, dispatch_strategy="tou_optimized"),
