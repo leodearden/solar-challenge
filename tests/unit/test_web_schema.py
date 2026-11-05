@@ -36,9 +36,9 @@ import importlib.util
 import json
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import closing
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -647,6 +647,30 @@ def format_2_run_ids(store_at_version_2: Path) -> dict[str, str]:
     return run_ids
 
 
+@dataclass(frozen=True)
+class _OlderStore:
+    """A store a solar-challenge at schema *version*, below SCHEMA_VERSION, left at *path*, its run files in that file's directory.
+
+    *run_ids* is the run id of each legacy stored-run fixture it holds, by the fixture's name.
+    """
+
+    path: Path
+    version: int
+    run_ids: Mapping[str, str]
+
+
+@pytest.fixture(
+    params=[
+        pytest.param((1, "store_at_version_1", "legacy_run_ids"), id="store-at-version-1"),
+        pytest.param((2, "store_at_version_2", "format_2_run_ids"), id="store-at-version-2"),
+    ]
+)
+def older_store(request: pytest.FixtureRequest) -> _OlderStore:
+    """store_at_version_1 holding legacy_run_ids, then store_at_version_2 holding format_2_run_ids."""
+    version, path_fixture, run_ids_fixture = request.param
+    return _OlderStore(request.getfixturevalue(path_fixture), version, request.getfixturevalue(run_ids_fixture))
+
+
 def _run_dir(database_path: Path, run_id: str) -> Path:
     """The directory of run *run_id*'s files in the store whose database file is *database_path*, its run files in that file's directory."""
     return stored_run_dir(run_storage_over(Database(database_path)), run_id)
@@ -716,35 +740,38 @@ def _values_v3_changes_in_the_pre_787_fleet(run_id: str) -> tuple[RewrittenValue
     )
 
 
-def test_migrate_store_brings_a_store_at_version_1_to_the_schema_version_reporting_only_the_values_v3_changes_in_the_pre_787_fleet(
-    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_after_its_own_reporting_only_the_values_v3_changes_in_the_pre_787_fleet(
+    older_store: _OlderStore,
 ) -> None:
-    """The legacy runs hold no key v2 drops but the null keys of the other dispatch variants, a null value it drops unreported."""
-    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+    """A store at version 2, each run's format.json naming 2, is migrated without version 2's step.
+
+    The legacy runs hold no key v2 drops but the null keys of the other dispatch variants, a null value it drops unreported.
+    """
+    report = migrate_store(older_store.path, older_store.path.parent)
 
     assert report == MigrationReport(
-        path=store_at_version_1,
-        from_version=1,
+        path=older_store.path,
+        from_version=older_store.version,
         to_version=SCHEMA_VERSION,
-        applied_steps=MIGRATIONS[1:],
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        applied_steps=MIGRATIONS[older_store.version :],
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(older_store.run_ids["pre_787_dispatch_fleet"]),
     )
-    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    assert _user_version(older_store.path) == SCHEMA_VERSION
 
 
 @_NEEDS_PYARROW
-@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
-def test_after_migrate_store_each_legacy_run_carries_the_format_version_and_loads(
-    store_at_version_1: Path, legacy_run_ids: dict[str, str], name: str
+def test_after_migrate_store_each_legacy_run_of_an_older_store_carries_the_format_version_and_loads(
+    older_store: _OlderStore,
 ) -> None:
-    """B5's second half, at the store: a run stored before runs carried a format version loads once migrated."""
-    run_id = legacy_run_ids[name]
+    """B5's second half, at the store: a run stored before runs carried a format version, or at format 2, loads once migrated."""
+    run_ids = list(older_store.run_ids.values())
 
-    migrate_store(store_at_version_1, store_at_version_1.parent)
+    migrate_store(older_store.path, older_store.path.parent)
 
-    marker = json.loads((_run_dir(store_at_version_1, run_id) / "format.json").read_text())
-    assert marker == {"format_version": RUN_FORMAT_VERSION}
-    assert _storage_of(store_at_version_1).load_run(run_id).run_id == run_id
+    markers = [json.loads((_run_dir(older_store.path, run_id) / "format.json").read_text()) for run_id in run_ids]
+    assert markers == [{"format_version": RUN_FORMAT_VERSION}] * len(run_ids)
+    storage = _storage_of(older_store.path)
+    assert [storage.load_run(run_id).run_id for run_id in run_ids] == run_ids
 
 
 @_NEEDS_PYARROW
@@ -781,37 +808,6 @@ def test_after_migrate_store_a_run_stored_before_786_reads_its_battery_dispatch_
         assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
-def test_migrate_store_brings_a_store_at_version_2_to_the_schema_version_by_the_steps_after_it_reporting_the_values_v3_rewrites_in_the_pre_787_fleet(
-    store_at_version_2: Path, format_2_run_ids: dict[str, str]
-) -> None:
-    """A store as a solar-challenge at schema version 2 left it, each run's format.json naming 2, is migrated without version 2's step."""
-    report = migrate_store(store_at_version_2, store_at_version_2.parent)
-
-    assert report == MigrationReport(
-        path=store_at_version_2,
-        from_version=2,
-        to_version=SCHEMA_VERSION,
-        applied_steps=MIGRATIONS[2:],
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(format_2_run_ids["pre_787_dispatch_fleet"]),
-    )
-    assert _user_version(store_at_version_2) == SCHEMA_VERSION
-
-
-@_NEEDS_PYARROW
-@pytest.mark.parametrize("name", _FIXTURES_IN_FORMAT_2)
-def test_after_migrate_store_each_run_of_a_store_at_version_2_carries_the_format_version_and_loads(
-    store_at_version_2: Path, format_2_run_ids: dict[str, str], name: str
-) -> None:
-    """Its format.json named 2 before the migration, as a save at format 2 left it."""
-    run_id = format_2_run_ids[name]
-
-    migrate_store(store_at_version_2, store_at_version_2.parent)
-
-    marker = json.loads((_run_dir(store_at_version_2, run_id) / "format.json").read_text())
-    assert marker == {"format_version": RUN_FORMAT_VERSION}
-    assert _storage_of(store_at_version_2).load_run(run_id).run_id == run_id
-
-
 def _dispatch_settings(home: HomeConfig) -> tuple[str, str, DispatchStrategyConfig | None, GridChargeConfig | None]:
     """*home*'s name and dispatch_strategy, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
     battery = home.battery_config
@@ -846,31 +842,6 @@ def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_eac
         ]
 
 
-def test_migrate_store_rewrites_only_the_pre_787_fleet_s_config_and_each_run_s_format_marker_in_a_store_at_version_2_leaving_no_other_file(
-    store_at_version_2: Path, format_2_run_ids: dict[str, str]
-) -> None:
-    """Every document and runs column v3 does not change is left byte for byte, and no temporary file is left behind.
-
-    Each run's format.json is there before the migration, naming 2, so none is added.
-    """
-    files_before = {run_id: _files_of(_run_dir(store_at_version_2, run_id)) for run_id in format_2_run_ids.values()}
-    rows_before = _runs_rows(store_at_version_2)
-    pre_787 = format_2_run_ids["pre_787_dispatch_fleet"]
-
-    migrate_store(store_at_version_2, store_at_version_2.parent)
-
-    rows_after = _runs_rows(store_at_version_2)
-    for run_id, before in files_before.items():
-        after = _files_of(_run_dir(store_at_version_2, run_id))
-        assert set(after) == set(before), run_id
-        assert {path for path in before if after[path] != before[path]} == (
-            {"config.json", "format.json"} if run_id == pre_787 else {"format.json"}
-        )
-        assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == (
-            {"config_json"} if run_id == pre_787 else set()
-        )
-
-
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
@@ -888,29 +859,42 @@ def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_r
     ] * 2
 
 
-def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_adds_each_run_s_format_marker_leaving_no_other_file(
-    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+_CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES = (
+    (2, "pre_786_dispatch_home"),
+    (3, "pre_787_dispatch_fleet"),
+)
+"""Each run-document step's version and the legacy stored-run fixture whose config it rewrites.
+
+v2 drops the pre-786 run's null dispatch keys, and v3 sets the pre-787 fleet's dispatch to the one each home ran by.
+"""
+
+
+def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_writes_each_run_s_format_marker_leaving_no_other_file(
+    older_store: _OlderStore,
 ) -> None:
     """Every document and runs column no step changes is left byte for byte, and no temporary file is left behind.
 
-    v2 changes the pre-786 run's config, and v3 the pre-787 fleet's.
+    Each run's format.json is added, or rewritten where a save at format 2 left one.
     """
-    files_before = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
-    rows_before = _runs_rows(store_at_version_1)
-    rewritten = {legacy_run_ids["pre_786_dispatch_home"], legacy_run_ids["pre_787_dispatch_fleet"]}
+    store = older_store.path
+    files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in older_store.run_ids.values()}
+    rows_before = _runs_rows(store)
+    rewritten = {
+        older_store.run_ids[name] for version, name in _CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES if version > older_store.version
+    }
 
-    migrate_store(store_at_version_1, store_at_version_1.parent)
+    migrate_store(store, store.parent)
 
-    rows_after = _runs_rows(store_at_version_1)
+    rows_after = _runs_rows(store)
     for run_id, before in files_before.items():
-        after = _files_of(_run_dir(store_at_version_1, run_id))
+        after = _files_of(_run_dir(store, run_id))
         assert set(after) == {*before, "format.json"}, run_id
-        assert {path for path in before if after[path] != before[path]} == (
-            {"config.json"} if run_id in rewritten else set()
-        )
+        assert {path for path in after if after[path] != before.get(path)} == (
+            {"config.json", "format.json"} if run_id in rewritten else {"format.json"}
+        ), run_id
         assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == (
             {"config_json"} if run_id in rewritten else set()
-        )
+        ), run_id
 
 
 def test_migrate_store_reports_each_value_it_drops_that_is_not_null_naming_the_run_both_documents_and_the_field(
