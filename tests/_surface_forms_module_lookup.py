@@ -225,8 +225,10 @@ def _compiled_with_globals_of_no_module(
         f"{globals_clause}. So no module is known to spell its annotations. "
         f"{_GENERATOR_RECORD_REMEDY}, and record each constructor it writes with the module "
         f"that spells each of its parameters, since a {MethodGenerator.__qualname__} record "
-        "alone does not say where a constructor it writes is spelled. Otherwise, define it "
-        "with def in a module"
+        "alone does not say where a constructor it writes is spelled. If another generator's "
+        "record already names a constructor of the same name, also give a rule that tells "
+        "which of the two generators wrote it. If no generator wrote it, define it with def "
+        "in a module"
     )
 
 

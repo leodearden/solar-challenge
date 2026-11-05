@@ -562,6 +562,7 @@ def test_a_module_level_class_whose_annotated_constructor_a_generator_compiled_w
     assert clause in message
     assert auditing.__file__ not in message.replace(clause, "")
     assert "add a MethodGenerator record" in message
+    assert "a rule that tells which of the two generators wrote it" in message
     assert "sys.modules holds no module under that name" not in message
     assert "before importing another module of that name" not in message
 
