@@ -1,0 +1,31 @@
+{
+  "total_generation_kwh": 26.851782213079762,
+  "total_demand_kwh": 7.594583275164039,
+  "total_self_consumption_kwh": 7.594583275164039,
+  "total_grid_import_kwh": 7.155734338404329e-17,
+  "total_grid_export_kwh": 18.814753797380195,
+  "total_battery_charge_kwh": 2.9772371771509833,
+  "total_battery_discharge_kwh": 2.534792036615457,
+  "peak_generation_kw": 3.571241100742295,
+  "peak_demand_kw": 0.6070388021851361,
+  "self_consumption_ratio": 0.28283348996718155,
+  "grid_dependency_ratio": 9.422155343012903e-18,
+  "export_ratio": 0.7006891999971364,
+  "simulation_days": 1,
+  "total_import_cost_gbp": 1.684850176042474e-17,
+  "total_export_revenue_gbp": 0.0,
+  "net_cost_gbp": 1.684850176042474e-17,
+  "strategy_name": "self_consumption",
+  "seg_revenue_gbp": null,
+  "total_heat_pump_load_kwh": null,
+  "peak_heat_pump_load_kw": null,
+  "heat_pump_load_ratio": null,
+  "total_grid_charge_cost_gbp": 0.0,
+  "total_grid_charge_kwh": 0.0,
+  "window": {
+    "first_day": "2024-06-15",
+    "last_day": "2024-06-15",
+    "cadence": "P0DT0H1M0S",
+    "timezone": "Europe/London"
+  }
+}

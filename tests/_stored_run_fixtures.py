@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Runs as solar-challenge stored them before a stored run carried a format version, for tests that read and migrate them.
+"""Runs as earlier solar-challenge code stored them, with no format version, for tests that read and migrate them.
 
-Each fixture in tests/fixtures/stored_runs/<name>/ is a run that the code of main at commit
+pre_469_home, legacy_fleet and pre_786_dispatch_home are runs that the code of main at commit
 9ce8827 saved. That commit is the one before task 469 merged (aca7236's first parent), so its
 summaries have no total_grid_charge_kwh, and a battery's dispatch strategy is not yet task
 786's tagged union. A one-off script, which is not committed, wrote them: it built synthetic
@@ -10,9 +10,17 @@ summarised them with that tree's calculate_summary, and a fleet's with its
 calculate_fleet_summary too; and it saved them through that tree's
 RunStorage(db_path, data_dir).save_home_run and save_fleet_run into a temporary store.
 
+pre_787_dispatch_fleet is a run that the code of main at commit b8d39b9 saved, before task 787
+refused a dispatch setting its run would ignore. A one-off script, which is not committed,
+simulated each home for one day, 2024-06-15, offline with synthetic_june_weather; it
+summarised them with that tree's calculate_home_summaries and calculate_fleet_summary; and it
+saved them through that tree's RunStorage.save_fleet_run into a temporary store. That save
+also wrote a format.json, which was then deleted, so the run reads as one stored before a run
+carried a format version, and every step brings it forward.
+
 Each fixture holds:
 
-- run/: the run's directory exactly as that save wrote it, with no format.json. A home run's
+- run/: the run's directory as that save wrote it, without a format.json. A home run's
   holds config.json, summary.json and data.parquet. A fleet run's holds config.json
   ({"homes": [...], "n_homes": N}), summary.json, and in homes/ each home's home_<i>.parquet
   and home_<i>_summary.json.
@@ -27,6 +35,12 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   tou_optimized with peak_hours [[16, 19]] and grid-charges to 0.8. Its dispatch strategy has
   the three-key shape of before the tagged union:
   {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]], "import_limit_kw": null}.
+- pre_787_dispatch_fleet: a fleet run of three homes, each with a 5 kWh battery that
+  grid-charges to 0.8, whose dispatch charged nothing from the grid:
+  homes[0]'s battery dispatches self_consumption, on an Economy 7 tariff, with home
+  dispatch_strategy "greedy"; homes[1]'s battery dispatches tou_optimized with peak_hours
+  [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
+  that names no dispatch strategy and no tariff, so it ran self-consumption.
 
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
@@ -55,7 +69,12 @@ if TYPE_CHECKING:
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "stored_runs"
 
-STORED_RUN_FIXTURES: tuple[str, ...] = ("pre_469_home", "legacy_fleet", "pre_786_dispatch_home")
+STORED_RUN_FIXTURES: tuple[str, ...] = (
+    "pre_469_home",
+    "legacy_fleet",
+    "pre_786_dispatch_home",
+    "pre_787_dispatch_fleet",
+)
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
 
 
