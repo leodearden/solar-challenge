@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A run's summary with chosen figures, for tests that write runs rows themselves.
+"""A run's summary with chosen figures, and the summary_json text a save writes for it.
 
 home_summary and fleet_summary are each a full summary of fixed round figures, with the
 figures a test gives in place of those; summary_json is the runs row's summary_json text a

@@ -690,8 +690,6 @@ def calculate_summary(
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
-    window = results.window
-
     # Calculate SEG revenue if tariff is provided.
     # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
     # SEGTariff validates rate >= 0; negative values raise ValueError here.
@@ -715,6 +713,7 @@ def calculate_summary(
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = heat_pump_load_ratio(heat_pump_load_kwh=total_heat_pump_kwh, demand_kwh=total_demand)
 
+    window = results.window
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,

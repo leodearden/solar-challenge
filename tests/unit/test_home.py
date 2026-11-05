@@ -28,6 +28,7 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import PrefetchedWeather
 from tests._finance_builders import make_sim_results
+from tests._run_summaries import home_summary
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
@@ -975,29 +976,6 @@ class TestCalculateSummaryWindow:
         assert summary.simulation_days == summary.window.days == calendar_days
 
 
-def _summary_statistics(**overrides: typing.Any) -> SummaryStatistics:
-    """A 7-day run's summary with every required field set, overrides applied."""
-    required_fields: dict[str, typing.Any] = {
-        "total_generation_kwh": 100.0,
-        "total_demand_kwh": 80.0,
-        "total_self_consumption_kwh": 60.0,
-        "total_grid_import_kwh": 20.0,
-        "total_grid_export_kwh": 40.0,
-        "total_battery_charge_kwh": 15.0,
-        "total_battery_discharge_kwh": 15.0,
-        "peak_generation_kw": 4.0,
-        "peak_demand_kw": 3.0,
-        "self_consumption_ratio": 0.6,
-        "grid_dependency_ratio": 0.25,
-        "export_ratio": 0.4,
-        "simulation_days": 7,
-        "total_import_cost_gbp": 5.0,
-        "total_export_revenue_gbp": 8.0,
-        "net_cost_gbp": -3.0,
-    }
-    return SummaryStatistics(**{**required_fields, **overrides})
-
-
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
 
@@ -1006,17 +984,34 @@ class TestSummaryStatistics:
 
     def test_all_fields_present(self):
         """SummaryStatistics has all required fields."""
-        stats = _summary_statistics()
+        stats = SummaryStatistics(
+            total_generation_kwh=100.0,
+            total_demand_kwh=80.0,
+            total_self_consumption_kwh=60.0,
+            total_grid_import_kwh=20.0,
+            total_grid_export_kwh=40.0,
+            total_battery_charge_kwh=15.0,
+            total_battery_discharge_kwh=15.0,
+            peak_generation_kw=4.0,
+            peak_demand_kw=3.0,
+            self_consumption_ratio=0.6,
+            grid_dependency_ratio=0.25,
+            export_ratio=0.4,
+            simulation_days=7,
+            total_import_cost_gbp=5.0,
+            total_export_revenue_gbp=8.0,
+            net_cost_gbp=-3.0,
+        )
         assert stats.total_generation_kwh == 100.0
         assert stats.simulation_days == 7
 
     def test_a_summary_holds_the_window_whose_days_are_its_simulation_days(self):
         """A summary whose simulation_days is its window's days holds that window."""
-        summary = _summary_statistics(simulation_days=2, window=_TWO_JUNE_DAYS)
+        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
 
         assert summary.window == _TWO_JUNE_DAYS
 
     def test_a_simulation_days_other_than_its_windows_days_is_refused_naming_both(self):
         """A summary whose simulation_days is not its window's days is refused, naming both."""
         with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
-            _summary_statistics(simulation_days=3, window=_TWO_JUNE_DAYS)
+            home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
