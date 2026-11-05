@@ -395,6 +395,19 @@ class Battery:
         return self.effective_capacity_kwh * self.max_soc_fraction
 
     @property
+    def grid_charge_target_kwh(self) -> Optional[float]:
+        """The SOC, in kWh, that grid charging fills the battery to.
+
+        It is config.grid_charging's target_soc_fraction of the effective (SOH-derated)
+        capacity, capped at the battery's current max_soc_fraction, so it is at most
+        max_soc_kwh. It is None when config.grid_charging is None.
+        """
+        grid_charging = self.config.grid_charging
+        if grid_charging is None:
+            return None
+        return min(grid_charging.target_soc_fraction, self.max_soc_fraction) * self.effective_capacity_kwh
+
+    @property
     def usable_capacity_kwh(self) -> float:
         """Usable capacity in kWh (max_soc - min_soc)."""
         return self.max_soc_kwh - self.min_soc_kwh
@@ -408,6 +421,11 @@ class Battery:
     def available_discharge_capacity_kwh(self) -> float:
         """Energy that can still be discharged in kWh: 0.0 while the SOC is at or below min_soc_kwh."""
         return max(0.0, self._soc_kwh - self.min_soc_kwh)
+
+    @property
+    def max_charge_kw(self) -> float:
+        """The maximum charging power in kW, the limit charge() applies."""
+        return self.config.max_charge_kw
 
     def charge(self, power_kw: float, duration_minutes: float) -> float:
         """Charge the battery.
@@ -427,7 +445,7 @@ class Battery:
         _require_valid_request("charge", power_kw, duration_minutes)
 
         # Limit to max charge rate
-        actual_power = min(power_kw, self.config.max_charge_kw)
+        actual_power = min(power_kw, self.max_charge_kw)
 
         # Calculate energy input and stored (with efficiency)
         duration_hours = duration_minutes * HOURS_PER_MINUTE

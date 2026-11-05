@@ -25,11 +25,11 @@ decides it, given every argument unchanged.
    context a window still holds (rule 4).
 2. **The target is `target_soc_fraction` of the `battery_capacity_kwh` that `decide_action`
    is given.** Reason: the strategy takes every battery fact from `decide_action`'s inputs,
-   so it keeps no second copy of limits a `Battery` lets callers reassign. Today the engine
-   passes the nominal capacity, the basis TOU and peak-shaving grid charging use too; when
-   it passes the SoH-derated capacity, the windows follow with no change.
+   so it keeps no second copy of limits a `Battery` lets callers reassign. The engine
+   passes the SoH-derated (effective) capacity, `Battery.effective_capacity_kwh`, which TOU
+   and peak-shaving grid charging measure their target against too.
    `max_soc_fraction` stays the battery's own ceiling: `Battery.charge` stores nothing past
-   `max_soc_kwh`, so a target above it asks for grid power that stores nothing.
+   `max_soc_kwh`, so a window's target above it asks for grid power that stores nothing.
 3. **Grid power fills the gap left after the step's PV charge, within the `max_charge_kw`
    headroom that charge leaves.** The SOC after the PV charge is predicted as
    `Battery.charge` stores it, `soc + min(pv, max_charge_kw) × dt_h × charge_efficiency`;

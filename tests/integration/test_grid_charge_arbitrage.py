@@ -7,6 +7,9 @@ These tests:
 - Validate that the CLI accepts the battery.grid_charging YAML keys
 - Assert that enabling grid-charging reduces net cost on a single winter day
   using a deterministic zero-PV synthetic weather frame (PVGIS-free, fast)
+- Assert that a copy of the scenario whose battery is at SOH 0.7 ends the cheap
+  night, in the CSV `home run` writes, at its target fraction of the battery's
+  effective (SOH-derated) capacity
 
 Every simulation is given a sunless winter day as its weather, so these tests run offline.
 """
@@ -14,15 +17,19 @@ Every simulation is given a sunless winter day as its weather, so these tests ru
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
 from solar_challenge.home import calculate_summary, simulate_home
+from solar_challenge.weather import WeatherCache
 from tests._repository_paths import SCENARIOS_DIR
-from tests._synthetic_weather import sunless_weather, weather_for
+from tests._synthetic_weather import sunless_tmy, sunless_weather, weather_for
 
 runner = CliRunner()
 
@@ -117,3 +124,29 @@ def test_energy_balance_holds_with_grid_charging() -> None:
 
     # With zero PV and grid-charging, we must have drawn from the grid
     assert res.grid_import.sum() > 0, "Expected non-zero grid import"
+
+
+def test_a_derated_battery_ends_the_cheap_night_at_its_target_fraction_of_effective_capacity(
+    tmp_path: Path, weather_cache: WeatherCache
+) -> None:
+    """The 5 kWh battery at SOH 0.7, grid-charging to 0.5, holds 1.75 kWh at 07:29, the cheap night's last minute: half its 3.5 kWh effective capacity."""
+    scenario = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    battery = scenario["home"]["battery"]
+    battery["soh"] = 0.7
+    battery["grid_charging"]["target_soc_fraction"] = 0.5
+    derated = tmp_path / "bristol-arbitrage-soh-0.7.yaml"
+    derated.write_text(yaml.safe_dump(scenario), encoding="utf-8")
+    home = load_scenarios(derated)[0].home
+    assert home is not None
+    weather_cache.put(sunless_tmy(temp_air=8.0), "tmy", home.location)
+    csv = tmp_path / "run.csv"
+
+    result = runner.invoke(
+        app,
+        ["home", "run", str(derated), "--start", "2024-01-15", "--end", "2024-01-15", "--output", str(csv)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    soc_kwh = pd.read_csv(csv, index_col=0, parse_dates=True)["battery_soc_kwh"]
+    assert soc_kwh.loc["2024-01-15 07:29"] == pytest.approx(1.75, abs=1e-6)

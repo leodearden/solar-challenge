@@ -26,7 +26,7 @@ class TestGridChargeContext:
             current_rate=0.10,
             peak_rate=0.40,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=5.0,
             round_trip_efficiency=0.81,
             charge_efficiency=0.9,
@@ -40,7 +40,7 @@ class TestGridChargeContext:
         assert ctx.current_rate == pytest.approx(0.10)
         assert ctx.peak_rate == pytest.approx(0.40)
         assert ctx.is_cheap_period is True
-        assert ctx.target_soc_fraction == pytest.approx(0.9)
+        assert ctx.target_soc_kwh == pytest.approx(9.0)
         assert ctx.max_charge_kw == pytest.approx(5.0)
         assert ctx.round_trip_efficiency == pytest.approx(0.81)
         assert ctx.charge_efficiency == pytest.approx(0.9)
@@ -51,7 +51,7 @@ class TestGridChargeContext:
             current_rate=0.07,
             peak_rate=0.32,
             is_cheap_period=False,
-            target_soc_fraction=0.8,
+            target_soc_kwh=4.0,
             max_charge_kw=3.3,
             round_trip_efficiency=0.85,
             charge_efficiency=0.95,
@@ -59,7 +59,7 @@ class TestGridChargeContext:
         assert ctx.current_rate == pytest.approx(0.07)
         assert ctx.peak_rate == pytest.approx(0.32)
         assert ctx.is_cheap_period is False
-        assert ctx.target_soc_fraction == pytest.approx(0.8)
+        assert ctx.target_soc_kwh == pytest.approx(4.0)
         assert ctx.max_charge_kw == pytest.approx(3.3)
         assert ctx.round_trip_efficiency == pytest.approx(0.85)
         assert ctx.charge_efficiency == pytest.approx(0.95)
@@ -117,7 +117,7 @@ class TestComputeGridChargePowerKw:
         current_rate=0.10,
         peak_rate=0.40,
         is_cheap_period=True,
-        target_soc_fraction=0.9,
+        target_soc_kwh=9.0,
         max_charge_kw=20.0,
         round_trip_efficiency=0.81,
         charge_efficiency=0.9,
@@ -129,7 +129,7 @@ class TestComputeGridChargePowerKw:
             current_rate=0.05,
             peak_rate=0.40,
             is_cheap_period=False,   # not cheap
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=20.0,
             round_trip_efficiency=0.81,
             charge_efficiency=0.9,
@@ -137,7 +137,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -151,7 +150,7 @@ class TestComputeGridChargePowerKw:
             current_rate=0.10,
             peak_rate=0.10,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=20.0,
             round_trip_efficiency=0.81,
             charge_efficiency=0.9,
@@ -159,7 +158,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -171,7 +169,7 @@ class TestComputeGridChargePowerKw:
             current_rate=0.25,
             peak_rate=0.25,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=20.0,
             round_trip_efficiency=0.90,
             charge_efficiency=0.9,
@@ -179,19 +177,17 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=0.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
         assert result == 0.0
 
     def test_soc_at_target_returns_zero(self):
-        """When battery_soc_kwh >= target_soc_fraction * capacity_kwh, returns 0.0."""
-        # target = 0.9 * 10 = 9.0 kWh; soc = 9.0 kWh → gap = 0
+        """When battery_soc_kwh >= target_soc_kwh, returns 0.0."""
+        # target = 9.0 kWh; soc = 9.0 kWh → gap = 0
         result = compute_grid_charge_power_kw(
             self._CTX_FAVOURABLE,
             battery_soc_kwh=9.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -202,7 +198,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             self._CTX_FAVOURABLE,
             battery_soc_kwh=9.5,  # above 9.0 target
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -212,10 +207,10 @@ class TestComputeGridChargePowerKw:
         """When residual budget is large, min picks gap_power.
 
         Params: is_cheap=True, peak=0.40, current=0.10, rt_eff=0.81,
-        charge_eff=0.9, target=0.9, capacity=10, soc=2.0,
+        charge_eff=0.9, target=9.0 kWh, soc=2.0,
         max_charge_kw=20, pv_charge_kw=0, timestep=60.
 
-        gap_kwh = 0.9*10 - 2.0 = 7.0
+        gap_kwh = 9.0 - 2.0 = 7.0
         gap_power = 7.0 / 0.9 / 1.0 = 7.7778 kW
         residual  = 20.0 - 0.0 = 20.0 kW
         result    = min(7.7778, 20.0) = 7.7778 kW
@@ -223,7 +218,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             self._CTX_FAVOURABLE,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -242,7 +236,7 @@ class TestComputeGridChargePowerKw:
             current_rate=0.10,
             peak_rate=0.40,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=5.0,
             round_trip_efficiency=0.81,
             charge_efficiency=0.9,
@@ -250,7 +244,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=1.0,
             timestep_minutes=60.0,
         )
@@ -266,14 +259,12 @@ class TestComputeGridChargePowerKw:
         result_30 = compute_grid_charge_power_kw(
             self._CTX_FAVOURABLE,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=30.0,
         )
         result_60 = compute_grid_charge_power_kw(
             self._CTX_FAVOURABLE,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -286,7 +277,6 @@ class TestComputeGridChargePowerKw:
             compute_grid_charge_power_kw(
                 self._CTX_FAVOURABLE,
                 battery_soc_kwh=2.0,
-                capacity_kwh=10.0,
                 pv_charge_power_kw=0.0,
                 timestep_minutes=0.0,
             )
@@ -297,7 +287,6 @@ class TestComputeGridChargePowerKw:
             compute_grid_charge_power_kw(
                 self._CTX_FAVOURABLE,
                 battery_soc_kwh=2.0,
-                capacity_kwh=10.0,
                 pv_charge_power_kw=0.0,
                 timestep_minutes=-1.0,
             )
@@ -314,7 +303,6 @@ class TestComputeGridChargePowerKw:
             compute_grid_charge_power_kw(
                 ctx,
                 battery_soc_kwh=2.0,
-                capacity_kwh=10.0,
                 pv_charge_power_kw=0.0,
                 timestep_minutes=timestep_minutes,
             )
@@ -339,7 +327,7 @@ class TestComputeGridChargePowerKw:
             current_rate=0.10,
             peak_rate=0.40,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=9.0,
             max_charge_kw=5.0,
             round_trip_efficiency=0.81,
             charge_efficiency=0.8,  # deliberately different from 0.9 to surface frame
@@ -347,7 +335,6 @@ class TestComputeGridChargePowerKw:
         result = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=2.0,
-            capacity_kwh=10.0,
             pv_charge_power_kw=1.0,  # residual = 5.0 - 1.0 = 4.0 kW battery-side
             timestep_minutes=60.0,
         )
@@ -364,7 +351,7 @@ class TestDecideActionAcceptsGridChargeCtx:
         current_rate=0.10,
         peak_rate=0.40,
         is_cheap_period=True,
-        target_soc_fraction=0.9,
+        target_soc_kwh=4.5,
         max_charge_kw=5.0,
         round_trip_efficiency=0.81,
         charge_efficiency=0.9,

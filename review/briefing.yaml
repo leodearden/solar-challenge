@@ -118,6 +118,18 @@ conventions:
       grid-charges; __post_init__ refuses the tariff-rate TOU route's missing tariff beside them
       (D27 invariant 10; D3; docs/prds/dispatch-configuration-below-config.md §5.7).
 
+  - rule: "Every capacity a dispatcher sees is SOH-derated: a grid-charge target is a fraction of the battery's effective capacity, capped at its max_soc_fraction, and the Battery answers it in kWh (Battery.grid_charge_target_kwh; tests/unit/test_grid_charge_target_basis.py); flow.py reads no battery.config, only the Battery's answers (tests/unit/test_flow_reads_no_battery_config.py)"
+    why: >
+      Both dispatch paths used to measure the target against the nominal capacity_kwh while
+      Battery bounds its SOC on effective capacity, so a 10 kWh battery at SOH 0.7 with target
+      0.5 stopped at 0.714 of its effective capacity; and a target above max_soc_fraction kept
+      requesting max_charge_kw into a full battery. GridChargeContext now carries the kWh
+      target, and simulate_timestep hands decide_action the effective capacity
+      (fk-8529726bbd6b, fk-99244625d7f2; D27 invariant 9;
+      docs/prds/dispatch-configuration-below-config.md §5.4). flow.py read battery.config 11
+      times, the nominal capacity_kwh among them; reading only the Battery's answers keeps one
+      definition of each limit and basis (docs/prds/dispatch-configuration-below-config.md §4).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are

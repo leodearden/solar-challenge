@@ -42,7 +42,7 @@ _FLAT_RATE_CTX = GridChargeContext(
     current_rate=0.25,
     peak_rate=0.25,
     is_cheap_period=False,
-    target_soc_fraction=0.9,
+    target_soc_kwh=4.5,
     max_charge_kw=2.5,
     round_trip_efficiency=0.95,
     charge_efficiency=0.975,
@@ -430,7 +430,7 @@ class TestScheduledChargeStrategyGridCharge:
         )
 
         assert compute_grid_charge_power_kw(
-            _FLAT_RATE_CTX, battery_soc_kwh=2.0, capacity_kwh=5.0, pv_charge_power_kw=0.0, timestep_minutes=1.0
+            _FLAT_RATE_CTX, battery_soc_kwh=2.0, pv_charge_power_kw=0.0, timestep_minutes=1.0
         ) == 0.0
         assert decision == DispatchDecision(charge_kw=0.0, discharge_kw=0.0, grid_charge_kw=2.5)
 

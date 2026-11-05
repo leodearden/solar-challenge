@@ -473,7 +473,7 @@ class TestTOUOptimizedStrategyGridCharging:
         current_rate=0.10,
         peak_rate=0.35,
         is_cheap_period=True,
-        target_soc_fraction=0.9,
+        target_soc_kwh=4.5,
         max_charge_kw=3.0,
         round_trip_efficiency=0.9,
         charge_efficiency=0.95,
@@ -494,7 +494,6 @@ class TestTOUOptimizedStrategyGridCharging:
         expected_grid = compute_grid_charge_power_kw(
             ctx,
             battery_soc_kwh=1.0,
-            capacity_kwh=5.0,
             pv_charge_power_kw=0.0,
             timestep_minutes=60.0,
         )
@@ -547,7 +546,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.30,
             peak_rate=0.31,
             is_cheap_period=True,
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -569,7 +568,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.35,
             peak_rate=0.35,
             is_cheap_period=False,  # peak, not cheap
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -625,7 +624,7 @@ class TestTOUOptimizedStrategyGridCharging:
             current_rate=0.10,
             peak_rate=0.35,
             is_cheap_period=True,  # caller says cheap — Gate1 passes
-            target_soc_fraction=0.9,
+            target_soc_kwh=4.5,
             max_charge_kw=3.0,
             round_trip_efficiency=0.9,
             charge_efficiency=0.95,
@@ -646,12 +645,12 @@ class TestTOUOptimizedStrategyGridCharging:
     def test_soc_at_target_no_grid_charge(self, standard_tou_strategy):
         """Gate 3: battery already at target SOC → controller returns 0.0."""
         ctx = self._FAVOURABLE_CTX
-        # soc == target_soc_fraction * capacity → gap_kwh = 0.0
+        # soc == target_soc_kwh → gap_kwh = 0.0
         decision = standard_tou_strategy.decide_action(
             timestamp=datetime(2024, 1, 1, 3, 0, 0),  # off-peak
             generation_kw=0.0,
             demand_kw=1.0,
-            battery_soc_kwh=4.5,   # = 0.9 * 5.0
+            battery_soc_kwh=4.5,   # = target_soc_kwh
             battery_capacity_kwh=5.0,
             timestep_minutes=60.0,
             grid_charge_ctx=ctx,
