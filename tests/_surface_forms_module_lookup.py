@@ -355,15 +355,15 @@ def names_declared_by(
 
 
 class NoSourceError(Exception):
-    """The error source_of raises, from the OSError or TypeError inspect.getsource raised, when inspect reads no source for a module or a function."""
+    """The error source_of raises, from the OSError or TypeError inspect.getsource raised, when inspect reads no source for a module or a function; its message names that module or function."""
 
 
 def source_of(obj: types.ModuleType | types.FunctionType) -> str:
-    """The source inspect reads for *obj*, a module or a function, read afresh on each call, the one place this helper asks inspect for a source; NoSourceError if inspect reads none, as for a built-in or extension module, for a module with no file, as a module types.ModuleType makes has none, or for a function compiled from text no file holds."""
+    """The source inspect reads for *obj*, a module or a function, read afresh on each call, the one place this helper asks inspect for a source; NoSourceError naming *obj* if inspect reads none, as for a built-in or extension module, for a module with no file, as a module types.ModuleType makes has none, or for a function compiled from text no file holds."""
     try:
         return inspect.getsource(obj)
     except (OSError, TypeError) as unread:
-        raise NoSourceError from unread
+        raise NoSourceError(f"inspect reads no source for {label_of(obj)}") from unread
 
 
 @_cached_while_alive
