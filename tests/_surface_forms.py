@@ -169,9 +169,9 @@ def member_forms(cls: type) -> dict[str, str]:
     come first, in annotation order, then the other names it defines, in class-body
     order. A ClassVar annotation declares a class variable, not an instance attribute; a
     string annotation is read as named_classes reads one, so a name its module does not
-    bind raises NameError, a module inspect reads no source for raises TypeError, and a
-    module another of the same name has replaced in sys.modules raises LookupError. A
-    class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
+    bind raises NameError, a module inspect reads no source for raises TypeError while
+    its imports are unread, as named_classes says, and a module another of the same name
+    has replaced in sys.modules raises LookupError. A class whose metaclass shadows __dict__ or overrides type's __getattribute__ raises
     the TypeError own_namespace raises for it. A public name the body binds to a class,
     by a nested class statement or an alias, raises TypeError naming *cls*, the name and
     that class, whose own members it would leave unpinned. A public member that no
@@ -195,7 +195,9 @@ def named_classes(obj: object) -> set[type]:
     reads it: its globals, with the imports of its top-level `if TYPE_CHECKING:` blocks
     bound over them. A name bound in neither raises NameError. A string read in a module
     inspect reads no source for, such as a built-in or extension module, which has no
-    such block to read, raises TypeError naming it and that module. A routine is spelled
+    such block to read, raises TypeError naming it and that module while the module's
+    imports are unread, as evaluated_in in tests/_surface_forms_module_lookup.py says,
+    for it keeps them once read. A routine is spelled
     in the module whose globals it carries, whatever module its __module__ names; a
     functools.partial, a bound method, or a routine that wraps another callable as
     functools.wraps records one, where that callable is, whatever __signature__ the
@@ -216,7 +218,7 @@ def named_classes(obj: object) -> set[type]:
     that may_be_generated in tests/_surface_forms_generators.py does not find a
     generator may have written there. A class with no witness carries nothing to check
     its module by, so the module is looked up unchecked, though a string read in one
-    inspect reads no source for still raises TypeError as above. A dataclass whose only
+    inspect reads no source for still raises TypeError as above, on the same condition. A dataclass whose only
     method is a hand-written __init__ has no witness in a module that imports
     annotations from __future__.
     A signature carried over a callable that spells no annotation, such as one defined
