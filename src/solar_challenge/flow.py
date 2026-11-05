@@ -244,7 +244,9 @@ def simulate_timestep(
         battery: Battery object (or None for no battery)
         timestep_minutes: Duration of timestep in minutes
         timestamp: Current simulation timestamp (defaults to epoch if None)
-        strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy)
+        strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy).
+            Its ``decide_action`` is given the battery's effective (SOH-derated)
+            capacity, ``Battery.effective_capacity_kwh``, as ``battery_capacity_kwh``.
         tariff: Optional tariff configuration.  When provided together with
             ``battery.config.grid_charging``, a :class:`~solar_challenge.dispatch.GridChargeContext`
             is built and forwarded to ``strategy.decide_action`` so strategies
@@ -286,7 +288,7 @@ def simulate_timestep(
             generation_kw=generation_kw,
             demand_kw=demand_kw,
             battery_soc_kwh=battery.soc_kwh,
-            battery_capacity_kwh=battery.config.capacity_kwh,
+            battery_capacity_kwh=battery.effective_capacity_kwh,
             timestep_minutes=timestep_minutes,
             grid_charge_ctx=grid_charge_ctx,
         )
