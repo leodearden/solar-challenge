@@ -38,17 +38,15 @@ _SIDEBAR_COLLAPSED = {"sidebar_width": 64, "content_left": 64}
 
 
 def _expand_sidebar_group(page: Page, group_label: str) -> None:
-    """Click the expandable group button in the desktop sidebar so that
-    its child links become visible.
+    """Click the expandable group button in the desktop sidebar that opens its child links.
 
-    The sidebar uses collapsible groups (Simulate, Scenarios, History)
-    controlled by Alpine.js ``x-collapse``.
+    The sidebar's collapsible groups (Simulate, Scenarios, History) open under Alpine.js
+    ``x-collapse``, so this returns once the button is clicked, while the links may still be
+    sliding open. A Playwright click on one of them waits until the link receives it.
     """
     sidebar = _desktop_sidebar(page)
     group_btn = sidebar.locator("button", has_text=group_label)
     group_btn.click()
-    # Wait for the collapse animation to finish
-    page.wait_for_timeout(400)
 
 
 def _click_sidebar_link(page: Page, link_text: str) -> None:
@@ -192,16 +190,12 @@ def test_dark_mode_toggle(page: Page, live_server: str) -> None:
     # Click the theme toggle button (in the desktop sidebar footer)
     toggle_btn = _desktop_sidebar(page).locator('button[aria-label="Toggle dark mode"]')
     toggle_btn.click()
-    page.wait_for_timeout(300)
 
     # After clicking, the dark class should be toggled
-    html_classes_after = html_el.get_attribute("class") or ""
-    ends_dark = "dark" in html_classes_after.split()
-
     if starts_dark:
-        assert not ends_dark, "Toggle should have removed 'dark' class"
+        expect(html_el, "Toggle should have removed 'dark' class").not_to_contain_class("dark")
     else:
-        assert ends_dark, "Toggle should have added 'dark' class"
+        expect(html_el, "Toggle should have added 'dark' class").to_contain_class("dark")
 
 
 # ── Sidebar collapse / expand ──────────────────────────────────────────
