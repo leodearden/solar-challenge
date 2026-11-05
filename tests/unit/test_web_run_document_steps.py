@@ -58,28 +58,30 @@ _V3 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 3)
 _PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
 """Task 786's fixture: a home run's stored config per dispatch strategy, as runs stored it before
 the strategies were variants of one union, with all three strategy keys, the ones the strategy
-does not read null. Each is the config of _dispatching_home(strategy) named after its strategy."""
+does not read null. Each is the config of _dispatching_home(strategy, GridChargeConfig(0.8))
+named after its strategy."""
 
-_STRATEGIES = (
-    SelfConsumptionStrategyConfig(),
-    TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-    PeakShavingStrategyConfig(import_limit_kw=3.0),
-)
-"""One example of each dispatch strategy, those of the stored configs above."""
+_STRATEGIES_AND_THE_GRID_CHARGING_THEY_RAN_BY = [
+    pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
+    pytest.param(
+        TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), GridChargeConfig(target_soc_fraction=0.8), id="tou_optimized"
+    ),
+    pytest.param(
+        PeakShavingStrategyConfig(import_limit_kw=3.0), GridChargeConfig(target_soc_fraction=0.8), id="peak_shaving"
+    ),
+]
+"""One example of each dispatch strategy, those of the stored configs above, and the grid charging each ran by:
+self-consumption dispatch ignored the stored configs' grid charging."""
 
 Keys = tuple[str | int, ...]
 
 
-def _dispatching_home(strategy: Any, name: str) -> HomeConfig:
-    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges to 0.8, as the stored configs above."""
+def _dispatching_home(strategy: Any, grid_charging: GridChargeConfig | None, name: str) -> HomeConfig:
+    """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges by *grid_charging*."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0),
-        battery_config=BatteryConfig(
-            capacity_kwh=5.0,
-            dispatch_strategy=strategy,
-            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-        ),
+        battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=grid_charging),
         tariff_config=TariffConfig.economy_7(),
         name=name,
     )
@@ -189,20 +191,20 @@ def test_v2_drops_the_null_keys_of_the_other_dispatch_variants_and_reports_nothi
     assert battery.grid_charging == GridChargeConfig(target_soc_fraction=0.8)
 
 
-@pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
-def test_v2_migrates_a_config_stored_before_the_dispatch_union_then_it_loads_as_its_variant(strategy: Any) -> None:
-    """786's pre-union configs: once migrated, each reads as the home it was saved from."""
+@pytest.mark.parametrize(("strategy", "grid_charging"), _STRATEGIES_AND_THE_GRID_CHARGING_THEY_RAN_BY)
+def test_v2_migrates_a_config_stored_before_the_dispatch_union_then_it_loads_as_its_variant_as_it_ran(
+    strategy: Any, grid_charging: GridChargeConfig | None
+) -> None:
+    """786's pre-union configs: v2 reports nothing, and once every step has brought one forward it reads as the home that ran."""
     tag = strategy.strategy_type
     stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[tag]
     documents = dataclasses.replace(
         _fixture_documents("pre_786_dispatch_home"), config=StoredDocument("pre-union-001", "config.json", stored)
     )
 
-    result = _V2.apply("home", documents)
-
-    assert result.dropped == ()
-    assert result.documents.config.read(HomeConfig) == _dispatching_home(
-        strategy, name=f"Stored before the dispatch union: {tag}"
+    assert _V2.apply("home", documents).dropped == ()
+    assert documents_in_current_format("home", documents).config.read(HomeConfig) == _dispatching_home(
+        strategy, grid_charging, name=f"Stored before the dispatch union: {tag}"
     )
 
 

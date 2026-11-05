@@ -742,7 +742,8 @@ def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
 _FORMAT_2_HOME_DISPATCH = ("greedy", "tou_optimized")
 """The home dispatch strategies a run at format 2 could ask for by name; it dispatched any other as greedy."""
 
-_Changes = list[tuple[str, Any]]
+_FieldChange = tuple[str, Any]
+"""A field a step changed, as its dotted path, and the value it held before."""
 
 
 def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
@@ -753,54 +754,60 @@ def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> Ste
     an object are left as they are.
     """
     config = documents.config
-    changes: _Changes = []
     if run_type == "home":
-        content = _home_as_it_ran(config.content, "", changes)
+        content, changes = _home_as_it_ran(config.content)
     else:
-        content = _fleet_homes_as_they_ran(config.content, changes)
+        content, changes = _fleet_homes_as_they_ran(config.content)
     dropped = tuple(DroppedValue(config.run_id, config.name, field, value) for field, value in changes)
     return StepResult(documents=replace(documents, config=replace(config, content=content)), dropped=dropped)
 
 
-def _fleet_homes_as_they_ran(config: Any, changes: _Changes) -> Any:
-    """A fleet run's *config* with each home of its homes brought forward by _home_as_it_ran, at homes[i]."""
+def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
+    """A fleet run's *config* with each item of its homes brought forward by _home_as_it_ran, and each change, at homes[i]."""
     if not isinstance(config, dict) or not isinstance(config.get("homes"), list):
-        return config
-    homes = [_home_as_it_ran(home, f"homes[{index}].", changes) for index, home in enumerate(config["homes"])]
-    return config if homes == config["homes"] else {**config, "homes": homes}
+        return config, []
+    brought_forward = [_home_as_it_ran(home) for home in config["homes"]]
+    changes = [
+        (f"homes[{index}].{field}", value)
+        for index, (_, home_changes) in enumerate(brought_forward)
+        for field, value in home_changes
+    ]
+    if not changes:
+        return config, []
+    return {**config, "homes": [home for home, _ in brought_forward]}, changes
 
 
-def _home_as_it_ran(home: Any, path: str, changes: _Changes) -> Any:
-    """*home*, a stored HomeConfig object whose fields are named *path* + field, set to the dispatch its run ran by.
+def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
+    """*home*, a stored HomeConfig object, set to the dispatch its run ran by, and each field it changed.
 
-    Each field it changes is appended to *changes* with its old value. A home dispatch_strategy
-    outside _FORMAT_2_HOME_DISPATCH ran greedy. A battery home asking for tou_optimized, whose
-    battery names no strategy, ran the tariff's rates when it had a tariff, which honours
-    grid_charging, and greedy when it had none. Otherwise its battery ran its own strategy,
-    self-consumption when it names none, which ignored grid_charging under self-consumption or
-    with no tariff.
+    A home dispatch_strategy outside _FORMAT_2_HOME_DISPATCH ran greedy. A battery home asking
+    for tou_optimized, whose battery names no strategy, ran the tariff's rates when it had a
+    tariff, which honours grid_charging, and greedy when it had none. Otherwise its battery ran
+    its own strategy, self-consumption when it names none, which ignored grid_charging under
+    self-consumption or with no tariff.
     """
     if not isinstance(home, dict):
-        return home
+        return home, []
+    changes: list[_FieldChange] = []
     strategy = home.get("dispatch_strategy")
     if isinstance(strategy, str) and strategy not in _FORMAT_2_HOME_DISPATCH:
-        changes.append((f"{path}dispatch_strategy", strategy))
+        changes.append(("dispatch_strategy", strategy))
         home = {**home, "dispatch_strategy": "greedy"}
     battery = home.get("battery_config")
     if not isinstance(battery, dict):
-        return home
+        return home, changes
     battery_strategy, tariff = battery.get("dispatch_strategy"), home.get("tariff_config")
     if home.get("dispatch_strategy") == "tou_optimized" and battery_strategy is None:
         if tariff is not None:
-            return home
-        changes.append((f"{path}dispatch_strategy", "tou_optimized"))
+            return home, changes
+        changes.append(("dispatch_strategy", "tou_optimized"))
         home = {**home, "dispatch_strategy": "greedy"}
     tag = battery_strategy.get("strategy_type") if isinstance(battery_strategy, dict) else "self_consumption"
     grid_charging = battery.get("grid_charging")
     if grid_charging is None or (tag != "self_consumption" and tariff is not None):
-        return home
-    changes.append((f"{path}battery_config.grid_charging", grid_charging))
-    return {**home, "battery_config": {**battery, "grid_charging": None}}
+        return home, changes
+    changes.append(("battery_config.grid_charging", grid_charging))
+    return {**home, "battery_config": {**battery, "grid_charging": None}}, changes
 
 
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
