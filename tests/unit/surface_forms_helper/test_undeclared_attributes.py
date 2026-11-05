@@ -375,6 +375,45 @@ def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_na
         scan(cls)
 
 
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A class statement in submeters defines storefront.Submeter, re-homed to storefront, which re-exports it; collections.namedtuple made tupling.Plain; ast binds ast.AST, and ast's source holds no class AST."""
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "submeters",
+        "class Submeter:\n    def __init__(self) -> None:\n        self.site = 1\n",
+    )
+    storefront = imported_module(
+        tmp_path,
+        monkeypatch,
+        "storefront",
+        "from submeters import Submeter\n\nSubmeter.__module__ = __name__\n",
+    )
+    tupling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "tupling",
+        "import collections\n\nPlain = collections.namedtuple('Plain', ['kwh'])\n",
+    )
+
+    for cls, module, qualname in [
+        (storefront.Submeter, "storefront", "Submeter"),
+        (tupling.Plain, "tupling", "Plain"),
+        (ast.AST, "ast", "AST"),
+    ]:
+        expected = (
+            f"{module}.{qualname} has no __init__ or __post_init__ the scan can read, since the "
+            f"source of the module {module!r} holds no class statement under the qualified name "
+            f"{qualname!r}: pass a class that a class statement in a source file defines, and "
+            "leave its __module__ and __qualname__ as that statement set them"
+        )
+        with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
+            scan(cls)
+
+
 _EACH_SCAN_OF_A_CLASS_THAT_SETS_SITE_AND_DECLARES_RATE = pytest.mark.parametrize(
     ("scan", "expected"),
     [
