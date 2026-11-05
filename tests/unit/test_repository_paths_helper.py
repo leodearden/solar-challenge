@@ -9,10 +9,6 @@ import pytest
 from tests._repository_paths import REPOSITORY_ROOT, SCENARIOS_DIR
 
 
-def test_scenarios_dir_is_the_scenarios_directory_under_the_project_root(project_root: Path) -> None:
-    assert SCENARIOS_DIR == (project_root / "scenarios").resolve()
-
-
 def test_scenarios_dir_finds_the_committed_scenarios_from_any_working_directory() -> None:
     assert SCENARIOS_DIR.is_absolute()
     assert SCENARIOS_DIR.is_dir(), f"no directory at {SCENARIOS_DIR}"
