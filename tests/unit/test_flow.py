@@ -728,7 +728,7 @@ class TestSimulateTimestepGridCharge:
         assert ctx.current_rate == pytest.approx(0.09)
         assert ctx.peak_rate == pytest.approx(0.25)
         assert ctx.is_cheap_period is True
-        assert ctx.target_soc_fraction == pytest.approx(0.9)
+        assert ctx.target_soc_kwh == pytest.approx(4.5)
         assert ctx.max_charge_kw == pytest.approx(2.5)
         assert ctx.charge_efficiency == pytest.approx(0.975)
         assert ctx.round_trip_efficiency == pytest.approx(0.975 * 0.975)
