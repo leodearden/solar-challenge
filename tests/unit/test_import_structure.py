@@ -23,8 +23,8 @@ No ALLOWED_FUNCTION_LOCAL_IMPORTS entry exempts one.
 
 web/field_tree.py, the stored-run format's field-tree codec, imports no module of
 solar_challenge at any scope: it reads any dataclass through its annotations, so it needs none,
-and web/stored_runs.py imports it (§3.1), so an import of a web module would close a cycle or
-reach up past its one importer.
+and modules of the web subpackage import it, web/stored_runs.py among them (§3.1), so an
+import of a web module would close a cycle or reach up past its importers.
 
 All five read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
@@ -357,10 +357,10 @@ def test_web_field_tree_imports_no_module_of_the_package(
         "these import statements of web/field_tree.py import a module of solar_challenge:"
         f"\n{sites}\n"
         "field_tree.py is the stored-run format's field-tree codec. It reads any dataclass "
-        "through the class's annotations, so it needs no module of the package, and "
-        "web/stored_runs.py imports it, so an import of a web module closes a cycle or reaches "
-        "up past its one importer (docs/prds/run-store-one-owner.md §3.1). Keep what needs the "
-        "package in web/stored_runs.py, the codec's caller"
+        "through the class's annotations, so it needs no module of the package, and modules of "
+        "the web subpackage import it, web/stored_runs.py among them, so an import of a web module "
+        "closes a cycle or reaches up past its importers (docs/prds/run-store-one-owner.md §3.1). "
+        "Keep what needs the package in the codec's callers, such as web/stored_runs.py"
     )
 
 
