@@ -19,8 +19,8 @@ table to the table's schema at the step's version, which the owner states apart 
 table's current schema, so a later step changes no earlier one.
 
 A step may also carry a run-document step of the stored-run format (stored_runs.RUN_DOCUMENT_STEPS),
-the step of the same version, as version 2 carries the first: migrate_store brings every stored
-run's files forward by it before the step's transaction, and the runs rows' copies inside it.
+the step of the same version, as version 2 carries the first: migrate_store brings the stored
+runs' files forward by it before the step's transaction, and the runs rows' copies inside it.
 Each run-document step is carried by the step of its version, so the format version is never
 past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs whose documents
 are in the current format or runs its migration reported it could not migrate. A run's time
@@ -283,7 +283,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     it failed stay so: a migration run again brings them forward again, which changes nothing
     in them, and so reports none of the values the failed step dropped from them. A run whose
     documents a run-document step cannot bring forward is left as it was and reported, and the
-    migration goes on. Every connection is opened through Database.connect().
+    migration goes on. No later step of the migration is given that run's files, or its runs
+    row's copies, whichever the step left, as no later step can bring forward documents still
+    in the format before that step; so each is reported once, by the fault that kept it from
+    that step. Every connection is opened through Database.connect().
 
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
@@ -303,7 +306,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     outcome = RunDocumentsOutcome()
     for step in pending:
         try:
-            outcome += _apply_step(database, data_dir, step)
+            outcome += _apply_step(database, data_dir, step, outcome)
         except (RowRefused, ValueError, sqlite3.Error, OSError) as fault:
             raise MigrationRefused(database_path, step, fault) from fault
     return MigrationReport(
@@ -317,21 +320,28 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     )
 
 
-def _apply_step(database: Database, data_dir: Path, step: MigrationStep) -> RunDocumentsOutcome:
+def _apply_step(
+    database: Database, data_dir: Path, step: MigrationStep, earlier: RunDocumentsOutcome
+) -> RunDocumentsOutcome:
     """Apply *step* to the store of *database* and *data_dir*, which is at the version before it, and return what its run-document step did.
 
     The run-document step, if the step carries one, first brings the stored runs' files
     forward. Then one transaction writes the step's database part, brings the runs rows'
     documents forward by the same run-document step, and records the step's version as the
-    store's user_version.
+    store's user_version. Both run-document parts are given *earlier*, the migration's outcome
+    before *step*.
     """
     document_step = step.run_documents
-    outcome = RunDocumentsOutcome() if document_step is None else migrate_stored_run_files(database, data_dir, document_step)
+    outcome = (
+        RunDocumentsOutcome()
+        if document_step is None
+        else migrate_stored_run_files(database, data_dir, document_step, earlier)
+    )
     with database.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")
         step.migrate_database(conn)
         if document_step is not None:
-            outcome += migrate_runs_table_documents(conn, document_step)
+            outcome += migrate_runs_table_documents(conn, document_step, earlier)
         conn.execute(f"PRAGMA user_version = {step.version}")
     return outcome
 

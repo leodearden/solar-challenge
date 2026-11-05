@@ -38,7 +38,7 @@ skipped such keys before runs carried a format version, and reports each dropped
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
 dispatch ignores, and reports each value it rewrites, with the value it holds now.
 documents_in_current_format folds every step over a legacy run's documents in memory.
-`solar-challenge web migrate` applies each step to every stored run's files and runs row
+`solar-challenge web migrate` applies each step to the stored runs' files and runs rows
 through step_run_documents, which checks that the documents it brings forward will read once
 at RUN_FORMAT_VERSION; write_run_documents then writes the documents a step changed and the
 run's format.json last. A run whose documents cannot be brought forward is left as it was, an

@@ -809,9 +809,8 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
 ) -> None:
     """D-S19-5: a run whose documents no step can make readable, which cannot be loaded today either, is reported by id, document and field.
 
-    Kept gap, task 1317's: v2 leaves the lacking run's documents in the format before it, yet v3
-    is given them as they are stored, so it reports the run again by what the strict reader
-    refuses in them first, the config's keys v2 would have dropped, not the summary's fault.
+    Each run is reported once per document source, by the fault that keeps it from the step that
+    left it, because no later step of the migration is given it.
     """
     lacking = install_stored_run_fixture(
         "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="lacking-generation"
@@ -826,12 +825,10 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
 
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
 
-    assert len(report.unmigrated_runs) == 5
+    assert len(report.unmigrated_runs) == 3
     assert {(each.run_id, each.document, each.field) for each in report.unmigrated_runs} == {
         (lacking, "summary.json", "total_generation_kwh"),
         (lacking, "runs.summary_json", "total_generation_kwh"),
-        (lacking, "config.json", "battery_config.dispatch_strategy.import_limit_kw"),
-        (lacking, "runs.config_json", "battery_config.dispatch_strategy.import_limit_kw"),
         ("garbled-config", "runs.config_json", None),
     }
     assert all(each.reason for each in report.unmigrated_runs)
@@ -844,6 +841,46 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
     assert _user_version(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run missing a home's summary file is left unmigrated in its files alone, so v3 still rewrites its runs row."""
+    copy = install_stored_run_fixture(
+        "pre_787_dispatch_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="missing-home-summary"
+    )
+    (_run_dir(store_at_version_1, copy) / "homes" / "home_0_summary.json").unlink()
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document) for each in report.unmigrated_runs] == [(copy, "homes/home_0_summary.json")]
+    assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
+        RewrittenValue(copy, "runs.config_json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
+    )
+    assert json.loads(_runs_rows(store_at_version_1)[copy]["config_json"])["homes"][2]["dispatch_strategy"] == "greedy"
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_still_brings_forward_the_files_of_a_run_whose_runs_row_a_step_left_unmigrated(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run whose runs.config_json is not JSON is left unmigrated in its runs row alone, so v3 still rewrites its files."""
+    copy = install_stored_run_fixture(
+        "pre_787_dispatch_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="garbled-row-config"
+    )
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("UPDATE runs SET config_json = '{not json' WHERE id = ?", (copy,))
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [(copy, "runs.config_json", None)]
+    assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
+        RewrittenValue(copy, "config.json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
+    )
+    marker = json.loads((_run_dir(store_at_version_1, copy) / "format.json").read_text())
+    assert marker == {"format_version": RUN_FORMAT_VERSION}
+    assert _storage_of(store_at_version_1).load_run(copy).run_id == copy
 
 
 def test_migrate_store_reports_a_run_of_no_type_once_as_unmigrated_naming_its_type_and_leaves_it_as_it_was(
