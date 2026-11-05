@@ -164,7 +164,7 @@ def _located(module: types.ModuleType) -> str:
 
 
 def _located_by_globals(namespace: dict[str, object]) -> str:
-    """How an error names the module whose globals are *namespace*, as _located names a module holding a copy of them, since a module's file and repr are read from its globals alone and a function carries only its module's globals, never the module."""
+    """How an error names the module whose globals are *namespace*: as _located names a types.ModuleType holding a copy of them."""
     holder = types.ModuleType("?")
     vars(holder).update(namespace)
     return _located(holder)
