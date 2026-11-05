@@ -31,8 +31,9 @@ class MethodGenerator:
     def may_have_written(self, cls: type, name: str, function: object) -> bool:
         """Whether this generator may have written *function* into *cls* as its method *name*: one of its methods, a function named as it names that method after *cls*, in a class it processed.
 
-        Only *cls*'s class statement tells such a function from one that statement defined,
-        which the generator leaves in place.
+        Only *cls*'s class statement, together with whether inspect reads a source for
+        *function*, tells such a function from one that statement defined, which the
+        generator leaves in place.
         """
         return (
             name in self.methods
@@ -77,7 +78,7 @@ _GENERATORS = (DATACLASS_DECORATOR, NAMEDTUPLE)
 
 
 def may_be_generated(cls: type, function: types.FunctionType) -> bool:
-    """Whether the dataclass decorator or collections.namedtuple may have written *function* into *cls* as the method its own name names, as MethodGenerator.may_have_written finds; only *cls*'s class statement tells such a function from one that statement defined."""
+    """Whether the dataclass decorator or collections.namedtuple may have written *function* into *cls* as the method its own name names, as MethodGenerator.may_have_written finds; only *cls*'s class statement, together with whether inspect reads a source for *function*, tells such a function from one that statement defined."""
     return any(
         generator.may_have_written(cls, function.__name__, function) for generator in _GENERATORS
     )

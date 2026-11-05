@@ -60,7 +60,10 @@ other than `type` and `object` that holds a `__getattribute__`, its reading of w
 2026-11-01. 3.5's readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on
 2026-11-03, and its reading of a constructor's code's qualified name on CPython 3.11.15,
 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-11-04, and 4.10's readings on those releases on
-2026-11-05. A new refusal gets its rule test first, then its entry here.
+2026-11-05. 3.5's reading of a class statement whose `def` of its constructor did not
+write the constructor the class holds was measured on CPython 3.11.15, 3.11.17, 3.12.3,
+3.13.9 and 3.14.4 on 2026-11-05. A new refusal gets its rule test first, then its entry
+here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -216,14 +219,34 @@ statement, as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` ab
 `class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
 `__name__` was assigned, so no rule could refuse the one and still read the other.
 
+The dataclass decorator writes an `__init__`, and `collections.namedtuple` a `__new__`,
+named after the class, unless its statement defines one. Where that source holds the
+class's statement, and the statement defines the constructor by a `def` or an `async def`
+anywhere in its body, the statement alone cannot tell whether that `def` wrote the
+constructor the class holds: an `__init__` stub under `if TYPE_CHECKING:` never runs, nor
+does a `def` in an `except` handler never entered, and a `def` the body deletes leaves the
+class no constructor of its own, so in each case the decorator or `collections.namedtuple`
+writes one. `named_classes` reads the constructor the class holds as that `def`'s only if
+`inspect` reads a source for it, as for any function a `def` statement in a source file
+wrote, and otherwise as the one the decorator or `collections.namedtuple` wrote, spelled
+as each spells the one it writes. On every admitted minor `inspect` reads no source for
+the constructor the class holds in each of those cases, and one for the constructor a
+`def` in a block that runs wrote, so a dataclass `BlockSubmeter`, whose body defines its
+`__init__` in an `if` block that runs, reads as the statement's. Read as the statement's,
+a dataclass `Stubbed`, whose stub takes `tap: 'Tap'`, `Tap` being `Decimal` in its
+module, would name `{Decimal}`, where the field declaration of its base, in a module that
+binds `Tap` to `Fraction`, gives `{Fraction}`; and the `__new__` written for a named tuple
+whose stub `__new__` stands under `if TYPE_CHECKING:` would be read in the module that
+function names, `namedtuple_` and the class's name, which `sys.modules` does not hold, so
+`named_classes` would raise `LookupError`.
+
 Where that source holds no class statement under the class's qualified name, nothing
-there tells whether the statement that defined the class defines its constructor. The
-dataclass decorator writes an `__init__`, and `collections.namedtuple` a `__new__`, named
-after the class, unless its statement defines one. `named_classes` reads such a
-constructor as the one the decorator or `collections.namedtuple` wrote, spelled as each
-spells the one it writes, only if `inspect` reads no source for it. On every admitted
-minor `inspect` reads none for any function the two write, which they compile from text
-they write. So a dataclass that `dataclass(type(...))` makes, a named tuple that
+there tells whether the statement that defined the class defines its constructor.
+`named_classes` reads such a constructor as the one the decorator or
+`collections.namedtuple` wrote, spelled as each spells the one it writes, only if
+`inspect` reads no source for it. On every admitted minor `inspect` reads none for any
+function the two write, which they compile from text they write. So a dataclass that
+`dataclass(type(...))` makes, a named tuple that
 `typing.NamedTuple('Pointed', [('share', 'Share')])` makes, and a re-homed dataclass whose
 body defines no `__init__` read alike on every minor. A constructor that a `def` statement
 in text given to `exec` wrote has no source either. Its code carries the qualified name
@@ -263,6 +286,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_name_a_global_statement_in_another_body_declares_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote`
 
 ## 4. Refused
 
