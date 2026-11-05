@@ -280,6 +280,15 @@ def test_schema_version_2_is_the_first_run_document_step_and_reports_its_descrip
     assert version_2.description == RUN_DOCUMENT_STEPS[0].description
 
 
+def test_schema_version_3_is_the_dispatch_as_it_ran_step_and_reports_its_description() -> None:
+    """Version 3 changes no table: it brings every stored run to the stored-run format of version 3."""
+    version_3 = MIGRATIONS[2]
+
+    assert version_3.version == 3
+    assert version_3.run_documents is RUN_DOCUMENT_STEPS[1]
+    assert version_3.description == RUN_DOCUMENT_STEPS[1].description
+
+
 @pytest.fixture
 def legacy_store(tmp_path: Path) -> Path:
     """The pre-548 store, as an older solar-challenge left it: at version 0, with the jobs table and runs with no name."""

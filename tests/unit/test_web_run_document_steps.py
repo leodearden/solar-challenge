@@ -12,6 +12,10 @@ it changes none of its input. It walks a document as the strict reader reads it:
 has, added to each object of a config of every field shape, is dropped from a dataclass's object
 and kept in a dict field's, and the config then reads back as the home saved. A run stored before
 the battery's dispatch strategies were variants of one union migrates, then loads.
+
+Last it pins v3, the step that reads each stored home's dispatch as it ran: which home
+dispatch_strategy it reads as greedy, which grid_charging it drops, what it leaves as it is, and
+that it changes none of its input.
 """
 
 import copy
@@ -37,6 +41,7 @@ from solar_challenge.web.stored_runs import (
     RUN_DOCUMENT_STEPS,
     RUN_FORMAT_VERSION,
     DroppedValue,
+    FleetRunConfig,
     RunDocumentStep,
     StoredDocument,
     StoredRunDocuments,
@@ -48,6 +53,7 @@ from tests._every_field_shape import home_of_every_field_shape
 from tests._stored_run_fixtures import FIXTURES_DIR, STORED_RUN_FIXTURES, fixture_run_type, stored_run_fixture_dir
 
 _V2 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 2)
+_V3 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 3)
 
 _PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
 """Task 786's fixture: a home run's stored config per dispatch strategy, as runs stored it before
@@ -369,5 +375,147 @@ def test_v2_changes_none_of_its_input_documents() -> None:
     before = copy.deepcopy(documents)
 
     _V2.apply("home", documents)
+
+    assert documents == before
+
+
+_GRID_CHARGING_TO_80_PERCENT = {"target_soc_fraction": 0.8}
+"""The grid_charging object of every battery of pre_786_dispatch_home and pre_787_dispatch_fleet."""
+
+_PEAK_SHAVING = {"strategy_type": "peak_shaving", "import_limit_kw": 3.0}
+
+
+def _home_run_before_v3(*edits: tuple[Keys, Any]) -> StoredRunDocuments:
+    """pre_786_dispatch_home's documents as v3 is given them, its config holding each edit's value at the edit's keys."""
+    documents = _documents_before(_V3, "pre_786_dispatch_home")
+    for keys, value in edits:
+        documents = _with_value(documents, "config.json", keys, value)
+    return documents
+
+
+def _elm_row_home(name: str, battery: BatteryConfig, **home: Any) -> HomeConfig:
+    """A home of pre_787_dispatch_fleet, named *name*, with *battery* and the rest of *home*."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+        battery_config=battery,
+        name=name,
+        **home,
+    )
+
+
+def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_it_changes() -> None:
+    name = "pre_787_dispatch_fleet"
+
+    result = _V3.apply("fleet", _documents_before(_V3, name))
+
+    assert result.dropped == (
+        DroppedValue(name, "config.json", "homes[0].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
+        DroppedValue(name, "config.json", "homes[1].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
+        DroppedValue(name, "config.json", "homes[2].dispatch_strategy", "tou_optimized"),
+        DroppedValue(name, "config.json", "homes[2].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT),
+    )
+    assert result.documents.config.read(FleetRunConfig).homes == (
+        _elm_row_home(
+            "Elm Row 1",
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig()),
+            tariff_config=TariffConfig.economy_7(),
+        ),
+        _elm_row_home(
+            "Elm Row 2",
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),))),
+        ),
+        _elm_row_home("Elm Row 3", BatteryConfig(capacity_kwh=5.0)),
+    )
+
+
+_RAN_DIFFERENTLY = [
+    pytest.param(
+        [(("battery_config", "dispatch_strategy"), {"strategy_type": "self_consumption"})],
+        [(("battery_config", "grid_charging"), None)],
+        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        id="grid-charging-under-self-consumption",
+    ),
+    pytest.param(
+        [(("tariff_config",), None)],
+        [(("battery_config", "grid_charging"), None)],
+        [("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        id="grid-charging-without-a-tariff",
+    ),
+    pytest.param(
+        [(("dispatch_strategy",), "tou_optimized"), (("battery_config", "dispatch_strategy"), None), (("tariff_config",), None)],
+        [(("dispatch_strategy",), "greedy"), (("battery_config", "grid_charging"), None)],
+        [("dispatch_strategy", "tou_optimized"), ("battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT)],
+        id="home-tou-optimized-without-a-tariff",
+    ),
+    pytest.param(
+        [(("dispatch_strategy",), "tou_optimised")],
+        [(("dispatch_strategy",), "greedy")],
+        [("dispatch_strategy", "tou_optimised")],
+        id="unknown-home-dispatch-strategy",
+    ),
+]
+
+
+@pytest.mark.parametrize(("edits", "as_it_ran", "reported"), _RAN_DIFFERENTLY)
+def test_v3_reads_a_home_run_s_dispatch_as_it_ran_reporting_each_value_it_changes(
+    edits: list[tuple[Keys, Any]], as_it_ran: list[tuple[Keys, Any]], reported: list[tuple[str, Any]]
+) -> None:
+    result = _V3.apply("home", _home_run_before_v3(*edits))
+
+    assert result.documents == _home_run_before_v3(*edits, *as_it_ran)
+    assert result.dropped == tuple(
+        DroppedValue("pre_786_dispatch_home", "config.json", field, value) for field, value in reported
+    )
+
+
+_RAN_AS_STORED = [
+    pytest.param([], id="tou-optimized-battery-grid-charging-on-economy-7"),
+    pytest.param(
+        [(("dispatch_strategy",), "tou_optimized"), (("battery_config", "dispatch_strategy"), None)],
+        id="home-tou-optimized-on-economy-7-grid-charging",
+    ),
+    pytest.param(
+        [(("battery_config", "dispatch_strategy"), _PEAK_SHAVING)], id="peak-shaving-battery-grid-charging-on-economy-7"
+    ),
+    pytest.param(
+        [(("dispatch_strategy",), "tou_optimized"), (("battery_config", "dispatch_strategy"), _PEAK_SHAVING)],
+        id="home-tou-optimized-beside-a-peak-shaving-battery",
+    ),
+    pytest.param(
+        [(("dispatch_strategy",), "tou_optimized"), (("battery_config",), None), (("tariff_config",), None)],
+        id="batteryless-home-tou-optimized-without-a-tariff",
+    ),
+    pytest.param([(("battery_config",), "not a battery")], id="battery-config-not-an-object"),
+]
+
+
+@pytest.mark.parametrize("edits", _RAN_AS_STORED)
+def test_v3_leaves_a_home_run_that_ran_as_stored_as_it_is(edits: list[tuple[Keys, Any]]) -> None:
+    documents = _home_run_before_v3(*edits)
+
+    result = _V3.apply("home", documents)
+
+    assert result.documents == documents
+    assert result.dropped == ()
+
+
+@pytest.mark.parametrize("content", ["not a config", ["not", "a", "config"]], ids=["text", "array"])
+def test_v3_leaves_a_config_that_is_not_an_object_as_it_is(content: Any) -> None:
+    documents = dataclasses.replace(
+        _home_run_before_v3(), config=StoredDocument("pre_786_dispatch_home", "config.json", content)
+    )
+
+    result = _V3.apply("home", documents)
+
+    assert result.documents == documents
+    assert result.dropped == ()
+
+
+def test_v3_changes_none_of_its_input_documents() -> None:
+    documents = _documents_before(_V3, "pre_787_dispatch_fleet")
+    before = copy.deepcopy(documents)
+
+    _V3.apply("fleet", documents)
 
     assert documents == before
