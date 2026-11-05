@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
+from typing import ClassVar, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
@@ -300,6 +300,7 @@ class SelfConsumptionStrategyConfig:
     """The configuration of a SelfConsumptionStrategy, which has no setting."""
 
     strategy_type: Literal["self_consumption"] = field(default="self_consumption", init=False)
+    _charges_from_the_grid: ClassVar[bool] = False
 
 
 @dataclass(frozen=True)
@@ -321,6 +322,7 @@ class TOUOptimizedStrategyConfig:
 
     peak_hours: tuple[tuple[int, int], ...]
     strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
+    _charges_from_the_grid: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         """Read peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
@@ -343,6 +345,7 @@ class PeakShavingStrategyConfig:
 
     import_limit_kw: float
     strategy_type: Literal["peak_shaving"] = field(default="peak_shaving", init=False)
+    _charges_from_the_grid: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         """Read import_limit_kw as PeakShavingStrategy does, and hold the float read."""
@@ -356,6 +359,9 @@ DispatchStrategyConfig: TypeAlias = (
 
 A variant's strategy_type, which its constructor does not take, is its tag: the name of the
 strategy it configures, and the strategy_type key of the block the scenario grammar reads it from.
+Its _charges_from_the_grid, a ClassVar, says whether the strategy it configures charges the
+battery from the grid in a cheap period of the tariff; build_dispatch_strategy refuses
+grid_charging under a variant that does not, naming each variant that does.
 """
 
 STRATEGY_CONFIG_BY_TYPE: Mapping[str, type[DispatchStrategyConfig]] = MappingProxyType(
@@ -811,29 +817,33 @@ def build_dispatch_strategy(
     strategy: DispatchStrategy
     match config:
         case SelfConsumptionStrategyConfig():
-            strategy, charges_from_the_grid = SelfConsumptionStrategy(), False
+            strategy = SelfConsumptionStrategy()
         case TOUOptimizedStrategyConfig():
-            strategy, charges_from_the_grid = TOUOptimizedStrategy(list(config.peak_hours)), True
+            strategy = TOUOptimizedStrategy(list(config.peak_hours))
         case PeakShavingStrategyConfig():
-            strategy, charges_from_the_grid = PeakShavingStrategy(config.import_limit_kw), True
+            strategy = PeakShavingStrategy(config.import_limit_kw)
         case _:
             assert_never(config)
     if grid_charging is not None:
-        _refuse_grid_charging_it_would_ignore(config.strategy_type, charges_from_the_grid, tariff)
+        _refuse_grid_charging_it_would_ignore(config, tariff)
     return strategy
 
 
-def _refuse_grid_charging_it_would_ignore(tag: str, charges_from_the_grid: bool, tariff: TariffConfig | None) -> None:
-    """Refuse a battery's grid_charging under dispatch strategy *tag*, unless it charges from the grid and there is a tariff.
+def _refuse_grid_charging_it_would_ignore(config: DispatchStrategyConfig, tariff: TariffConfig | None) -> None:
+    """Refuse a battery's grid_charging under dispatch strategy *config*, unless its variant charges from the grid and there is a tariff.
 
     Raises:
-        ConfigurationError: The strategy does not charge from the grid, or there is no tariff;
-            the message names grid_charging, the strategy and what to change.
+        ConfigurationError: The variant does not charge from the grid, or there is no tariff;
+            the message names grid_charging, the strategy and what to change. The first
+            message names, as the strategy to use instead, each variant that charges from
+            the grid.
     """
-    if not charges_from_the_grid:
+    tag = config.strategy_type
+    if not config._charges_from_the_grid:
+        grid_charging_tags = [each_tag for each_tag, variant in STRATEGY_CONFIG_BY_TYPE.items() if variant._charges_from_the_grid]
         raise ConfigurationError(
             f"grid_charging is set, but dispatch strategy {tag!r} does not charge from the grid; "
-            "remove grid_charging, or use tou_optimized or peak_shaving"
+            f"remove grid_charging, or use {' or '.join(grid_charging_tags)}"
         )
     if tariff is None:
         raise ConfigurationError(
