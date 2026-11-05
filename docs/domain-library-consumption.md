@@ -1065,6 +1065,20 @@ such as `P0DT0H1M0S`; a summary it stored before the field existed loads with
 `window` `None`. Consumers that read `simulation_days` for windows crossing the
 October change re-check them when they re-pin.
 
+**Unreleased on main** (task 787): building a `HomeConfig` refuses, with
+`ConfigurationError`, a `dispatch_strategy` other than `'greedy'` or
+`'tou_optimized'`, which the 0.5.0 tag accepts and dispatches as greedy. When
+the home has a battery, it also refuses three settings the tag's dispatch
+ignores with no warning: the battery's `grid_charging` under self-consumption
+dispatch, its `grid_charging` without a `tariff_config`, and
+`dispatch_strategy='tou_optimized'` without a `tariff_config` when the battery
+names no strategy of its own. `FleetDistributionConfig` refuses an unknown
+`dispatch_strategy`, and a fleet file without a `tariff:` block that dispatches
+`tou_optimized` is refused, where the tag warns. A dashboard store at schema
+version 2 is refused until `solar-challenge web migrate` brings it to version
+3, whose step reads each stored run's dispatch as it ran. The platform needs no
+change: its `HomeConfig`s set none of these.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
