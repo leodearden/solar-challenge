@@ -19,7 +19,7 @@ import os
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Generator, assert_never
@@ -38,6 +38,7 @@ from solar_challenge.validation import (
 )
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
 from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
@@ -436,7 +437,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         "status": run.status,
         "created_at": run.created_at,
         "n_homes": run.n_homes,
-        "summary": {} if summary is None else asdict(summary),
+        "summary": {} if summary is None else field_tree(summary),
     }
 
 

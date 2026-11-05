@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A run's summary with chosen figures, for tests that write runs rows themselves.
+"""A run's summary with chosen figures, and the summary_json text a save writes for it.
 
 home_summary and fleet_summary are each a full summary of fixed round figures, with the
 figures a test gives in place of those; summary_json is the runs row's summary_json text a
-save writes for a summary: its field tree in JSON.
+save writes for a summary: its field tree in JSON. JUNE_WEEK_WINDOW is a window whose days
+are home_summary's 7, so home_summary(window=JUNE_WEEK_WINDOW) is a summary with a window.
 
 Usage::
 
@@ -21,9 +22,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import date
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from solar_challenge.web.field_tree import field_tree
+
+JUNE_WEEK_WINDOW = SimulationWindow(date(2025, 6, 1), date(2025, 6, 7), ONE_MINUTE, "Europe/London")
+"""The 7 days, 1 to 7 June 2025 on a Europe/London minute clock, that home_summary's simulation_days counts."""
 
 _HOME_SUMMARY = SummaryStatistics(
     total_generation_kwh=100.0,
@@ -79,4 +86,4 @@ def fleet_summary(**figures: object) -> FleetSummary:
 
 def summary_json(summary: SummaryStatistics | FleetSummary) -> str:
     """The summary_json text a save writes in a runs row for *summary*: its field tree in JSON."""
-    return json.dumps(dataclasses.asdict(summary))
+    return json.dumps(field_tree(summary))

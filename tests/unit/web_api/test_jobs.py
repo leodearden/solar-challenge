@@ -12,10 +12,12 @@ from flask.testing import FlaskClient
 
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.home import calculate_summary
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.jobs import JobSnapshot, JobState
 from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._run_summaries import JUNE_WEEK_WINDOW, home_summary
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -165,7 +167,36 @@ class TestGetJobResults:
             "name": "Test Run",
             "type": "home",
             "created_at": "2024-01-01T00:00:00",
-            "summary": asdict(calculate_summary(results)),
+            "summary": field_tree(calculate_summary(results)),
+        }
+
+    def test_completed_job_answers_its_run_s_summary_window_as_its_field_tree(
+        self, storage: RunStorage, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A summary's window is answered as it is stored: its days as ISO 8601 dates, its cadence as an ISO 8601 duration."""
+        run_id = "run-windowed-001"
+        mock_job_manager.job_state.return_value = replace(
+            _A_RUNNING_JOB, job_id="job-complete", run_id=run_id, status="completed", progress_pct=100.0
+        )
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        storage.save_home_run(
+            run_id=run_id,
+            config=make_home_config(),
+            results=make_sim_results(days=1),
+            summary=summary,
+            name="Windowed Run",
+        )
+
+        resp = client.get("/api/jobs/job-complete/results")
+
+        assert resp.status_code == 200
+        answered = resp.get_json()["summary"]
+        assert answered == field_tree(summary)
+        assert answered["window"] == {
+            "first_day": "2025-06-01",
+            "last_day": "2025-06-07",
+            "cadence": "P0DT0H1M0S",
+            "timezone": "Europe/London",
         }
 
     def test_completed_fleet_job_answers_its_run_s_fleet_summary(
@@ -186,7 +217,7 @@ class TestGetJobResults:
             "name": "Fleet Run",
             "type": "fleet",
             "created_at": "2024-01-02T00:00:00",
-            "summary": asdict(calculate_fleet_summary(fleet)),
+            "summary": field_tree(calculate_fleet_summary(fleet)),
         }
 
     def test_completed_job_missing_run_returns_404(

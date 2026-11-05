@@ -263,9 +263,11 @@ class SummaryStatistics:
     # Energy the battery stored from the grid: a part of both total_battery_charge_kwh and
     # total_grid_import_kwh.
     total_grid_charge_kwh: float = 0.0
+    # The window the totals were computed over, whose days simulation_days is.
+    window: Optional[SimulationWindow] = None
 
     def __post_init__(self) -> None:
-        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import."""
+        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and, when a window is set, a simulation_days other than its days."""
         grid_charge = self.total_grid_charge_kwh
         if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
             raise ValueError(
@@ -274,6 +276,13 @@ class SummaryStatistics:
                 f"got total_grid_charge_kwh={grid_charge!r}, "
                 f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
                 f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
+            )
+        window = self.window
+        if window is not None and self.simulation_days != window.days:
+            raise ValueError(
+                "SummaryStatistics' simulation_days is the number of calendar days its window covers: "
+                f"got simulation_days={self.simulation_days!r} for a window of {window.days} days, "
+                f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
             )
 
 
@@ -638,7 +647,8 @@ def calculate_summary(
             negative number).
 
     Returns:
-        SummaryStatistics with totals and ratios
+        SummaryStatistics with totals and ratios, carrying the window its results
+        cover, whose calendar days are its simulation_days
 
     Notes:
         **Two-path SEG design** — ``total_export_revenue_gbp`` and
@@ -680,9 +690,6 @@ def calculate_summary(
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
-    # Calculate simulation duration
-    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
-
     # Calculate SEG revenue if tariff is provided.
     # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
     # SEGTariff validates rate >= 0; negative values raise ValueError here.
@@ -706,6 +713,7 @@ def calculate_summary(
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = heat_pump_load_ratio(heat_pump_load_kwh=total_heat_pump_kwh, demand_kwh=total_demand)
 
+    window = results.window
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -719,7 +727,7 @@ def calculate_summary(
         self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
         grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
         export_ratio=_share(total_export, total_gen),
-        simulation_days=sim_days,
+        simulation_days=window.days,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
@@ -730,4 +738,5 @@ def calculate_summary(
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
+        window=window,
     )

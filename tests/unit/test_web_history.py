@@ -34,6 +34,7 @@ from solar_challenge.web.charts import (
     comparison_radar,
 )
 from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
 from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
@@ -43,7 +44,7 @@ from tests._dashboard_databases import write_database_at_schema_version_1
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._run_storage_layout import stored_run_dir
-from tests._run_summaries import fleet_summary, home_summary, summary_json
+from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._web_app import (
     build_test_app,
@@ -471,9 +472,19 @@ class TestRunDetailAPI:
             "duration_seconds": 60.0,
             "n_homes": 1,
             "notes": None,
-            "summary": dataclasses.asdict(summary),
+            "summary": field_tree(summary),
             "home_configs": [_A_HOME_FIELD_TREE],
         }
+
+    def test_api_get_run_answers_a_summary_s_window_as_its_field_tree(self, app: Flask, client: FlaskClient) -> None:
+        """A summary's window is answered as it is stored: its days as ISO 8601 dates, its cadence as an ISO 8601 duration."""
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        _insert_test_run(app, run_id="windowed-run", summary=summary)
+
+        response = client.get("/api/history/runs/windowed-run")
+
+        assert response.status_code == 200
+        assert response.get_json()["summary"] == field_tree(summary)
 
     def test_api_get_run_of_a_fleet_run_answers_its_fleet_summary_and_each_home_in_the_fleet_s_order(
         self, storage: RunStorage, client: FlaskClient
@@ -486,7 +497,7 @@ class TestRunDetailAPI:
         data = client.get("/api/history/runs/fleet-run").get_json()
 
         assert "fleet_self_consumption_ratio" in data["summary"]
-        assert data["summary"] == dataclasses.asdict(calculate_fleet_summary(fleet))
+        assert data["summary"] == field_tree(calculate_fleet_summary(fleet))
         assert data["home_configs"] == [_field_tree(home) for home in homes]
 
     def test_api_get_run_of_a_running_run_answers_its_row_without_a_summary_or_homes(

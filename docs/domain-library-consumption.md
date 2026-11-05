@@ -976,13 +976,10 @@ run from its first local date's midnight to the midnight after its last, at one
 minute on the location's clock; a tz-aware date in another zone is read as its
 date on that clock, and a naive one as already on it. So a run whose last day
 is the March change day ends at 23:59 on it, and its `SimulationResults.window`
-ends that day. `calculate_summary` still counts `simulation_days` from the
-rows' span, so a run whose last day is the October change day now counts one
-day more than its window holds, 3 for 2024-10-26..27 where the tag counts 2, as
-the tag already does for a run past that day. `generate_load_profile` raises
-`ValueError` for a household model whose days have no energy: the Elexon
-fallback the task 906 line describes covers only a model that raises or gives a
-day of another length. Consumers re-baseline demand figures when they re-pin.
+ends that day. `generate_load_profile` raises `ValueError` for a household
+model whose days have no energy: the Elexon fallback the task 906 line
+describes covers only a model that raises or gives a day of another length.
+Consumers re-baseline demand figures when they re-pin.
 
 **Unreleased on main** (task 955): `ScenarioConfig` is frozen, and it holds
 `homes` as a tuple, defaulting to `()`: a list of homes is converted when the
@@ -1047,6 +1044,26 @@ read, naming `fleet_distribution.load.use_stochastic`; the tag accepts both,
 handing the value to the home, or to every home of the fleet. A null in either
 block still reads as absent, the default true, as the task 914 and 919 lines
 say. Consumers that pass such values give `true` or `false` when they re-pin.
+
+**Unreleased on main** (task 778): `SummaryStatistics` gains a last keyword,
+`window`, defaulting to `None`: the `SimulationWindow`, imported from
+`solar_challenge.timebase`, that its totals were computed over. Building one
+raises `ValueError`, naming both values, when `window` is set and
+`simulation_days` is not its `days`. Code that builds one without a window
+needs no change. `calculate_summary` sets `window` to its results' `window`,
+and `simulation_days` to that window's `days`: the calendar dates the results'
+index covers on its own clock, first and last both counted. The 0.5.0 tag
+counts the whole 24-hour days between the index's first and last rows, plus
+one. So for an index that crosses the October clock change but not the March
+one, the tag counts one day more: 62 for a `Europe/London` minute index from
+2024-10-01 00:00 to 2024-11-30 23:59, which now reads 61. A `simulate_home` run
+whose last day is the October change day counts its window's days, 2 for
+2024-10-26..27, as the tag does. `FleetSummary.simulation_days`, read from the
+first home's summary, changes the same way. The web app stores each summary's
+window, its days as ISO 8601 dates and its cadence as an ISO 8601 duration
+such as `P0DT0H1M0S`; a summary it stored before the field existed loads with
+`window` `None`. Consumers that read `simulation_days` for windows crossing the
+October change re-check them when they re-pin.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of

@@ -28,6 +28,7 @@ from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import PrefetchedWeather
 from tests._finance_builders import make_sim_results
+from tests._run_summaries import home_summary
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 
@@ -952,6 +953,32 @@ class TestCalculateSummaryUnification:
         )
 
 
+class TestCalculateSummaryWindow:
+    """calculate_summary carries the window its results cover, and counts that window's calendar days."""
+
+    @pytest.mark.parametrize(
+        ("first_day", "last_day", "calendar_days"),
+        [("2024-10-01", "2024-11-30", 61), ("2024-03-31", "2024-04-01", 2), ("2024-07-01", "2024-12-31", 184)],
+    )
+    def test_simulation_days_counts_the_calendar_days_of_its_results_window(
+        self, first_day, last_day, calendar_days
+    ):
+        """simulation_days is the window's days, though the whole 24-hour days between the first and last minutes, plus one, are 62, 2 and 185 on these Europe/London indexes."""
+        index = pd.date_range(first_day, f"{last_day} 23:59", freq="1min", tz="Europe/London")
+        results = SimulationResults(
+            strategy_name="self_consumption",
+            **{name: pd.Series(1.0, index=index) for name in _series_field_names()},
+        )
+
+        summary = calculate_summary(results)
+
+        assert summary.window == results.window
+        assert summary.simulation_days == summary.window.days == calendar_days
+
+
+_TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
+
+
 class TestSummaryStatistics:
     """Test SummaryStatistics dataclass."""
 
@@ -977,3 +1004,14 @@ class TestSummaryStatistics:
         )
         assert stats.total_generation_kwh == 100.0
         assert stats.simulation_days == 7
+
+    def test_a_summary_holds_the_window_whose_days_are_its_simulation_days(self):
+        """A summary whose simulation_days is its window's days holds that window."""
+        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
+
+        assert summary.window == _TWO_JUNE_DAYS
+
+    def test_a_simulation_days_other_than_its_windows_days_is_refused_naming_both(self):
+        """A summary whose simulation_days is not its window's days is refused, naming both."""
+        with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
+            home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)

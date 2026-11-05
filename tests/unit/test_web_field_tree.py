@@ -5,10 +5,11 @@ field_tree writes a dataclass's field tree. read_field_tree reads one back as it
 annotations declare, refusing a value with a FieldTreeRefused that names the value's dotted path,
 with [i] for an item and None for the root, and the reason. without_unknown_keys drops each key
 the reader refuses as one no field has, reporting each as an UnknownKey. The tests drive those
-names over this module's dataclasses, which hold every shape the codec reads, shapes no stored
-dataclass has today included: a list, a dict of dataclasses, a pd.Timestamp and Any. The
-agreement test pins the drop to the reader: a key no field has, added to each dataclass's object,
-is refused by the reader at exactly the path where the drop reports it.
+names over this module's dataclasses, which hold every shape the codec reads, a date and a
+timedelta among them, and shapes no stored dataclass has today: a list, a dict of dataclasses, a
+pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no field has, added
+to each dataclass's object, is refused by the reader at exactly the path where the drop reports
+it.
 """
 
 import copy
@@ -17,6 +18,7 @@ import math
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 import pandas as pd
@@ -86,6 +88,8 @@ class _EveryShape:
     ratio: float
     label: str
     at: pd.Timestamp
+    day: date
+    cadence: timedelta
     anything: Any
     positive: _Positive
     note: str | None = None
@@ -113,6 +117,8 @@ _EVERY = _EveryShape(
     ratio=0.25,
     label="every shape",
     at=pd.Timestamp("2024-06-01T09:00:00+01:00"),
+    day=date(2024, 6, 1),
+    cadence=timedelta(minutes=30),
     anything={"free": [1, {"x": None}]},
     positive=_Positive(2.0),
     note="every field set",
@@ -162,7 +168,7 @@ def _nested_array(depth: int) -> list[Any]:
 
 
 def test_field_tree_writes_a_dataclass_as_the_json_tree_of_its_fields() -> None:
-    """A dataclass becomes an object, its tag included; a tuple or a list an array; a dict keeps its keys; a pd.Timestamp becomes its ISO text; None stays None."""
+    """A dataclass becomes an object, its tag included; a tuple or a list an array; a dict keeps its keys; a pd.Timestamp becomes its ISO text, a date its ISO 8601 text and a timedelta its ISO 8601 duration; None stays None."""
     assert field_tree(_EVERY) == {
         "point": {"x": 1.0, "y": 2.0},
         "optional_point": {"x": 7.0, "y": 0.0},
@@ -178,6 +184,8 @@ def test_field_tree_writes_a_dataclass_as_the_json_tree_of_its_fields() -> None:
         "ratio": 0.25,
         "label": "every shape",
         "at": "2024-06-01T09:00:00+01:00",
+        "day": "2024-06-01",
+        "cadence": "P0DT0H30M0S",
         "anything": {"free": [1, {"x": None}]},
         "positive": {"value": 2.0},
         "note": "every field set",
@@ -190,6 +198,22 @@ def test_field_tree_refuses_a_value_that_is_no_dataclass() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        pytest.param("day", datetime(2024, 6, 1, 9), id="a-datetime-for-a-date"),
+        pytest.param("cadence", pd.Timedelta(minutes=30), id="a-pd-timedelta-for-a-timedelta"),
+    ],
+)
+def test_json_refuses_the_field_tree_of_a_date_or_timedelta_subclass(name: str, value: Any) -> None:
+    """The writer turns into text only the types the reader reads back as themselves, so json.dumps refuses such a value at its save, not the strict reader at a load.
+
+    A pd.Timestamp in a date field is not covered: the writer turns it into datetime text, which the reader refuses as no date.
+    """
+    with pytest.raises(TypeError, match=f"Object of type {type(value).__name__} is not JSON serializable"):
+        json.dumps(field_tree(replace(_EVERY, **{name: value})))
+
+
+@pytest.mark.parametrize(
     "written",
     [
         pytest.param(_EVERY, id="every-field-set"),
@@ -198,6 +222,25 @@ def test_field_tree_refuses_a_value_that_is_no_dataclass() -> None:
 )
 def test_read_field_tree_reads_a_field_tree_back_as_the_instance_written(written: _EveryShape) -> None:
     assert read_field_tree(json.loads(json.dumps(field_tree(written))), _EveryShape) == written
+
+
+@pytest.mark.parametrize(
+    "cadence",
+    [timedelta(0), timedelta(microseconds=1), timedelta(seconds=0.5), timedelta(days=1, seconds=3), -timedelta(minutes=1)],
+    ids=["zero", "a-microsecond", "half-a-second", "a-day-and-3-seconds", "minus-a-minute"],
+)
+def test_read_field_tree_reads_back_each_timedelta_field_tree_writes(cadence: timedelta) -> None:
+    """The reader refuses a duration's text unless it is the text field_tree writes for it, so each text field_tree writes must read back."""
+    written = replace(_EVERY, cadence=cadence)
+
+    assert read_field_tree(json.loads(json.dumps(field_tree(written))), _EveryShape) == written
+
+
+def test_read_field_tree_reads_a_date_and_a_timedelta_back_as_those_very_types() -> None:
+    """A pd.Timedelta equals the timedelta of its value, so the round trip's equality cannot tell them apart."""
+    read = read_field_tree(_TREE, _EveryShape)
+
+    assert (type(read.day), type(read.cadence)) == (date, timedelta)
 
 
 def test_read_field_tree_gives_a_missing_field_that_has_a_default_its_default() -> None:
@@ -318,6 +361,43 @@ _REFUSALS = [
         id="shade-no-option",
     ),
     pytest.param(_with_value(_TREE, ("at",), 5), "at", "is the number 5, not a string", id="at-a-number"),
+    pytest.param(_with_value(_TREE, ("day",), 5), "day", "is the number 5, not a string", id="day-a-number"),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), 60),
+        "cadence",
+        "is the number 60, not a string",
+        id="cadence-a-number-of-seconds",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "60000"),
+        "cadence",
+        "is the string '60000', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'P0DT0H0M0.00006S'",
+        id="cadence-a-digit-string",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "PT1M"),
+        "cadence",
+        "is the string 'PT1M', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'P0DT0H1M0S'",
+        id="cadence-another-iso-8601-spelling",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), ""),
+        "cadence",
+        "is the string '', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'NaT'",
+        id="cadence-empty",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "NaT"),
+        "cadence",
+        "is the string 'NaT', not a duration a timedelta holds",
+        id="cadence-nat",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "P0DT0H0M0.000000001S"),
+        "cadence",
+        "is the string 'P0DT0H0M0.000000001S', not a duration a timedelta holds",
+        id="cadence-of-a-nanosecond",
+    ),
     pytest.param(_with_value(_TREE, ("pair",), [1, 2, 3]), "pair", _TUPLE_OF_2_OF_3, id="pair-of-3-items"),
     pytest.param(
         _with_value(_TREE, ("rate", "steps", 0), [16, 19, 20]),
@@ -361,6 +441,24 @@ def test_read_field_tree_refuses_a_string_that_is_no_timestamp_from_pandas_refus
 
     assert refused.path == "at"
     assert refused.reason.startswith("is the string 'not a time', not a timestamp: ")
+    assert isinstance(refused.__cause__, ValueError)
+
+
+def test_read_field_tree_refuses_a_string_that_is_no_date_from_its_refusal() -> None:
+    """Only the reason's prefix is pinned: date.fromisoformat's own text after the colon is the interpreter's."""
+    refused = _refusal(_with_value(_TREE, ("day",), "not a day"), _EveryShape)
+
+    assert refused.path == "day"
+    assert refused.reason.startswith("is the string 'not a day', not a date: ")
+    assert isinstance(refused.__cause__, ValueError)
+
+
+def test_read_field_tree_refuses_a_string_that_is_no_duration_from_pandas_refusal() -> None:
+    """Only the reason's prefix is pinned: pandas' own text after the colon varies by release."""
+    refused = _refusal(_with_value(_TREE, ("cadence",), "not a duration"), _EveryShape)
+
+    assert refused.path == "cadence"
+    assert refused.reason.startswith("is the string 'not a duration', not a duration: ")
     assert isinstance(refused.__cause__, ValueError)
 
 

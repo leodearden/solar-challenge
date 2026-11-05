@@ -22,6 +22,7 @@ from solar_challenge.number_fields import Interval, as_finite_float, as_whole_nu
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
 from solar_challenge.web.fleet_scenario import (
@@ -240,7 +241,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
         "name": run.name,
         "type": run.type,
         "created_at": run.created_at,
-        "summary": {} if summary is None else asdict(summary),
+        "summary": {} if summary is None else field_tree(summary),
     }), 200
 
 # ---------------------------------------------------------------------------
@@ -695,7 +696,7 @@ def history_get_run(run_id: str) -> Response | tuple[Response, int]:
 
     detail = asdict(run)
     if summary is not None:
-        detail["summary"] = asdict(summary)
+        detail["summary"] = field_tree(summary)
     if homes is not None:
         detail["home_configs"] = [asdict(home) for home in homes]
     return jsonify(detail)
