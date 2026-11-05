@@ -317,7 +317,7 @@ def _class_statements_in(
                 qualified_name = _qualified_name(name, scope, declared_global)
                 yield qualified_name, statement
                 yield from _class_statements_in(
-                    body, f"{qualified_name}.", frozenset(_global_names(body))
+                    body, f"{qualified_name}.", frozenset(names_declared_by(body, ast.Global))
                 )
             case ast.FunctionDef(name=name, body=body) | ast.AsyncFunctionDef(
                 name=name, body=body
@@ -325,7 +325,7 @@ def _class_statements_in(
                 yield from _class_statements_in(
                     body,
                     f"{_qualified_name(name, scope, declared_global)}.<locals>.",
-                    frozenset(_global_names(body)),
+                    frozenset(names_declared_by(body, ast.Global)),
                 )
             case ast.expr():
                 pass
@@ -338,16 +338,20 @@ def _qualified_name(name: str, scope: str, declared_global: Collection[str]) -> 
     return name if name in declared_global else f"{scope}{name}"
 
 
-def _global_names(nodes: Iterable[ast.AST]) -> Iterator[str]:
-    """The names the global statements among *nodes*, or in any block of theirs, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
+def names_declared_by(
+    nodes: Iterable[ast.AST],
+    kind: type[ast.Global] | type[ast.Nonlocal],
+    *other_kinds: type[ast.Global] | type[ast.Nonlocal],
+) -> Iterator[str]:
+    """The names that the statements among *nodes*, or in any block of theirs, that are of *kind* or one of *other_kinds*, global or nonlocal statements, declare in the body *nodes* belong to, wherever in it they stand; never those of one in a def or class statement among them, whose body declares its own."""
     for node in nodes:
         match node:
-            case ast.Global(names=names):
-                yield from names
+            case ast.Global() | ast.Nonlocal():
+                yield from node.names if isinstance(node, (kind, *other_kinds)) else ()
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
                 pass
             case _:
-                yield from _global_names(ast.iter_child_nodes(node))
+                yield from names_declared_by(ast.iter_child_nodes(node), kind, *other_kinds)
 
 
 class _NoSourceError(Exception):
