@@ -604,6 +604,7 @@ def test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attr
     "block",
     [
         pytest.param("    if True:\n", id="an-if-block"),
+        pytest.param("    if False:\n        pass\n    else:\n", id="an-else-branch"),
         pytest.param(
             "    try:\n        raise LookupError\n    except LookupError:\n", id="an-except-handler"
         ),
