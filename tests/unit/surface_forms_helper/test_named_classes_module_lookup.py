@@ -228,7 +228,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_o
 def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On 3.11 the methods the dataclass decorator wrote still carry the globals of types, which binds nothing under 'Tap'."""
+    """On 3.11 the __init__ the dataclass decorator compiled still carries the globals of types, which binds nothing under 'Tap'."""
     remaking = imported_module(
         tmp_path,
         monkeypatch,
