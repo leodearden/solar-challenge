@@ -11,7 +11,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-_PACKAGE_DIR = Path(__file__).resolve().parents[2] / "src" / "solar_challenge"
+from tests._repository_paths import REPOSITORY_ROOT
+
+_PACKAGE_DIR = REPOSITORY_ROOT / "src" / "solar_challenge"
 
 
 # The modules whose module-level functions draw from, seed or set the state of a generator the

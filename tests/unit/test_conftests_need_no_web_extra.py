@@ -15,6 +15,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from tests._pyproject import load_project_table
+from tests._repository_paths import REPOSITORY_ROOT
 
 _IMPORT_WITH_MODULES_BLOCKED = """\
 import importlib
@@ -47,9 +48,9 @@ def _conftests_outside_the_e2e_suite() -> list[str]:
     collect_ignore names its directory, and the lane's e2e job, which does,
     installs the web extra.
     """
-    tests = Path(__file__).resolve().parents[1]
+    tests = REPOSITORY_ROOT / "tests"
     return sorted(
-        ".".join(conftest.relative_to(tests.parent).with_suffix("").parts)
+        ".".join(conftest.relative_to(REPOSITORY_ROOT).with_suffix("").parts)
         for conftest in tests.rglob("conftest.py")
         if not conftest.is_relative_to(tests / "e2e")
     )

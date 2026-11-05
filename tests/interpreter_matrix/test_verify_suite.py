@@ -25,13 +25,11 @@ import pytest
 
 from tests._command_runner import describe_pytest_outcome
 from tests._interpreters import off_pin_minor_versions
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
 
 pytestmark = pytest.mark.slow
-
-# Parametrization happens at collection time, before any fixture exists.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Printed by the interpreter uv ran the suite with, so a green run proves which Python it was.
 _IDENTITY_PROBE = """
@@ -42,12 +40,12 @@ print(json.dumps({
 }))
 """
 
-_OFF_PIN_MINORS = sorted(off_pin_minor_versions(PROJECT_ROOT))
+_OFF_PIN_MINORS = sorted(off_pin_minor_versions(REPOSITORY_ROOT))
 
 
 def _matrix_venv(major: int, minor: int) -> Path:
     """Return the project environment for Python *major*.*minor*, under the gitignored .cache/."""
-    return PROJECT_ROOT / ".cache" / f"venv-py{major}{minor}"
+    return REPOSITORY_ROOT / ".cache" / f"venv-py{major}{minor}"
 
 
 def _suite_env(major: int, minor: int) -> dict[str, str]:
@@ -67,7 +65,7 @@ def _interpreter_identity(env: dict[str, str], python: str) -> dict[str, object]
     probe = subprocess.run(
         # --no-sync: a plain `uv run` would re-sync the environment without the suite's extras.
         ["uv", "run", "--no-sync", "python", "-c", _IDENTITY_PROBE],
-        cwd=PROJECT_ROOT,
+        cwd=REPOSITORY_ROOT,
         env=env,
         capture_output=True,
         text=True,
@@ -94,7 +92,7 @@ def test_verify_suite_passes_on_python(version: tuple[int, int]) -> None:
     python = f"{major}.{minor}"
     env = _suite_env(major, minor)
 
-    result = run_verify_suite(PROJECT_ROOT, env, variant=f"on Python {python}")
+    result = run_verify_suite(REPOSITORY_ROOT, env, variant=f"on Python {python}")
 
     assert result.returncode == 0, f"the verify suite failed on Python {python}\n{describe_pytest_outcome(result)}"
     identity = _interpreter_identity(env, python)

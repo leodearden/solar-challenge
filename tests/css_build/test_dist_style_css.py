@@ -46,12 +46,12 @@ from xml.etree import ElementTree
 
 import pytest
 
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 
 pytestmark = pytest.mark.slow
 
-# Module-scoped fixtures cannot request the function-scoped project_root fixture.
-_WEB_PACKAGE = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" / "web"
+_WEB_PACKAGE = REPOSITORY_ROOT / "src" / "solar_challenge" / "web"
 
 # Relative to the web package, in the checkout and in its scratch copies alike.
 _DIST = Path("static", "dist")

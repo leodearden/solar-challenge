@@ -13,9 +13,10 @@ import ast
 import importlib.util
 import re
 from collections.abc import Collection, Iterable, Iterator
-from pathlib import Path
 
-_TESTS = Path(__file__).resolve().parents[1]
+from tests._repository_paths import REPOSITORY_ROOT
+
+_TESTS = REPOSITORY_ROOT / "tests"
 
 LAYERS = (
     "_surface_forms_labels",

@@ -46,6 +46,7 @@ from tests._html_page import element_attributes, element_count, texts, texts_aft
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
+from tests._stored_run_fixtures import FIXTURES_DIR
 from tests._web_app import (
     build_test_app,
     database_of,
@@ -65,9 +66,7 @@ _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig
 
 _A_HOME_FIELD_TREE = _field_tree(_A_HOME)
 
-_PRE_DISPATCH_UNION_HOME_CONFIGS = (
-    Path(__file__).resolve().parents[1] / "fixtures" / "stored_runs" / "pre_dispatch_union_home_configs.json"
-)
+_PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
 """A home run's stored config per dispatch strategy, as runs stored it before the strategies were
 variants of one union: all three strategy keys, the ones the strategy does not read null."""
 

@@ -54,6 +54,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from tests._repository_paths import SCENARIOS_DIR
 
 _PERIOD = {"start_date": "2024-01-01", "end_date": "2024-01-07"}
 
@@ -1232,11 +1233,9 @@ class TestScenarioFileBlockKeys:
 class TestShippedScenarios:
     """Every shipped scenario and CLI template parses under the refusals."""
 
-    def test_every_shipped_scenario_and_template_parses(
-        self, project_root: Path, tmp_path: Path
-    ) -> None:
+    def test_every_shipped_scenario_and_template_parses(self, tmp_path: Path) -> None:
         """Every block of each scenarios/*.yaml file and each ``config template`` output parses."""
-        paths = sorted((project_root / "scenarios").glob("*.yaml"))
+        paths = sorted(SCENARIOS_DIR.glob("*.yaml"))
         assert paths, "no shipped scenarios found"
         for name, template in _CLI_TEMPLATES.items():
             template_path = tmp_path / f"{name}-template.yaml"

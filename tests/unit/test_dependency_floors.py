@@ -18,9 +18,7 @@ from _pytest.mark import ParameterSet
 from packaging.requirements import Requirement
 
 from tests._pyproject import declared_floor, load_project_table, load_uv_lock, locked_versions
-
-# Parametrization happens at collection time, before any fixture exists.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+from tests._repository_paths import REPOSITORY_ROOT
 
 
 def _declared_requirements(project_root: Path) -> list[ParameterSet]:
@@ -42,11 +40,11 @@ def _declared_requirements(project_root: Path) -> list[ParameterSet]:
 
 @pytest.fixture(scope="module")
 def uv_lock() -> dict[str, Any]:
-    """Return PROJECT_ROOT's uv.lock, parsed once for every case rather than at collection."""
-    return load_uv_lock(PROJECT_ROOT)
+    """Return REPOSITORY_ROOT's uv.lock, parsed once for every case rather than at collection."""
+    return load_uv_lock(REPOSITORY_ROOT)
 
 
-@pytest.mark.parametrize(("table", "requirement"), _declared_requirements(PROJECT_ROOT))
+@pytest.mark.parametrize(("table", "requirement"), _declared_requirements(REPOSITORY_ROOT))
 def test_every_declared_floor_is_the_locked_release(table: str, requirement: str, uv_lock: dict[str, Any]) -> None:
     """The requirement's >= floor is the lowest release uv.lock pins for its distribution.
 

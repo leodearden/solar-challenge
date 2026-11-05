@@ -55,13 +55,12 @@ from pathlib import Path
 import pytest
 from packaging.utils import canonicalize_name
 
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 from tests._uv_env import isolated_uv_env
 from tests._working_tree import copy_working_tree
 
-# Module-scoped fixtures cannot request the function-scoped project_root fixture.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_EXTERNAL_PROBE = PROJECT_ROOT / "tests" / "integration" / "_external_probe.py"
+_EXTERNAL_PROBE = REPOSITORY_ROOT / "tests" / "integration" / "_external_probe.py"
 
 
 def _offline_uv_environment(base: Mapping[str, str], **overrides: str) -> dict[str, str]:
@@ -87,13 +86,13 @@ def _skip_unless_a_clean_wheel_can_be_built() -> None:
             pytest.skip(f"{tool} not available on PATH — skipping build-marker tests")
     work_tree_check = subprocess.run(
         ["git", "rev-parse", "--is-inside-work-tree"],
-        cwd=PROJECT_ROOT,
+        cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
     )
     if work_tree_check.returncode != 0:
         pytest.skip(
-            f"git does not recognise {PROJECT_ROOT} as a checkout, so it cannot list the files to "
+            f"git does not recognise {REPOSITORY_ROOT} as a checkout, so it cannot list the files to "
             f"build the wheel from: {work_tree_check.stderr.strip()}"
         )
 
@@ -107,7 +106,7 @@ def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
     stops declaring them.
     """
     _skip_unless_a_clean_wheel_can_be_built()
-    return copy_working_tree(PROJECT_ROOT, tmp_path_factory.mktemp("wheel_source"))
+    return copy_working_tree(REPOSITORY_ROOT, tmp_path_factory.mktemp("wheel_source"))
 
 
 def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
@@ -541,7 +540,7 @@ def test_isolated_install_resolves_and_calls_every_symbol(consumer_environment: 
     """
     result = subprocess.run(
         [str(consumer_environment / "bin" / "python"), str(_EXTERNAL_PROBE)],
-        cwd=str(PROJECT_ROOT),
+        cwd=str(REPOSITORY_ROOT),
         capture_output=True,
         text=True,
         timeout=600,

@@ -38,14 +38,13 @@ import pytest
 from tests._command_runner import describe_pytest_outcome
 from tests._hermetic_checkout import init_hermetic_checkout
 from tests._newest_releases_deselections import NEWEST_RELEASES_DESELECTIONS
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._required_environment import declare_required_environment, pinned_environment
 from tests._uv_env import isolated_uv_env
 from tests._verify_suite import run_verify_suite
 from tests._working_tree import copy_working_tree
 
 pytestmark = pytest.mark.slow
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # It exists only so a hung resolution or download fails this test by name.
 _UV_TIMEOUT_SECS = 900
@@ -89,7 +88,7 @@ def test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit(
     tests/unit/test_offline_lane_contracts.py, for one, needs the e2e extra's
     newest playwright wheel, which nothing else fetches.
     """
-    project = copy_working_tree(PROJECT_ROOT, tmp_path / "project")
+    project = copy_working_tree(REPOSITORY_ROOT, tmp_path / "project")
     # So the suite's tests that list the tree's files with git, such as tests/integration/test_external_install.py's, run.
     init_hermetic_checkout(project)
     declare_required_environment(project, pinned_environment(project))

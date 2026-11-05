@@ -39,12 +39,13 @@ from pathlib import Path
 import pytest
 
 from tests._declared_dependencies import WEB_SUBPACKAGE
+from tests._repository_paths import REPOSITORY_ROOT
 
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
 _WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
 _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
-_SRC_DIR = Path(__file__).resolve().parents[2] / "src"
+_SRC_DIR = REPOSITORY_ROOT / "src"
 
 
 @dataclass(frozen=True)
