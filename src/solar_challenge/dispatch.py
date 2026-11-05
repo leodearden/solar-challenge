@@ -793,16 +793,44 @@ def build_dispatch_strategy(
     grid_charging: GridChargeConfig | None,
     tariff: TariffConfig | None,
 ) -> DispatchStrategy:
-    """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff."""
+    """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff.
+
+    Raises:
+        ConfigurationError: grid_charging is set, but the strategy would ignore it: its variant
+            does not charge from the grid, or there is no tariff to find a cheap period in.
+    """
+    strategy: DispatchStrategy
     match config:
         case SelfConsumptionStrategyConfig():
-            return SelfConsumptionStrategy()
+            strategy, charges_from_the_grid = SelfConsumptionStrategy(), False
         case TOUOptimizedStrategyConfig():
-            return TOUOptimizedStrategy(list(config.peak_hours))
+            strategy, charges_from_the_grid = TOUOptimizedStrategy(list(config.peak_hours)), True
         case PeakShavingStrategyConfig():
-            return PeakShavingStrategy(config.import_limit_kw)
+            strategy, charges_from_the_grid = PeakShavingStrategy(config.import_limit_kw), True
         case _:
             assert_never(config)
+    if grid_charging is not None:
+        _refuse_grid_charging_it_would_ignore(config.strategy_type, charges_from_the_grid, tariff)
+    return strategy
+
+
+def _refuse_grid_charging_it_would_ignore(tag: str, charges_from_the_grid: bool, tariff: TariffConfig | None) -> None:
+    """Refuse a battery's grid_charging under dispatch strategy *tag*, unless it charges from the grid and there is a tariff.
+
+    Raises:
+        ConfigurationError: The strategy does not charge from the grid, or there is no tariff;
+            the message names grid_charging, the strategy and what to change.
+    """
+    if not charges_from_the_grid:
+        raise ConfigurationError(
+            f"grid_charging is set, but dispatch strategy {tag!r} does not charge from the grid; "
+            "remove grid_charging, or use tou_optimized or peak_shaving"
+        )
+    if tariff is None:
+        raise ConfigurationError(
+            f"grid_charging is set, but there is no tariff, so dispatch strategy {tag!r} has no cheap period "
+            "to charge in; add a tariff or remove grid_charging"
+        )
 
 
 _ONE_DAY = timedelta(days=1)
