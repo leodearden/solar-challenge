@@ -16,6 +16,7 @@ from pathlib import Path
 
 from tests._heap_freeze import freeze_the_heap_once
 from tests._network_guard import refusing_network
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
 if TYPE_CHECKING:
@@ -34,8 +35,8 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
 @pytest.fixture
 def project_root() -> Path:
-    """Return the project root directory."""
-    return Path(__file__).parent.parent
+    """Return the repository root, tests/_repository_paths.py's REPOSITORY_ROOT."""
+    return REPOSITORY_ROOT
 
 
 @pytest.fixture
