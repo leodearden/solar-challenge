@@ -329,6 +329,10 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
+    Another: each write to self in each __init__ and __post_init__ *cls*'s own body
+    defines counts as made, as if every branch around it ran, so an attribute that only a
+    branch not taken sets goes unreported too, as when each branch of an if statement in
+    the class body defines its own __init__.
     """
     _refuse_immutable_type(cls)
     declared = member_forms(cls).keys() & _declared_attributes(cls).keys()
