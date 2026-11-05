@@ -27,6 +27,16 @@ def _desktop_sidebar(page: Page):
     return page.locator("aside").first
 
 
+def _sidebar_toggle(page: Page) -> Locator:
+    """The desktop sidebar's collapse/expand button; the mobile sidebar has none."""
+    return page.get_by_role("button", name="Toggle sidebar")
+
+
+# The desktop sidebar's width and #main-content's left edge, in px, at pytest-playwright's default 1280x720 viewport (Tailwind lg).
+_SIDEBAR_OPEN = {"sidebar_width": 256, "content_left": 256}
+_SIDEBAR_COLLAPSED = {"sidebar_width": 64, "content_left": 64}
+
+
 def _expand_sidebar_group(page: Page, group_label: str) -> None:
     """Click the expandable group button in the desktop sidebar so that
     its child links become visible.
@@ -198,10 +208,8 @@ def test_dark_mode_toggle(page: Page, live_server: str) -> None:
 
 
 def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
-    """Clicking the collapse toggle slides the sidebar from w-64 to w-16, and clicking it again slides it back to w-64."""
-    page.goto(live_server + "/")
-    page.evaluate("localStorage.setItem('sidebarOpen', 'true')")
-    page.goto(live_server + "/")
+    """Clicking the collapse toggle collapses the sidebar from w-64 to w-16, and clicking it again expands it back to w-64."""
+    _open_with_the_sidebar_stored(page, live_server + "/", "true")
     sidebar = _desktop_sidebar(page)
     toggle = _sidebar_toggle(page)
     expect(toggle).to_have_attribute("title", "Collapse sidebar")
@@ -215,10 +223,6 @@ def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
 
 
 # ── Sidebar state on load ──────────────────────────────────────────────
-
-# The desktop sidebar's width and #main-content's left edge, in px, at pytest-playwright's default 1280x720 viewport (Tailwind lg).
-_SIDEBAR_OPEN = {"sidebar_width": 256, "content_left": 256}
-_SIDEBAR_COLLAPSED = {"sidebar_width": 64, "content_left": 64}
 
 # Records in window.sidebarProbe.load how the sidebar and the main column load, at two moments:
 # - before_alpine: what is drawn at readystatechange 'interactive'. That fires once the page is parsed,
@@ -265,11 +269,6 @@ _CLICK_AND_READ_THE_TRANSITIONS = """async toggle => {
     await new Promise(resolve => setTimeout(resolve));
     return window.sidebarProbe.transitions();
 }"""
-
-
-def _sidebar_toggle(page: Page) -> Locator:
-    """The desktop sidebar's collapse/expand button; the mobile sidebar has none."""
-    return page.get_by_role("button", name="Toggle sidebar")
 
 
 def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None) -> None:
