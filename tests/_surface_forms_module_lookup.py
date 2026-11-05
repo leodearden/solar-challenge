@@ -256,15 +256,17 @@ def class_statement(cls: type) -> ast.ClassDef | None:
 
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:
     """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; TypeError naming both if inspect reads no source for *module*, which then has no such block to read."""
-    if not _has_source(module):
+    try:
+        imports = _type_checking_imports(module)
+    except NoSourceError as unread:
         raise TypeError(
             f"The string annotation {annotation!r} is read in the module {module.__name__!r}, "
             "for which inspect reads no source, as for a built-in or extension module, so no "
             "`if TYPE_CHECKING:` import there can be read: make the name private, or annotate "
             "with the class, not a string"
-        )
+        ) from unread
     namespace = dict(vars(module))
-    exec(_type_checking_imports(module), namespace)
+    exec(imports, namespace)
     return eval(annotation, namespace)
 
 
