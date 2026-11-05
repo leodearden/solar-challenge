@@ -803,7 +803,7 @@ def test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_
             "new = Pointed.__new__\n"
             "new.__code__ = new.__code__.replace(co_qualname='Pointed.__new__')\n",
             "Pointed",
-            r"statementless\.Pointed is constructed through \S+\.Pointed\.__new__, which carries "
+            r"statementless\.Pointed is constructed through namedtuple_Pointed\.Pointed\.__new__, which carries "
             r"the name collections\.namedtuple gives the __new__ it writes into "
             r"statementless\.Pointed, and its code carries the qualified name 'Pointed\.__new__'",
             r"Pointed",
