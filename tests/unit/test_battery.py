@@ -271,6 +271,42 @@ class TestBatteryConfigGridCharging:
         assert restored == cfg
 
 
+class TestBatteryAnswersItsGridChargeTarget:
+    """A Battery answers the SOC grid charging fills it to, a fraction of its effective capacity capped at max_soc_kwh, and the charge limit charge() applies."""
+
+    def test_without_grid_charging_there_is_no_target(self) -> None:
+        assert Battery(BatteryConfig(capacity_kwh=10.0)).grid_charge_target_kwh is None
+
+    @pytest.mark.parametrize("soh", [1.0, 0.7])
+    def test_the_target_is_its_fraction_of_the_effective_capacity(self, soh: float) -> None:
+        battery = Battery(
+            BatteryConfig(capacity_kwh=10.0, soh=soh, grid_charging=GridChargeConfig(0.5))
+        )
+        assert battery.grid_charge_target_kwh == pytest.approx(0.5 * 10.0 * soh)
+
+    def test_a_target_above_the_ceiling_is_the_ceiling(self) -> None:
+        battery = Battery(
+            BatteryConfig(
+                capacity_kwh=10.0, soh=0.7, max_soc_fraction=0.9, grid_charging=GridChargeConfig(0.95)
+            )
+        )
+        assert battery.grid_charge_target_kwh == battery.max_soc_kwh
+
+    def test_a_target_above_an_assigned_ceiling_is_that_ceiling(self) -> None:
+        battery = Battery(
+            BatteryConfig(capacity_kwh=10.0, soh=0.7, grid_charging=GridChargeConfig(0.95))
+        )
+        battery.max_soc_fraction = 0.6
+        assert battery.grid_charge_target_kwh == battery.max_soc_kwh
+
+    def test_the_charge_limit_is_the_configured_one_and_the_one_charge_applies(self) -> None:
+        battery = Battery(BatteryConfig(capacity_kwh=10.0, max_charge_kw=3.3), initial_soc_kwh=1.0)
+        assert battery.max_charge_kw == 3.3
+        assert battery.charge(math.inf, 60) == pytest.approx(
+            battery.max_charge_kw * 1.0 * battery.charge_efficiency
+        )
+
+
 class TestBatteryConfigRoundTripEfficiency:
     """Test BatteryConfig round-trip efficiency split via sqrt."""
 
