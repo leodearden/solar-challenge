@@ -624,10 +624,10 @@ def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_for
     "rename_codes",
     [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
 )
-def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_its_body_compiled_a_function(
+def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_it_has_a_witness(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
-    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__ carries the globals of the module that defined Audit."""
+    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__, its witness, carries the globals of the module that defined Audit."""
     auditing = imported_module(
         tmp_path,
         monkeypatch,

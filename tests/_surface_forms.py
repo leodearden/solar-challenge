@@ -206,14 +206,18 @@ def named_classes(obj: object) -> set[type]:
     holds under the name its __module__ records. One whose module another of the same
     name has since replaced in sys.modules raises LookupError naming it and the module
     found there, and one whose module has since left sys.modules, LookupError naming it
-    and that module's name. Where inspect reads no source for the module found, a class
-    it does not bind under its qualified name, as _json binds _json.Scanner as
-    make_scanner, is checked only by a function in its own namespace that is named after
-    it and that no generator may have written there, which must carry that module's
-    globals. A class with no such function carries nothing to check its module by, so
-    the module is looked up unchecked, though a string read there still raises TypeError
-    as above. A dataclass whose only method is a hand-written __init__ has no such
-    function in a module that imports annotations from __future__.
+    and that module's name. A class defined inside a function, and one the module found
+    does not bind under its qualified name where inspect reads no source for that
+    module, as _json binds _json.Scanner as make_scanner, are instead checked only by
+    their witness, which must carry that module's globals. A class's witness is the
+    first function in its own namespace, read through spelled_function and unwrapped
+    from any decorator that records it as __wrapped__, that is named after the class and
+    that may_be_generated in tests/_surface_forms_generators.py does not find a
+    generator may have written there. A class with no witness carries nothing to check
+    its module by, so the module is looked up unchecked, though a string read in one
+    inspect reads no source for still raises TypeError as above. A dataclass whose only
+    method is a hand-written __init__ has no witness in a module that imports
+    annotations from __future__.
     A signature carried over a callable that spells no annotation, such as one defined
     in C or a class constructed by object or in C, is read where the def or lambda given
     it is defined. A string in one given to a link that records no module, as a
@@ -296,8 +300,8 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
     A string annotation in any of those class bodies is read as named_classes reads one,
     so a name its module does not bind raises NameError. Like those annotations, *cls*'s
     source is read from its own module only, so a module another of the same name has
-    replaced in sys.modules raises LookupError, unless inspect reads no source for that
-    one and *cls*'s body compiled no function to check it by.
+    replaced in sys.modules raises LookupError, unless *cls* is one named_classes checks
+    by its witness and it has none: the module found there is then read unchecked.
     """
     _refuse_immutable_type(cls)
     declared = {name for base in recorded_mro(cls) for name in _own_members(base)}
@@ -316,11 +320,11 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     since its names are unknown. A class that member_forms refuses raises the TypeError
     member_forms raises for it.
 
-    A string annotation in *cls*'s own body is read as named_classes reads one, so a name
-    its module does not bind raises NameError. Like such an annotation, *cls*'s source is
-    read from its own module only, so a module another of the same name has replaced in
-    sys.modules raises LookupError, unless inspect reads no source for that one and
-    *cls*'s body compiled no function to check it by.
+    A string annotation in *cls*'s own body is read as named_classes reads one, so a
+    name its module does not bind raises NameError. Like such an annotation, *cls*'s
+    source is read from its own module only, so a module another of the same name has
+    replaced in sys.modules raises LookupError, unless *cls* is one named_classes checks
+    by its witness and it has none: the module found there is then read unchecked.
 
     A known gap: a default factory counts as called by the generated __init__, so a field
     with one that a hand-written __init__ skips goes unreported, though instances lack it.
