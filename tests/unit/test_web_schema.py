@@ -44,7 +44,13 @@ from typing import Any
 
 import pytest
 
-from solar_challenge.dispatch import TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import (
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
+from solar_challenge.home import HomeConfig
 from solar_challenge.web.chat_messages import CHAT_ROLES, get_chat_history
 from solar_challenge.web.database import Database, RowRefused
 from solar_challenge.web.presets import PRESET_TYPES, home_presets
@@ -67,6 +73,7 @@ from solar_challenge.web.stored_runs import (
     DroppedValue,
     RewrittenValue,
     RunType,
+    StoredFleetRun,
     StoredHomeRun,
     UnmigratedRun,
     write_run_documents,
@@ -779,6 +786,55 @@ def test_migrate_store_brings_a_store_at_version_2_to_the_schema_version_by_the_
         rewritten_values=_values_v3_changes_in_the_pre_787_fleet(format_2_run_ids["pre_787_dispatch_fleet"]),
     )
     assert _user_version(store_at_version_2) == SCHEMA_VERSION
+
+
+@_NEEDS_PYARROW
+@pytest.mark.parametrize("name", _FIXTURES_IN_FORMAT_2)
+def test_after_migrate_store_each_run_of_a_store_at_version_2_carries_the_format_version_and_loads(
+    store_at_version_2: Path, format_2_run_ids: dict[str, str], name: str
+) -> None:
+    """Its format.json named 2 before the migration, as a save at format 2 left it."""
+    run_id = format_2_run_ids[name]
+
+    migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    marker = json.loads((_run_dir(store_at_version_2, run_id) / "format.json").read_text())
+    assert marker == {"format_version": RUN_FORMAT_VERSION}
+    assert _storage_of(store_at_version_2).load_run(run_id).run_id == run_id
+
+
+def _dispatch_settings(home: HomeConfig) -> tuple[str, str, DispatchStrategyConfig | None, GridChargeConfig | None]:
+    """*home*'s name and dispatch_strategy, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
+    battery = home.battery_config
+    assert battery is not None, f"{home.name} has no battery"
+    return (home.name, home.dispatch_strategy, battery.dispatch_strategy, battery.grid_charging)
+
+
+@_NEEDS_PYARROW
+def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_each_home_s_dispatch_as_it_ran_from_its_files_and_its_row(
+    store_at_version_2: Path, format_2_run_ids: dict[str, str]
+) -> None:
+    """Before the migration, its documents hold the three shapes HomeConfig has refused since task 787.
+
+    They are grid_charging under self-consumption, grid_charging with no tariff, and home
+    tou_optimized with no tariff. Each now reads as the dispatch its run ran by.
+    """
+    run_id = format_2_run_ids["pre_787_dispatch_fleet"]
+
+    migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    storage = _storage_of(store_at_version_2)
+    loaded = storage.load_run(run_id)
+    record = storage.run_record(run_id)
+    assert isinstance(loaded, StoredFleetRun)
+    assert record is not None
+    for homes in (tuple(loaded.fleet_results.home_configs), record.home_configs()):
+        assert homes is not None
+        assert [_dispatch_settings(home) for home in homes] == [
+            ("Elm Row 1", "greedy", SelfConsumptionStrategyConfig(), None),
+            ("Elm Row 2", "greedy", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
+            ("Elm Row 3", "greedy", None, None),
+        ]
 
 
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
