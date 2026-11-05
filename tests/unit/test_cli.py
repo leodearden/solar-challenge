@@ -1,6 +1,7 @@
 """Tests for the CLI module."""
 
 import io
+import re
 import sys
 import tempfile
 from collections.abc import Callable
@@ -762,8 +763,8 @@ def clear_june_in_tmp_path(
     monkeypatch.chdir(tmp_path)
 
 
-def _run_home_named(home_name: str, *options: str) -> Result:
-    """Run `home run` with options for _DAY on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
+def _run_home_named(home_name: str, *options: str, start: str = _DAY, end: str = _DAY) -> Result:
+    """Run `home run` with options from start to end, by default _DAY alone, on home.yaml, written in the working directory: a home named home_name with 4 kW of PV and a deterministic 3400 kWh a year of load."""
     Path("home.yaml").write_text(
         yaml.safe_dump(
             {
@@ -778,7 +779,7 @@ def _run_home_named(home_name: str, *options: str) -> Result:
 
     return runner.invoke(
         app,
-        ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY, *options],
+        ["home", "run", "home.yaml", "--start", start, "--end", end, *options],
         catch_exceptions=False,
     )
 
@@ -935,6 +936,15 @@ class TestCommandsPrintOnlyTheirProductOnStdout:
         assert result.exit_code == 0
         assert result.stdout.startswith("## Cost-Recovery Rank\n")
         assert "Sweep complete: 1 feasible config(s), 0 infeasible config(s)." in " ".join(result.stderr.split())
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+def test_home_run_counts_the_calendar_days_of_a_run_crossing_the_october_clock_change() -> None:
+    """27 and 28 October 2024 are two calendar days, though the clocks going back makes their minutes 49 hours, so the whole 24-hour days between the first and last minutes, plus one, are three."""
+    result = _run_home_named("Bristol", start="2024-10-27", end="2024-10-28")
+
+    assert result.exit_code == 0
+    assert re.search(r"\bSimulation Days 2\b", table_text(result.stdout))
 
 
 _ECONOMY_7_TARIFF = {

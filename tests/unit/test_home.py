@@ -952,6 +952,29 @@ class TestCalculateSummaryUnification:
         )
 
 
+class TestCalculateSummaryWindow:
+    """calculate_summary carries the window its results cover, and counts that window's calendar days."""
+
+    @pytest.mark.parametrize(
+        ("first_day", "last_day", "calendar_days"),
+        [("2024-10-01", "2024-11-30", 61), ("2024-03-31", "2024-04-01", 2), ("2024-07-01", "2024-12-31", 184)],
+    )
+    def test_simulation_days_counts_the_calendar_days_of_its_results_window(
+        self, first_day, last_day, calendar_days
+    ):
+        """simulation_days is the window's days, though the whole 24-hour days between the first and last minutes, plus one, are 62, 2 and 185 on these Europe/London indexes."""
+        index = pd.date_range(first_day, f"{last_day} 23:59", freq="1min", tz="Europe/London")
+        results = SimulationResults(
+            strategy_name="self_consumption",
+            **{name: pd.Series(1.0, index=index) for name in _series_field_names()},
+        )
+
+        summary = calculate_summary(results)
+
+        assert summary.window == results.window
+        assert summary.simulation_days == summary.window.days == calendar_days
+
+
 def _summary_statistics(**overrides: typing.Any) -> SummaryStatistics:
     """A 7-day run's summary with every required field set, overrides applied."""
     required_fields: dict[str, typing.Any] = {
