@@ -809,9 +809,9 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
 ) -> None:
     """D-S19-5: a run whose documents no step can make readable, which cannot be loaded today either, is reported by id, document and field.
 
-    v2 leaves the lacking run's documents in the format before it, so v3 is given them as they
-    are stored and reports what the strict reader refuses in them first: the config's keys v2
-    would have dropped.
+    Kept gap, task 1317's: v2 leaves the lacking run's documents in the format before it, yet v3
+    is given them as they are stored, so it reports the run again by what the strict reader
+    refuses in them first, the config's keys v2 would have dropped, not the summary's fault.
     """
     lacking = install_stored_run_fixture(
         "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="lacking-generation"
