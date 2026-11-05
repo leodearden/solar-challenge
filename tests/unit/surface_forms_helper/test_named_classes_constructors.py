@@ -490,7 +490,8 @@ def test_a_constructor_named_as_the_dataclass_decorator_names_the_one_it_writes_
         TypeError,
         match=r"^retapping\.Submeter is constructed through retapping\.Submeter\.__init__, "
         r"which carries the name the dataclass decorator gives the __init__ it writes, though "
-        r"its record of retapping\.Submeter says it writes none there, ",
+        r"its record of retapping\.Submeter says it writes none there, so no module is known "
+        r"to spell its parameters: make the name private, or define __init__ with def$",
     ):
         named_classes(retapping.Submeter)
 
