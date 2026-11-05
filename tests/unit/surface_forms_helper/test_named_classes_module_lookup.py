@@ -528,14 +528,21 @@ _GENERATING_SOURCE = (
 
 
 @pytest.mark.parametrize(
-    "generator_globals",
+    ("generator_globals", "globals_clause"),
     [
-        pytest.param("{}", id="globals-of-its-own"),
-        pytest.param("dict(vars(sys.modules[cls.__module__]))", id="copy-of-its-modules-globals"),
+        pytest.param("{}", "globals that record no module's name", id="globals-of-its-own"),
+        pytest.param(
+            "dict(vars(sys.modules[cls.__module__]))",
+            "a copy of the globals of the module at {file}",
+            id="copy-of-its-modules-globals",
+        ),
     ],
 )
-def test_a_module_level_class_whose_annotated_constructor_a_generator_compiled_with_globals_that_are_no_modules_own_raises_a_lookup_error_naming_that_constructors_code_file_and_a_method_generator_record_not_a_missing_or_replaced_module(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, generator_globals: str
+def test_a_module_level_class_whose_annotated_constructor_a_generator_compiled_with_globals_that_are_no_modules_own_raises_a_lookup_error_naming_that_constructors_code_file_what_its_globals_are_and_a_method_generator_record_not_a_missing_or_replaced_module(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    generator_globals: str,
+    globals_clause: str,
 ) -> None:
     """Top's body compiles no function, since the module imports annotations from __future__, so the __init__ that generate writes, with globals of its own or a copy of auditing's, is the constructor read."""
     auditing = imported_module(
@@ -549,8 +556,11 @@ def test_a_module_level_class_whose_annotated_constructor_a_generator_compiled_w
         named_classes(auditing.Top)
 
     message = str(raised.value)
+    clause = globals_clause.format(file=auditing.__file__)
     assert "auditing.Top.__init__" in message
     assert "'<unlisted generator>'" in message
+    assert clause in message
+    assert auditing.__file__ not in message.replace(clause, "")
     assert "add a MethodGenerator record" in message
     assert "sys.modules holds no module under that name" not in message
     assert "before importing another module of that name" not in message
