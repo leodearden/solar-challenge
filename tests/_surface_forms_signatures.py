@@ -1388,6 +1388,14 @@ def _compiled_in_a_class_body(holder: type, name: str, function: types.FunctionT
     return function.__code__.co_qualname == f"{holder.__qualname__}.{name}"
 
 
+def _compiled_in_a_class_body_clause(function: types.FunctionType) -> str:
+    """The clause stating the sign _compiled_in_a_class_body reads in *function*: the qualified name its code carries."""
+    return (
+        f"its code carries the qualified name {function.__code__.co_qualname!r}, as for a "
+        "function a def statement in a class body wrote"
+    )
+
+
 def _refuse_def_written_member_of_another_class_statement(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> None:
@@ -1404,11 +1412,10 @@ def _refuse_def_written_member_of_another_class_statement(
         return
     module = defining_module(holder).__name__
     raise TypeError(
-        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and its "
-        f"code carries the qualified name {function.__code__.co_qualname!r}, as for a function "
-        "a def statement in a class body wrote, but inspect reads no source for it, though it "
-        f"reads one for each function a def statement in the source of the module {module!r} "
-        "wrote, so the class statement that source holds under the qualified name "
+        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and "
+        f"{_compiled_in_a_class_body_clause(function)}, but inspect reads no source for it, "
+        "though it reads one for each function a def statement in the source of the module "
+        f"{module!r} wrote, so the class statement that source holds under the qualified name "
         f"{holder.__qualname__!r} may not be the one that defined {label_of(holder)}, and "
         f"whether that one defines {constructor.name} is not known: make the name private, or "
         f"define {label_of(holder)} by the class statement that source holds"
@@ -1437,10 +1444,7 @@ def _refuse_def_written_member_of_statementless_class(
             "statement set them"
         )
     elif _compiled_in_a_class_body(holder, constructor.name, function):
-        evidence = (
-            f"its code carries the qualified name {function.__code__.co_qualname!r}, as for a "
-            "function a def statement in a class body wrote"
-        )
+        evidence = _compiled_in_a_class_body_clause(function)
         remedy = (
             f"define {label_of(holder)} by a class statement in the source of the module "
             f"{module!r}"
