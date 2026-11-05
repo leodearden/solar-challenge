@@ -1283,12 +1283,12 @@ def _refuse_constructor_recorded_twice(constructors: Iterable[_GeneratedConstruc
 def _generated_constructor_of(
     cls: type, holder: type, name: str, author: object
 ) -> _GeneratedConstructor | None:
-    """The constructor _GENERATED_CONSTRUCTORS holds that is named *name* and whose generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, if *holder*'s class statement, as _defined_in_body reads it, defines no *name*; None otherwise.
+    """The constructor _GENERATED_CONSTRUCTORS holds that is named *name* and whose generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, if no def statement of *holder*'s class statement wrote *author*, as _defined_in_body finds; None otherwise.
 
     A function assigned from elsewhere keeps its own name. A function that records
     __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
     _defined_in_body refuses, naming *cls*, the class constructed through *author*, where
-    it cannot tell whether that statement defines *name*.
+    it cannot tell whether a def statement wrote *author*.
     """
     if not isinstance(author, types.FunctionType) or hasattr(author, "__wrapped__"):
         return None
@@ -1326,7 +1326,17 @@ def _refuse_constructor_its_generator_records_unwritten(
 def _defined_in_body(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> bool:
-    """Whether a def statement in any block of *holder*'s class statement, as class_statement reads it, binds *constructor*'s name in *holder*'s namespace: a def or async def statement that scope_statements finds in that body, whose name no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace; where class_statement reads no class statement for *holder*, False only once _refuse_def_written_member_of_statementless_class finds no sign that a def statement wrote *function*, the one *cls* is constructed through: inspect reads no source for it, and its code carries another qualified name than *holder*'s dotted with the constructor's."""
+    """Whether a def statement of *holder*'s class statement, as class_statement reads it, wrote *function*, the one *cls* is constructed through, as *constructor*'s name: a def or async def statement that scope_statements finds in any block of that body binds that name, which no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace, and inspect reads a source for *function*, as _inspect_reads_a_source_for finds.
+
+    Where that body binds the name so but inspect reads no source for *function*, TypeError
+    names *cls* if _refuse_def_written_member_of_another_class_statement finds a sign that
+    a def statement of another class statement wrote *function*. Where class_statement
+    reads no class statement for *holder*, False only once
+    _refuse_def_written_member_of_statementless_class finds no sign that a def statement
+    wrote *function*. docs/surface-forms-inspect-readings.md §3.5 says how each minor reads
+    a class's statement, and which def statements there write nothing the class holds, as
+    one under `if TYPE_CHECKING:` writes nothing.
+    """
     statement = class_statement(holder)
     if statement is None:
         _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
@@ -1337,50 +1347,102 @@ def _defined_in_body(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     bound_outside = names_declared_by(statement.body, ast.Global, ast.Nonlocal)
-    return constructor.name in def_names.difference(bound_outside)
+    if constructor.name not in def_names.difference(bound_outside):
+        return False
+    if _inspect_reads_a_source_for(function):
+        return True
+    _refuse_def_written_member_of_another_class_statement(cls, holder, constructor, function)
+    return False
+
+
+def _inspect_reads_a_source_for(function: types.FunctionType) -> bool:
+    """Whether inspect reads a source for *function*, as source_of finds.
+
+    On every admitted minor it reads one for each function a def statement in a source
+    file wrote, and none for a function compiled from text no file holds: one the
+    dataclass decorator or collections.namedtuple wrote, each compiled from text it writes,
+    or one a def statement in text given to exec wrote. docs/surface-forms-inspect-readings.md
+    §3.5 records these readings.
+    """
+    try:
+        source_of(function)
+    except NoSourceError:
+        return False
+    return True
+
+
+def _compiled_in_a_class_body(holder: type, name: str, function: types.FunctionType) -> bool:
+    """Whether *function*'s code carries *holder*'s __qualname__ dotted with *name*, the qualified name a def statement of *name* in the body of a class statement under *holder*'s qualified name compiles it under, while the dataclass decorator and collections.namedtuple compile each function they write under a qualified name of their own.
+
+    A generated function whose code was given that name, as code.replace gives it, carries
+    it too, so a rule reads it only to refuse: it fails closed.
+    docs/surface-forms-inspect-readings.md §3.5 records the qualified name each minor
+    compiles such code under.
+    """
+    return function.__code__.co_qualname == f"{holder.__qualname__}.{name}"
+
+
+def _refuse_def_written_member_of_another_class_statement(
+    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
+) -> None:
+    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed, which carries the name *constructor*'s generator gives the constructor it writes into *holder* and for which inspect reads no source, and the module defining_module gives for *holder*, whose class statement in that module's source defines that constructor by a def statement, if *function*'s code carries the qualified name a def statement in *holder*'s class body gives it, as _compiled_in_a_class_body finds.
+
+    inspect reads a source for each function a def statement of that class statement
+    wrote, as _inspect_reads_a_source_for says, so none of them wrote *function*. A def
+    statement in another class statement under *holder*'s qualified name, as in text given
+    to exec, may have written it, and that statement, not the one the source holds, may
+    have defined *holder*, so whether it defines that constructor is not known. The remedy
+    defines *holder* by the class statement the source holds.
+    """
+    if not _compiled_in_a_class_body(holder, constructor.name, function):
+        return
+    module = defining_module(holder).__name__
+    raise TypeError(
+        f"{label_of(cls)} is constructed through {label_of(function)}, which carries the "
+        f"name {constructor.generator.label} gives the {constructor.name} it writes into "
+        f"{label_of(holder)}, and its code carries the qualified name "
+        f"{function.__code__.co_qualname!r}, as for a function a def statement in a class "
+        "body wrote, but inspect reads no source for it, though it reads one for each "
+        f"function a def statement in the source of the module {module!r} wrote, so the "
+        f"class statement that source holds under the qualified name {holder.__qualname__!r} "
+        f"may not be the one that defined {label_of(holder)}, and whether that one defines "
+        f"{constructor.name} is not known: make the name private, or define "
+        f"{label_of(holder)} by the class statement that source holds"
+    )
 
 
 def _refuse_def_written_member_of_statementless_class(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> None:
-    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, as source_of finds, or if its code carries *holder*'s __qualname__ dotted with the constructor's name, as a def statement in *holder*'s class body compiles it.
+    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, as _inspect_reads_a_source_for finds, or if its code carries the qualified name a def statement in *holder*'s class body gives it, as _compiled_in_a_class_body finds.
 
-    A generator compiles each function it writes from text it writes, for which inspect
-    reads no source, under a qualified name of its own; a def statement in a source file
-    wrote any function inspect reads a source for. A function with either sign may be
-    one the class statement that defined *holder* defines, and that statement is
-    elsewhere, as for a class whose __module__ names a module that re-exports it, or in
-    text given to exec, so whether it defines that constructor is not known. The dotted
-    name only refuses, so a generated function whose code was given it is refused too:
-    the rule fails closed. class_statement looks that statement up by *holder*'s
+    A function with either sign may be one the class statement that defined *holder*
+    defines, and that statement is elsewhere, as for a class whose __module__ names a
+    module that re-exports it, or in text given to exec, so whether it defines that
+    constructor is not known. class_statement looks that statement up by *holder*'s
     __module__ and __qualname__ in the source of the module they name; the remedy leaves
-    those as the statement set them where inspect reads a source for *function*, and
-    puts the statement in that source otherwise.
-    docs/surface-forms-inspect-readings.md §3.5 says how each minor reads the source of
-    such a class and of the functions a generator writes, and what qualified name their
-    code carries.
+    those as the statement set them where inspect reads a source for *function*, and puts
+    the statement in that source otherwise. docs/surface-forms-inspect-readings.md §3.5
+    says how each minor reads the source of such a class.
     """
     module = defining_module(holder).__name__
-    try:
-        source_of(function)
-    except NoSourceError:
-        compiled_in_body = f"{holder.__qualname__}.{constructor.name}"
-        if function.__code__.co_qualname != compiled_in_body:
-            return
+    if _inspect_reads_a_source_for(function):
+        evidence = "inspect reads a source for it, as for a function a def statement wrote"
+        remedy = (
+            f"leave the __module__ and __qualname__ of {label_of(holder)} as its class "
+            "statement set them"
+        )
+    elif _compiled_in_a_class_body(holder, constructor.name, function):
         evidence = (
-            f"its code carries the qualified name {compiled_in_body!r}, as for a function a "
-            "def statement in a class body wrote"
+            f"its code carries the qualified name {function.__code__.co_qualname!r}, as for a "
+            "function a def statement in a class body wrote"
         )
         remedy = (
             f"define {label_of(holder)} by a class statement in the source of the module "
             f"{module!r}"
         )
     else:
-        evidence = "inspect reads a source for it, as for a function a def statement wrote"
-        remedy = (
-            f"leave the __module__ and __qualname__ of {label_of(holder)} as its class "
-            "statement set them"
-        )
+        return
     raise TypeError(
         f"{label_of(cls)} is constructed through {label_of(function)}, which carries the "
         f"name {constructor.generator.label} gives the {constructor.name} it writes into "

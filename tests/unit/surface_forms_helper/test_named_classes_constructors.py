@@ -277,6 +277,122 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     assert named_classes(revalving.UnwrittenSubmeter) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        pytest.param("Stubbed", {fractions.Fraction}, id="dataclass-init-under-type-checking"),
+        pytest.param(
+            "Excepted",
+            {fractions.Fraction},
+            id="dataclass-init-in-an-except-handler-never-entered",
+        ),
+        pytest.param(
+            "Deleted", {fractions.Fraction}, id="dataclass-init-deleted-in-its-class-body"
+        ),
+        pytest.param("Pointed", {decimal.Decimal}, id="named-tuple-new-under-type-checking"),
+    ],
+)
+def test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, expected: set[type]
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    stubbing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "stubbing",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "from typing import TYPE_CHECKING, NamedTuple\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Stubbed(Meter):\n"
+        "    if TYPE_CHECKING:\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Excepted(Meter):\n"
+        "    try:\n"
+        "        pass\n"
+        "    except ImportError:\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Deleted(Meter):\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n"
+        "    del __init__\n"
+        "\n"
+        "class Pointed(NamedTuple):\n"
+        "    tap: 'Tap'\n"
+        "    if TYPE_CHECKING:\n"
+        "        def __new__(cls, tap: 'Tap') -> 'Pointed': ...\n",
+    )
+
+    assert named_classes(getattr(stubbing, name)) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "constructor"),
+    [
+        pytest.param(
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "exec(\n"
+            "    '@dataclass\\n'\n"
+            "    'class Submeter(Meter):\\n'\n"
+            "    '    def __init__(self, tap: \"Tap\") -> None: ...\\n'\n"
+            ")\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n",
+            r"decoyed\.Submeter\.__init__",
+            id="exec-written-def-below-a-stub-under-type-checking",
+        ),
+        pytest.param(
+            "from dataclasses import dataclass\n"
+            "from decimal import Decimal as Tap\n"
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "from tapping import Meter\n"
+            "\n"
+            "@dataclass\n"
+            "class Submeter(Meter):\n"
+            "    if TYPE_CHECKING:\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n"
+            "\n"
+            "init = Submeter.__init__\n"
+            "init.__code__ = init.__code__.replace(co_qualname='Submeter.__init__')\n",
+            r"\S+\.Submeter\.__init__",
+            id="generated-code-renamed",
+        ),
+    ],
+)
+def test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, source: str, constructor: str
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    decoyed = imported_module(tmp_path, monkeypatch, "decoyed", source)
+
+    with pytest.raises(
+        TypeError,
+        match=rf"^decoyed\.Submeter is constructed through {constructor}, which carries the "
+        r"name the dataclass decorator gives the __init__ it writes into decoyed\.Submeter, "
+        r"and its code carries the qualified name 'Submeter\.__init__', as for a function a "
+        r"def statement in a class body wrote, but inspect reads no source for it\b"
+        r".*\bso the class statement that source holds under the qualified name 'Submeter' "
+        r"may not be the one that defined decoyed\.Submeter\b.*: make the name private, or "
+        r"define decoyed\.Submeter by the class statement that source holds$",
+    ):
+        named_classes(decoyed.Submeter)
+
+
 def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statement_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
