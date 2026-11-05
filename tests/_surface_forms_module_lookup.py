@@ -379,9 +379,8 @@ def source_of(obj: types.ModuleType | types.FunctionType) -> str:
         raise NoSourceError(f"inspect reads no source for {label_of(obj)}") from unread
 
 
-@_cached_while_alive
 def _has_source(module: types.ModuleType) -> bool:
-    """Whether inspect reads a source for *module*, as source_of finds, computed once and kept while *module* lives."""
+    """Whether inspect reads a source for *module* now, as source_of finds, asked afresh on each call as source_of reads, so its answer never disagrees with class_statement's read."""
     try:
         source_of(module)
     except NoSourceError:
