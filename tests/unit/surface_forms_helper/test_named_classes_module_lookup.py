@@ -823,6 +823,41 @@ def test_a_string_annotation_read_in_a_module_inspect_reads_no_source_for_raises
         named_classes(_json.make_scanner)
 
 
+_LAPSING_SOURCE = (
+    "from typing import TYPE_CHECKING\n"
+    "\n"
+    "if TYPE_CHECKING:\n"
+    "    from decimal import Decimal as Share\n"
+    "\n"
+    "class Audit:\n"
+    "    share: int\n"
+    "\n"
+    "    def __init__(self): ...\n"
+    "\n"
+    "Audited = Audit\n"
+    "del Audit\n"
+    "\n"
+    "def settle(share: 'Share') -> None: ...\n"
+)
+
+
+def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_source_for_raises_a_type_error_naming_it_and_that_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Audit, which lapsing binds only as Audited, had lapsing's source read for it while lapsing still had its file."""
+    lapsing = imported_module(tmp_path, monkeypatch, "lapsing", _LAPSING_SOURCE)
+    with pytest.raises(LookupError, match=r"^lapsing\.Audit is not bound under 'Audit'"):
+        named_classes(lapsing.Audited)
+    monkeypatch.delattr(lapsing, "__file__")
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'lapsing'.*\bno source\b") as raised:
+        named_classes(lapsing.settle)
+
+    naming_the_module = raised.value.__cause__
+    assert str(naming_the_module) == f"inspect reads no source for {lapsing!r}"
+    assert isinstance(naming_the_module.__cause__, (OSError, TypeError))
+
+
 def test_an_unresolvable_forward_reference_raises_a_name_error_naming_it() -> None:
     def f(a: "Nowhere") -> None: ...  # noqa: F821
 
