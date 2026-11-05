@@ -507,6 +507,7 @@ def test_v3_leaves_a_home_run_that_ran_as_stored_as_it_is(edits: list[tuple[Keys
 
     assert result.documents == documents
     assert result.dropped == ()
+    assert result.rewritten == ()
 
 
 @pytest.mark.parametrize("content", ["not a config", ["not", "a", "config"]], ids=["text", "array"])
@@ -519,6 +520,7 @@ def test_v3_leaves_a_config_that_is_not_an_object_as_it_is(content: Any) -> None
 
     assert result.documents == documents
     assert result.dropped == ()
+    assert result.rewritten == ()
 
 
 def test_v3_changes_none_of_its_input_documents() -> None:

@@ -131,10 +131,10 @@ class TestSimulateHomeStrategyPathGridCharging:
             f"max={results.battery_soc.max():.3f}"
         )
 
-    def test_grid_charging_without_a_tariff_is_refused(self, night_weather_data):
-        """Without tariff_config there is no cheap period to grid-charge in, so the battery's grid_charging is refused, not left inert."""
+    def test_grid_charging_without_a_tariff_is_refused(self):
+        """Without tariff_config there is no cheap period to grid-charge in, so building the home refuses the battery's grid_charging, not left inert."""
         with pytest.raises(ConfigurationError, match="grid_charging"):
-            config_no_tariff = HomeConfig(
+            HomeConfig(
                 pv_config=PVConfig(capacity_kw=4.0),
                 load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
                 battery_config=BatteryConfig(
@@ -145,13 +145,6 @@ class TestSimulateHomeStrategyPathGridCharging:
                 ),
                 tariff_config=None,
                 location=Location.bristol(),
-            )
-            simulate_home(
-                config_no_tariff,
-                start_date=pd.Timestamp("2024-06-21"),
-                end_date=pd.Timestamp("2024-06-21"),
-                validate_balance=True,
-                weather=weather_for(config_no_tariff, night_weather_data),
             )
 
 
