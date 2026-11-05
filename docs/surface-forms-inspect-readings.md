@@ -1031,12 +1031,13 @@ record that tells the class `make_dataclass` makes on 3.12 and 3.13 from one
 statement would drop a reading that is alike on every minor. So the refusal is 3.11's
 alone.
 
-The error's remedy is to assign the class the `__module__` of the module that binds it
-under its qualified name, as `make_dataclass` assigns it from 3.12. After
-`Made.__module__ = __name__`, `named_classes` gives `{Decimal}` on every minor, 3.11
-included, where the class's `__init__` still carries the globals of `types`: the helper
-reads each field's annotation in the module of the class declaring it, whatever globals
-the functions the decorator compiled carry.
+For a class whose `__module__` names a module that never bound it, the error's remedy is
+to assign the class the `__module__` of the module that binds it under its qualified name,
+as `make_dataclass` assigns it from 3.12. After `Made.__module__ = __name__`,
+`named_classes` gives `{Decimal}` on every minor, 3.11 included, where the class's
+`__init__` still carries the globals of `types`: the helper reads each field's annotation
+in the module of the class declaring it, whatever globals the functions the decorator
+compiled carry.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it`

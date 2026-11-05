@@ -123,9 +123,10 @@ def _class_module(cls: type) -> types.ModuleType:
         f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
         f"the name {cls.__module__!r}: that module binds "
         f"{'nothing' if bound is None else 'another object'} there. Read each module's "
-        "objects before importing another module of that name, bind the class under its "
-        "qualified name, or assign the class the __module__ of the module that binds it "
-        "under that name, as dataclasses.make_dataclass assigns it from Python 3.12"
+        "objects before importing another module of that name, or bind the class under its "
+        "qualified name. If the class's __module__ names a module that never bound it, as "
+        "that of a class dataclasses.make_dataclass makes on Python 3.11 names types, assign "
+        "it the __module__ of the module that binds it under its qualified name"
     )
 
 

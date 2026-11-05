@@ -179,9 +179,10 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
 
 _UNBOUND_IN_TYPES = (
     r"^types\.Made is not bound under 'Made' in the module at .*types\.py, which sys\.modules "
-    r"holds under the name 'types': that module binds nothing there\. .*\bassign the class "
-    r"the __module__ of the module that binds it under that name, as "
-    r"dataclasses\.make_dataclass assigns it from Python 3\.12$"
+    r"holds under the name 'types': that module binds nothing there\. .*\. If the class's "
+    r"__module__ names a module that never bound it, as that of a class "
+    r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
+    r"__module__ of the module that binds it under its qualified name$"
 )
 
 
