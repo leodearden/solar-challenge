@@ -27,8 +27,11 @@ field, and the rest of the store migrates. A step that cannot write a run's file
 transaction fails once it has brought the run files forward, is refused, leaving the database
 at the version before it, and the migration run again once the fault is gone completes it.
 Version 1 names a legacy run after its home as the format reads the run's config once migrated.
+A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
+forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 """
 
+import functools
 import importlib.util
 import json
 import logging
@@ -66,12 +69,13 @@ from solar_challenge.web.stored_runs import (
     RunType,
     StoredHomeRun,
     UnmigratedRun,
+    write_run_documents,
 )
 from tests._dashboard_databases import (
     FIXTURES_DIR,
     schema_of,
     write_database_a_newer_solar_challenge_wrote,
-    write_database_at_schema_version_1,
+    write_database_at_schema_version,
     write_pre_548_database,
 )
 from tests._finance_builders import make_home_config, make_sim_results
@@ -232,6 +236,7 @@ def test_open_database_refuses_a_store_a_newer_solar_challenge_wrote_naming_both
 STORES_AT_ANOTHER_VERSION = [
     pytest.param(write_pre_548_database, id="legacy-store"),
     pytest.param(write_database_a_newer_solar_challenge_wrote, id="newer-store"),
+    pytest.param(functools.partial(write_database_at_schema_version, version=2), id="store-at-version-2"),
 ]
 
 
@@ -592,7 +597,7 @@ def test_migrate_store_keeps_a_named_run_of_no_type_with_no_type(legacy_store: P
 @pytest.fixture
 def store_at_version_1(tmp_path: Path) -> Path:
     """The database file of a store a solar-challenge at schema version 1 left in tmp_path/store, the directory of its run files."""
-    return write_database_at_schema_version_1(tmp_path / "store" / "solar-challenge.db")
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 1)
 
 
 @pytest.fixture
@@ -600,6 +605,30 @@ def legacy_run_ids(store_at_version_1: Path) -> dict[str, str]:
     """The run id of each legacy stored-run fixture, by name, each installed in store_at_version_1: its runs row and its run directory."""
     database = Database(store_at_version_1)
     return {name: install_stored_run_fixture(name, database, store_at_version_1.parent) for name in STORED_RUN_FIXTURES}
+
+
+_FIXTURES_IN_FORMAT_2 = ("pre_469_home", "legacy_fleet", "pre_787_dispatch_fleet")
+"""The legacy stored-run fixtures whose documents version 2's step leaves as they are, so a store at schema version 2 holds them as committed.
+
+pre_787_dispatch_fleet is the one a solar-challenge at format 2 saved. pre_786_dispatch_home is
+left out: it holds the null keys of the dispatch variants it is not, which v2 drops.
+"""
+
+
+@pytest.fixture
+def store_at_version_2(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 2 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 2)
+
+
+@pytest.fixture
+def format_2_run_ids(store_at_version_2: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_2, by name, each installed in store_at_version_2 with the format.json naming 2 a save at format 2 left."""
+    database = Database(store_at_version_2)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_2.parent) for name in _FIXTURES_IN_FORMAT_2}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_2, run_id), (), 2)
+    return run_ids
 
 
 def _run_dir(database_path: Path, run_id: str) -> Path:
@@ -734,6 +763,22 @@ def test_after_migrate_store_a_run_stored_before_786_reads_its_battery_dispatch_
     for config in (loaded.config, *home_configs):
         assert config.battery_config is not None
         assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+
+
+def test_migrate_store_brings_a_store_at_version_2_to_the_schema_version_by_the_steps_after_it_reporting_the_values_v3_rewrites_in_the_pre_787_fleet(
+    store_at_version_2: Path, format_2_run_ids: dict[str, str]
+) -> None:
+    """A store as a solar-challenge at schema version 2 left it, each run's format.json naming 2, is migrated without version 2's step."""
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_2,
+        from_version=2,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[2:],
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(format_2_run_ids["pre_787_dispatch_fleet"]),
+    )
+    assert _user_version(store_at_version_2) == SCHEMA_VERSION
 
 
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
