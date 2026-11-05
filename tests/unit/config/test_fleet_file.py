@@ -22,12 +22,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.tariff import TariffConfig
-
-
-@pytest.fixture
-def scenarios_dir(project_root: Path) -> Path:
-    """The scenarios/ directory of fleet files shipped with the repository."""
-    return project_root / "scenarios"
+from tests._repository_paths import SCENARIOS_DIR
 
 
 def _assert_refused_naming_tou_optimized_and_the_tariff(read: Callable[[], object]) -> None:
@@ -78,9 +73,9 @@ class TestBristolPhase1Scenario:
     """Tests for Bristol Phase 1 scenario (loaded from YAML)."""
 
     @pytest.fixture
-    def bristol_fleet(self, scenarios_dir: Path) -> FleetConfig:
+    def bristol_fleet(self) -> FleetConfig:
         """Load Bristol Phase 1 from YAML."""
-        return load_fleet_config(scenarios_dir / "bristol-phase1.yaml")
+        return load_fleet_config(SCENARIOS_DIR / "bristol-phase1.yaml")
 
     def test_load_bristol_phase1(self, bristol_fleet: FleetConfig) -> None:
         """Test loading Bristol Phase 1 from YAML."""
@@ -136,9 +131,9 @@ class TestBristolPhase1Scenario:
         mean_consumption = sum(consumptions) / len(consumptions)
         assert 3000 <= mean_consumption <= 3800
 
-    def test_reproducible(self, scenarios_dir: Path) -> None:
+    def test_reproducible(self) -> None:
         """Test that loading from YAML is reproducible (seeded random)."""
-        yaml_path = scenarios_dir / "bristol-phase1.yaml"
+        yaml_path = SCENARIOS_DIR / "bristol-phase1.yaml"
         fleet1 = load_fleet_config(yaml_path)
         fleet2 = load_fleet_config(yaml_path)
 
@@ -328,22 +323,22 @@ fleet_distribution:
 class TestAgedScenario:
     """Full product read-path test: load_fleet_config propagates system_age_years from YAML."""
 
-    def test_aged_scenario_has_100_homes_all_aged_20(self, scenarios_dir: Path) -> None:
+    def test_aged_scenario_has_100_homes_all_aged_20(self) -> None:
         """Loading bristol-phase1-aged.yaml returns 100 homes each with system_age_years=20.0."""
-        aged_path = scenarios_dir / "bristol-phase1-aged.yaml"
+        aged_path = SCENARIOS_DIR / "bristol-phase1-aged.yaml"
         fleet = load_fleet_config(aged_path)
         assert len(fleet.homes) == 100
         for home in fleet.homes:
             assert home.pv_config.system_age_years == 20.0
 
-    def test_baseline_scenario_has_age_zero(self, scenarios_dir: Path) -> None:
+    def test_baseline_scenario_has_age_zero(self) -> None:
         """Loading bristol-phase1.yaml returns homes with default system_age_years=0.0."""
-        baseline_path = scenarios_dir / "bristol-phase1.yaml"
+        baseline_path = SCENARIOS_DIR / "bristol-phase1.yaml"
         fleet = load_fleet_config(baseline_path)
         for home in fleet.homes:
             assert home.pv_config.system_age_years == 0.0
 
-    def test_aged_scenario_degradation_factor_is_approx_90pct(self, scenarios_dir: Path) -> None:
+    def test_aged_scenario_degradation_factor_is_approx_90pct(self) -> None:
         """The aged scenario yields degradation factor ≈ 0.90 (20yr × 0.5%/yr).
 
         Exercises the signal chain end-to-end at config speed:
@@ -352,7 +347,7 @@ class TestAgedScenario:
         This confirms the ≈10% lower aggregate generation claim without
         running a live PVGIS simulation.
         """
-        aged_path = scenarios_dir / "bristol-phase1-aged.yaml"
+        aged_path = SCENARIOS_DIR / "bristol-phase1-aged.yaml"
         fleet = load_fleet_config(aged_path)
         home = fleet.homes[0]  # all homes share the same scalar age
         factor = calculate_degradation_factor(

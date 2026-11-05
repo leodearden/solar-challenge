@@ -8,6 +8,7 @@ import pytest
 
 from solar_challenge.config import load_config
 from tests._fleet_generation_pins import PINNED_FLEETS, REGENERATE_COMMAND, SHIPPED_FLEETS, fleet_pin, golden_path
+from tests._repository_paths import REPOSITORY_ROOT, SCENARIOS_DIR
 
 
 @pytest.mark.parametrize("fleet", PINNED_FLEETS, ids=[Path(fleet).stem for fleet in PINNED_FLEETS])
@@ -32,11 +33,11 @@ def test_the_fleet_generates_the_homes_its_golden_pins(project_root: Path, fleet
         )
 
 
-def test_every_fleet_scenario_is_pinned(project_root: Path) -> None:
+def test_every_fleet_scenario_is_pinned() -> None:
     """Every scenarios/*.yaml with a fleet_distribution: block is a shipped fleet the pins hold."""
     fleet_scenarios = sorted(
-        path.relative_to(project_root).as_posix()
-        for path in (project_root / "scenarios").glob("*.yaml")
+        path.relative_to(REPOSITORY_ROOT).as_posix()
+        for path in SCENARIOS_DIR.glob("*.yaml")
         if "fleet_distribution" in load_config(path)
     )
     assert fleet_scenarios == sorted(SHIPPED_FLEETS), (
