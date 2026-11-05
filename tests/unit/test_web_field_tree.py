@@ -204,9 +204,13 @@ def test_field_tree_refuses_a_value_that_is_no_dataclass() -> None:
         pytest.param("cadence", pd.Timedelta(minutes=30), id="a-pd-timedelta-for-a-timedelta"),
     ],
 )
-def test_field_tree_leaves_a_date_or_timedelta_subclass_as_it_is(name: str, value: Any) -> None:
-    """The writer turns into text only the types the reader reads back as themselves, so json.dumps refuses such a value at its save, not the strict reader at a load."""
-    assert field_tree(replace(_EVERY, **{name: value}))[name] is value
+def test_json_refuses_the_field_tree_of_a_date_or_timedelta_subclass(name: str, value: Any) -> None:
+    """The writer turns into text only the types the reader reads back as themselves, so json.dumps refuses such a value at its save, not the strict reader at a load.
+
+    A pd.Timestamp in a date field is not covered: the writer turns it into datetime text, which the reader refuses as no date.
+    """
+    with pytest.raises(TypeError, match=f"Object of type {type(value).__name__} is not JSON serializable"):
+        json.dumps(field_tree(replace(_EVERY, **{name: value})))
 
 
 @pytest.mark.parametrize(
@@ -217,6 +221,18 @@ def test_field_tree_leaves_a_date_or_timedelta_subclass_as_it_is(name: str, valu
     ],
 )
 def test_read_field_tree_reads_a_field_tree_back_as_the_instance_written(written: _EveryShape) -> None:
+    assert read_field_tree(json.loads(json.dumps(field_tree(written))), _EveryShape) == written
+
+
+@pytest.mark.parametrize(
+    "cadence",
+    [timedelta(0), timedelta(microseconds=1), timedelta(seconds=0.5), timedelta(days=1, seconds=3), -timedelta(minutes=1)],
+    ids=["zero", "a-microsecond", "half-a-second", "a-day-and-3-seconds", "minus-a-minute"],
+)
+def test_read_field_tree_reads_back_each_timedelta_field_tree_writes(cadence: timedelta) -> None:
+    """The reader refuses a duration's text unless it is the text field_tree writes for it, so each text field_tree writes must read back."""
+    written = replace(_EVERY, cadence=cadence)
+
     assert read_field_tree(json.loads(json.dumps(field_tree(written))), _EveryShape) == written
 
 
@@ -353,10 +369,28 @@ _REFUSALS = [
         id="cadence-a-number-of-seconds",
     ),
     pytest.param(
+        _with_value(_TREE, ("cadence",), "60000"),
+        "cadence",
+        "is the string '60000', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'P0DT0H0M0.00006S'",
+        id="cadence-a-digit-string",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "PT1M"),
+        "cadence",
+        "is the string 'PT1M', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'P0DT0H1M0S'",
+        id="cadence-another-iso-8601-spelling",
+    ),
+    pytest.param(
         _with_value(_TREE, ("cadence",), ""),
         "cadence",
-        "is the string '', not a duration a timedelta holds",
+        "is the string '', not an ISO 8601 duration as field_tree writes one: pandas reads it as 'NaT'",
         id="cadence-empty",
+    ),
+    pytest.param(
+        _with_value(_TREE, ("cadence",), "NaT"),
+        "cadence",
+        "is the string 'NaT', not a duration a timedelta holds",
+        id="cadence-nat",
     ),
     pytest.param(
         _with_value(_TREE, ("cadence",), "P0DT0H0M0.000000001S"),

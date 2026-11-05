@@ -64,12 +64,14 @@ def field_tree(obj: Any) -> dict[str, Any]:
 def _field_tree_value(value: Any) -> Any:
     """Emit one value in its JSON-compatible form.
 
-    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string, a date its ISO 8601
-    text and a timedelta its ISO 8601 duration, such as 'P0DT0H1M0S'; another subclass of
-    either, as a datetime or a pd.Timedelta, is no type the reader reads back as itself, so it
-    is returned unchanged. A value of one of _ARRAY_CONTAINERS becomes a list, and a dict keeps
-    its keys, with every item serialized the same way. Anything else, None included, is
-    returned unchanged.
+    A dataclass becomes a dict. A pd.Timestamp becomes its ISO string, a value of type date
+    its ISO 8601 text and one of type timedelta its ISO 8601 duration, such as 'P0DT0H1M0S'.
+    Any other subclass of date or timedelta, as a datetime or a pd.Timedelta, is no type the
+    reader reads back as itself, so it is returned unchanged. The value's type, not its
+    field's annotation, picks the form, so a pd.Timestamp in a date field becomes datetime
+    text, which the reader refuses as no date. A value of one of _ARRAY_CONTAINERS becomes a
+    list, and a dict keeps its keys, with every item serialized the same way. Anything else,
+    None included, is returned unchanged.
     """
     if is_dataclass(value):
         return field_tree(value)
@@ -386,17 +388,24 @@ def _read_leaf(value: Any, annotation: Any, path: str | None) -> Any:
 
 
 def _timedelta_of(text: str, path: str | None) -> timedelta:
-    """The timedelta that *text*, an ISO 8601 duration at *path* in its document, is, as pd.Timedelta reads it.
+    """The timedelta that *text*, at *path* in its document, is: the ISO 8601 duration that field_tree writes for it, as pd.Timedelta reads it.
 
     Raises:
-        FieldTreeRefused: pandas reads no duration from *text*, its ValueError the cause; or the
-            one it reads is none a timedelta holds: NaT, which it reads from '' or 'NaT', or one
-            with nanoseconds, which a timedelta's microseconds would drop.
+        FieldTreeRefused: pandas reads no duration from *text*, its ValueError the cause; *text*
+            is not the ISO 8601 duration field_tree writes for the one pandas reads, as a bare
+            number, which pandas reads as nanoseconds, or another spelling, as '1 min' or
+            'PT1M'; or the one it reads is none a timedelta holds: NaT, or one with
+            nanoseconds, which a timedelta's microseconds would drop.
     """
     try:
         duration = pd.Timedelta(text)
     except ValueError as refusal:
         raise FieldTreeRefused(path, f"is {_json_value(text)}, not a duration: {refusal}") from refusal
+    written = duration.isoformat()
+    if text != written:
+        raise FieldTreeRefused(
+            path, f"is {_json_value(text)}, not an ISO 8601 duration as field_tree writes one: pandas reads it as {written!r}"
+        )
     if pd.isna(duration) or duration.nanoseconds:
         raise FieldTreeRefused(path, f"is {_json_value(text)}, not a duration a timedelta holds")
     converted: timedelta = duration.to_pytimedelta()
