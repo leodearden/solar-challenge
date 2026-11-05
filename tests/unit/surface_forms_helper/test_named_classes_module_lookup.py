@@ -177,6 +177,106 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
+_UNBOUND_IN_TYPES = (
+    r"^types\.Made is not bound under 'Made' in the module at .*types\.py, which sys\.modules "
+    r"holds under the name 'types': that module binds nothing there\. .*\. If the class's "
+    r"__module__ names a module that never bound it, as that of a class "
+    r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
+    r"__module__ of the module that binds it under its qualified name$"
+)
+
+
+def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    newclassing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "newclassing",
+        "import types\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
+        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
+    )
+
+    with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+        named_classes(newclassing.Made)
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
+    dataclassmaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "dataclassmaking",
+        "from dataclasses import make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+
+    if sys.version_info < (3, 12):
+        with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+            named_classes(dataclassmaking.Made)
+    else:
+        assert named_classes(dataclassmaking.Made) == {decimal.Decimal}
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On 3.11 the __init__ the dataclass decorator compiled still carries the globals of types, which binds nothing under 'Tap'."""
+    remaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "remaking",
+        "from dataclasses import make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
+        "Made.__module__ = __name__\n",
+    )
+
+    assert named_classes(remaking.Made) == {decimal.Decimal}
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_a_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From 3.12, make_dataclass assigns the name of the module whose function calls it, not that of the module binding the class that function returns."""
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "dataclassfactories",
+        "from dataclasses import make_dataclass\n"
+        "\n"
+        "def made() -> type:\n"
+        "    return make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+    factoring = imported_module(
+        tmp_path,
+        monkeypatch,
+        "dataclassfactoring",
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from dataclassfactories import made\n"
+        "\n"
+        "Made = made()\n",
+    )
+    recorded = "types" if sys.version_info < (3, 12) else "dataclassfactories"
+
+    with pytest.raises(
+        LookupError,
+        match=rf"^{recorded}\.Made is not bound under 'Made' in the module at .*\b{recorded}\.py, "
+        rf"which sys\.modules holds under the name '{recorded}': that module binds nothing there\. ",
+    ):
+        named_classes(factoring.Made)
+
+
 def _name_each_code_as_if_compiled_at_module_level(
     cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:

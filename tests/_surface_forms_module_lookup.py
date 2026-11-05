@@ -104,7 +104,9 @@ def _class_module(cls: type) -> types.ModuleType:
     replaced its own in sys.modules, LookupError names *cls* and the module found. An
     immutable type carries no source or annotation to misread, and a class so checked
     for which _body_witness finds no witness carries nothing to check it by, so their
-    module is looked up unchecked.
+    module is looked up unchecked. docs/surface-forms-inspect-readings.md §4.10 says which
+    __module__ dataclasses.make_dataclass records on each minor, and so when a class it
+    makes is refused.
     """
     module = _module_named(cls.__module__, cls)
     if is_immutable_type(cls):
@@ -121,8 +123,10 @@ def _class_module(cls: type) -> types.ModuleType:
         f"the module at {getattr(module, '__file__', None)}, which sys.modules holds under "
         f"the name {cls.__module__!r}: that module binds "
         f"{'nothing' if bound is None else 'another object'} there. Read each module's "
-        "objects before importing another module of that name, or bind the class under "
-        "its qualified name"
+        "objects before importing another module of that name, or bind the class under its "
+        "qualified name. If the class's __module__ names a module that never bound it, as "
+        "that of a class dataclasses.make_dataclass makes on Python 3.11 names types, assign "
+        "it the __module__ of the module that binds it under its qualified name"
     )
 
 
@@ -220,7 +224,7 @@ def bound_under(qualified_name: str, module: types.ModuleType) -> object:
 
 
 def class_statement(cls: type) -> ast.ClassDef | None:
-    """The class statement that defined *cls*: the one the source of the module defining_module gives for *cls* holds under *cls*'s qualified name, as _class_statements_in spells the name each statement there gives, alike on every minor; None if that source holds none, as for a class collections.namedtuple or dataclasses.make_dataclass makes, or one whose __module__ names a module that re-exports it.
+    """The class statement that defined *cls*: the one the source of the module defining_module gives for *cls* holds under *cls*'s qualified name, as _class_statements_in spells the name each statement there gives, alike on every minor; None if that source holds none, as for a class collections.namedtuple makes, one type() makes that the dataclass decorator then processes, or one whose __module__ names a module that re-exports it.
 
     TypeError names *cls* if inspect reads no source for that module, as for a built-in
     or extension module, which may hold a class statement that defined it; or if that
