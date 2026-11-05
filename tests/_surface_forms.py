@@ -209,18 +209,22 @@ def named_classes(obj: object) -> set[type]:
     holds under the name its __module__ records. One whose module another of the same
     name has since replaced in sys.modules raises LookupError naming it and the module
     found there, and one whose module has since left sys.modules, LookupError naming it
-    and that module's name. A class defined inside a function, and one the module found
-    does not bind under its qualified name where inspect reads no source for that
-    module, as _json binds _json.Scanner as make_scanner, are instead checked only by
-    their witness, which must carry that module's globals. A class's witness is the
-    first function in its own namespace, read through spelled_function and unwrapped
-    from any decorator that records it as __wrapped__, that is named after the class and
-    that may_be_generated in tests/_surface_forms_generators.py does not find a
-    generator may have written there. A class with no witness carries nothing to check
-    its module by, so the module is looked up unchecked, though a string read in one
-    inspect reads no source for still raises TypeError as above, on the same condition.
-    A dataclass whose only method is a hand-written __init__ has no witness in a module
-    that imports annotations from __future__.
+    and that module's name. A routine whose globals are no module's own, as a generator
+    may compile a method it writes with, raises LookupError naming it and the file its
+    code was compiled from: globals that record no module's name, or a copy of the
+    globals of the module sys.modules holds under the name they record. A class defined
+    inside a function, and one the module found does not bind under its qualified name
+    where inspect reads no source for that module, as _json binds _json.Scanner as
+    make_scanner, are instead checked only by their witness, which must carry that
+    module's globals. A class's witness is the first function in its own namespace, read
+    through spelled_function and unwrapped from any decorator that records it as
+    __wrapped__, that is named after the class and that may_be_generated in
+    tests/_surface_forms_generators.py does not find a generator may have written there.
+    A class with no witness carries nothing to check its module by, so the module is
+    looked up unchecked, though a string read in one inspect reads no source for still
+    raises TypeError as above, on the same condition. A dataclass whose only method is a
+    hand-written __init__ has no witness in a module that imports annotations from
+    __future__.
     A signature carried over a callable that spells no annotation, such as one defined
     in C or a class constructed by object or in C, is read where the def or lambda given
     it is defined. A string in one given to a link that records no module, as a

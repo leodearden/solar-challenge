@@ -62,21 +62,47 @@ def _module_named(name: str, obj: object) -> types.ModuleType:
 def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
     """The module whose globals *routine* carries, whatever module its __module__ names: the one sys.modules holds under the name that module was imported as, its spec's, or its __name__ if it has no spec.
 
-    If sys.modules holds another module under that name, as once another module of the
-    same name has replaced it there, LookupError names *routine* and both modules. A
-    routine that carries no globals, as a descriptor object that carries a signature
-    carries none, records nothing to check its module by, so the one its __module__
-    names is looked up unchecked.
+    Globals that are no module's own, as a generator may compile a method it writes
+    with, raise LookupError naming *routine* and the file its code was compiled from:
+    globals that record no module's name, which every module's globals record from
+    their creation, or a copy of the globals of the module sys.modules holds under the
+    name they record, as _copies_globals_of finds one. If sys.modules holds another
+    module under that name, as once another module of the same name has replaced it
+    there, LookupError names *routine* and both modules. A routine that carries no
+    globals, as a descriptor object that carries a signature carries none, records
+    nothing to check its module by, so the one its __module__ names is looked up
+    unchecked.
     """
     namespace = getattr(routine, "__globals__", None)
     if namespace is None:
         return _module_named(routine.__module__, routine)
     spec = namespace.get("__spec__")
     name = namespace.get("__name__") if spec is None else spec.name
+    if name is None:
+        raise _compiled_with_globals_of_no_module(routine, "globals that record no module's name")
     module = _module_named(name, routine)
-    if vars(module) is not namespace:
-        raise _defined_elsewhere(label_of(routine), namespace, module, name)
-    return module
+    if vars(module) is namespace:
+        return module
+    if _copies_globals_of(namespace, module):
+        raise _compiled_with_globals_of_no_module(
+            routine,
+            f"a copy of the globals of {_located(module)}, which sys.modules holds under the "
+            f"name {name!r}",
+        )
+    raise _defined_elsewhere(label_of(routine), namespace, module, name)
+
+
+def _copies_globals_of(namespace: dict[str, object], module: types.ModuleType) -> bool:
+    """Whether *namespace* is a copy of *module*'s globals, not those globals themselves: it holds the very __spec__ object they hold, as the copy attrs compiles each __init__ it writes with does.
+
+    The import system makes a new spec for each module it imports, so the globals of a
+    module another has since replaced in sys.modules hold a spec of their own, and a
+    copy holds the spec of the module it was copied from. A module with no spec gives
+    nothing to tell a copy by.
+    """
+    own = vars(module)
+    spec = namespace.get("__spec__")
+    return namespace is not own and spec is not None and spec is own.get("__spec__")
 
 
 _PY_TPFLAGS_IMMUTABLETYPE = 1 << 8
@@ -170,6 +196,12 @@ def _located_by_globals(namespace: dict[str, object]) -> str:
     return _located(holder)
 
 
+_GENERATOR_RECORD_REMEDY = (
+    f"If a generator wrote it, add a {MethodGenerator.__qualname__} record for that generator "
+    f"to the generators that {MethodGenerator.__module__} lists"
+)
+
+
 def _written_by_an_unlisted_generator(
     cls: type, function: types.FunctionType, module: types.ModuleType
 ) -> LookupError:
@@ -178,10 +210,23 @@ def _written_by_an_unlisted_generator(
         f"{label_of(cls)}.{function.__name__} was compiled from "
         f"{function.__code__.co_filename!r} with globals that name no file and are not those "
         f"of {_located(module)}, which sys.modules holds under the name {cls.__module__!r}. "
-        f"If a generator wrote it, add a {MethodGenerator.__qualname__} record for that "
-        f"generator to the generators that {MethodGenerator.__module__} lists. If a module "
-        f"with no file defined {label_of(cls)}, read each module's objects before importing "
-        "another module of that name"
+        f"{_GENERATOR_RECORD_REMEDY}. If a module with no file defined {label_of(cls)}, read "
+        "each module's objects before importing another module of that name"
+    )
+
+
+def _compiled_with_globals_of_no_module(
+    routine: Callable[..., object], globals_clause: str
+) -> LookupError:
+    """The error for *routine*, compiled with the globals *globals_clause* describes, which are no module's own, as a generator may compile a method it writes, so that no module is known to spell its annotations."""
+    return LookupError(
+        f"{label_of(routine)} was compiled from {routine.__code__.co_filename!r} with globals "
+        "that are no module's own, as a generator may compile a method it writes: "
+        f"{globals_clause}. So no module is known to spell its annotations. "
+        f"{_GENERATOR_RECORD_REMEDY}, and record each constructor it writes with the module "
+        f"that spells each of its parameters, since a {MethodGenerator.__qualname__} record "
+        "alone does not say where a constructor it writes is spelled. Otherwise, define it "
+        "with def in a module"
     )
 
 
