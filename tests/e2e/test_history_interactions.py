@@ -16,31 +16,33 @@ from playwright.sync_api import Locator, Page, Route, expect
 # -- Search filter updates table -------------------------------------------
 
 
+@pytest.mark.usefixtures("seeded_home_runs_pair")
 def test_search_filter_updates_table(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """Type run name -> row visible; type nonsense -> 'No simulation runs found'."""
+    """Type run name -> row visible; type nonsense -> 'No simulation runs found'.
+
+    The seeded pair puts runs the search excludes in the unfiltered list, so the list narrowing to one run shows the search has applied.
+    """
     _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
 
     search_input = page.locator("#filter-search")
     expect(search_input).to_be_visible()
 
     # Search for the seeded run name
     search_input.fill(run_name)
-    page.wait_for_timeout(1000)
+    expect(page.get_by_role("link", name="View results")).to_have_count(1)
 
-    # The seeded run should be visible
+    # The seeded run is the only run listed
     row = page.locator("td", has_text=run_name)
     expect(row.first).to_be_visible()
 
     # Clear and search for nonsense
     search_input.fill("zzz-nonexistent-run-xyz-12345")
-    page.wait_for_timeout(1000)
 
     # Should show empty state
     empty_msg = page.locator("text=No simulation runs found")
@@ -166,7 +168,6 @@ def test_pagination_controls_exist(
     """'Prev' and 'Next' buttons attached in DOM."""
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     prev_btn = page.locator("button", has_text="Prev")
     next_btn = page.locator("button", has_text="Next")
