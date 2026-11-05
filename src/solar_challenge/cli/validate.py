@@ -4,7 +4,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Callable, Mapping, Optional, Sequence
-from warnings import WarningMessage, catch_warnings, simplefilter
 
 import pandas as pd
 import typer
@@ -310,26 +309,17 @@ def _domestic_scale_warnings(defined: _DefinedHomes) -> list[str]:
     ]
 
 
-def _user_warnings(caught: Sequence[WarningMessage]) -> list[str]:
-    """The messages of the UserWarnings among *caught*: the advisories a loader raises as it builds."""
-    return [
-        str(item.message) for item in caught if issubclass(item.category, UserWarning)
-    ]
-
-
 def _findings(config_file: Path) -> tuple[list[str], list[str]]:
     """The (errors, warnings) of validating the file.
 
-    The errors are the first refusal met reading the file, if any. The warnings are the
-    advisories the loader raised on the way, then each domestic-scale size above its ceiling.
+    The errors are the first refusal met reading the file, if any; otherwise the warnings
+    are each domestic-scale size above its ceiling.
     """
-    with catch_warnings(record=True) as caught:
-        simplefilter("always")
-        try:
-            defined = _homes_defined_by(config_file)
-        except (ConfigurationError, ValueError) as refusal:
-            return [str(refusal)], _user_warnings(caught)
-    return [], _user_warnings(caught) + _domestic_scale_warnings(defined)
+    try:
+        defined = _homes_defined_by(config_file)
+    except (ConfigurationError, ValueError) as refusal:
+        return [str(refusal)], []
+    return [], _domestic_scale_warnings(defined)
 
 
 def _print_config_findings(
@@ -375,9 +365,9 @@ def config(
     A YAML-defined sweep is built at every sweep point, as `fleet sweep` builds it.
     A fleet or home file's seg: block is read as `finance run` and `home run` read it, and
     its finance: block as `finance run` reads it; either may be absent. A scenario's are
-    read with the scenario. The first value or key refused is an ERROR. The loader's
-    advisories, and sizes beyond a domestic install, are WARNINGs. Other top-level blocks,
-    such as flex_band:, community: or period:, are not checked.
+    read with the scenario. The first value or key refused is an ERROR. Sizes beyond a
+    domestic install are WARNINGs. Other top-level blocks, such as flex_band:, community: or
+    period:, are not checked.
     """
     errors, warnings = _findings(config_file)
     _print_config_findings(config_file, errors=errors, warnings=warnings)

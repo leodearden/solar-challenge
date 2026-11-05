@@ -9,7 +9,6 @@ import json
 import math
 import random
 import re
-import warnings
 from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from enum import Enum
 from pathlib import Path
@@ -2633,21 +2632,11 @@ def _read_fleet_distribution_file(
     """Read the fleet_distribution: block of *document*, with what the file gives every home it generates.
 
     The one place that decides which top-level blocks those homes get. It reads location:,
-    fleet_distribution: and tariff: in that order, and warns when the block dispatches
-    tou_optimized with no tariff to dispatch by.
+    fleet_distribution: and tariff: in that order.
     """
     location = parse_location_block(document.get("location"))
     distribution = parse_fleet_distribution_config(document["fleet_distribution"])
     tariff = parse_tariff_config(document.get("tariff"))
-    if distribution.dispatch_strategy == "tou_optimized" and tariff is None:
-        warnings.warn(
-            "fleet_distribution.dispatch_strategy is 'tou_optimized' but no tariff "
-            "is configured; homes will fall back to self-consumption dispatch at "
-            "simulation time. Add a top-level 'tariff:' key to the fleet YAML to "
-            "enable Economy-7 grid-charging.",
-            UserWarning,
-            stacklevel=3,
-        )
     return distribution, _FleetFileSettings(location=location, tariff=tariff)
 
 

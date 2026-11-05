@@ -47,7 +47,9 @@ class HomeConfig:
         dispatch_strategy: Battery dispatch strategy, one of HOME_DISPATCH_STRATEGIES
 
     Raises:
-        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES.
+        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES; or the
+            home has a battery whose dispatch would ignore a setting: tou_optimized with no
+            tariff to dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
     """
 
     pv_config: PVConfig
@@ -73,6 +75,28 @@ class HomeConfig:
                 f"one of {' or '.join(repr(name) for name in HOME_DISPATCH_STRATEGIES)}",
                 got=self.dispatch_strategy,
             )
+        battery = self.battery_config
+        if battery is None:
+            return
+        if _runs_tariff_tou(self):
+            if self.tariff_config is None:
+                raise ConfigurationError(
+                    "dispatch_strategy 'tou_optimized' dispatches the battery by the tariff's rates, "
+                    "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
+                )
+            return
+        build_dispatch_strategy(
+            battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+            grid_charging=battery.grid_charging,
+            tariff=self.tariff_config,
+        )
+
+
+def _runs_tariff_tou(config: HomeConfig) -> bool:
+    """Whether the home asks for tou_optimized and its battery, if any, names no strategy of its own: the tariff-rate TOU path's homes."""
+    return config.dispatch_strategy == "tou_optimized" and (
+        config.battery_config is None or config.battery_config.dispatch_strategy is None
+    )
 
 
 _COLUMN = "column"
@@ -438,10 +462,10 @@ def _dispatch_path(
     tariff = config.tariff_config
     if strategy is not None:
         return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
+    if _runs_tariff_tou(config) and tariff is not None:
+        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
     battery = config.battery_config
     battery_strategy = None if battery is None else battery.dispatch_strategy
-    if config.dispatch_strategy == "tou_optimized" and tariff is not None and battery_strategy is None:
-        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
     strategy = build_dispatch_strategy(
         battery_strategy or SelfConsumptionStrategyConfig(),
         grid_charging=None if battery is None else battery.grid_charging,
