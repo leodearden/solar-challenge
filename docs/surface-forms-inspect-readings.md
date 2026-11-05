@@ -218,6 +218,14 @@ whose `__qualname__` was assigned another statement's qualified name by that oth
 statement, as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
 `class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
 `__name__` was assigned, so no rule could refuse the one and still read the other.
+Where the source of the module a class's `__module__` names holds no class statement
+under its qualified name, as for the re-homed `Submeter` above, a class
+`collections.namedtuple` makes, or `ast.AST`, `undeclared_attributes` and
+`unset_attributes` have no `__init__` or `__post_init__` to read: both raise `TypeError`
+naming the class, that module and that qualified name, alike on every minor. The error's
+remedy defines the class by a class statement in a source file and leaves both
+`__module__` and `__qualname__` as that statement set them, as the remedy below for a
+constructor `inspect` reads a source for leaves them.
 
 The dataclass decorator writes an `__init__`, and `collections.namedtuple` a `__new__`,
 named after the class, unless its statement defines one. On every admitted minor
@@ -300,6 +308,7 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
 - `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_code_carries_another_qualified_name_than_a_def_in_its_class_body_gives_is_spelled_as_its_generator_spells_what_it_writes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
