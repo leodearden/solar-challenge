@@ -19,9 +19,8 @@ table to the table's schema at the step's version, which the owner states apart 
 table's current schema, so a later step changes no earlier one.
 
 A step may also carry a run-document step of the stored-run format (stored_runs.RUN_DOCUMENT_STEPS),
-the step of the same version, as version 2 carries the first: migrate_store brings every stored
-run's files forward by it before the step's transaction, and the runs rows' copies inside it,
-skipping the files or the copies an earlier step of the migration left unmigrated.
+the step of the same version, as version 2 carries the first: migrate_store brings the stored
+runs' files forward by it before the step's transaction, and the runs rows' copies inside it.
 Each run-document step is carried by the step of its version, so the format version is never
 past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs whose documents
 are in the current format or runs its migration reported it could not migrate. A run's time
@@ -284,9 +283,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     it failed stay so: a migration run again brings them forward again, which changes nothing
     in them, and so reports none of the values the failed step dropped from them. A run whose
     documents a run-document step cannot bring forward is left as it was and reported, and the
-    migration goes on: no later step of the migration is given that run's files, or its runs
-    row's copies, whichever the step left, so each is reported once, by the fault that kept it
-    from that step. Every connection is opened through Database.connect().
+    migration goes on. No later step of the migration is given that run's files, or its runs
+    row's copies, whichever the step left, as no later step can bring forward documents still
+    in the format before that step; so each is reported once, by the fault that kept it from
+    that step. Every connection is opened through Database.connect().
 
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
@@ -329,7 +329,7 @@ def _apply_step(
     forward. Then one transaction writes the step's database part, brings the runs rows'
     documents forward by the same run-document step, and records the step's version as the
     store's user_version. Both run-document parts are given *earlier*, the migration's outcome
-    before *step*, so each skips what an earlier step left unmigrated.
+    before *step*.
     """
     document_step = step.run_documents
     outcome = (

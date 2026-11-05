@@ -17,10 +17,9 @@ RunStatusConflict, and fail_interrupted_runs leaves it as it was
 (docs/prds/job-events-and-sse-framing.md §3.4).
 
 The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
-and for a step carrying a run-document step, migrate_stored_run_files, which brings every
-stored run's files forward before the step's transaction, and migrate_runs_table_documents,
-which brings the copies in each runs row forward inside it. Each skips the files or the copies
-an earlier step of the same migration left unmigrated.
+and for a step carrying a run-document step, migrate_stored_run_files, which brings the stored
+runs' files forward before the step's transaction, and migrate_runs_table_documents, which
+brings the runs rows' copies forward inside it.
 """
 
 import json
@@ -316,9 +315,9 @@ def _run_dir(data_dir: Path, run_id: str) -> Path:
 class RunDocumentsOutcome:
     """What a run-document step did to a store's runs: each value it dropped that is not null, each value it rewrote, and each run it left unmigrated, in order.
 
-    A run left unmigrated is recorded by the source a step left it in, so a later step can skip
-    each: unmigrated_files holds each run whose files a step left as they were, and
-    unmigrated_rows each run whose runs row it left so.
+    A run left unmigrated is recorded by the source a step left it in: unmigrated_files holds
+    each run whose files a step left as they were, and unmigrated_rows each run whose runs row
+    it left so.
     """
 
     dropped: tuple[DroppedValue, ...] = ()
@@ -347,9 +346,8 @@ def migrate_stored_run_files(
     """Bring the files of each run the runs table of *database* records forward by *step*, the run-file part of the schema step carrying it.
 
     *earlier* is what the earlier run-document steps of the same migration did. A run with no
-    directory under *data_dir* is skipped, and so is a directory no row records. A run whose
-    files an earlier step left unmigrated is skipped too, and not reported again, as no later
-    step can bring forward documents still in the format before the earlier step.
+    directory under *data_dir* is skipped, and so is a directory no row records. So is a run
+    whose files *earlier* left unmigrated, as web/schema.py's migrate_store says.
     Each run's JSON documents are read as its kind lays them out and brought forward as
     step_run_documents brings them; then only the documents the step changed are rewritten, and
     format.json naming step.version last. A run whose documents cannot be read or brought
@@ -409,10 +407,9 @@ def migrate_runs_table_documents(
     *earlier* is what the earlier run-document steps of the same migration did. Each run's
     runs.config_json and runs.summary_json are brought forward as step_run_documents brings
     them, and only a column the step changed is rewritten, as the JSON text a save writes. A row
-    that holds neither document is skipped. A row an earlier step left unmigrated is skipped
-    too, and not reported again, as no later step can bring forward documents still in the
-    format before the earlier step. A row whose documents cannot be brought forward, or that
-    has no type, is left as it was and reported as unmigrated.
+    that holds neither document is skipped, and so is a row *earlier* left unmigrated, as
+    web/schema.py's migrate_store says. A row whose documents cannot be brought forward, or
+    that has no type, is left as it was and reported as unmigrated.
     """
     rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
     left_unmigrated = {each.run_id for each in earlier.unmigrated_rows}
