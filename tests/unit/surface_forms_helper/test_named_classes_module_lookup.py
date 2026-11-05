@@ -177,6 +177,33 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
+_UNBOUND_IN_TYPES = (
+    r"^types\.Made is not bound under 'Made' in the module at .*types\.py, which sys\.modules "
+    r"holds under the name 'types': that module binds nothing there\. .*\bassign the class "
+    r"the __module__ of the module that binds it under that name, as "
+    r"dataclasses\.make_dataclass assigns it from Python 3\.12$"
+)
+
+
+def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    newclassing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "newclassing",
+        "import types\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
+        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
+    )
+
+    with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+        named_classes(newclassing.Made)
+
+
 def _name_each_code_as_if_compiled_at_module_level(
     cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
