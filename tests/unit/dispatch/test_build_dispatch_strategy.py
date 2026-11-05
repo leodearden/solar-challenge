@@ -114,6 +114,18 @@ def test_grid_charging_under_a_variant_that_does_not_charge_from_the_grid_is_ref
         assert named in str(refused.value), (named, str(refused.value))
 
 
+@pytest.mark.parametrize("case", _NON_GRID_CHARGING_CASES, ids=_ids(_NON_GRID_CHARGING_CASES))
+def test_the_refusal_under_a_variant_that_does_not_charge_from_the_grid_names_each_variant_that_does(
+    case: _Case,
+) -> None:
+    with pytest.raises(ConfigurationError) as refused:
+        build_dispatch_strategy(case.config, grid_charging=_GRID_CHARGING, tariff=TariffConfig.economy_7())
+
+    remedies = str(refused.value).partition("remove grid_charging, or use ")[2]
+    expected = sorted(each.config.strategy_type for each in _GRID_CHARGING_CASES)
+    assert sorted(remedies.split(" or ")) == expected, str(refused.value)
+
+
 @pytest.mark.parametrize("case", _GRID_CHARGING_CASES, ids=_ids(_GRID_CHARGING_CASES))
 def test_grid_charging_without_a_tariff_is_refused(case: _Case) -> None:
     with pytest.raises(ConfigurationError) as refused:
