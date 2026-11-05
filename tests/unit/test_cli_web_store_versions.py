@@ -37,7 +37,7 @@ from solar_challenge.web.stored_runs import StoredHomeRun
 from tests._dashboard_databases import (
     schema_of,
     write_database_a_newer_solar_challenge_wrote,
-    write_database_at_schema_version_1,
+    write_database_at_schema_version,
     write_pre_548_database,
 )
 from tests._html_page import headings
@@ -253,7 +253,7 @@ def test_web_migrate_releases_the_store_lock_once_it_has_migrated_the_store(lega
 @pytest.fixture
 def legacy_run_ids(tmp_path: Path) -> dict[str, str]:
     """The run id of each legacy stored-run fixture, by name, each installed in the store under tmp_path/.solar-challenge, which a solar-challenge at schema version 1 left."""
-    database = write_database_at_schema_version_1(_store_database(tmp_path))
+    database = write_database_at_schema_version(_store_database(tmp_path), 1)
     return {
         name: install_stored_run_fixture(name, Database(database), database.parent) for name in STORED_RUN_FIXTURES
     }
