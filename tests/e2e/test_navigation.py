@@ -198,41 +198,20 @@ def test_dark_mode_toggle(page: Page, live_server: str) -> None:
 
 
 def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
-    """Clicking the collapse toggle shrinks the sidebar from w-64 to w-16."""
+    """Clicking the collapse toggle slides the sidebar from w-64 to w-16, and clicking it again slides it back to w-64."""
     page.goto(live_server + "/")
-    page.wait_for_load_state("domcontentloaded")
-
-    sidebar = _desktop_sidebar(page)
-
-    # Ensure sidebar starts expanded by setting localStorage
     page.evaluate("localStorage.setItem('sidebarOpen', 'true')")
     page.goto(live_server + "/")
-    page.wait_for_load_state("domcontentloaded")
     sidebar = _desktop_sidebar(page)
+    toggle = _sidebar_toggle(page)
+    expect(toggle).to_have_attribute("title", "Collapse sidebar")
+    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
 
-    # Expanded sidebar should have w-64 (256px width)
-    initial_width = sidebar.evaluate("el => el.getBoundingClientRect().width")
-    assert initial_width > 200, f"Sidebar should start expanded (width={initial_width})"
+    toggle.click()
+    expect(sidebar).to_have_css("width", f"{_SIDEBAR_COLLAPSED['sidebar_width']}px")
 
-    # Click the collapse toggle (aria-label="Toggle sidebar")
-    collapse_btn = sidebar.locator('button[aria-label="Toggle sidebar"]')
-    collapse_btn.click()
-    # Wait for the CSS transition (duration-300 = 300ms)
-    page.wait_for_timeout(400)
-
-    collapsed_width = sidebar.evaluate("el => el.getBoundingClientRect().width")
-    assert collapsed_width < 100, (
-        f"Sidebar should be collapsed (width={collapsed_width})"
-    )
-
-    # Click again to re-expand
-    collapse_btn.click()
-    page.wait_for_timeout(400)
-
-    expanded_width = sidebar.evaluate("el => el.getBoundingClientRect().width")
-    assert expanded_width > 200, (
-        f"Sidebar should be expanded again (width={expanded_width})"
-    )
+    toggle.click()
+    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
 
 
 # ── Sidebar state on load ──────────────────────────────────────────────
