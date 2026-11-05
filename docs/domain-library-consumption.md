@@ -1076,8 +1076,13 @@ names no strategy of its own. `FleetDistributionConfig` refuses an unknown
 `dispatch_strategy`, and a fleet file without a `tariff:` block that dispatches
 `tou_optimized` is refused, where the tag warns. A dashboard store at schema
 version 2 is refused until `solar-challenge web migrate` brings it to version
-3, whose step reads each stored run's dispatch as it ran. The platform needs no
-change: its `HomeConfig`s set none of these.
+3, whose step reads each stored run's dispatch as it ran. `simulate_home`'s
+`strategy` replaces the dispatch only once the `HomeConfig` is built, so a home
+whose override should grid-charge, such as `ScheduledChargeStrategy`'s windows,
+still has to select a grid-charging dispatch of its own, as
+[scheduled-charge-windows.md](scheduled-charge-windows.md) §2 says; removing its
+`grid_charging` instead leaves the override no grid-charge context. The platform
+needs no change: its `HomeConfig`s set none of these.
 
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
