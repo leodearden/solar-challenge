@@ -213,16 +213,26 @@ def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> 
     assert schema_of(snapshot) == schema_of(new_store), remedy
 
 
-def test_open_database_refuses_a_legacy_store_naming_it_both_versions_and_the_migrate_command(tmp_path: Path) -> None:
-    legacy = write_pre_548_database(tmp_path / "legacy.db")
+STORES_AT_AN_OLDER_VERSION = [
+    pytest.param(write_pre_548_database, 0, id="legacy-store"),
+    pytest.param(functools.partial(write_database_at_schema_version, version=2), 2, id="store-at-version-2"),
+]
+"""A writer of a store at a schema version below SCHEMA_VERSION, then that version; a legacy store, with no version, is at version 0."""
+
+
+@pytest.mark.parametrize(("store_at_an_older_version", "version"), STORES_AT_AN_OLDER_VERSION)
+def test_open_database_refuses_a_store_at_an_older_version_naming_it_both_versions_and_the_migrate_command(
+    store_at_an_older_version: Callable[[Path], Path], version: int, tmp_path: Path
+) -> None:
+    path = store_at_an_older_version(tmp_path / "store.db")
 
     with pytest.raises(SchemaVersionMismatch) as refused:
-        open_database(legacy)
+        open_database(path)
 
-    assert (refused.value.path, refused.value.found, refused.value.expected) == (legacy, 0, SCHEMA_VERSION)
+    assert (refused.value.path, refused.value.found, refused.value.expected) == (path, version, SCHEMA_VERSION)
     message = str(refused.value)
-    assert str(legacy) in message
-    assert "schema version 0" in message
+    assert str(path) in message
+    assert f"schema version {version}" in message
     assert f"version {SCHEMA_VERSION}" in message
     assert "Run `solar-challenge web migrate`" in message
 
@@ -241,25 +251,24 @@ def test_open_database_refuses_a_store_a_newer_solar_challenge_wrote_naming_both
 
 
 STORES_AT_ANOTHER_VERSION = [
-    pytest.param(write_pre_548_database, id="legacy-store"),
-    pytest.param(write_database_a_newer_solar_challenge_wrote, id="newer-store"),
-    pytest.param(functools.partial(write_database_at_schema_version, version=2), id="store-at-version-2"),
+    *STORES_AT_AN_OLDER_VERSION,
+    pytest.param(write_database_a_newer_solar_challenge_wrote, SCHEMA_VERSION + 1, id="newer-store"),
 ]
 
 
-@pytest.mark.parametrize("store_at_another_version", STORES_AT_ANOTHER_VERSION)
+@pytest.mark.parametrize(("store_at_another_version", "version"), STORES_AT_ANOTHER_VERSION)
 def test_open_database_writes_nothing_to_a_store_it_refuses(
-    store_at_another_version: Callable[[Path], Path], tmp_path: Path
+    store_at_another_version: Callable[[Path], Path], version: int, tmp_path: Path
 ) -> None:
     path = store_at_another_version(tmp_path / "store.db")
-    bytes_before, schema_before, version_before = path.read_bytes(), schema_of(path), _user_version(path)
+    bytes_before, schema_before = path.read_bytes(), schema_of(path)
 
     with pytest.raises(SchemaVersionMismatch):
         open_database(path)
 
     assert path.read_bytes() == bytes_before
     assert schema_of(path) == schema_before
-    assert _user_version(path) == version_before
+    assert _user_version(path) == version
 
 
 def test_a_schema_version_mismatch_is_not_a_value_error() -> None:
