@@ -504,6 +504,76 @@ def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_gl
     assert "None.build.<locals>.Local" not in message
 
 
+_GENERATING_SOURCE = (
+    "from __future__ import annotations\n"
+    "\n"
+    "import sys\n"
+    "from fractions import Fraction as Share\n"
+    "\n"
+    "def generate(cls):\n"
+    "    namespace = {{}}\n"
+    "    exec(compile('def __init__(self, share): self.share = share\\n', "
+    "'<unlisted generator>', 'exec'), {generator_globals}, namespace)\n"
+    "    init = namespace['__init__']\n"
+    "    init.__module__ = cls.__module__\n"
+    "    init.__qualname__ = f'{{cls.__qualname__}}.__init__'\n"
+    "    init.__annotations__ = {{'share': cls.__annotations__['share'], 'return': None}}\n"
+    "    cls.__init__ = init\n"
+    "    return cls\n"
+    "\n"
+    "@generate\n"
+    "class Top:\n"
+    "    share: Share\n"
+)
+
+
+@pytest.mark.parametrize(
+    "generator_globals",
+    [
+        pytest.param("{}", id="globals-of-its-own"),
+        pytest.param("dict(vars(sys.modules[cls.__module__]))", id="copy-of-its-modules-globals"),
+    ],
+)
+def test_a_module_level_class_whose_annotated_constructor_a_generator_compiled_with_globals_that_are_no_modules_own_raises_a_lookup_error_naming_that_constructors_code_file_and_a_method_generator_record_not_a_missing_or_replaced_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, generator_globals: str
+) -> None:
+    """Top's body compiles no function, since the module imports annotations from __future__, so the __init__ that generate writes, with globals of its own or a copy of auditing's, is the constructor read."""
+    auditing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "auditing",
+        _GENERATING_SOURCE.format(generator_globals=generator_globals),
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(auditing.Top)
+
+    message = str(raised.value)
+    assert "auditing.Top.__init__" in message
+    assert "'<unlisted generator>'" in message
+    assert "add a MethodGenerator record" in message
+    assert "sys.modules holds no module under that name" not in message
+    assert "before importing another module of that name" not in message
+
+
+def test_a_routine_a_generator_compiled_with_a_copy_of_its_modules_globals_raises_a_lookup_error_naming_both_modules_once_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Top itself is not passed: later binds its own Top under 'Top', which the check of Top's module finds before any routine is looked up."""
+    source = _GENERATING_SOURCE.format(
+        generator_globals="dict(vars(sys.modules[cls.__module__]))"
+    )
+    earlier = imported_module(tmp_path_factory.mktemp("earlier"), monkeypatch, "auditing", source)
+    later = imported_module(tmp_path_factory.mktemp("later"), monkeypatch, "auditing", source)
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.Top.__init__)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+    assert "MethodGenerator" not in str(raised.value)
+
+
 def test_a_class_a_function_of_a_module_with_no_file_built_once_another_module_with_no_file_of_the_same_name_has_since_replaced_it_in_sys_modules_raises_a_lookup_error_naming_the_replacement_by_its_repr_and_the_remedy_of_reading_each_modules_objects_before_importing_another(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
