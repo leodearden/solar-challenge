@@ -255,16 +255,24 @@ def class_statement(cls: type) -> ast.ClassDef | None:
 
 
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:
-    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; TypeError naming both if inspect reads no source for *module*, which then has no such block to read."""
-    if not _has_source(module):
+    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them.
+
+    Those imports are read from *module*'s source once and kept while *module* lives,
+    whatever inspect reads for it later. TypeError naming *annotation* and *module* if
+    inspect reads no source for *module* while they are unread, as for a built-in or
+    extension module, which has no such block to read.
+    """
+    try:
+        imports = _type_checking_imports(module)
+    except NoSourceError as unread:
         raise TypeError(
             f"The string annotation {annotation!r} is read in the module {module.__name__!r}, "
             "for which inspect reads no source, as for a built-in or extension module, so no "
             "`if TYPE_CHECKING:` import there can be read: make the name private, or annotate "
             "with the class, not a string"
-        )
+        ) from unread
     namespace = dict(vars(module))
-    exec(_type_checking_imports(module), namespace)
+    exec(imports, namespace)
     return eval(annotation, namespace)
 
 
@@ -377,9 +385,8 @@ def source_of(obj: types.ModuleType | types.FunctionType) -> str:
         raise NoSourceError(f"inspect reads no source for {label_of(obj)}") from unread
 
 
-@_cached_while_alive
 def _has_source(module: types.ModuleType) -> bool:
-    """Whether inspect reads a source for *module*, as source_of finds, computed once and kept while *module* lives."""
+    """Whether source_of reads a source for *module*, asked afresh on each call."""
     try:
         source_of(module)
     except NoSourceError:
