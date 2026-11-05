@@ -85,7 +85,7 @@ class TestBatteryGridChargeParsing:
             )
 
     def test_yaml_round_trip_grid_charging(self, tmp_path: Path) -> None:
-        """YAML with battery.grid_charging round-trips into home.battery_config.grid_charging."""
+        """YAML with battery.grid_charging, on a home that dispatches tou_optimized by its tariff, round-trips into home.battery_config.grid_charging."""
         yaml_content = """
 home:
   pv:
@@ -96,6 +96,9 @@ home:
     capacity_kwh: 5.0
     grid_charging:
       target_soc_fraction: 0.8
+  tariff:
+    type: economy_7
+  dispatch_strategy: tou_optimized
 """
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
@@ -269,8 +272,12 @@ class TestOmittedAndNullKeys:
         assert _parsed_home(load={}).load_config == LoadConfig()
 
     def test_omitted_grid_charging_keys_take_the_declared_defaults(self) -> None:
-        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default."""
-        battery = _parsed_home(battery={"capacity_kwh": 5.0, "grid_charging": {}}).battery_config
+        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default, on a home that dispatches tou_optimized by its tariff."""
+        battery = _parsed_home(
+            battery={"capacity_kwh": 5.0, "grid_charging": {}},
+            tariff={"type": "economy_7"},
+            dispatch_strategy="tou_optimized",
+        ).battery_config
         assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
 
     @pytest.mark.parametrize(

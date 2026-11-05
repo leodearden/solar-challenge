@@ -357,7 +357,7 @@ class TestLoadFleetConfigFlexThreading:
     """Tests for YAML tariff + grid_charging threading through load_fleet_config."""
 
     def test_fleet_yaml_tariff_and_grid_charging_threaded(self, tmp_path: Path) -> None:
-        """A fleet YAML with top-level tariff: and battery.grid_charging: threads both to all homes."""
+        """A fleet YAML with top-level tariff: and battery.grid_charging: threads both to all homes, which dispatch tou_optimized by that tariff."""
         yaml_content = """
 name: Flex Threading Test
 fleet_distribution:
@@ -371,6 +371,7 @@ fleet_distribution:
       target_soc_fraction: 0.9
   load:
     annual_consumption_kwh: 3400
+  dispatch_strategy: tou_optimized
 tariff:
   type: economy_7
   off_peak_rate: 0.09
@@ -388,7 +389,7 @@ tariff:
             assert home.battery_config.grid_charging.target_soc_fraction == 0.9
 
     def test_fleet_yaml_dispatch_strategy_threaded(self, tmp_path: Path) -> None:
-        """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config."""
+        """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config, beside the tariff it dispatches by."""
         yaml_content = """
 name: Dispatch Strategy Threading Test
 fleet_distribution:
@@ -401,6 +402,8 @@ fleet_distribution:
   load:
     annual_consumption_kwh: 3400
   dispatch_strategy: tou_optimized
+tariff:
+  type: economy_7
 """
         path = tmp_path / "fleet.yaml"
         path.write_text(yaml_content)

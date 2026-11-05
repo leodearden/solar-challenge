@@ -1031,7 +1031,7 @@ class TestFleetFromDistribution:
     def test_a_block_settings_distribution_and_grid_charging_reach_the_queued_homes(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A block setting sent as a distribution, pv.tilt, is sampled for every queued home, and the battery block's grid_charging reaches every queued battery."""
+        """A block setting sent as a distribution, pv.tilt, is sampled for every queued home, and the battery block's grid_charging reaches every queued battery, which dispatches tou_optimized by the fleet's tariff."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
@@ -1041,6 +1041,8 @@ class TestFleetFromDistribution:
                     "tilt": {"type": "uniform", "min": 10.0, "max": 20.0},
                 },
                 "battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": 0.5}},
+                "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
+                "tariff": {"type": "economy_7"},
             },
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)

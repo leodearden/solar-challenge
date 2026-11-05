@@ -14,6 +14,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import TariffConfig
 from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -223,7 +224,7 @@ class TestPvInverterHomogenization:
     """Tests that PV and inverter are homogenized; load and dispatch are preserved."""
 
     def _make_diverse_base(self) -> ScenarioConfig:
-        """Fleet with 3 homes: distinct PV sizes, loads, and dispatch strategies."""
+        """Fleet with 3 homes: distinct PV sizes, loads, and dispatch strategies; the tou_optimized one has the tariff it dispatches by."""
         homes = [
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=3.0),
@@ -233,6 +234,7 @@ class TestPvInverterHomogenization:
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=5.0),
                 load_config=LoadConfig(annual_consumption_kwh=3500, household_occupants=3),
+                tariff_config=TariffConfig.economy_7(),
                 dispatch_strategy="tou_optimized",
             ),
             HomeConfig(
@@ -296,7 +298,11 @@ class TestBatteryHomogenization:
     """Tests for battery homogenization in _apply_install / enumerate_configs."""
 
     def _make_mixed_battery_base(self) -> ScenarioConfig:
-        """Fleet with one home that HAS a non-default battery and one without."""
+        """Fleet with one home that HAS a non-default battery and one without.
+
+        The battery names no dispatch strategy and grid-charges, so its home dispatches
+        tou_optimized by its tariff's rates, which honours grid charging.
+        """
         battery = BatteryConfig(
             capacity_kwh=7.0,
             max_discharge_kw=3.6,          # non-default
@@ -306,6 +312,8 @@ class TestBatteryHomogenization:
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000, household_occupants=2),
             battery_config=battery,
+            tariff_config=TariffConfig.economy_7(),
+            dispatch_strategy="tou_optimized",
         )
         home_without_battery = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
