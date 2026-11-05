@@ -429,29 +429,11 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # Left side: energy in
+    # _settle derives the flows so that this balance closes whenever a step's PV charge is within
+    # its excess and its discharge within its shortfall.
     energy_in = result.generation + result.grid_import
-
-    # Right side: energy out
-    # Note: self_consumption is part of demand that was met
-    # Net storage = charge - discharge
     storage_delta = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + storage_delta
-
-    # generation + import = demand + export + (charge - discharge)
-    # This simplifies because:
-    # - self_consumption = min(gen, demand)
-    # - excess = gen - demand when positive
-    # - shortfall = demand - gen when positive
-    # - export = excess - charge
-    # - import = shortfall - discharge
-
-    # Let's verify:
-    # gen + import = demand + export + charge - discharge
-    # gen + (shortfall - discharge) = demand + (excess - charge) + charge - discharge
-    # gen + shortfall - discharge = demand + excess - charge + charge - discharge
-    # gen + shortfall = demand + excess
-    # This is true since shortfall = max(0, demand - gen) and excess = max(0, gen - demand)
 
     imbalance = abs(energy_in - energy_out)
 
