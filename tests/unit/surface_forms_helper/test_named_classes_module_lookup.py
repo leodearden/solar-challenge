@@ -204,6 +204,45 @@ def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_t
         named_classes(newclassing.Made)
 
 
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
+    dataclassmaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "dataclassmaking",
+        "from dataclasses import make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+
+    if sys.version_info < (3, 12):
+        with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+            named_classes(dataclassmaking.Made)
+    else:
+        assert named_classes(dataclassmaking.Made) == {decimal.Decimal}
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On 3.11 the methods the dataclass decorator wrote still carry the globals of types, which binds nothing under 'Tap'."""
+    remaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "remaking",
+        "from dataclasses import make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
+        "Made.__module__ = __name__\n",
+    )
+
+    assert named_classes(remaking.Made) == {decimal.Decimal}
+
+
 def _name_each_code_as_if_compiled_at_module_level(
     cls: type, monkeypatch: pytest.MonkeyPatch
 ) -> None:
