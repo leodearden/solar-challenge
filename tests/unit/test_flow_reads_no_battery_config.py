@@ -9,11 +9,11 @@ battery is reached, an alias or another object's attribute included
 
 import ast
 from dataclasses import dataclass
-from pathlib import Path
-
 import pytest
 
-_FLOW_PY = Path(__file__).resolve().parents[2] / "src" / "solar_challenge" / "flow.py"
+from tests._repository_paths import REPOSITORY_ROOT
+
+_FLOW_PY = REPOSITORY_ROOT / "src" / "solar_challenge" / "flow.py"
 
 
 @dataclass(frozen=True)
