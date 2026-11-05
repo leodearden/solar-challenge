@@ -28,6 +28,7 @@ from solar_challenge.web.assistant import (
     suggest_config,
 )
 from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
@@ -35,7 +36,7 @@ from solar_challenge.web.stored_runs import StoredRunUnreadable
 from tests._finance_builders import make_fleet_results
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
-from tests._run_summaries import fleet_summary, home_summary, summary_json
+from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._web_app import run_storage_of
 from tests._web_job_days import web_job_days
 from tests._web_runs import store_fleet_run
@@ -251,8 +252,25 @@ class TestGetRunResults:
             "status": "completed",
             "created_at": "2026-01-01T12:00:00+00:00",
             "n_homes": 1,
-            "summary": dataclasses.asdict(summary),
+            "summary": field_tree(summary),
         }
+
+    def test_a_summary_s_window_is_answered_as_its_field_tree_which_json_encodes(self, tmp_path: Path) -> None:
+        """The run context and the tool loop json.dumps what get_run_results answers, so a summary's window is answered as its stored text."""
+        storage = empty_run_storage(tmp_path)
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        seed_run(
+            storage.database,
+            run_id="windowed-run",
+            name="windowed",
+            created_at="2026-01-01T12:00:00+00:00",
+            summary=summary,
+        )
+
+        result = get_run_results("windowed-run", storage)
+
+        assert result["summary"] == field_tree(summary)
+        assert json.loads(json.dumps(result)) == result
 
     def test_a_fleet_run_answers_the_field_tree_of_its_fleet_summary(self, storage: RunStorage) -> None:
         """get_run_results of a saved fleet run answers its FleetSummary's fields, fleet_self_consumption_ratio among them."""
@@ -261,7 +279,7 @@ class TestGetRunResults:
 
         result = get_run_results("fleet-run", storage)
 
-        assert result["summary"] == dataclasses.asdict(calculate_fleet_summary(fleet))
+        assert result["summary"] == field_tree(calculate_fleet_summary(fleet))
 
     def test_lookup_by_name_resolves_same_row(self, tmp_path: Path) -> None:
         """get_run_results(name, storage) resolves to the same row as lookup by id."""

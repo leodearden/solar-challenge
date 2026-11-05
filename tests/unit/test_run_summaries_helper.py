@@ -11,11 +11,12 @@ pytest.importorskip("pyarrow")
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RunType
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._run_stores import empty_run_storage
-from tests._run_summaries import fleet_summary, home_summary, summary_json
+from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 
 
 @pytest.fixture
@@ -35,6 +36,7 @@ def _stored_summary_json(storage: RunStorage, run_id: str) -> str:
     ("run_type", "summary"),
     [
         pytest.param("home", home_summary(total_generation_kwh=987.65), id="home"),
+        pytest.param("home", home_summary(window=JUNE_WEEK_WINDOW), id="home-with-a-window"),
         pytest.param("fleet", fleet_summary(fleet_self_consumption_ratio=0.25), id="fleet"),
     ],
 )
@@ -47,7 +49,7 @@ def test_a_runs_row_written_with_a_summary_s_json_reads_back_as_the_summary_s_fi
             (run_type, summary_json(summary)),
         )
 
-    assert json.loads(_stored_summary_json(storage, "run-1")) == dataclasses.asdict(summary)
+    assert json.loads(_stored_summary_json(storage, "run-1")) == field_tree(summary)
 
 
 def test_a_home_summary_s_json_is_the_text_a_home_run_s_save_writes(storage: RunStorage) -> None:
