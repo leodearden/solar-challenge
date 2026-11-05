@@ -29,12 +29,14 @@ from tests._surface_forms_class_reads import (
 from tests._surface_forms_generators import DATACLASS_DECORATOR, NAMEDTUPLE, MethodGenerator
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
+    NoSourceError,
     bound_under,
     class_statement,
     defining_module,
     is_get_delete_descriptor,
     is_routine,
     names_declared_by,
+    source_of,
 )
 
 
@@ -1335,7 +1337,7 @@ def _defined_in_body(
 def _refuse_def_written_member_of_statementless_class(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> None:
-    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, or if its code carries *holder*'s __qualname__ dotted with the constructor's name, as a def statement in *holder*'s class body compiles it.
+    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, as source_of finds, or if its code carries *holder*'s __qualname__ dotted with the constructor's name, as a def statement in *holder*'s class body compiles it.
 
     A generator compiles each function it writes from text it writes, for which inspect
     reads no source, under a qualified name of its own; a def statement in a source file
@@ -1354,8 +1356,8 @@ def _refuse_def_written_member_of_statementless_class(
     """
     module = defining_module(holder).__name__
     try:
-        inspect.getsource(function)
-    except (OSError, TypeError):
+        source_of(function)
+    except NoSourceError:
         compiled_in_body = f"{holder.__qualname__}.{constructor.name}"
         if function.__code__.co_qualname != compiled_in_body:
             return
