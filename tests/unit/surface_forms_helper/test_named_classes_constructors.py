@@ -277,6 +277,61 @@ def test_a_constructor_a_dataclass_body_defines_names_the_classes_its_own_module
     assert named_classes(revalving.UnwrittenSubmeter) == {decimal.Decimal}
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        pytest.param("Stubbed", {fractions.Fraction}, id="dataclass-init-under-type-checking"),
+        pytest.param(
+            "Excepted",
+            {fractions.Fraction},
+            id="dataclass-init-in-an-except-handler-never-entered",
+        ),
+        pytest.param(
+            "Deleted", {fractions.Fraction}, id="dataclass-init-deleted-in-its-class-body"
+        ),
+        pytest.param("Pointed", {decimal.Decimal}, id="named-tuple-new-under-type-checking"),
+    ],
+)
+def test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str, expected: set[type]
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    stubbing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "stubbing",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "from typing import TYPE_CHECKING, NamedTuple\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "@dataclass\n"
+        "class Stubbed(Meter):\n"
+        "    if TYPE_CHECKING:\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Excepted(Meter):\n"
+        "    try:\n"
+        "        pass\n"
+        "    except ImportError:\n"
+        "        def __init__(self, tap: 'Tap') -> None: ...\n"
+        "\n"
+        "@dataclass\n"
+        "class Deleted(Meter):\n"
+        "    def __init__(self, tap: 'Tap') -> None: ...\n"
+        "    del __init__\n"
+        "\n"
+        "class Pointed(NamedTuple):\n"
+        "    tap: 'Tap'\n"
+        "    if TYPE_CHECKING:\n"
+        "        def __new__(cls, tap: 'Tap') -> 'Pointed': ...\n",
+    )
+
+    assert named_classes(getattr(stubbing, name)) == expected
+
+
 def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statement_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
