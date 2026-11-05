@@ -6,6 +6,7 @@ and that each run's status and type badges take the classes the server
 draws for their values.
 """
 
+import re
 from typing import Any
 
 import pytest
@@ -156,15 +157,9 @@ def test_sort_columns(page: Page, live_server: str) -> None:
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
 
-    # Wait for Alpine to initialise the runBrowser component
-    page.wait_for_timeout(500)
-
     # Click the "Name" column header (it has @click="toggleSort('name')")
     name_header = page.locator('th', has_text="Name").first
     name_header.click()
-
-    # Wait for Alpine reactivity
-    page.wait_for_timeout(300)
 
     # After clicking Name, the sort indicator span with text " ^" or " v"
     # should become visible (it uses x-show="sort === 'name'")
@@ -172,10 +167,7 @@ def test_sort_columns(page: Page, live_server: str) -> None:
     expect(sort_indicator).to_be_visible()
 
     # The indicator should contain a caret character (^ or v)
-    indicator_text = sort_indicator.text_content() or ""
-    assert "^" in indicator_text or "v" in indicator_text, (
-        f"Expected sort indicator '^' or 'v', got '{indicator_text}'"
-    )
+    expect(sort_indicator).to_have_text(re.compile(r"[\^v]"))
 
 
 # -- Compare button visibility --------------------------------------------
@@ -189,9 +181,6 @@ def test_compare_button_hidden_by_default(page: Page, live_server: str) -> None:
     """
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
-
-    # Wait for Alpine to initialise
-    page.wait_for_timeout(500)
 
     # The compare button link has text "Compare Selected"
     compare_btn = page.locator("a", has_text="Compare Selected")

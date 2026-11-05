@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 from tests.e2e._chart_tabs import open_chart_tab
 
@@ -25,7 +25,6 @@ def _enable_dark_mode_and_reload(page: Page, url: str) -> None:
     page.evaluate("() => localStorage.setItem('theme', 'dark')")
     page.reload()
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(500)
 
 
 def _assert_dark_class_on_html(page: Page, page_name: str) -> None:
@@ -81,11 +80,27 @@ def _toggle_theme(page: Page) -> None:
     page.get_by_role("button", name="Toggle dark mode").click()
 
 
+def _expect_titled_in(chart: Locator, theme: str) -> None:
+    """Wait until the chart in the container chart has its title in theme's text colour, the mark of a chart drawn in theme's chrome."""
+    expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
+
+
 def _expect_drawn_in(page: Page, chart_id: str, theme: str) -> None:
     """Wait until the chart in the container chart_id shows theme's chrome: its title in the text colour and its first y grid line in the grid colour."""
-    chrome = _CHROME[theme]
-    expect(page.locator(f"#{chart_id} .gtitle")).to_have_css("fill", chrome.text)
-    expect(page.locator(f"#{chart_id} path.ygrid").first).to_have_css("stroke", chrome.grid)
+    chart = page.locator(f"#{chart_id}")
+    _expect_titled_in(chart, theme)
+    expect(chart.locator("path.ygrid").first).to_have_css("stroke", _CHROME[theme].grid)
+
+
+def _chart_tab_panels(tablist: Locator) -> Locator:
+    """The chart tabs' panels: a tab's panel is an x-show child of chart_tabs' root, one per tab in the tabs' order."""
+    return tablist.locator("xpath=../../*[@x-show]")
+
+
+def _expect_each_chart_titled_in(panel: Locator, theme: str) -> None:
+    """Wait until each chart in panel has its title in theme's text colour."""
+    for chart in panel.locator("[data-chart-figure]").all():
+        _expect_titled_in(chart, theme)
 
 
 def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
@@ -158,6 +173,8 @@ def test_dark_mode_results_page_charts(
     _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
     _assert_dark_class_on_html(page, f"/results/home/{run_id}")
 
+    opening_panel = _chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first
+    _expect_each_chart_titled_in(opening_panel, "dark")
     expect(page.locator(".plot-container .bg").first).to_be_attached()
 
     backgrounds = _plotly_background_colors(page)
@@ -226,17 +243,14 @@ _CHART_PAGES = (
 def _show_each_chart_tab(page: Page, theme: str) -> None:
     """Show each chart tab of the page in turn, waiting until each chart in its panel has its title in theme's text colour.
 
-    A tab's panel is an x-show child of chart_tabs' root, one per tab in the tabs' order. Alpine shows and hides
-    the panels an animation frame after a tab is selected, so the panel being shown, not the tab being selected,
-    says that the tab's charts are shown.
+    Alpine shows and hides the panels an animation frame after a tab is selected, so the panel being shown, not the
+    tab being selected, says that the tab's charts are shown.
     """
     tablist = page.get_by_role("tablist", name="Chart tabs")
-    panels = tablist.locator("xpath=../../*[@x-show]")
-    for tab, panel in zip(tablist.get_by_role("tab").all(), panels.all(), strict=True):
+    for tab, panel in zip(tablist.get_by_role("tab").all(), _chart_tab_panels(tablist).all(), strict=True):
         tab.click()
         expect(panel).to_be_visible()
-        for chart in panel.locator("[data-chart-figure]").all():
-            expect(chart.locator(".gtitle")).to_have_css("fill", _CHROME[theme].text)
+        _expect_each_chart_titled_in(panel, theme)
 
 
 @pytest.mark.parametrize("switched_to_dark", [False, True], ids=["dark-on-load", "switched-to-dark"])

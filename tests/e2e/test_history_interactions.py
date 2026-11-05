@@ -13,9 +13,24 @@ import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
 
+# -- The list a search leaves ----------------------------------------------
+
+
+def _expect_search_listed_only_one_run(page: Page) -> Locator:
+    """Wait until the open Run History page lists one run, and return that run's 'View results' link.
+
+    A list of one run is the search's, not the unfiltered list, only if the unfiltered list holds more than one,
+    so a test calling this requests seeded_home_runs_pair beside the run it searches for.
+    """
+    result_link = page.get_by_role("link", name="View results")
+    expect(result_link).to_have_count(1)
+    return result_link
+
+
 # -- Search filter updates table -------------------------------------------
 
 
+@pytest.mark.usefixtures("seeded_home_runs_pair")
 def test_search_filter_updates_table(
     page: Page,
     live_server: str,
@@ -25,22 +40,20 @@ def test_search_filter_updates_table(
     _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2000)
 
     search_input = page.locator("#filter-search")
     expect(search_input).to_be_visible()
 
     # Search for the seeded run name
     search_input.fill(run_name)
-    page.wait_for_timeout(1000)
+    _expect_search_listed_only_one_run(page)
 
-    # The seeded run should be visible
+    # The seeded run is the only run listed
     row = page.locator("td", has_text=run_name)
     expect(row.first).to_be_visible()
 
     # Clear and search for nonsense
     search_input.fill("zzz-nonexistent-run-xyz-12345")
-    page.wait_for_timeout(1000)
 
     # Should show empty state
     empty_msg = page.locator("text=No simulation runs found")
@@ -166,7 +179,6 @@ def test_pagination_controls_exist(
     """'Prev' and 'Next' buttons attached in DOM."""
     page.goto(live_server + "/history/runs")
     page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(1000)
 
     prev_btn = page.locator("button", has_text="Prev")
     next_btn = page.locator("button", has_text="Next")
@@ -199,10 +211,7 @@ def test_late_superseded_request_does_not_replace_search_results(
     seeded_home_run: tuple[str, str],
     settle_superseded_request: Callable[[Route], None],
 ) -> None:
-    """The initial list request, answered or failed after the search's, leaves the search results showing.
-
-    The seeded pair puts runs the search excludes in the unfiltered list, so a stale list is observable.
-    """
+    """The initial list request, answered or failed after the search's, leaves the search results showing."""
     run_id, run_name = seeded_home_run
     held_requests: list[Route] = []
 
@@ -212,14 +221,12 @@ def test_late_superseded_request_does_not_replace_search_results(
     page.route(_is_unfiltered_runs_request, hold)
     page.goto(live_server + "/history/runs")
     page.get_by_label("Search", exact=True).fill(run_name)
-
-    result_links = page.get_by_role("link", name="View results")
-    expect(result_links).to_have_count(1)
+    _expect_search_listed_only_one_run(page)
 
     (superseded_request,) = held_requests
     settle_superseded_request(superseded_request)
     # networkidle cannot fire while the held request is in flight, and fires 500 ms after it settles
     page.wait_for_load_state("networkidle")
 
-    expect(result_links).to_have_count(1)
-    expect(result_links).to_have_attribute("href", f"/results/{run_id}")
+    result_link = _expect_search_listed_only_one_run(page)
+    expect(result_link).to_have_attribute("href", f"/results/{run_id}")
