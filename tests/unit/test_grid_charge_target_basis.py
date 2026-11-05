@@ -5,21 +5,25 @@ docs/prds/dispatch-configuration-below-config.md §5.4 states it, and its §9 ro
 
 The fixture is the program's: a 10 kWh battery with 5 kW charge and discharge limits, at soh 1.0 or 0.7, on Economy 7
 (TariffConfig.economy_7()), run for 180 minutes from 2024-01-15 01:00, inside the cheap night, with a demand of 0.3 kW
-and no PV.
+and no PV; the window case reads the same minutes on Europe/London's wall clock.
 """
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
+    ChargeWindow,
     DispatchDecision,
     DispatchStrategy,
     GridChargeConfig,
     GridChargeContext,
+    ScheduledChargeStrategy,
+    SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import simulate_timestep, simulate_timestep_tou
@@ -110,6 +114,21 @@ def _run(path: Callable[[Battery, pd.Timestamp], None], battery: Battery) -> Bat
     return battery
 
 
+_LONDON = ZoneInfo("Europe/London")
+
+_WINDOW_TO_HALF = ScheduledChargeStrategy(
+    SelfConsumptionStrategy(),
+    (ChargeWindow("daily", time(1, 0), timedelta(hours=3), 0.5, allow_discharge=False),),
+    _LONDON,
+)
+"""A window open over the fixture's 180 minutes on London's wall clock, charging to 0.5 and holding; stateless, so one instance serves every run."""
+
+
+def _window_path(battery: Battery, minute: pd.Timestamp) -> None:
+    """Simulate *minute*, read on London's wall clock, through simulate_timestep, dispatched by _WINDOW_TO_HALF, which refuses a naive timestamp."""
+    _strategy_path(battery, minute.tz_localize(_LONDON), _WINDOW_TO_HALF)
+
+
 class TestDecideActionSeesTheEffectiveCapacity:
     """simulate_timestep hands decide_action the battery's effective capacity, the basis of its SOC fractions."""
 
@@ -134,6 +153,19 @@ class TestGridChargeEndsAtTheTargetFractionOfEffectiveCapacity:
         self, path: Callable[[Battery, pd.Timestamp], None], soh: float, start: Literal["midpoint", "min_soc_kwh"]
     ) -> None:
         battery = _run(path, _battery(soh, 0.5, start=start))
+
+        assert battery.soc_fraction == pytest.approx(0.5, abs=1e-6)
+
+
+class TestAChargeWindowFillsToItsTargetFractionOfEffectiveCapacity:
+    """A ScheduledChargeStrategy window to 0.5 fills the battery to half its effective capacity through simulate_timestep, from either start; GridChargeConfig's own 0.9 target only makes the engine offer a context."""
+
+    @pytest.mark.parametrize("soh", [1.0, 0.7])
+    @pytest.mark.parametrize("start", _STARTS)
+    def test_the_run_ends_at_the_window_target_fraction(
+        self, soh: float, start: Literal["midpoint", "min_soc_kwh"]
+    ) -> None:
+        battery = _run(_window_path, _battery(soh, 0.9, start=start))
 
         assert battery.soc_fraction == pytest.approx(0.5, abs=1e-6)
 
