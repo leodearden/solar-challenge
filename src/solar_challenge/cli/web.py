@@ -105,7 +105,9 @@ def migrate() -> None:
 
     A step can bring each stored run to the stored-run format too: it prints
     each value it drops from a run's documents that is not null, naming the
-    run, the document and the field, and each run it cannot migrate, which it
+    run, the document and the field; each value it rewrites to the setting
+    its run ran by, naming the run, the document, the field, the value it
+    held and the value it holds now; and each run it cannot migrate, which it
     leaves as it was, naming its run, document and field. It reads a run's
     JSON documents, not its time series, which have no format version: a run
     whose time series is damaged is migrated, and refused naming it when it is
