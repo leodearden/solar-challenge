@@ -47,11 +47,12 @@ def _battery(soh: float, target: float, *, start: Literal["midpoint", "min_soc_k
 
 
 class _Recording(DispatchStrategy):
-    """A TOUOptimizedStrategy([(16, 19)]) that records the battery capacity each decide_action is given and the decision it returns."""
+    """A TOUOptimizedStrategy([(16, 19)]) that records the battery capacity and grid-charge context each decide_action is given, and the decision it returns."""
 
     def __init__(self) -> None:
         self._strategy = TOUOptimizedStrategy([(16, 19)])
         self.capacities_kwh: list[float] = []
+        self.grid_charge_contexts: list[Optional[GridChargeContext]] = []
         self.decisions: list[DispatchDecision] = []
 
     @property
@@ -79,6 +80,7 @@ class _Recording(DispatchStrategy):
             grid_charge_ctx=grid_charge_ctx,
         )
         self.capacities_kwh.append(battery_capacity_kwh)
+        self.grid_charge_contexts.append(grid_charge_ctx)
         self.decisions.append(decision)
         return decision
 
@@ -137,7 +139,7 @@ class TestGridChargeEndsAtTheTargetFractionOfEffectiveCapacity:
 
 
 class TestATargetAboveTheCeilingStopsAsking:
-    """§9 row 10: a target of 0.95, above max_soc_fraction 0.9, fills the battery to max_soc_kwh, after which the strategy asks for no grid power."""
+    """§9 row 10: a target of 0.95, above max_soc_fraction 0.9, fills the battery to max_soc_kwh; the engine then still offers a grid-charge context, its target max_soc_kwh, and the strategy asks for no grid power."""
 
     @pytest.mark.parametrize("path", _PATHS)
     @pytest.mark.parametrize("soh", [1.0, 0.7])
@@ -151,7 +153,7 @@ class TestATargetAboveTheCeilingStopsAsking:
 
     @pytest.mark.parametrize("soh", [1.0, 0.7])
     @pytest.mark.parametrize("start", _STARTS)
-    def test_the_next_cheap_minute_s_decision_asks_for_no_grid_power(
+    def test_the_next_cheap_minute_s_context_targets_the_ceiling_and_its_decision_asks_for_no_grid_power(
         self, soh: float, start: Literal["midpoint", "min_soc_kwh"]
     ) -> None:
         battery = _run(_strategy_path, _battery(soh, 0.95, start=start))
@@ -159,4 +161,8 @@ class TestATargetAboveTheCeilingStopsAsking:
 
         _strategy_path(battery, _MINUTES[-1] + pd.Timedelta(minutes=1), recorder)
 
+        assert [
+            None if context is None else (context.is_cheap_period, context.target_soc_kwh)
+            for context in recorder.grid_charge_contexts
+        ] == [(True, battery.max_soc_kwh)]
         assert [decision.grid_charge_kw for decision in recorder.decisions] == [0.0]
