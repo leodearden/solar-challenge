@@ -255,7 +255,13 @@ def class_statement(cls: type) -> ast.ClassDef | None:
 
 
 def evaluated_in(annotation: str, module: types.ModuleType) -> object:
-    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them; TypeError naming both if inspect reads no source for *module*, which then has no such block to read."""
+    """*annotation* evaluated in a copy of *module*'s globals, with the imports of its top-level `if TYPE_CHECKING:` blocks run over them.
+
+    Those imports are read from *module*'s source once and kept while *module* lives,
+    whatever inspect reads for it later. TypeError naming *annotation* and *module* if
+    inspect reads no source for *module* while they are unread, as for a built-in or
+    extension module, which has no such block to read.
+    """
     try:
         imports = _type_checking_imports(module)
     except NoSourceError as unread:
@@ -380,7 +386,7 @@ def source_of(obj: types.ModuleType | types.FunctionType) -> str:
 
 
 def _has_source(module: types.ModuleType) -> bool:
-    """Whether inspect reads a source for *module* now, as source_of finds, asked afresh on each call as source_of reads, so its answer never disagrees with class_statement's read."""
+    """Whether source_of reads a source for *module*, asked afresh on each call."""
     try:
         source_of(module)
     except NoSourceError:

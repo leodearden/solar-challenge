@@ -841,7 +841,7 @@ _LAPSING_SOURCE = (
 )
 
 
-def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_source_for_raises_a_type_error_naming_it_and_that_module(
+def test_a_string_annotation_read_in_a_module_inspect_has_stopped_reading_a_source_for_before_its_imports_were_read_raises_a_type_error_naming_it_and_that_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Audit, which lapsing binds only as Audited, had lapsing's source read for it while lapsing still had its file."""
