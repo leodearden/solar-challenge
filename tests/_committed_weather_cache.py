@@ -17,11 +17,12 @@ import pytest
 from solar_challenge.location import Location
 from solar_challenge.weather import WeatherCache
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-COMMITTED_WEATHER_CACHE_DIR = _REPOSITORY_ROOT / "tests" / "fixtures" / "weather_cache"
+from tests._repository_paths import REPOSITORY_ROOT
+
+COMMITTED_WEATHER_CACHE_DIR = REPOSITORY_ROOT / "tests" / "fixtures" / "weather_cache"
 REWRITE_THE_COMMITTED_BRISTOL_TMY = (
     "With network access to PVGIS, from the repository root, write the entry again with "
-    f'WeatherCache(cache_dir=Path("{COMMITTED_WEATHER_CACHE_DIR.relative_to(_REPOSITORY_ROOT).as_posix()}"))'
+    f'WeatherCache(cache_dir=Path("{COMMITTED_WEATHER_CACHE_DIR.relative_to(REPOSITORY_ROOT).as_posix()}"))'
     '.put(PvgisTmy(None).get(Location.bristol()), "tmy", Location.bristol())'
 )
 

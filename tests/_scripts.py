@@ -11,12 +11,13 @@ Usage::
 """
 
 import importlib.util
-from pathlib import Path
 from types import ModuleType
 
 import pytest
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+from tests._repository_paths import REPOSITORY_ROOT
+
+_SCRIPTS_DIR = REPOSITORY_ROOT / "scripts"
 
 
 def load_script(name: str) -> ModuleType:
