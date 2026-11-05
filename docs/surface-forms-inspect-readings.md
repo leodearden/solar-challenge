@@ -25,9 +25,12 @@ members a class's own body defines, raises `TypeError` for one that is a
 `functools.partial` (4.4, 4.6). Both raise `TypeError` for a class whose metaclass shadows
 `__dict__` or overrides `type`'s `__getattribute__` (4.8). `member_forms` also raises
 `TypeError` for a named tuple whose `_fields` holder holds anything but a tuple of strings
-(4.9), though every minor reads such a class alike. Each entry says how each minor reads
-its objects, and names the rule tests that pin what `surface_form`, `member_forms` and
-`named_classes` do. Each `TypeError` also states its own case's reading.
+(4.9), though every minor reads such a class alike. On 3.11 alone, `named_classes`,
+`member_forms`, `undeclared_attributes` and `unset_attributes` raise `LookupError` for a
+class that `dataclasses.make_dataclass` makes in the module binding it, since 3.11 records
+`types` as its `__module__` (4.10). Each entry says how each minor reads its objects, and
+names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do.
+Each `TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -56,8 +59,8 @@ other than `type` and `object` that holds a `__getattribute__`, its reading of w
 `inspect.getsource` finds a class's statement, and 4.9's readings on those releases on
 2026-11-01. 3.5's readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on
 2026-11-03, and its reading of a constructor's code's qualified name on CPython 3.11.15,
-3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-11-04. A new refusal gets its rule test first,
-then its entry here.
+3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-11-04, and 4.10's readings on those releases on
+2026-11-05. A new refusal gets its rule test first, then its entry here.
 
 ## 2. The Chain inspect Follows, on Every Minor
 
@@ -990,6 +993,56 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_unset_attributes.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it`
 - `tests/unit/surface_forms_helper/test_signature_closure.py::test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_type_error_member_forms_raises_for_it`
 
+### 4.10 A class `dataclasses.make_dataclass` makes, whose `__module__` is `types` on 3.11
+
+On 3.11, `dataclasses.make_dataclass` makes its class with `types.new_class` and leaves it
+the `__module__` that call gives it, `types`, so each function the dataclass decorator then
+compiles for it, its `__init__` among them, carries the globals of `types`. 3.12 added the
+`module` parameter, which defaults to the name of the module calling `make_dataclass` and
+is assigned before the decorator runs, so from 3.12 those functions carry the calling
+module's globals. So for `Made = make_dataclass('Made', [('spare', 'Tap')])` in a module
+that binds `Tap` to `Decimal`, `typing.get_type_hints(Made)` raises `NameError` on 3.11
+and gives `{'spare': Decimal}` from 3.12. On 3.11 no record of the class names the calling
+module: not its `__module__`; not its `__qualname__`, `Made`; not its fields, whose types
+are the strings given; and not its functions' globals.
+
+The helper reads each class by what it records, alike on every minor. `named_classes`
+raises `LookupError` for 3.11's class as it does on every minor for one that
+`dataclass(types.new_class(...))` makes, which records `types` too: the error names the
+class as `types.Made`, the module `types` by its file, and that this module binds nothing
+under the class's qualified name. `member_forms`, `undeclared_attributes` and
+`unset_attributes` look the class's module up the same way and raise the same error.
+`surface_form` spells the class alike on every minor, as
+`dataclass[eq] (spare: Tap) -> None`. From 3.12 the class records the `__module__` and
+globals that one `dataclass(type(...))` makes in the calling module records, and reads as
+that one does (3.5): `named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
+`undeclared_attributes` and `unset_attributes` raise `TypeError`, as for any class with no
+class statement to scan. Called from a function of another module, `make_dataclass`
+records `types` on 3.11 and that other module's name from 3.12, so where that module does
+not bind the class under its qualified name, every minor raises the `LookupError`, naming
+the module the class records.
+
+No rule reads such a class alike on every minor. A uniform reading would have to find
+3.11's calling module from a record, and none names it: a search of `sys.modules` for a
+module that binds the class would be a guess, which a re-export, as
+`from making import Made` makes one, leaves ambiguous. A uniform refusal would need a
+record that tells the class `make_dataclass` makes on 3.12 and 3.13 from one
+`dataclass(type(...))` makes, and none does there: refusing every dataclass with no class
+statement would drop a reading that is alike on every minor. So the refusal is 3.11's
+alone.
+
+The error's remedy is to assign the class the `__module__` of the module that binds it
+under its qualified name, as `make_dataclass` assigns it from 3.12. After
+`Made.__module__ = __name__`, `named_classes` gives `{Decimal}` on every minor, 3.11
+included, where the class's `__init__` still carries the globals of `types`: the helper
+reads each field's annotation in the module of the class declaring it, whatever globals
+the functions the decorator compiled carry.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it`
+- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to`
+
 ## 5. When the Admitted Minors Change
 
 On a newly admitted minor, re-measure each reading here (§6) and run the rule tests. An
@@ -1010,9 +1063,14 @@ minor either: it names a choice no rule reads. 4.8's refusal rests on 3.11 and 3
 it meets 4.6's or 4.7's reading, and on 3.14 where `inspect.get_annotations` reads the
 namespace the class holds; otherwise it rests on no minor: it names readings no rule
 reads. 4.9's refusal rests on no minor either, since every minor reads `_fields` alike: it
-names a `_fields` from which no rule reads the fields' names. 3.5's lookup stays whatever
-the admitted minors: it finds a class's statement by qualified name, as 3.11 and 3.12 do,
-and the lookup 3.13 and 3.14 make reads none for a class whose `__module__` was assigned.
+names a `_fields` from which no rule reads the fields' names. 4.10's refusal of a class
+that `dataclasses.make_dataclass` makes in the module binding it rests on 3.11 alone, since
+from 3.12 `make_dataclass` records its calling module. The refusal of a class whose
+`__module__` names a module that does not bind it, as for one `types.new_class` makes,
+rests on no minor: no record names the module that binds such a class. 3.5's lookup stays
+whatever the admitted minors: it finds a class's statement by qualified name, as 3.11 and
+3.12 do, and the lookup 3.13 and 3.14 make reads none for a class whose `__module__` was
+assigned.
 Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure
