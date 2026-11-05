@@ -100,6 +100,28 @@ def test_a_routine_whose_module_another_module_of_the_same_name_has_since_replac
     assert later.__file__ in str(raised.value)
 
 
+def test_a_routine_of_a_module_with_no_file_whose_place_another_module_with_no_file_of_the_same_name_has_since_taken_in_sys_modules_raises_a_lookup_error_naming_each_by_its_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither module names a file; the earlier module's spec gives it an origin but no location, so its repr is not the replacement's."""
+    earlier = importlib.util.module_from_spec(
+        importlib.machinery.ModuleSpec("fileless", None, origin="the original")
+    )
+    monkeypatch.setitem(sys.modules, "fileless", earlier)
+    exec("def audit(share: 'Share') -> None: ...\n", vars(earlier))
+    later = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", later)
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.audit)
+
+    message = str(raised.value)
+    assert "fileless.audit" in message
+    assert repr(earlier) in message
+    assert repr(later) in message
+    assert "module at None" not in message
+
+
 def test_a_routine_relabelled_with_another_modules_name_names_the_class_the_module_whose_globals_it_carries_binds_the_name_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -724,17 +746,18 @@ def test_a_class_defined_in_c_that_carries_a_signature_names_the_classes_its_for
     "rename_codes",
     [pytest.param(False, id="as-compiled"), pytest.param(True, id="codes-named-at-module-level")],
 )
-def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_and_its_own_module_if_it_has_a_witness(
+def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modules_raises_a_lookup_error_naming_it_its_own_module_and_the_replacement_by_its_repr_if_it_has_a_witness(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, rename_codes: bool
 ) -> None:
-    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__, its witness, carries the globals of the module that defined Audit."""
+    """Audit's __init__ annotates nothing, so only Audit's own module is looked up, for its attribute. The replacement binds nothing under Audit, as a module inspect reads no source for may bind a class under another name, but __init__, its witness, carries the globals of the module that defined Audit. The error names that module by its file and the replacement, which names none, by its repr."""
     auditing = imported_module(
         tmp_path,
         monkeypatch,
         "auditing",
         "class Audit:\n    share: int\n\n    def __init__(self): ...\n",
     )
-    monkeypatch.setitem(sys.modules, "auditing", types.ModuleType("auditing"))
+    replacement = types.ModuleType("auditing")
+    monkeypatch.setitem(sys.modules, "auditing", replacement)
     if rename_codes:
         _name_each_code_as_if_compiled_at_module_level(auditing.Audit, monkeypatch)
 
@@ -743,6 +766,8 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
 
     assert "auditing.Audit" in str(raised.value)
     assert auditing.__file__ in str(raised.value)
+    assert repr(replacement) in str(raised.value)
+    assert "module at None" not in str(raised.value)
 
 
 def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry_from_an_error_naming_the_module_with_no_source_raised_from_the_error_inspect_raised(
