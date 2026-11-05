@@ -392,6 +392,46 @@ def test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose
         named_classes(decoyed.Submeter)
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        pytest.param(
+            "if TYPE_CHECKING:\n"
+            "    @dataclass\n"
+            "    class Submeter(Meter):\n"
+            "        def __init__(self, tap: 'Tap') -> None: ...\n",
+            id="found-statement",
+        ),
+        pytest.param("", id="statementless"),
+    ],
+)
+def test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_code_carries_another_qualified_name_than_a_def_in_its_class_body_gives_is_spelled_as_its_generator_spells_what_it_writes(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, statement: str
+) -> None:
+    imported_module(tmp_path, monkeypatch, "tapping", _TAPPING_SOURCE)
+    requalified = imported_module(
+        tmp_path,
+        monkeypatch,
+        "requalified",
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "from tapping import Meter\n"
+        "\n"
+        "exec(\n"
+        "    '@dataclass\\n'\n"
+        "    'class Submeter(Meter):\\n'\n"
+        "    '    def __init__(self, tap: \"Tap\") -> None: ...\\n'\n"
+        ")\n"
+        "init = Submeter.__init__\n"
+        "init.__code__ = init.__code__.replace(co_qualname='Other.__init__')\n"
+        "\n" + statement,
+    )
+
+    assert named_classes(requalified.Submeter) == {fractions.Fraction}
+
+
 def test_a_function_assigned_as_a_dataclass_constructor_after_its_class_statement_names_the_classes_the_module_defining_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
