@@ -273,7 +273,7 @@ Labels are this PRD's; ids are assigned at decompose. Every leaf carries `x_find
 
 **ε — Retire the home- and fleet-level dispatch key at the bump** (held leaf; priority medium; `metadata.x_seam_wait = {stream: "S29", contract: "surface bump window open"}`, excluded from this batch's `commit_planning`)
 - Keys: fk-94f4881bbe48, fk-04b52ee632c6.
-- Work: §5.5 ε bullet, §5.2's default change; delete `HomeConfig.dispatch_strategy`, `FleetDistributionConfig.dispatch_strategy`, `HOME_DISPATCH_STRATEGIES`, `_parse_fleet_dispatch_strategy`, `generate_homes_from_distribution`'s `"greedy"`, any `_runs_tariff_tou` S3 left; `scenario_writer` stops writing the home key; migrate the two scenario files; the ~20 test sites that pass a home-level `dispatch_strategy`; update the briefing's dispatch key_decision to "one vocabulary".
+- Work: §5.5 ε bullet, §5.2's default change; delete `HomeConfig.dispatch_strategy`, `FleetDistributionConfig.dispatch_strategy`, `HOME_DISPATCH_STRATEGIES`, `_read_dispatch_strategy_key` (which reads both the home and the fleet key), `generate_homes_from_distribution`'s `"greedy"`, any `_runs_tariff_tou` S3 left; `scenario_writer` stops writing the home key; migrate the two scenario files; the ~20 test sites that pass a home-level `dispatch_strategy`; update the briefing's dispatch key_decision to "one vocabulary".
 - Signal: §9 row 12 (`solar-challenge validate config` and `home run` on the migrated `bristol-arbitrage.yaml`; the old file refused naming `battery.dispatch_strategy`).
 - Prereqs: β; S11's tariff-clock arm leaf; S3's leaf that routes home-level `tou_optimized` through the factory; S29 releases it.
 
