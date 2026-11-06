@@ -29,6 +29,8 @@ at the version before it, and the migration run again once the fault is gone com
 Version 1 names a legacy run after its home as the format reads the run's config once migrated.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
+A run that store's migration left in format 1, with no format.json, has its files brought
+forward by every step after format 1, so it is reported, if at all, by its own fault.
 """
 
 import functools
@@ -833,6 +835,56 @@ def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_eac
             ("Elm Row 2", "greedy", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
             ("Elm Row 3", "greedy", None, None),
         ]
+
+
+def _install_a_run_in_format_1(database_path: Path, run_id: str) -> str:
+    """Install pre_786_dispatch_home as run *run_id* in the store whose database file is *database_path*, its run files in that file's directory; return the id.
+
+    The run has no format.json, so its documents are in format 1. In a store at version 2 that
+    is a run the migration to version 2 left as it was. Its config holds the other dispatch
+    variants' null keys, which v2 drops and v3 alone would refuse.
+    """
+    return install_stored_run_fixture("pre_786_dispatch_home", Database(database_path), database_path.parent, run_id=run_id)
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_the_files_of_a_run_an_earlier_migration_left_in_format_1_forward_by_every_step_after_it(
+    store_at_version_2: Path,
+) -> None:
+    """The run stands for one the migration to version 2 left, whose documents have since been fixed: v2, then v3, bring it forward."""
+    left = _install_a_run_in_format_1(store_at_version_2, "left-by-v2")
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    run_dir = _run_dir(store_at_version_2, left)
+    assert json.loads((run_dir / "format.json").read_text()) == {"format_version": RUN_FORMAT_VERSION}
+    config = json.loads((run_dir / "config.json").read_text())
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    assert [
+        each for each in report.unmigrated_runs if each.run_id == left and each.document in ("config.json", "summary.json")
+    ] == []
+    assert _storage_of(store_at_version_2).load_run(left).run_id == left
+
+
+def test_migrate_store_reports_the_files_of_a_run_an_earlier_migration_left_by_their_own_fault_not_by_a_key_the_skipped_step_drops(
+    store_at_version_2: Path,
+) -> None:
+    """Its summary.json lacks a figure SummaryStatistics requires; its config.json's import_limit_kw, which v2 drops, is no fault of it.
+
+    Only its files' report is checked here; its runs row's is checked apart.
+    """
+    lacking = _install_a_run_in_format_1(store_at_version_2, "lacking-generation")
+    run_dir = _run_dir(store_at_version_2, lacking)
+    _edit_stored_document(run_dir / "summary.json", _deleting("total_generation_kwh"))
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    reported = {(each.run_id, each.document, each.field) for each in report.unmigrated_runs}
+    assert (lacking, "summary.json", "total_generation_kwh") in reported
+    assert (lacking, "config.json", "battery_config.dispatch_strategy.import_limit_kw") not in reported
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
 
 
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
