@@ -310,7 +310,9 @@ def test_a_battery_with_each_dispatch_strategy_loads_back_equal(
 def test_a_pv_field_the_grammar_has_no_key_for_is_refused(field: str) -> None:
     """B3: a PV field outside the grammar, set away from its default, is refused by name."""
     home = HomeConfig(
-        pv_config=dataclasses.replace(PVConfig(capacity_kw=4.0), **{field: {"pdc0": 250.0}}),
+        pv_config=dataclasses.replace(
+            PVConfig(capacity_kw=4.0), **{field: {"pdc0": 250.0, "gamma_pdc": -0.004}}
+        ),
         load_config=LoadConfig(),
     )
 
@@ -323,7 +325,7 @@ def test_every_pv_field_the_grammar_has_no_key_for_is_named_in_one_refusal() -> 
     home = HomeConfig(
         pv_config=dataclasses.replace(
             PVConfig(capacity_kw=4.0),
-            **{field: {"pdc0": 250.0} for field in PV_BLOCK.outside_grammar},
+            **{field: {"pdc0": 250.0, "gamma_pdc": -0.004} for field in PV_BLOCK.outside_grammar},
         ),
         load_config=LoadConfig(),
     )

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     DEFAULT_CEC_MODULE,
@@ -887,25 +888,33 @@ class TestWiredDcCapacity:
         [None, create_simple_inverter_params()],
         ids=["voltage-matched-inverter", "custom-sandia-inverter"],
     )
-    def test_a_module_with_neither_pdc0_nor_stc_is_refused(
+    def test_a_module_with_neither_pdc0_nor_stc_is_refused_at_construction_and_at_use(
         self, custom_inverter_params: dict[str, float] | None
     ) -> None:
+        """A PVConfig keeps the caller's own module dict, so an STC deleted after construction reaches use, which refuses the module as construction does, before it reads any inverter."""
+        module = rated_sapm_module()
         config = PVConfig(
             capacity_kw=4.0,
-            custom_module_params=sapm_library_module(),
+            custom_module_params=module,
             custom_inverter_params=custom_inverter_params,
         )
+        del module["STC"]
 
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as constructing:
+            dataclasses.replace(config)
+        with pytest.raises(ConfigurationError) as building:
             create_pv_system(config)
+        with pytest.raises(ConfigurationError) as wiring:
+            wired_dc_capacity_kw(config)
 
-        message = str(refusal.value)
+        message = str(constructing.value)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
+        assert str(building.value) == message
+        assert str(wiring.value) == message
 
     @pytest.mark.parametrize(
         "module",
         [
-            pytest.param(sapm_library_module, id="sapm_module"),
             pytest.param(rated_sapm_module, id="rated_sapm_module"),
             pytest.param(
                 default_module_beyond_every_mppt_window, id="module_beyond_every_mppt_window"
