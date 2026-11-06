@@ -168,6 +168,70 @@ class TestInterval:
             in str(exc_info.value)
         )
 
+    OPEN_INFINITE = Interval(-math.inf, math.inf, low_open=True, high_open=True)
+
+    @pytest.mark.parametrize(
+        ("interval", "number", "admitted"),
+        [
+            pytest.param(NON_NEGATIVE, 0, True, id="non-negative-zero"),
+            pytest.param(NON_NEGATIVE, -0.0, True, id="non-negative-negative-zero"),
+            pytest.param(NON_NEGATIVE, 5e-324, True, id="non-negative-smallest-float"),
+            pytest.param(NON_NEGATIVE, 1e308, True, id="non-negative-large-float"),
+            pytest.param(NON_NEGATIVE, 10**400, True, id="non-negative-huge-int"),
+            pytest.param(NON_NEGATIVE, np.float64(2.5), True, id="non-negative-numpy-float"),
+            pytest.param(NON_NEGATIVE, np.int64(3), True, id="non-negative-numpy-int"),
+            pytest.param(NON_NEGATIVE, -5e-324, False, id="non-negative-negative-smallest-float"),
+            pytest.param(NON_NEGATIVE, -(10**400), False, id="non-negative-negative-huge-int"),
+            pytest.param(NON_NEGATIVE, math.inf, False, id="non-negative-infinity"),
+            pytest.param(NON_NEGATIVE, -math.inf, False, id="non-negative-negative-infinity"),
+            pytest.param(NON_NEGATIVE, math.nan, False, id="non-negative-nan"),
+            pytest.param(NON_NEGATIVE, np.float64("nan"), False, id="non-negative-numpy-nan"),
+            pytest.param(NON_NEGATIVE, np.float64("inf"), False, id="non-negative-numpy-infinity"),
+            pytest.param(Interval(-500), -500, True, id="low-bound-only-its-bound"),
+            pytest.param(Interval(-500), 10**400, True, id="low-bound-only-huge-int"),
+            pytest.param(Interval(-500), math.inf, False, id="low-bound-only-infinity"),
+            pytest.param(Interval(-500), math.nan, False, id="low-bound-only-nan"),
+            pytest.param(Interval(-500), -500.5, False, id="low-bound-only-below-it"),
+            pytest.param(Interval(high=23), -(10**400), True, id="high-bound-only-negative-huge-int"),
+            pytest.param(Interval(high=23), 23, True, id="high-bound-only-its-bound"),
+            pytest.param(Interval(high=23), -math.inf, False, id="high-bound-only-negative-infinity"),
+            pytest.param(Interval(high=23), math.nan, False, id="high-bound-only-nan"),
+            pytest.param(Interval(high=23), 23.5, False, id="high-bound-only-above-it"),
+            pytest.param(OPEN_INFINITE, 0, True, id="open-infinite-zero"),
+            pytest.param(OPEN_INFINITE, math.inf, False, id="open-infinite-infinity"),
+            pytest.param(OPEN_INFINITE, -math.inf, False, id="open-infinite-negative-infinity"),
+            pytest.param(OPEN_INFINITE, math.nan, False, id="open-infinite-nan"),
+            pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
+            pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
+            pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
+            pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
+            pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
+            pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
+            pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
+            pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
+            pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
+            pytest.param(POSITIVE, True, True, id="positive-true"),
+            pytest.param(POSITIVE, False, False, id="positive-false"),
+            pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
+        ],
+    )
+    def test_an_interval_decides_each_kind_of_number_by_comparing_it_with_its_bounds(
+        self, interval: Interval, number: float, admitted: bool
+    ) -> None:
+        """NaN and ±inf are refused and every other number is compared exactly with the bounds, a huge int, a numpy number and a bool (as 0 or 1) included."""
+        assert interval.admits(number) == admitted
+
+    def test_a_replaced_interval_admits_by_its_new_bounds(self) -> None:
+        """A replaced interval decides by the bounds it was replaced with, not by those it was copied from."""
+        assert dataclasses.replace(POSITIVE, low_open=False).admits(0) is True
+        assert dataclasses.replace(NON_NEGATIVE, high=1).admits(1.5) is False
+        assert dataclasses.replace(Interval(0, 1), high=math.inf).admits(math.inf) is False
+
+    def test_an_interval_reprs_as_its_four_bounds(self) -> None:
+        """The equal-bounds refusal prints the interval's repr, which names its four bounds as given and nothing derived from them."""
+        assert repr(NON_NEGATIVE) == "Interval(low=0, high=inf, low_open=False, high_open=False)"
+        assert repr(Interval(0, 1, low_open=True)) == "Interval(low=0, high=1, low_open=True, high_open=False)"
+
 
 class TestAsFiniteFloat:
     """as_finite_float reads a value as float() reads it, and refuses a boolean or one that is not a finite number."""
