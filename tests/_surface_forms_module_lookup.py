@@ -308,7 +308,7 @@ def class_statement(cls: type) -> ast.ClassDef | None:
     )
 
 
-def missing_class_statement(cls: type) -> str:
+def missing_class_statement_clause(cls: type) -> str:
     """What the helper's errors say where class_statement returns None for *cls*: that the source of the module defining_module gives for *cls* holds no class statement under *cls*'s qualified name."""
     return (
         f"the source of the module {defining_module(cls).__name__!r} holds no class statement "

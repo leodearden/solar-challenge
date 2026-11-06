@@ -55,7 +55,7 @@ from tests._surface_forms_module_lookup import (
     evaluated_in,
     is_immutable_type,
     is_routine,
-    missing_class_statement,
+    missing_class_statement_clause,
     scope_statements,
     spelled_function,
 )
@@ -1003,13 +1003,14 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* and what missing_class_statement states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
+    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
             f"{label_of(cls)} has no __init__ or __post_init__ the scan can read, since "
-            f"{missing_class_statement(cls)}: pass a class that a class statement in a source "
-            "file defines, and leave its __module__ and __qualname__ as that statement set them"
+            f"{missing_class_statement_clause(cls)}: pass a class that a class statement in a "
+            "source file defines, and leave its __module__ and __qualname__ as that statement "
+            "set them"
         )
     return [
         node
