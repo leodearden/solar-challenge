@@ -62,6 +62,7 @@ from solar_challenge.web.presets import PRESET_TYPES, home_presets
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
+    LaggingRunsRefused,
     MigrationRefused,
     MigrationReport,
     SchemaVersionMismatch,
@@ -1299,6 +1300,39 @@ def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_it
     assert report.applied_steps == ()
     assert storage.database.path.read_bytes() == bytes_before
     assert _files_of(stored_run_dir(storage, "home-1")) == files_before
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_again_once_it_can_brings_the_run_forward(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk."""
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    run_id = install_stored_run_fixture("pre_469_home", Database(store), store.parent)
+    marker = _run_dir(store, run_id) / "format.json"
+    _put_a_directory_in_place_of(marker)
+    files_before = _files_of(_run_dir(store, run_id))
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, OSError)
+    message = str(refused.value)
+    for named in [str(store), f"schema version {SCHEMA_VERSION}", str(RUN_FORMAT_VERSION), str(marker)]:
+        assert named in message, (named, message)
+    assert _user_version(store) == SCHEMA_VERSION
+    assert _files_of(_run_dir(store, run_id)) == files_before
+
+    marker.rmdir()
+    report = migrate_store(store, store.parent)
+
+    assert report.brought_forward_runs == (run_id,)
+    assert _storage_of(store).load_run(run_id).run_id == run_id
+
+
+def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
+    """No request causes it: the migration that meets the fault refuses to go on."""
+    assert not issubclass(LaggingRunsRefused, ValueError)
 
 
 def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(

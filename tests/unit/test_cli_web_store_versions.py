@@ -15,7 +15,8 @@ file that is not a database, naming it, and leave it as it is. migrate brings th
 at version 1 to the stored-run format too, reporting each value it drops that is not null and
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
 format version (B5). It refuses a step that cannot write a run's file, exiting 1 with the
-refusal naming the step and the fault.
+refusal naming the step and the fault, and so it does a run an earlier migration left lagging
+whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault.
 """
 
 import json
@@ -329,6 +330,22 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
     assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
     assert "Traceback" not in result.output
     for named in [str(database), "schema version 2", "stays at version 1", str(marker)]:
+        assert named in result.stderr, (named, result.stderr)
+
+
+def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_store_and_the_fault(tmp_path: Path) -> None:
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write."""
+    database = open_database(_store_database(tmp_path))
+    run_id = install_stored_run_fixture("pre_469_home", database, database.path.parent)
+    marker = stored_run_dir(run_storage_over(database), run_id) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database.path), f"schema version {SCHEMA_VERSION}", str(marker)]:
         assert named in result.stderr, (named, result.stderr)
 
 
