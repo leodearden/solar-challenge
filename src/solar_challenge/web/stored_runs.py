@@ -52,7 +52,12 @@ RUN_DOCUMENT_STEPS, the schema step of that version, and a legacy fixture in
 tests/fixtures/stored_runs whose documents the step changes (contract C10);
 tests/unit/test_web_run_document_steps.py runs every step over every fixture. Steps run in
 order and v2 drops each key today's dataclasses lack, so a later step that reads a renamed or
-retired field's old key must keep v2 from dropping it.
+retired field's old key must keep v2 from dropping it. A step must also change nothing in
+documents a later step brought forward, nor in those a save in the current format writes: a
+runs row records no format of its own, so migration brings one it cannot bring forward from
+its store's format forward from the first. A step that cannot keep to this must first give
+each runs row a format version of its own, with its schema step
+(docs/prds/run-store-one-owner.md §3.10).
 """
 
 import functools
@@ -727,7 +732,11 @@ class RunDocumentStep:
         version: The format version the step's result is in.
         description: What the step changes, as `solar-challenge web migrate` reports it.
         apply: The documents of a run of a type, brought forward. It is pure: it changes none
-            of its input, and applying it to its own result changes nothing, and drops and rewrites nothing.
+            of its input. It changes, drops and rewrites nothing in documents already in its own
+            format, as its own result is, or in a later one a later step brought them to.
+            Migration relies on this to bring a runs row, which records no format of its own,
+            forward from the first format (storage.migrate_runs_table_documents), and
+            tests/unit/test_web_run_document_steps.py checks it over every fixture.
     """
 
     version: int

@@ -39,12 +39,14 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.run_names import is_run_name, require_run_name
 from solar_challenge.web.stored_runs import (
+    FIRST_FORMAT_VERSION,
     RUN_KINDS,
     RUN_TYPES,
     DroppedValue,
     RewrittenValue,
     RunKind,
     RunType,
+    StepResult,
     StoredDocument,
     StoredFleetRun,
     StoredHomeRun,
@@ -412,12 +414,17 @@ def migrate_runs_table_documents(
     """The runs table's part of the schema step carrying the run-document step of *to_version*, run on *conn* inside that step's transaction.
 
     *from_version* is the format the runs rows are in, as the store's schema version implies
-    it. *earlier* is what the earlier run-document steps of the same migration did. Each run's runs.config_json and runs.summary_json are brought
-    forward from *from_version* to *to_version* by bring_run_documents_forward, and only a column
-    the steps changed is rewritten, as the JSON text a save writes. A row that holds neither
-    document is skipped, and so is a row *earlier* left unmigrated, as web/schema.py's
-    migrate_store says. A row whose documents cannot be brought forward, or that has no type,
-    is left as it was and reported as unmigrated.
+    it. *earlier* is what the earlier run-document steps of the same migration did. Each run's
+    runs.config_json and runs.summary_json are brought forward from *from_version* to
+    *to_version* by bring_run_documents_forward, and only a column the steps changed is
+    rewritten, as the JSON text a save writes. A runs row records no format of its own, and an
+    earlier migration may have left one in the first: so a row that cannot be brought forward
+    from *from_version* is brought forward from FIRST_FORMAT_VERSION instead. That is exact, as
+    each step changes nothing in documents a later step brought forward (RunDocumentStep). A row
+    that holds neither document is skipped, and so is a row *earlier* left unmigrated, as
+    web/schema.py's migrate_store says. A row whose documents cannot be decoded or brought
+    forward from either format, or that has no type, is left as it was and reported as
+    unmigrated, by the last refusal.
     """
     rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
     left_unmigrated = {each.run_id for each in earlier.unmigrated_rows}
@@ -439,7 +446,7 @@ def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: 
             config=_row_document(run_id, "config_json", row["config_json"]),
             summary=_row_document(run_id, "summary_json", row["summary_json"]),
         )
-        result = bring_run_documents_forward(typed, documents, from_version, to_version)
+        result = _row_brought_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_rows=(UnmigratedRun.of(refusal),))
     stepped = (result.documents.config, result.documents.summary)
@@ -447,6 +454,23 @@ def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: 
         if document.content != was.content:
             conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
     return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten)
+
+
+def _row_brought_forward(
+    run_type: RunType, documents: StoredRunDocuments, from_version: int, to_version: int
+) -> StepResult:
+    """*documents*, a runs row's, brought forward from *from_version* to *to_version* by bring_run_documents_forward, or from FIRST_FORMAT_VERSION when they cannot be, as migrate_runs_table_documents says.
+
+    Raises:
+        StoredRunUnreadable: They cannot be brought forward from *from_version*, nor from
+            FIRST_FORMAT_VERSION when *from_version* is past it; the refusal is the last one's.
+    """
+    try:
+        return bring_run_documents_forward(run_type, documents, from_version, to_version)
+    except StoredRunUnreadable:
+        if from_version <= FIRST_FORMAT_VERSION:
+            raise
+    return bring_run_documents_forward(run_type, documents, FIRST_FORMAT_VERSION, to_version)
 
 
 @dataclass(frozen=True)
