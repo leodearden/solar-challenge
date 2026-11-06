@@ -1413,7 +1413,7 @@ class TestBatterySOHDerating:
         battery = Battery(cfg)
         assert battery.soh < 1.0
 
-    def test_ten_year_old_battery_soh_is_its_calendar_fade_alone(self) -> None:
+    def test_single_run_soh_is_one_minus_its_calendar_fade(self) -> None:
         """SOH = 1 − 0.02×10: a single run counts no throughput, so no cycle fade."""
         assert Battery(BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)).soh == pytest.approx(0.8, abs=1e-12)
 
