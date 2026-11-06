@@ -47,7 +47,13 @@ import types
 import typing
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
-from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
+from tests._surface_forms_class_reads import (
+    namespace_holders,
+    own_annotations,
+    own_namespace,
+    recorded_mro,
+)
+from tests._surface_forms_generators import dataclass_parameter
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     class_namespace_defs,
@@ -62,9 +68,7 @@ from tests._surface_forms_module_lookup import (
 from tests._surface_forms_signatures import (
     ModuleOrUnspelled,
     Unspelled,
-    dataclass_parameter,
     is_enum,
-    namespace_holders,
     refuse_member_without_a_portable_form,
     signature_of,
     spelling_modules,

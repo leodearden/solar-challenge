@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The generators that write methods into the classes they process, the dataclass decorator and collections.namedtuple, each by the rules it documents: which classes it processed, and the name it gives each method it writes there, after the class.
+"""The generators that write methods into the classes they process, the dataclass decorator and collections.namedtuple, each by the rules it documents: which classes it processed, the name it gives each method it writes there, after the class, and the parameters the dataclass decorator recorded for a class it processed.
 
 Of the helper, this module imports only the modules below it in
 tests/unit/test_surface_forms_layers.py's LAYERS, which checks that.
@@ -9,7 +9,7 @@ import dataclasses
 import types
 from collections.abc import Callable
 
-from tests._surface_forms_class_reads import own_namespace
+from tests._surface_forms_class_reads import namespace_holders, own_namespace, recorded_mro
 
 
 @dataclasses.dataclass(frozen=True)
@@ -45,6 +45,12 @@ class MethodGenerator:
 def _is_decorated_dataclass(cls: type) -> bool:
     """Whether the dataclass decorator processed *cls* itself; is_dataclass is true as well of an undecorated subclass of a dataclass, whose annotations the decorator never read."""
     return "__dataclass_fields__" in own_namespace(cls)
+
+
+def dataclass_parameter(cls: type, name: str) -> bool:
+    """Whether the dataclass decorator recorded its parameter *name* as on, in the __dataclass_params__ of the first class in *cls*'s MRO whose own namespace holds one: *cls*, if the decorator processed it, else the base it inherits the record from, as attribute lookup reads it."""
+    holder = next(namespace_holders(recorded_mro(cls), "__dataclass_params__"))
+    return bool(getattr(own_namespace(holder)["__dataclass_params__"], name))
 
 
 DATACLASS_DECORATOR = MethodGenerator(
