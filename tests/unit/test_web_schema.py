@@ -9,7 +9,9 @@ migrate_store brings an older store to SCHEMA_VERSION, whose tables are then a n
 keeping its rows and naming each run that had no name after its kind (D27 invariant 7, part
 2). A row a step's new constraints refuse makes migrate_store raise MigrationRefused, naming
 the table, the row's id and the column, and leaves the store as it was; so do tables a step
-cannot rebuild, naming the fault. Both refuse a file that is not a database with a
+cannot rebuild, naming the fault. A refusal says the store stays at the version its report
+leaves it at, a store below version 0 at its own, and is never built with a report its step
+is not the next step from. Both refuse a file that is not a database with a
 StoreUnreadable naming it, and leave it as it is. MIGRATIONS' versions
 run from 1 without a gap, and SCHEMA_VERSION is the last of them (contract C5). A new store's
 schema is the one committed for its version as schema_v<N>.sql in tests/fixtures/databases, and
@@ -476,6 +478,34 @@ def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it
 def test_a_migration_refused_is_not_a_value_error() -> None:
     """No request causes it: the migration that meets the row refuses to run."""
     assert not issubclass(MigrationRefused, ValueError)
+
+
+def test_migrate_store_refused_at_version_1_on_a_store_below_version_0_says_the_store_stays_at_its_own_version(
+    legacy_store: Path,
+) -> None:
+    """No solar-challenge records a version below 0, but migrate_store gives such a store every step, as it gives a legacy store at 0."""
+    insert_runs_row(legacy_store, {"id": "legacy-sweep", "name": "Sweep Run", "type": "sweep"})
+    with closing(Database(legacy_store).connect()) as conn:
+        conn.execute("PRAGMA user_version = -1")
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(legacy_store, legacy_store.parent)
+
+    assert refused.value.step == MIGRATIONS[0]
+    assert "so it stays at version -1," in str(refused.value), str(refused.value)
+    assert refused.value.migrated == MigrationReport(legacy_store, -1, -1, ())
+    assert user_version_of(legacy_store) == -1
+
+
+def test_a_migration_refused_refuses_the_report_of_a_store_its_step_is_not_the_next_step_from(tmp_path: Path) -> None:
+    """The store stays at its report's to_version, so a refusal of any step but the one after it would contradict its report."""
+    left_at_version_1 = MigrationReport(tmp_path / "store.db", 1, 1, ())
+
+    with pytest.raises(ValueError) as refused:
+        MigrationRefused(left_at_version_1, MIGRATIONS[2], sqlite3.OperationalError("disk I/O error"))
+
+    for named in ["step to schema version 3", "left the store at version 1"]:
+        assert named in str(refused.value), (named, str(refused.value))
 
 
 STORES_WHOSE_TABLES_VERSION_1_CANNOT_REBUILD = [

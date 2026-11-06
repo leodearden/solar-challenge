@@ -24,7 +24,8 @@ files or its runs row, naming each, also in a store at SCHEMA_VERSION, which has
 apply, once the run's documents are fixed, and reports again each it still cannot migrate. It
 goes by what a run's documents show, not by where they came from, so it catches up a run saved
 in the current format the same way when its save did not finish or its runs row holds a key no
-field has.
+field has. A LaggingRunsRefused carries only the report of a migration that left the store at
+SCHEMA_VERSION.
 """
 
 import importlib.util
@@ -1014,6 +1015,19 @@ def test_a_lagging_runs_refused_after_its_migration_s_steps_names_the_version_th
     assert "as it was" not in message
     assert refused.migrated is migrated
     assert refused.path == path
+
+
+def test_a_lagging_runs_refused_refuses_the_report_of_a_migration_that_left_the_store_below_the_schema_version(
+    tmp_path: Path,
+) -> None:
+    """The catch-up runs once the store is at SCHEMA_VERSION, the version the refusal says it stays at."""
+    left_at_version_2 = MigrationReport(tmp_path / "store.db", 1, 2, (MIGRATIONS[1],))
+
+    with pytest.raises(ValueError) as refused:
+        LaggingRunsRefused(left_at_version_2, sqlite3.OperationalError("disk I/O error"))
+
+    for named in [f"store at schema version {SCHEMA_VERSION}", "left the store at version 2"]:
+        assert named in str(refused.value), (named, str(refused.value))
 
 
 def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(

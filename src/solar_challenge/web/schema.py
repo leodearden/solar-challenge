@@ -183,16 +183,26 @@ class MigrationRefused(Exception):
 
     migrated is the report of what the migration did before the step: the steps it applied,
     which stay applied, each value they dropped or rewrote and each run they left; a report of
-    no step when the step is the migration's first. It is not a ValueError: no request causes
-    it, as SchemaVersionMismatch is not one.
+    no step when the step is the migration's first. Its to_version is the version the store
+    stays at, and the step is the one a store at that version takes next. It is not a
+    ValueError: no request causes it, as SchemaVersionMismatch is not one.
+
+    Raises:
+        ValueError: *step* is not the step a store at migrated's to_version takes next; the
+            message names both versions.
     """
 
     def __init__(
         self, migrated: MigrationReport, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error | OSError
     ) -> None:
+        if _steps_after(migrated.to_version)[:1] != (step,):
+            raise ValueError(
+                f"A migration refused at the step to schema version {step.version} cannot carry the report of one "
+                f"that left the store at version {migrated.to_version}, from which that step is not the next"
+            )
         super().__init__(
             f"{migrated.path} cannot be migrated to schema version {step.version}, so it stays at version "
-            f"{step.version - 1}, and the step has changed nothing in it: {fault}"
+            f"{migrated.to_version}, and the step has changed nothing in it: {fault}"
         )
         self.migrated = migrated
         self.path = migrated.path
@@ -204,23 +214,32 @@ class LaggingRunsRefused(Exception):
 
     migrated is the report of the steps the migration applied before the catch-up, which stay
     applied, with each value they dropped or rewrote and each run they left; a report of no step
-    when the migration found the store at SCHEMA_VERSION. The message names the store, the
-    stored-run format version, the schema version the store stays at, SCHEMA_VERSION, and how it
-    came to be there: as it was, when the migration found it at that version, or else by the
-    steps the migration applied from migrated's from_version, the version it found it at; then
-    the fault. It is not a ValueError: no request causes it, as MigrationRefused is not one.
+    when the migration found the store at SCHEMA_VERSION. Its to_version is SCHEMA_VERSION, the
+    version the catch-up runs at. The message names the store, the stored-run format version,
+    the schema version the store stays at, migrated's to_version, and how it came to be there: as
+    it was, when the migration found it at that version, or else by the steps the migration
+    applied from migrated's from_version, the version it found it at; then the fault. It is not
+    a ValueError: no request causes it, as MigrationRefused is not one.
+
+    Raises:
+        ValueError: migrated's to_version is not SCHEMA_VERSION; the message names both versions.
     """
 
     def __init__(self, migrated: MigrationReport, fault: OSError | sqlite3.Error) -> None:
+        if migrated.to_version != SCHEMA_VERSION:
+            raise ValueError(
+                f"A migration's catch-up runs on a store at schema version {SCHEMA_VERSION}, so its refusal cannot "
+                f"carry the report of one that left the store at version {migrated.to_version}"
+            )
         arrival = (
             "as it was"
-            if migrated.from_version == SCHEMA_VERSION
+            if migrated.from_version == migrated.to_version
             else f"to which this migration's steps brought it from version {migrated.from_version}"
         )
         super().__init__(
             f"The runs of {migrated.path} still in an older stored-run format cannot be brought forward to stored-run "
-            f"format version {RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, {arrival}, and "
-            f"the runs brought forward before the fault stay so: {fault}"
+            f"format version {RUN_FORMAT_VERSION}, so the store stays at schema version {migrated.to_version}, "
+            f"{arrival}, and the runs brought forward before the fault stay so: {fault}"
         )
         self.migrated = migrated
         self.path = migrated.path
@@ -378,7 +397,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     found = _version_of_existing_or_new_store(database)
     if found > SCHEMA_VERSION:
         raise SchemaVersionMismatch(database_path, found, SCHEMA_VERSION)
-    pending = tuple(step for step in MIGRATIONS if step.version > found)
+    pending = _steps_after(found)
     outcome = RunDocumentsOutcome()
     for index, step in enumerate(pending):
         try:
@@ -461,6 +480,11 @@ def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: Run
         conn.execute("BEGIN IMMEDIATE")
         outcome += migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
     return outcome
+
+
+def _steps_after(version: int) -> tuple[MigrationStep, ...]:
+    """The steps of MIGRATIONS a store at schema *version* has yet to take, in order: each of a later version, so every step for a store below version 1."""
+    return tuple(step for step in MIGRATIONS if step.version > version)
 
 
 def _run_format_at(version: int) -> int:
