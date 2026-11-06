@@ -190,7 +190,7 @@ class SimulationResults:
     other series with SeriesRefused, naming its column and its dtype.
 
     Each amount series, every series but the battery_soc and tariff_rate levels,
-    holds a number at every minute, as the run's totals sum every minute's amount.
+    holds a number in every row, as the run's totals sum every row's amount.
     A NaN in one raises ValueError at construction and in each method that reads
     them, as a series can still be written in place; an infinite sample is kept.
 
@@ -272,18 +272,18 @@ class SimulationResults:
                 yield attribute.metadata[_COLUMN], series, amount
 
     def _refuse_nan_amounts(self) -> None:
-        """Raise ValueError naming each amount series that holds a NaN: its column, its first NaN and when, and how many."""
+        """Raise ValueError naming each amount series that holds a NaN: its column, its first NaN and when, and how many of its rows are NaN."""
         refused: list[str] = []
         for column, series, _ in self._series_with_amounts():
             missing = series.isna().to_numpy()
             if missing.any():
                 first = int(missing.argmax())
                 refused.append(
-                    f"{column}={series.iloc[first]} at {series.index[first]} ({missing.sum()} of {missing.size} minutes)"
+                    f"{column}={series.iloc[first]} at {series.index[first]} ({missing.sum()} of {missing.size} rows)"
                 )
         if refused:
             raise ValueError(
-                "SimulationResults' amount series are what its totals sum, so each holds a number at every minute: "
+                "SimulationResults' amount series are what its totals sum, so each holds a number in every row: "
                 f"got {', '.join(refused)}"
             )
 
