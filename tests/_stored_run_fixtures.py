@@ -42,6 +42,9 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
   that names no dispatch strategy and no tariff, so it ran self-consumption.
 
+PRE_DISPATCH_UNION_HOME_CONFIGS is a file of FIXTURES_DIR beside those directories: the stored
+config of a home run per dispatch strategy, from before the strategies were variants of one union.
+
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
 store can hold a copy of a fixture beside the fixture itself. The functions import the web
@@ -68,6 +71,11 @@ if TYPE_CHECKING:
     from solar_challenge.web.stored_runs import RunType
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "stored_runs"
+
+PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
+"""A home run's stored config per dispatch strategy, as runs stored it before the strategies were
+variants of one union: all three strategy keys, the ones the strategy does not read null. Each
+config is that of a home with the strategy and a grid charge of 0.8, keyed by the strategy's name."""
 
 STORED_RUN_FIXTURES: tuple[str, ...] = (
     "pre_469_home",
