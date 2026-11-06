@@ -53,6 +53,7 @@ from solar_challenge.web.schema import (
     LaggingRunsRefused,
     MigrationRefused,
     MigrationReport,
+    RunFilesBroughtForward,
     migrate_store,
     open_database,
 )
@@ -1104,3 +1105,46 @@ def test_a_migration_report_of_no_step_lists_each_run_brought_forward_and_each_r
     assert lines[lines.index(unmigrated_line) - 1].startswith("Left each run below"), lines
     assert "nothing to migrate" not in str(leaving_only)
     assert f"  {unmigrated}" in str(leaving_only).splitlines()
+
+
+def test_run_files_brought_forward_lists_each_run_then_each_value_dropped_then_each_value_rewritten() -> None:
+    """Each section is listed only when it holds an item, so a report of no run reads as nothing."""
+    dropped = DroppedValue("run-1", "summary.json", "retired_figure", 12.5)
+    rewritten = RewrittenValue("run-3", "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy")
+    brought_forward = RunFilesBroughtForward(
+        runs=("run-1", "run-3"), dropped_values=(dropped,), rewritten_values=(rewritten,)
+    )
+
+    lines = str(brought_forward).splitlines()
+
+    assert len(lines) == 7, lines
+    assert lines[0].startswith("Before the fault, brought forward the files of each run below"), lines
+    assert lines[1:3] == ["  run 'run-1'", "  run 'run-3'"]
+    assert lines[3].startswith("Dropped each value below"), lines
+    assert lines[4] == f"  {dropped}"
+    assert lines[5].startswith("Rewrote each value below"), lines
+    assert lines[6] == f"  {rewritten}"
+    assert str(RunFilesBroughtForward(runs=("run-1",))).splitlines() == [lines[0], "  run 'run-1'"]
+    assert str(RunFilesBroughtForward()) == ""
+
+
+@pytest.mark.parametrize(
+    ("dropped_values", "rewritten_values"),
+    [
+        pytest.param((DroppedValue("run-3", "summary.json", "retired_figure", 12.5),), (), id="dropped"),
+        pytest.param(
+            (),
+            (RewrittenValue("run-3", "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy"),),
+            id="rewritten",
+        ),
+    ],
+)
+def test_run_files_brought_forward_refuses_a_value_of_a_run_it_does_not_name(
+    dropped_values: tuple[DroppedValue, ...], rewritten_values: tuple[RewrittenValue, ...]
+) -> None:
+    """Each value is of a run whose files were brought forward, so a report that names no run holds no value."""
+    with pytest.raises(ValueError) as refused:
+        RunFilesBroughtForward(runs=("run-1",), dropped_values=dropped_values, rewritten_values=rewritten_values)
+
+    for named in ["'run-3'", "run-1"]:
+        assert named in str(refused.value), (named, str(refused.value))
