@@ -1375,6 +1375,37 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
 
 
 # ---------------------------------------------------------------------------
+# A battery's discharge is part of the self-consumption it supplies
+# ---------------------------------------------------------------------------
+
+# Shortfalls whose discharge, as withdrawal less losses, rounds an ulp above the energy asked for.
+SUNLESS_SHORTFALLS = [
+    pytest.param(0.463, 1.0, id="0.463kW-1min"),
+    pytest.param(0.737, 5.0, id="0.737kW-5min"),
+    pytest.param(0.247, 30.0, id="0.247kW-30min"),
+    pytest.param(0.494, 60.0, id="0.494kW-60min"),
+]
+
+
+class TestASunlessStepsDischargeIsPartOfItsSelfConsumption:
+    """With no PV, the battery's discharge is all the self-consumption a step has, so it cannot exceed it."""
+
+    @pytest.mark.parametrize(("demand_kw", "minutes"), SUNLESS_SHORTFALLS)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_the_battery_discharges_no_more_than_the_self_consumption_it_supplies(
+        self, step: Callable[..., EnergyFlowResult], demand_kw: float, minutes: float
+    ) -> None:
+        result = step(
+            generation_kw=0.0,
+            demand_kw=demand_kw,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=minutes,
+        )
+        assert result.battery_discharge > 0.0
+        assert result.battery_discharge <= result.self_consumption
+
+
+# ---------------------------------------------------------------------------
 # A flow is an energy a step moved, so never negative
 # ---------------------------------------------------------------------------
 

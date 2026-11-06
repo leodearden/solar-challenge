@@ -20,6 +20,7 @@ from solar_challenge.battery import (
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import as_finite_float
+from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -1019,6 +1020,27 @@ class TestBatteryDischargeToMeetDemand:
         energy = default_battery.discharge(power_kw=1.0, duration_minutes=60)
         assert isinstance(energy, float)
         assert energy >= 0
+
+    @pytest.mark.parametrize(
+        ("config", "power_kw", "duration_minutes", "asked_kw"),
+        [
+            pytest.param(BatteryConfig.default_5kwh(), 0.463, 1.0, 0.463, id="0.463kW-1min"),
+            pytest.param(BatteryConfig.default_5kwh(), 0.737, 5.0, 0.737, id="0.737kW-5min"),
+            pytest.param(BatteryConfig.default_5kwh(), 0.247, 30.0, 0.247, id="0.247kW-30min"),
+            pytest.param(BatteryConfig.default_5kwh(), 0.494, 60.0, 0.494, id="0.494kW-60min"),
+            pytest.param(
+                BatteryConfig(capacity_kwh=5.0, max_discharge_kw=0.463), math.inf, 1.0, 0.463, id="rate-limited-inf"
+            ),
+        ],
+    )
+    def test_discharge_delivers_what_it_was_asked_for_and_never_more(
+        self, config: BatteryConfig, power_kw: float, duration_minutes: float, asked_kw: float
+    ) -> None:
+        """Each request here is one whose withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
+        asked_kwh = asked_kw * (duration_minutes * HOURS_PER_MINUTE)
+        delivered = Battery(config).discharge(power_kw, duration_minutes)
+        assert delivered <= asked_kwh
+        assert delivered == pytest.approx(asked_kwh, rel=1e-12)
 
 
 class TestBatterySOCTimeSeries:
