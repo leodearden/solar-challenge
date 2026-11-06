@@ -5,9 +5,9 @@ The generic tests run every step in RUN_DOCUMENT_STEPS over every committed lega
 tests/_stored_run_fixtures.py: the steps' versions ascend to RUN_FORMAT_VERSION, each step is
 idempotent on every fixture, and each step changes at least one fixture's documents, so a new
 step (contract C10) ships with a fixture that exercises it. Each step also changes nothing in
-documents a later step brought forward, a fixture's or those a save in the current format
-writes, which migration relies on to bring a runs row, which records no format, forward from the
-first format.
+documents a later step brought forward, a fixture's or each a save of a home run or a fleet run
+in the current format writes, which migration relies on to bring a runs row, which records no
+format, forward from the first format.
 
 The rest pins v2, the step that drops each key a document's dataclass does not have: what it
 drops, which dropped values it reports, what it leaves for the strict reader to refuse, and that
@@ -24,7 +24,7 @@ that it changes none of its input.
 import copy
 import dataclasses
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -36,10 +36,12 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.fleet import aggregate_home_summaries, calculate_home_summaries
+from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.stored_runs import (
     RUN_DOCUMENT_STEPS,
     RUN_FORMAT_VERSION,
@@ -47,13 +49,17 @@ from solar_challenge.web.stored_runs import (
     RewrittenValue,
     FleetRunConfig,
     RunDocumentStep,
+    RunType,
     StoredDocument,
+    StoredFleetRun,
+    StoredHomeRun,
     StoredRunDocuments,
     StoredRunUnreadable,
     documents_in_current_format,
     read_run_documents,
 )
 from tests._every_field_shape import home_of_every_field_shape
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._stored_run_fixtures import FIXTURES_DIR, STORED_RUN_FIXTURES, fixture_run_type, stored_run_fixture_dir
 
 _V2 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 2)
@@ -208,12 +214,57 @@ def test_every_step_changes_nothing_in_a_fixture_s_documents_a_later_step_brough
     assert (result.dropped, result.rewritten) == ((), ())
 
 
-@pytest.mark.parametrize("step", RUN_DOCUMENT_STEPS, ids=lambda step: f"v{step.version}")
-def test_every_step_changes_nothing_in_the_documents_a_save_in_the_current_format_writes(step: RunDocumentStep) -> None:
-    """The config document of a home of every field shape, as a save writes it, is in the current format: no step changes it."""
-    documents = _every_shape_documents()
+_SAVED_RUN = "saved"
 
-    result = step.apply("home", documents)
+
+def _as_saved(name: str, content: dict[str, Any]) -> StoredDocument:
+    """Document *name* of run _SAVED_RUN holding *content* as its file and its runs row hold it: decoded from the JSON a save writes."""
+    return StoredDocument(_SAVED_RUN, name, json.loads(json.dumps(content)))
+
+
+def _documents_a_home_run_s_save_writes() -> StoredRunDocuments:
+    """The documents a save of a home of every field shape writes, built as StoredHomeRun builds them: its config and its summary."""
+    results = make_sim_results(days=1)
+    run = StoredHomeRun(_SAVED_RUN, home_of_every_field_shape(), results, calculate_summary(results))
+    return StoredRunDocuments(
+        config=_as_saved("config.json", run.config_document()), summary=_as_saved("summary.json", run.summary_document())
+    )
+
+
+def _documents_a_fleet_run_s_save_writes() -> StoredRunDocuments:
+    """The documents a save of a fleet of a home of every field shape and a default home writes, built as StoredFleetRun builds them: its config, its summary and each home's summary."""
+    fleet_results = make_fleet_results_of(
+        [make_sim_results(days=1), make_sim_results(days=1)], homes=[home_of_every_field_shape(), make_home_config()]
+    )
+    home_summaries = tuple(calculate_home_summaries(fleet_results))
+    run = StoredFleetRun(_SAVED_RUN, fleet_results, aggregate_home_summaries(home_summaries), home_summaries)
+    return StoredRunDocuments(
+        config=_as_saved("config.json", run.config_document()),
+        summary=_as_saved("summary.json", run.summary_document()),
+        home_summaries=tuple(
+            _as_saved(f"homes/home_{index}_summary.json", field_tree(summary)) for index, summary in enumerate(home_summaries)
+        ),
+    )
+
+
+_DOCUMENTS_A_SAVE_WRITES = [
+    pytest.param("home", _documents_a_home_run_s_save_writes, id="home-run"),
+    pytest.param("fleet", _documents_a_fleet_run_s_save_writes, id="fleet-run"),
+]
+
+
+@pytest.mark.parametrize("step", RUN_DOCUMENT_STEPS, ids=lambda step: f"v{step.version}")
+@pytest.mark.parametrize(("run_type", "documents_a_save_writes"), _DOCUMENTS_A_SAVE_WRITES)
+def test_every_step_changes_nothing_in_the_documents_a_save_in_the_current_format_writes(
+    step: RunDocumentStep, run_type: RunType, documents_a_save_writes: Callable[[], StoredRunDocuments]
+) -> None:
+    """Each document a save of a home run or a fleet run writes, to its files and its runs row alike, is in the current format: no step changes it.
+
+    The home run's home, and the fleet's first, is of every field shape; the fleet's second is a default home.
+    """
+    documents = documents_a_save_writes()
+
+    result = step.apply(run_type, documents)
 
     assert result.documents == documents
     assert (result.dropped, result.rewritten) == ((), ())
