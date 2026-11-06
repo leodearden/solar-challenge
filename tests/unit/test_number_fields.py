@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.number_fields, the package's number readers."""
 
+import copy
 import dataclasses
 import math
+import pickle
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -231,6 +233,34 @@ class TestInterval:
         """The equal-bounds refusal prints the interval's repr, which names its four bounds as given and nothing derived from them."""
         assert repr(NON_NEGATIVE) == "Interval(low=0, high=inf, low_open=False, high_open=False)"
         assert repr(Interval(0, 1, low_open=True)) == "Interval(low=0, high=1, low_open=True, high_open=False)"
+
+    @pytest.mark.parametrize(
+        "copy_of",
+        [
+            pytest.param(copy.copy, id="copy"),
+            pytest.param(copy.deepcopy, id="deepcopy"),
+            pytest.param(lambda interval: pickle.loads(pickle.dumps(interval)), id="pickle"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "interval",
+        [
+            pytest.param(POSITIVE, id="positive"),
+            pytest.param(NON_NEGATIVE, id="non-negative"),
+            pytest.param(FRACTION, id="fraction"),
+            pytest.param(Interval(-500), id="low-bound-only"),
+            pytest.param(Interval(high=23), id="high-bound-only"),
+        ],
+    )
+    def test_a_copy_of_an_interval_is_equal_and_admits_the_same_numbers(
+        self, interval: Interval, copy_of: Callable[[Interval], Interval]
+    ) -> None:
+        """A copy, a deep copy and a pickle round trip of an interval equal it, hash like it and admit what it admits."""
+        duplicate = copy_of(interval)
+        assert duplicate == interval
+        assert hash(duplicate) == hash(interval)
+        for number in (-1, 0, 0.5, 1, 10**400, math.inf, -math.inf, math.nan):
+            assert duplicate.admits(number) is interval.admits(number)
 
 
 class TestAsFiniteFloat:
