@@ -16,9 +16,11 @@ at version 1 to the stored-run format too, reporting each value it drops that is
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
 format version (B5). It refuses a step that cannot write a run's file, exiting 1 with the
 refusal naming the step and the fault, and so it does a run an earlier migration left lagging
-whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused
-after it applied a step, it first prints on stdout the report of the steps it applied, which
-stay applied, then the refusal on stderr; refused before any step, it prints no report.
+whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused,
+it prints on stdout the report of the steps it applied, which stay applied, then the run files
+the refused step or catch-up brought forward before its fault, which stay so, with each value
+dropped or rewritten in them, then the refusal on stderr; it prints no report of steps when it
+applied none, and no run files when the refused part brought none forward.
 """
 
 import json
@@ -322,7 +324,11 @@ def test_web_migrate_reports_each_value_v3_rewrites_in_the_pre_787_fleet_with_th
 def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_step_and_the_fault(
     legacy_run_ids: dict[str, str], tmp_path: Path
 ) -> None:
-    """A directory in the place of a run's format.json stands in for a file the step cannot write, e.g. on a full disk."""
+    """A directory in the place of a run's format.json stands in for a file the step cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and pre_469_home's sorts before the fleet's, so its
+    files stay brought forward and are printed. No step committed, so no migration report is.
+    """
     database = _store_database(tmp_path)
     marker = stored_run_dir(run_storage_over(Database(database)), legacy_run_ids["legacy_fleet"]) / "format.json"
     marker.mkdir()
@@ -334,13 +340,15 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
     assert "Traceback" not in result.output
     for named in [str(database), "schema version 2", "stays at version 1", str(marker)]:
         assert named in result.stderr, (named, result.stderr)
-    assert result.stdout == ""
+    assert result.stdout.startswith("Before the fault, brought forward the files of each run below"), result.stdout
+    assert f"  run {legacy_run_ids['pre_469_home']!r}" in result.stdout.splitlines(), result.stdout
+    assert legacy_run_ids["legacy_fleet"] not in result.stdout
 
 
 def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of_the_steps_it_applied_then_the_refusal(
     legacy_run_ids: dict[str, str], tmp_path: Path
 ) -> None:
-    """Version 3's step is refused once version 2's has committed."""
+    """Version 3's step is refused once version 2's has committed, after its run-file part brought every run forward, rewriting the pre-787 fleet's config.json."""
     retired = _install_a_copy_editing_its_summary(
         tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
     )
@@ -361,6 +369,14 @@ def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of
     assert result.output.index("Migrated the dashboard database") < result.output.index(
         "cannot be migrated to schema version 3"
     ), result.output
+    files_heading = "Before the fault, brought forward the files of each run below"
+    assert files_heading in result.stdout, result.stdout
+    fleet = legacy_run_ids["pre_787_dispatch_fleet"]
+    assert (
+        f'  run {fleet!r}: config.json\'s homes[2].dispatch_strategy was "tou_optimized", now "greedy"'
+        in result.stdout[result.stdout.index(files_heading) :].splitlines()
+    ), result.stdout
+    assert result.stdout.index("Migrated the dashboard database") < result.stdout.index(files_heading), result.stdout
 
 
 def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_store_and_the_fault(tmp_path: Path) -> None:
