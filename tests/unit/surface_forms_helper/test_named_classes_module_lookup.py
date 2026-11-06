@@ -866,18 +866,19 @@ _HAND_WRITTEN_INIT_SOURCE = (
 def _dataclass_of_a_replaced_module_with_no_file(
     source: str, monkeypatch: pytest.MonkeyPatch
 ) -> type:
-    """D, as *source* defines it in the module 'fileless', one with no file, which another module with no file then replaces in sys.modules until *monkeypatch* is undone."""
+    """D, as *source* defines it in a copy of the namespace of the module 'fileless', one with no file, which another module with no file then replaces in sys.modules until *monkeypatch* is undone."""
     earlier = types.ModuleType("fileless")
     monkeypatch.setitem(sys.modules, "fileless", earlier)
-    exec(source, vars(earlier))
+    namespace = dict(vars(earlier))
+    exec(source, namespace)
     monkeypatch.setitem(sys.modules, "fileless", types.ModuleType("fileless"))
-    return earlier.D
+    return namespace["D"]
 
 
 def test_a_dataclass_whose_only_method_is_a_hand_written_init_in_a_module_with_no_file_without_the_future_import_of_annotations_raises_a_lookup_error_naming_its_annotate_from_python_3_14_and_before_it_names_the_classes_its_annotations_name_once_another_module_with_no_file_has_replaced_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """D's __init__ annotates nothing and does not take share, so only D's own module is looked up, for share. The replacement binds nothing under 'D' and has no source, so D is checked by its witness. The decorator may have written __init__, so it is no witness; from Python 3.14 the body also compiles __annotate__, named after D and carrying the globals of the module that defined it, which name no file."""
+    """D's __init__ annotates nothing and does not take share, so only D's own module is looked up, for share. The replacement binds nothing under 'D' and has no source, so D is checked by its witness. The decorator may have written __init__, so it is no witness; from Python 3.14 the body also compiles __annotate__, named after D and carrying the globals D's body ran in, which name no file."""
     made = _dataclass_of_a_replaced_module_with_no_file(_HAND_WRITTEN_INIT_SOURCE, monkeypatch)
 
     if sys.version_info >= (3, 14):
