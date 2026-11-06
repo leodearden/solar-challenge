@@ -351,17 +351,17 @@ def sankey_diagram(summary: SummaryStatistics) -> ChartPanel:
     Returns:
         The chart's panel.
     """
-    grid_charge = summary.total_grid_charge_kwh
-    # Self-consumption counts the battery's discharge to demand as well as the PV used directly
-    pv_to_demand = summary.total_self_consumption_kwh - summary.total_battery_discharge_kwh
-    pv_to_battery = summary.total_battery_charge_kwh - grid_charge
-    grid_to_demand = summary.total_grid_import_kwh - grid_charge
     flows = [
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.DEMAND, pv_to_demand, _EnergyFlow.SELF_CONSUMPTION),
-        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, pv_to_battery, _SankeyNode.BATTERY),
+        _SankeyLink(
+            _SankeyNode.PV_GENERATION,
+            _SankeyNode.DEMAND,
+            summary.total_direct_self_consumption_kwh,
+            _EnergyFlow.SELF_CONSUMPTION,
+        ),
+        _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.BATTERY, summary.total_pv_charge_kwh, _SankeyNode.BATTERY),
         _SankeyLink(_SankeyNode.PV_GENERATION, _SankeyNode.EXPORT, summary.total_grid_export_kwh, _EnergyFlow.GRID_EXPORT),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, grid_to_demand, _EnergyFlow.GRID_IMPORT),
-        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, grid_charge, _SankeyNode.BATTERY),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.DEMAND, summary.total_grid_to_demand_kwh, _EnergyFlow.GRID_IMPORT),
+        _SankeyLink(_SankeyNode.GRID, _SankeyNode.BATTERY, summary.total_grid_charge_kwh, _SankeyNode.BATTERY),
         _SankeyLink(_SankeyNode.BATTERY, _SankeyNode.DEMAND, summary.total_battery_discharge_kwh, _SankeyNode.BATTERY),
     ]
     drawn = [flow for flow in flows if flow.kwh > _SANKEY_MIN_FLOW_KWH]
