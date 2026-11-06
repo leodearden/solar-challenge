@@ -17,9 +17,9 @@ RunStatusConflict, and fail_interrupted_runs leaves it as it was
 (docs/prds/job-events-and-sse-framing.md §3.4).
 
 The runs table's part of each schema step is here too: migrate_runs_table_v1 for version 1,
-and for a step carrying a run-document step, migrate_stored_run_files, which brings the stored
-runs' files forward before the step's transaction, and migrate_runs_table_documents, which
-brings the runs rows' copies forward inside it.
+and for a step carrying a run-document step, migrate_stored_run_files, which brings each stored
+run's files forward from the format they are in to the step's before the step's transaction,
+and migrate_runs_table_documents, which brings the runs rows' copies forward inside it.
 """
 
 import json
@@ -43,7 +43,6 @@ from solar_challenge.web.stored_runs import (
     RUN_TYPES,
     DroppedValue,
     RewrittenValue,
-    RunDocumentStep,
     RunKind,
     RunType,
     StoredDocument,
@@ -53,9 +52,10 @@ from solar_challenge.web.stored_runs import (
     StoredRunDocuments,
     StoredRunUnreadable,
     UnmigratedRun,
+    bring_run_documents_forward,
     documents_in_current_format,
     read_run_documents,
-    step_run_documents,
+    stored_format_version,
     write_run_documents,
 )
 from solar_challenge.web.text_options import one_of
@@ -341,20 +341,24 @@ class RunDocumentsOutcome:
 
 
 def migrate_stored_run_files(
-    database: Database, data_dir: Path, step: RunDocumentStep, earlier: RunDocumentsOutcome
+    database: Database, data_dir: Path, to_version: int, earlier: RunDocumentsOutcome
 ) -> RunDocumentsOutcome:
-    """Bring the files of each run the runs table of *database* records forward by *step*, the run-file part of the schema step carrying it.
+    """Bring the files of each run the runs table of *database* records forward to format *to_version*, the run-file part of the schema step carrying the run-document step of that version.
 
     *earlier* is what the earlier run-document steps of the same migration did. A run with no
     directory under *data_dir* is skipped, and so is a directory no row records. So is a run
-    whose files *earlier* left unmigrated, as web/schema.py's migrate_store says.
-    Each run's JSON documents are read as its kind lays them out and brought forward as
-    step_run_documents brings them; then only the documents the step changed are rewritten, and
-    format.json naming step.version last. A run whose documents cannot be read or brought
-    forward, or whose row has no type, is left as it was and reported as unmigrated. A run's
-    time series are not read: they have no format version, so a run whose time series is
-    damaged is brought forward as any other is, and refused naming it when it is loaded. The
-    writes are idempotent, so a migration stopped part way through runs again from the start.
+    whose files *earlier* left unmigrated, as web/schema.py's migrate_store says. A run's files
+    are in the format its format.json names, as stored_format_version reads it; files already
+    in *to_version* or a later format are neither read, written nor reported. Each other run's
+    JSON documents are read as its kind lays them out and brought forward from their format by
+    bring_run_documents_forward; then only the documents the steps changed are rewritten, and
+    format.json naming *to_version* last. A run whose format.json or documents cannot be read or
+    brought forward, or whose row has no type, is left as it was and reported as unmigrated. A
+    run's time series are not read: they have no format version, so a run whose time series is
+    damaged is brought forward as any other is, and refused naming it when it is loaded. A
+    migration stopped part way through runs again from the start: the files it brought forward
+    name *to_version* and are left as they are, and the steps change nothing in a document they
+    already brought forward in a run stopped part way through, whose format.json is as it was.
 
     Raises:
         sqlite3.Error: The runs table cannot be read; nothing has been written.
@@ -371,7 +375,7 @@ def migrate_stored_run_files(
             continue
         run_dir = _existing_run_dir(data_dir, row["id"])
         if run_dir is not None:
-            outcome += _migrate_run_files(run_dir, row["id"], row["type"], step)
+            outcome += _migrate_run_files(run_dir, row["id"], row["type"], to_version)
     return outcome
 
 
@@ -384,15 +388,18 @@ def _existing_run_dir(data_dir: Path, run_id: str) -> Path | None:
     return run_dir if run_dir.is_dir() else None
 
 
-def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, step: RunDocumentStep) -> RunDocumentsOutcome:
-    """Bring the files of run *run_id* of *run_type*, which *run_dir* holds, forward by *step*, as migrate_stored_run_files does for each run."""
+def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, to_version: int) -> RunDocumentsOutcome:
+    """Bring the files of run *run_id* of *run_type*, which *run_dir* holds, forward to format *to_version*, as migrate_stored_run_files does for each run."""
     try:
+        from_version = stored_format_version(run_dir, run_id)
+        if from_version >= to_version:
+            return RunDocumentsOutcome()
         typed = _run_type(run_id, run_type)
         documents = read_run_documents(run_dir, run_id, typed)
-        result = step_run_documents(step, typed, documents)
+        result = bring_run_documents_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_files=(UnmigratedRun.of(refusal),))
-    write_run_documents(run_dir, result.documents.changed_from(documents), step.version)
+    write_run_documents(run_dir, result.documents.changed_from(documents), to_version)
     return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten)
 
 
@@ -400,16 +407,17 @@ _DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
 
 
 def migrate_runs_table_documents(
-    conn: sqlite3.Connection, step: RunDocumentStep, earlier: RunDocumentsOutcome
+    conn: sqlite3.Connection, from_version: int, to_version: int, earlier: RunDocumentsOutcome
 ) -> RunDocumentsOutcome:
-    """The runs table's part of the schema step carrying *step*, run on *conn* inside that step's transaction.
+    """The runs table's part of the schema step carrying the run-document step of *to_version*, run on *conn* inside that step's transaction.
 
-    *earlier* is what the earlier run-document steps of the same migration did. Each run's
-    runs.config_json and runs.summary_json are brought forward as step_run_documents brings
-    them, and only a column the step changed is rewritten, as the JSON text a save writes. A row
-    that holds neither document is skipped, and so is a row *earlier* left unmigrated, as
-    web/schema.py's migrate_store says. A row whose documents cannot be brought forward, or
-    that has no type, is left as it was and reported as unmigrated.
+    *from_version* is the format the runs rows are in, as the store's schema version implies
+    it. *earlier* is what the earlier run-document steps of the same migration did. Each run's runs.config_json and runs.summary_json are brought
+    forward from *from_version* to *to_version* by bring_run_documents_forward, and only a column
+    the steps changed is rewritten, as the JSON text a save writes. A row that holds neither
+    document is skipped, and so is a row *earlier* left unmigrated, as web/schema.py's
+    migrate_store says. A row whose documents cannot be brought forward, or that has no type,
+    is left as it was and reported as unmigrated.
     """
     rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
     left_unmigrated = {each.run_id for each in earlier.unmigrated_rows}
@@ -418,12 +426,12 @@ def migrate_runs_table_documents(
         if row["id"] in left_unmigrated:
             continue
         if row["config_json"] is not None or row["summary_json"] is not None:
-            outcome += _migrate_runs_row(conn, row, step)
+            outcome += _migrate_runs_row(conn, row, from_version, to_version)
     return outcome
 
 
-def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, step: RunDocumentStep) -> RunDocumentsOutcome:
-    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward by *step*, as migrate_runs_table_documents does for each row."""
+def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: int, to_version: int) -> RunDocumentsOutcome:
+    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward from format *from_version* to *to_version*, as migrate_runs_table_documents does for each row."""
     run_id = row["id"]
     try:
         typed = _run_type(run_id, row["type"])
@@ -431,7 +439,7 @@ def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, step: RunDocum
             config=_row_document(run_id, "config_json", row["config_json"]),
             summary=_row_document(run_id, "summary_json", row["summary_json"]),
         )
-        result = step_run_documents(step, typed, documents)
+        result = bring_run_documents_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_rows=(UnmigratedRun.of(refusal),))
     stepped = (result.documents.config, result.documents.summary)

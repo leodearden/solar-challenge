@@ -1103,7 +1103,8 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     """A directory in the place of the legacy fleet run's format.json stands in for a file a step cannot write, e.g. on a full disk.
 
     The step stops there, leaving the database at version 1 and no temporary file in the run's
-    directory; the runs it brought forward before the fault are brought forward again.
+    directory; the runs it brought forward before the fault keep their format.json naming 2, so
+    the migration run again brings them on by v3 alone.
     """
     fleet_dir = _run_dir(store_at_version_1, legacy_run_ids["legacy_fleet"])
     _put_a_directory_in_place_of(fleet_dir / "format.json")
@@ -1141,8 +1142,9 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
 ) -> None:
     """A trigger refusing each update of a runs row fails version 2's transaction, once its run-file part has given every run its format.json.
 
-    Run again once the trigger is dropped, the migration brings those files forward by v2
-    again, changing nothing in them, then by v3, and brings the runs rows forward.
+    Run again once the trigger is dropped, the migration leaves those files as they are until
+    v3, as they are in format 2 already, then brings them forward by v3, and brings the runs
+    rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(

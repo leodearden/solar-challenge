@@ -38,11 +38,13 @@ skipped such keys before runs carried a format version, and reports each dropped
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
 dispatch ignores, and reports each value it rewrites, with the value it holds now.
 documents_in_current_format folds every step over a legacy run's documents in memory.
-`solar-challenge web migrate` applies each step to the stored runs' files and runs rows
-through step_run_documents, which checks that the documents it brings forward will read once
-at RUN_FORMAT_VERSION; write_run_documents then writes the documents a step changed and the
-run's format.json last. A run whose documents cannot be brought forward is left as it was, an
-UnmigratedRun naming it.
+`solar-challenge web migrate` brings the stored runs' files and runs rows forward through
+bring_run_documents_forward, by each step after the format they are in up to a later one, and
+checks that the documents it brings forward will read once at RUN_FORMAT_VERSION. A run's files
+are in the format their format.json names, as stored_format_version reads it, and in
+FIRST_FORMAT_VERSION when it has none. write_run_documents then writes the documents the steps
+changed and the run's format.json last. A run whose documents cannot be brought forward is left
+as it was, an UnmigratedRun naming it.
 
 A change to a stored dataclass's shape, such as a renamed or retired field or a new field
 with no default, ships with a RunDocumentStep of the next version appended to
@@ -333,6 +335,32 @@ _NO_FORMAT_VERSION = (
 )
 
 
+def _marked_format_version(run_dir: Path, run_id: str) -> int | None:
+    """The format version the format.json of run *run_id* in *run_dir* names; None when format.json is not a file there.
+
+    Raises:
+        StoredRunUnreadable: format.json cannot be read, is not JSON, or is not a _FormatMarker's
+            field tree as StoredDocument.read refuses it.
+    """
+    if not (run_dir / _FORMAT_DOCUMENT).is_file():
+        return None
+    return _json_document(run_dir, run_id, _FORMAT_DOCUMENT).read(_FormatMarker).format_version
+
+
+def stored_format_version(run_dir: Path, run_id: str) -> int:
+    """The format version the documents of run *run_id* in *run_dir* are in: the one its format.json names, FIRST_FORMAT_VERSION when format.json is not a file there.
+
+    A run saved before runs carried a format version has no format.json, so a migration that
+    leaves such a run as it was leaves it in FIRST_FORMAT_VERSION.
+
+    Raises:
+        StoredRunUnreadable: format.json cannot be read, is not JSON, or is not a _FormatMarker's
+            field tree as StoredDocument.read refuses it; the document is format.json.
+    """
+    found = _marked_format_version(run_dir, run_id)
+    return FIRST_FORMAT_VERSION if found is None else found
+
+
 def _check_format_version(run_dir: Path, run_id: str) -> None:
     """Check that the format.json of run *run_id* in *run_dir* names RUN_FORMAT_VERSION, the format this code reads.
 
@@ -340,9 +368,9 @@ def _check_format_version(run_dir: Path, run_id: str) -> None:
         StoredRunUnreadable: format.json is missing, is not JSON, is not a _FormatMarker's field
             tree as StoredDocument.read refuses it, or names another version, naming both.
     """
-    if not (run_dir / _FORMAT_DOCUMENT).is_file():
+    found = _marked_format_version(run_dir, run_id)
+    if found is None:
         raise StoredRunUnreadable(run_id, _FORMAT_DOCUMENT, _FORMAT_VERSION_FIELD, _NO_FORMAT_VERSION)
-    found = _json_document(run_dir, run_id, _FORMAT_DOCUMENT).read(_FormatMarker).format_version
     if found != RUN_FORMAT_VERSION:
         remedy = "run `solar-challenge web migrate`" if found < RUN_FORMAT_VERSION else "a newer solar-challenge saved it"
         raise StoredRunUnreadable(
@@ -684,7 +712,7 @@ class UnmigratedRun:
 
 @dataclass(frozen=True)
 class StepResult:
-    """What a run-document step made of a run's documents: the documents, brought forward, each value it dropped that is not null, and each value it rewrote."""
+    """What run-document steps made of a run's documents: the documents, brought forward, each value they dropped that is not null, and each value they rewrote."""
 
     documents: StoredRunDocuments
     dropped: tuple[DroppedValue, ...] = ()
@@ -862,6 +890,9 @@ def _format_version(steps: Sequence[RunDocumentStep]) -> int:
 RUN_FORMAT_VERSION = _format_version(RUN_DOCUMENT_STEPS)
 """The format version this code reads and writes: the last run-document step's."""
 
+FIRST_FORMAT_VERSION = RUN_DOCUMENT_STEPS[0].version - 1
+"""The format version of a run stored before runs carried one, which has no format.json: the one before the first run-document step's."""
+
 
 def documents_in_current_format(run_type: RunType, documents: StoredRunDocuments) -> StoredRunDocuments:
     """*documents*, of a run of type *run_type* stored before it carried a format version, brought forward by every step in order.
@@ -878,19 +909,35 @@ def _brought_forward(
     return functools.reduce(lambda current, step: step.apply(run_type, current).documents, steps, documents)
 
 
-def step_run_documents(step: RunDocumentStep, run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """*documents*, of a run of type *run_type* in the format before *step*'s version, brought forward by *step*, one of RUN_DOCUMENT_STEPS.
+def bring_run_documents_forward(
+    run_type: RunType, documents: StoredRunDocuments, from_version: int, to_version: int
+) -> StepResult:
+    """*documents*, of a run of type *run_type* in format *from_version*, brought forward to *to_version* by each of RUN_DOCUMENT_STEPS after *from_version* up to *to_version*, in order.
 
-    The result is checked as the strict reader will read it once every later step has brought it
-    to RUN_FORMAT_VERSION, so a run whose documents no step makes readable is refused before
-    any of it is written. It changes none of *documents* and writes nothing.
+    The result holds each value those steps dropped that is not null and each value they
+    rewrote, in the steps' order. It is checked as the strict reader will read it once the steps
+    after *to_version* have brought it to RUN_FORMAT_VERSION, so a run whose documents no step
+    makes readable is refused before any of it is written; documents already in *to_version* are
+    only checked. It changes none of *documents* and writes nothing.
 
     Raises:
         StoredRunUnreadable: The documents, so brought forward, cannot be read as the run's
             dataclasses, naming the document and the field.
+        ValueError: *from_version* is past *to_version*, or *to_version* past RUN_FORMAT_VERSION;
+            the message names both versions.
     """
-    result = step.apply(run_type, documents)
-    later_steps = RUN_DOCUMENT_STEPS[RUN_DOCUMENT_STEPS.index(step) + 1 :]
+    if from_version > to_version or to_version > RUN_FORMAT_VERSION:
+        raise ValueError(
+            f"A run's documents cannot be brought forward from format version {from_version} to {to_version}: "
+            f"the target must be at or after the format they are in, and at or before {RUN_FORMAT_VERSION}, "
+            "the format version this solar-challenge reads"
+        )
+    result = StepResult(documents)
+    for step in RUN_DOCUMENT_STEPS:
+        if from_version < step.version <= to_version:
+            stepped = step.apply(run_type, result.documents)
+            result = StepResult(stepped.documents, result.dropped + stepped.dropped, result.rewritten + stepped.rewritten)
+    later_steps = [step for step in RUN_DOCUMENT_STEPS if step.version > to_version]
     _check_readable(run_type, _brought_forward(run_type, result.documents, later_steps))
     return result
 
