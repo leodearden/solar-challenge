@@ -42,6 +42,9 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
   that names no dispatch strategy and no tariff, so it ran self-consumption.
 
+PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
+docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
+
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
 store can hold a copy of a fixture beside the fixture itself. The functions import the web
@@ -68,6 +71,11 @@ if TYPE_CHECKING:
     from solar_challenge.web.stored_runs import RunType
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "stored_runs"
+
+PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
+"""A home run's stored config per dispatch strategy, as runs stored it before the strategies were
+variants of one union: all three strategy keys, the ones the strategy does not read null. Each
+config is that of a home with the strategy and a grid charge of 0.8, keyed by the strategy's name."""
 
 STORED_RUN_FIXTURES: tuple[str, ...] = (
     "pre_469_home",
@@ -125,6 +133,21 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *,
     installed_id: str = row["id"]
     shutil.copytree(stored_run_fixture_dir(name), stored_run_dir(RunStorage(database, data_dir), installed_id))
     return installed_id
+
+
+def pre_dispatch_union_home_config(strategy_type: str) -> dict[str, Any]:
+    """The stored config that PRE_DISPATCH_UNION_HOME_CONFIGS holds for dispatch strategy *strategy_type*.
+
+    Raises:
+        ValueError: The file holds no config for *strategy_type*.
+    """
+    configs: dict[str, dict[str, Any]] = json.loads(PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())
+    if strategy_type not in configs:
+        raise ValueError(
+            f"{PRE_DISPATCH_UNION_HOME_CONFIGS.name} has no config for dispatch strategy {strategy_type!r}; "
+            f"its strategies are {list(configs)}"
+        )
+    return configs[strategy_type]
 
 
 def _fixture_dir(name: str) -> Path:

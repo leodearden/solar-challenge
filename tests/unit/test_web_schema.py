@@ -65,7 +65,7 @@ from tests._dashboard_databases import (
     write_pre_548_database,
 )
 from tests._run_stores import run_storage_over
-from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
+from tests._stored_run_fixtures import pre_dispatch_union_home_config
 
 
 def _names_in_sqlite_master(path: Path, object_type: str) -> set[str]:
@@ -373,8 +373,7 @@ def test_migrate_store_names_a_nameless_run_stored_before_the_dispatch_union_aft
     Such a config holds the null keys of the other dispatch variants, which no field has, so read
     as it is stored it would be refused, and its run named as a run of no homes.
     """
-    pre_union = json.loads((STORED_RUN_FIXTURES_DIR / "pre_dispatch_union_home_configs.json").read_text())
-    config = {**pre_union["self_consumption"], "name": "North Roof"}
+    config = {**pre_dispatch_union_home_config("self_consumption"), "name": "North Roof"}
     insert_runs_row(legacy_store, {"id": "legacy-pre-union", "name": None, "type": "home", "config_json": json.dumps(config)})
 
     migrate_store(legacy_store, legacy_store.parent)

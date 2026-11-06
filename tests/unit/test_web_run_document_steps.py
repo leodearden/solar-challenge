@@ -60,16 +60,15 @@ from solar_challenge.web.stored_runs import (
 )
 from tests._every_field_shape import home_of_every_field_shape
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
-from tests._stored_run_fixtures import FIXTURES_DIR, STORED_RUN_FIXTURES, fixture_run_type, stored_run_fixture_dir
+from tests._stored_run_fixtures import (
+    STORED_RUN_FIXTURES,
+    fixture_run_type,
+    pre_dispatch_union_home_config,
+    stored_run_fixture_dir,
+)
 
 _V2 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 2)
 _V3 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 3)
-
-_PRE_DISPATCH_UNION_HOME_CONFIGS = FIXTURES_DIR / "pre_dispatch_union_home_configs.json"
-"""Task 786's fixture: a home run's stored config per dispatch strategy, as runs stored it before
-the strategies were variants of one union, with all three strategy keys, the ones the strategy
-does not read null. Each is the config of _dispatching_home(strategy, GridChargeConfig(0.8))
-named after its strategy."""
 
 _STRATEGIES_AND_THE_GRID_CHARGING_THEY_RAN_BY = [
     pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
@@ -291,7 +290,7 @@ def test_v2_migrates_a_config_stored_before_the_dispatch_union_then_it_loads_as_
 ) -> None:
     """786's pre-union configs: v2 reports nothing, and once every step has brought one forward it reads as the home that ran."""
     tag = strategy.strategy_type
-    stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[tag]
+    stored = pre_dispatch_union_home_config(tag)
     documents = dataclasses.replace(
         _fixture_documents("pre_786_dispatch_home"), config=StoredDocument("pre-union-001", "config.json", stored)
     )
