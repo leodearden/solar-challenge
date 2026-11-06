@@ -321,15 +321,11 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies, and each named tuple field its instances read from the tuple, which holds every field.
 
-    As in undeclared_attributes, an immutable type raises TypeError naming it before
-    anything else is read; a class whose module's source holds no class statement under
-    its qualified name raises TypeError naming that module and that name, and one whose
-    module inspect reads no source for raises TypeError naming it, both when its source
-    is read; a write to self whose attribute name the scan cannot read raises TypeError
-    unless *reviewed* holds its text, a text in *reviewed* that is no such write's raises
-    ValueError, and one string given as *reviewed* raises TypeError. A reviewed write
-    sets none of the declared attributes, since its names are unknown. A class that
-    member_forms refuses raises the TypeError member_forms raises for it.
+    It raises as undeclared_attributes does for an immutable type, a class with no class
+    statement the scan can read, a write to self whose attribute name the scan cannot
+    read and a *reviewed* that is one string or holds a text that is no such write's. A
+    reviewed write sets none of the declared attributes, since its names are unknown. A
+    class that member_forms refuses raises the TypeError member_forms raises for it.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a
     name its module does not bind raises NameError. Like such an annotation, *cls*'s
