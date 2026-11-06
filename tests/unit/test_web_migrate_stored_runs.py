@@ -76,7 +76,6 @@ from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_home_run
 
-
 _NEEDS_PYARROW = pytest.mark.skipif(
     importlib.util.find_spec("pyarrow") is None,
     reason="a stored run's time series is written and read with pyarrow, from the web extra",
