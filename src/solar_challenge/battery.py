@@ -99,7 +99,7 @@ def compute_soh(
     Uses a linear calendar fade and equivalent-full-cycle (EFC) cycle fade:
 
     - ``calendar_fade = params.calendar_fade_rate_per_year * system_age_years``
-    - ``efc = cumulative_throughput_kwh / (2 * usable_capacity_kwh)`` if
+    - ``efc = cumulative_throughput_kwh / usable_capacity_kwh`` if
       ``usable_capacity_kwh > 0`` else ``0.0``
     - ``cycle_fade = params.cycle_fade_per_equivalent_full_cycle * efc``
     - ``soh = clamp(1 - calendar_fade - cycle_fade, [soh_floor, 1.0])``
@@ -110,11 +110,14 @@ def compute_soh(
 
     Args:
         system_age_years: Age of the battery in years (≥ 0).
-        cumulative_throughput_kwh: Total energy discharged over the battery's
-            lifetime in kWh (≥ 0).
-        usable_capacity_kwh: Nominal usable capacity in kWh
-            (``BatteryConfig.nominal_usable_capacity_kwh``); used to convert
-            throughput to EFC.  Pass 0.0 to disable cycle fade (safe).
+        cumulative_throughput_kwh: The energy the battery has discharged since
+            installation, in kWh (≥ 0), as
+            ``SummaryStatistics.total_battery_discharge_kwh`` counts it (the
+            output of ``Battery.discharge``).
+        usable_capacity_kwh: The battery's nominal usable capacity in kWh
+            (``BatteryConfig.nominal_usable_capacity_kwh``), not de-rated by
+            SOH.  One equivalent full cycle is this much throughput.  Pass 0.0
+            to disable cycle fade.
         params: BatteryConfig carrying the fade-rate and floor parameters.
 
     Returns:
@@ -122,7 +125,7 @@ def compute_soh(
     """
     calendar_fade = params.calendar_fade_rate_per_year * system_age_years
     efc = (
-        cumulative_throughput_kwh / (2.0 * usable_capacity_kwh)
+        cumulative_throughput_kwh / usable_capacity_kwh
         if usable_capacity_kwh > 0
         else 0.0
     )
@@ -168,7 +171,8 @@ class BatteryConfig:
         calendar_fade_rate_per_year: Linear calendar SOH fade rate per year
             (≥ 0; default 0.02/yr ≈ 70 % SOH at 15-yr warranty horizon).
         cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
-            cycle (≥ 0; default 5e-5/EFC ≈ 30 % fade over ~6 000 EFC).
+            cycle as :func:`compute_soh` counts one (≥ 0; default 5e-5/EFC
+            ≈ 30 % fade over ~6 000 EFC).
             ``Battery`` computes calendar fade only (throughput 0); cycle
             fade takes effect only through an ``soh`` computed by
             :func:`compute_soh` from accrued throughput.
