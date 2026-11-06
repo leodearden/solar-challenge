@@ -483,21 +483,20 @@ def _monthly_summary_figure(results: SimulationResults) -> go.Figure:
     return fig
 
 
-def _unpriced_import_note(results: SimulationResults) -> str | None:
-    """The note *results*'s financial chart carries that its import is not priced, else None.
+def _unpriced_import_note(config: HomeConfig) -> str | None:
+    """The note the financial chart of a run of *config* carries when its import is not priced, else None.
 
-    A run's import is priced when its tariff rate is above zero at some minute:
-    simulate_home writes a zero rate throughout a run without a tariff. The note
-    names revenue tracking too only when the run earns no export revenue.
+    simulate_home prices a run's import only under config.tariff_config, and its
+    export only under config.seg_tariff.
     """
-    if results.tariff_rate.gt(0).any():
+    if config.tariff_config is not None:
         return None
-    if results.export_revenue.gt(0).any():
+    if config.seg_tariff is not None:
         return "No import tariff configured — cost tracking unavailable"
     return "No tariff configured — cost and revenue tracking unavailable"
 
 
-def financial_breakdown(results: SimulationResults) -> ChartPanel:
+def financial_breakdown(results: SimulationResults, config: HomeConfig) -> ChartPanel:
     """Dual-axis chart of the run's daily cost and revenue bars and its cumulative net cost line.
 
     Daily cost and revenue are :func:`~solar_challenge.output.aggregate_daily`'s
@@ -508,24 +507,22 @@ def financial_breakdown(results: SimulationResults) -> ChartPanel:
     The line is the run's net cost to date: the running total of each day's
     import cost less its export revenue.
 
-    The chart carries a note exactly when the run's import is not priced: its
-    tariff rate is zero throughout, as for a run simulated without a tariff.
-    Its £0 cost bars would otherwise read as free import, and its Cumulative
-    Net Cost would count revenue only. The note does not depend on the bars
-    totalling £0, so a priced run that imports nothing carries none.
+    The chart carries a note exactly when *config*, the home the run simulated,
+    sets no import tariff. Its £0 cost bars would otherwise read as free
+    import, and its Cumulative Net Cost would count revenue only.
 
-    - "No import tariff configured — cost tracking unavailable" when the run
-      earns export revenue, which only an SEG rate pays.
+    - "No import tariff configured — cost tracking unavailable" when it sets an
+      SEG, which prices its export.
     - "No tariff configured — cost and revenue tracking unavailable" when it
-      earns none. That includes a run with an SEG rate that exports nothing in
-      its window: SimulationResults records the import tariff's rate but no
-      export rate, so the chart cannot tell it from a run with neither.
+      sets neither.
 
-    A tariff with no SEG rate carries no note: its £0 revenue is the
-    economically correct value, and simulate_home warns about it.
+    A tariff with no SEG carries no note: its £0 revenue is the economically
+    correct value, and simulate_home warns about it.
 
     Args:
         results: SimulationResults instance.
+        config: The HomeConfig the run simulated; its tariff_config and
+            seg_tariff say which of the run's flows are priced.
 
     Returns:
         The chart's panel.
@@ -566,7 +563,7 @@ def financial_breakdown(results: SimulationResults) -> ChartPanel:
     fig.update_yaxes(title_text="Daily (GBP)", secondary_y=False)
     fig.update_yaxes(title_text=f"{net_cost_label} (GBP)", secondary_y=True)
 
-    note = _unpriced_import_note(results)
+    note = _unpriced_import_note(config)
     if note is not None:
         fig.add_annotation(
             text=note,
@@ -1138,7 +1135,7 @@ def home_results_tabs(
         ChartTab(
             "battery_finance",
             "Battery & Finance",
-            (*battery_panels, financial_breakdown(results), monthly_summary(results)),
+            (*battery_panels, financial_breakdown(results, config), monthly_summary(results)),
         ),
         ChartTab("analysis", "Analysis", (seasonal_comparison(results), *heat_pump_panels)),
     )
