@@ -8,7 +8,8 @@ document yet answers None. A document that cannot be read is refused with a
 StoredRunUnreadable naming the run, the column, e.g. runs.summary_json, and the field; so is
 each document of a record with no type, naming runs.type. RunRecord.summary_tree() answers
 the field tree of the summary RunRecord.summary() reads, {} while the run has none, and
-refuses a summary as RunRecord.summary() refuses it. run_headline maps a summary of
+refuses a summary as RunRecord.summary() refuses it; unlike the stored text, that tree holds
+a field with a default that the text lacks. run_headline maps a summary of
 either kind to the generation and self-consumption ratio a run list shows, and refuses a
 summary whose figure for either is not a finite number.
 
@@ -249,6 +250,17 @@ class TestRunRecordSummaryTree:
 
         assert record.summary_tree() == field_tree(summary)
 
+    def test_a_summary_stored_without_a_field_that_has_a_default_answers_that_field_as_summary_reads_it(
+        self, storage: RunStorage
+    ) -> None:
+        tree_without_window = {key: value for key, value in field_tree(home_summary()).items() if key != "window"}
+        record = dataclasses.replace(_store_a_home_run(storage, "older-run"), summary_json=json.dumps(tree_without_window))
+
+        answer = record.summary_tree()
+
+        assert answer == field_tree(record.summary())
+        assert "window" in answer
+
     def test_a_fleet_run_answers_its_fleet_summary_s_field_tree(self, storage: RunStorage) -> None:
         fleet = make_fleet_results(n_homes=2, days=1)
         store_fleet_run(storage, "fleet-run", fleet)
@@ -262,11 +274,14 @@ class TestRunRecordSummaryTree:
 
     def test_a_summary_that_cannot_be_read_is_refused_as_summary_refuses_it(self, storage: RunStorage) -> None:
         garbled = dataclasses.replace(_store_a_home_run(storage, "garbled-run"), summary_json="{not json")
+        with pytest.raises(StoredRunUnreadable) as summary_refusal:
+            garbled.summary()
 
         with pytest.raises(StoredRunUnreadable) as refusal:
             garbled.summary_tree()
 
         assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", "runs.summary_json")
+        assert str(refusal.value) == str(summary_refusal.value)
 
 
 class TestRunHeadline:
