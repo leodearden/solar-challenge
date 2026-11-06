@@ -33,7 +33,10 @@ A run that store's migration left in format 1, with no format.json, has its file
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
 steps, migrate_store catches up: it brings forward each run an earlier migration left in its
 files or its runs row, naming each, also in a store at SCHEMA_VERSION, which has no step to
-apply, once the run's documents are fixed, and reports again each it still cannot migrate.
+apply, once the run's documents are fixed, and reports again each it still cannot migrate. It
+goes by what a run's documents show, not by where they came from, so it catches up a run saved
+in the current format the same way when its save did not finish or its runs row holds a key no
+field has.
 """
 
 import functools
@@ -81,6 +84,7 @@ from solar_challenge.web.stored_runs import (
     RunType,
     StoredFleetRun,
     StoredHomeRun,
+    StoredRunUnreadable,
     UnmigratedRun,
     write_run_documents,
 )
@@ -954,7 +958,7 @@ def test_migrate_store_brings_forward_a_run_an_earlier_migration_left_once_its_d
         from_version=SCHEMA_VERSION,
         to_version=SCHEMA_VERSION,
         applied_steps=(),
-        brought_forward_runs=(lacking,),
+        caught_up_runs=(lacking,),
     )
     marker = json.loads((_run_dir(store_at_version_1, lacking) / "format.json").read_text())
     assert marker == {"format_version": RUN_FORMAT_VERSION}
@@ -978,7 +982,7 @@ def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_sti
 
     second = migrate_store(store_at_version_1, store_at_version_1.parent)
 
-    assert (second.applied_steps, second.brought_forward_runs) == ((), ())
+    assert (second.applied_steps, second.caught_up_runs) == ((), ())
     assert second.unmigrated_runs == first.unmigrated_runs
     assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
     assert _runs_rows(store_at_version_1) == rows_after_first
@@ -1007,7 +1011,7 @@ def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_ea
         from_version=SCHEMA_VERSION,
         to_version=SCHEMA_VERSION,
         applied_steps=(),
-        brought_forward_runs=(lacking,),
+        caught_up_runs=(lacking,),
     )
     assert "nothing to migrate" not in str(report)
     assert f"  run {lacking!r}" in str(report).splitlines()
@@ -1019,6 +1023,59 @@ def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_ea
     assert isinstance(summary, SummaryStatistics)
     assert summary.total_generation_kwh == committed["total_generation_kwh"]
     assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_catches_up_a_current_run_whose_runs_row_holds_a_key_no_field_has_by_dropping_the_key(
+    tmp_path: Path,
+) -> None:
+    """A runs row records no format, so a row the current format refuses for a key no field has reads only from the first: the catch-up brings it forward from there, as it brings a row an earlier migration left, v2 dropping the key."""
+    storage = empty_run_storage(tmp_path)
+    config = make_home_config()
+    store_home_run(storage, "home-1", config, make_sim_results(days=1))
+    _edit_runs_document(storage.database.path, "home-1", "config_json", _setting("retired_setting", 1.5))
+    files_before = _files_of(stored_run_dir(storage, "home-1"))
+
+    report = migrate_store(storage.database.path, storage.data_dir)
+
+    assert report == MigrationReport(
+        storage.database.path,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        dropped_values=(DroppedValue("home-1", "runs.config_json", "retired_setting", 1.5),),
+        caught_up_runs=("home-1",),
+    )
+    record = storage.run_record("home-1")
+    assert record is not None
+    assert record.home_configs() == (config,)
+    assert _files_of(stored_run_dir(storage, "home-1")) == files_before
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_catches_up_a_current_run_whose_save_did_not_finish_writing_only_its_format_json(
+    tmp_path: Path,
+) -> None:
+    """A home run's save writes config.json, summary.json, data.parquet, then format.json; this run lost the last two, as a save stopped part way through leaves it.
+
+    A run with no format.json reads as one saved before runs carried a format version, so the
+    catch-up brings its documents forward from the first format, which changes none of them, and
+    writes its format.json. Its load still refuses it, naming the time series it lacks.
+    """
+    storage = empty_run_storage(tmp_path)
+    store_home_run(storage, "home-1", make_home_config(), make_sim_results(days=1))
+    run_dir = stored_run_dir(storage, "home-1")
+    saved = _files_of(run_dir)
+    (run_dir / "format.json").unlink()
+    (run_dir / "data.parquet").unlink()
+
+    report = migrate_store(storage.database.path, storage.data_dir)
+
+    assert report == MigrationReport(storage.database.path, SCHEMA_VERSION, SCHEMA_VERSION, (), caught_up_runs=("home-1",))
+    assert _files_of(run_dir) == {name: content for name, content in saved.items() if name != "data.parquet"}
+    with pytest.raises(StoredRunUnreadable) as refused:
+        storage.load_run("home-1")
+    assert (refused.value.document, refused.value.field) == ("data.parquet", None)
 
 
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
@@ -1362,7 +1419,7 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
     marker.rmdir()
     report = migrate_store(store, store.parent)
 
-    assert report.brought_forward_runs == (run_id,)
+    assert report.caught_up_runs == (run_id,)
     assert _storage_of(store).load_run(run_id).run_id == run_id
 
 
@@ -1416,7 +1473,7 @@ def test_a_migration_report_of_no_step_lists_each_run_brought_forward_and_each_r
         "run-2", "summary.json", "total_generation_kwh", "is missing, and SummaryStatistics has no default for it"
     )
     report = MigrationReport(
-        path, SCHEMA_VERSION, SCHEMA_VERSION, (), brought_forward_runs=("run-4",), unmigrated_runs=(unmigrated,)
+        path, SCHEMA_VERSION, SCHEMA_VERSION, (), caught_up_runs=("run-4",), unmigrated_runs=(unmigrated,)
     )
     leaving_only = MigrationReport(path, SCHEMA_VERSION, SCHEMA_VERSION, (), unmigrated_runs=(unmigrated,))
 

@@ -102,10 +102,10 @@ def migrate() -> None:
     left, to the schema version this one reads, applying in order each
     migration step it is behind by, and prints each step it applied. A store
     already at this version has no step to apply. After the steps, even when
-    there were none, each run an earlier migration left in an older
-    stored-run format, e.g. one whose documents have since been fixed, is
-    brought forward and printed, and each it still cannot migrate is printed
-    again.
+    there were none, each run still in an older stored-run format or with no
+    format.json, e.g. one an earlier migration left whose documents have
+    since been fixed, is brought forward and printed, and each it still
+    cannot migrate is printed again.
 
     A step can bring each stored run to the stored-run format too: it prints
     each value it drops from a run's documents that is not null, naming the

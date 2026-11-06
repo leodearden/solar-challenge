@@ -432,9 +432,11 @@ def migrate_runs_table_documents(
     recorded as brought forward, as migrate_stored_run_files records a run whose files it
     wrote; a row the steps left as it was is not. A runs row records no format of its own, and
     an earlier migration may have left one in the first: so a row that cannot be brought
-    forward from *from_version* is brought forward from FIRST_FORMAT_VERSION instead. That is
-    exact, as each step changes nothing in documents a later step brought forward
-    (RunDocumentStep). A row that holds neither document is skipped, and so is a row *earlier*
+    forward from *from_version* is brought forward from FIRST_FORMAT_VERSION instead. For a row
+    in the first format that is exact, as each step changes nothing in documents a later step
+    brought forward (RunDocumentStep). A row a later format refuses for a shape the first
+    admits, such as a key no field has, is brought forward from the first just the same, v2
+    dropping the key. A row that holds neither document is skipped, and so is a row *earlier*
     left unmigrated, as web/schema.py's migrate_store says. A row whose documents cannot be
     decoded or brought forward from either format, or that has no type, is left as it was and
     reported as unmigrated, by the last refusal.

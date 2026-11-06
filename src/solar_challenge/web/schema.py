@@ -25,9 +25,9 @@ inside it.
 Each run-document step is carried by the step of its version, so the format version is never
 past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs whose documents
 are in the current format or runs a migration reported it could not migrate. Such a store has no
-step to apply, but migrate_store still brings forward each run an earlier migration left in an
-older format, e.g. once its documents are fixed, and reports again each it still cannot. A run's
-time series have no format version, and migration reads none of them, as
+step to apply, but migrate_store still catches up each run still in an older format, such as one
+an earlier migration left once its documents are fixed, and reports again each it still cannot.
+A run's time series have no format version, and migration reads none of them, as
 migrate_stored_run_files says.
 """
 
@@ -252,9 +252,13 @@ class MigrationReport:
 
     dropped_values are the values its run-document steps dropped that are not null,
     rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
-    they were, each once. brought_forward_runs are the id of each run whose files or runs row it
-    brought forward after its steps, each once, which an earlier migration had left in an older
-    stored-run format.
+    they were, each once. caught_up_runs are the id of each run whose files or runs row its
+    catch-up after the steps brought forward, each once: files whose format.json names an older
+    stored-run format or is missing, and a runs row that reads only once brought forward from the
+    first. Most are runs an earlier migration left, e.g. once their documents are fixed, but a
+    run saved in the current format is caught up the same way when its save did not finish,
+    leaving no format.json, or its runs row holds a shape only the first format admits, such as
+    a key no field has, which is then dropped.
     """
 
     path: Path
@@ -264,20 +268,20 @@ class MigrationReport:
     dropped_values: tuple[DroppedValue, ...] = ()
     unmigrated_runs: tuple[UnmigratedRun, ...] = ()
     rewritten_values: tuple[RewrittenValue, ...] = ()
-    brought_forward_runs: tuple[str, ...] = ()
+    caught_up_runs: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         """The report as `solar-challenge web migrate` prints it.
 
         That is the store's database, both versions and each step applied, or that no step was
-        applied; then each run brought forward after the steps, each value dropped, each value
+        applied; then each run caught up after the steps, each value dropped, each value
         rewritten and each run left unmigrated. A report of no step and nothing else says there
         was nothing to migrate.
         """
         listed = [
             *_listed(
-                "Brought forward each run below, which an earlier migration left in an older stored-run format:",
-                [f"run {run_id!r}" for run_id in self.brought_forward_runs],
+                "Brought forward each run below, whose documents were in an older stored-run format or had no format.json:",
+                [f"run {run_id!r}" for run_id in self.caught_up_runs],
             ),
             *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
             *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
@@ -325,10 +329,13 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     files, or its runs row's copies, whichever the step left, as it would only refuse them
     again; so each is reported once, by the fault that kept it from that step.
 
-    After the steps, even when there were none, each run an earlier migration left in an older
-    stored-run format is brought forward to RUN_FORMAT_VERSION, e.g. once its documents have been
-    fixed, in its files and its runs row alike, and the store's version is left as it is
-    (_bring_lagging_runs_forward). The report names each run whose files or runs row that
+    After the steps, even when there were none, the migration catches up, leaving the store's
+    version as it is (_bring_lagging_runs_forward): each run's files whose format.json names an
+    older stored-run format or is missing, and each runs row that reads only once brought
+    forward from the first format, are brought forward to RUN_FORMAT_VERSION. That is a run an
+    earlier migration left, e.g. once its documents have been fixed, or a run in the current
+    format whose save did not finish or whose runs row holds a shape only the first format
+    admits, such as a key no field has. The report names each run whose files or runs row that
     brought forward, and each source it still cannot bring forward is reported again. A source a
     step of this migration left is not tried again. Every connection is opened through
     Database.connect().
@@ -370,7 +377,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         dropped_values=outcome.dropped,
         rewritten_values=outcome.rewritten,
         unmigrated_runs=tuple(dict.fromkeys(outcome.unmigrated)),
-        brought_forward_runs=caught_up.brought_forward_runs,
+        caught_up_runs=caught_up.brought_forward_runs,
     )
 
 
@@ -404,7 +411,7 @@ def _apply_step(
 
 
 def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: RunDocumentsOutcome) -> RunDocumentsOutcome:
-    """Bring each run of the store of *database* and *data_dir*, at SCHEMA_VERSION, that an earlier migration left in an older stored-run format forward to RUN_FORMAT_VERSION, and return what that did.
+    """Bring each run of the store of *database* and *data_dir*, at SCHEMA_VERSION, still in an older stored-run format forward to RUN_FORMAT_VERSION, and return what that did.
 
     The runs' files come first, each from the format its format.json names, as
     migrate_stored_run_files brings them. Then one transaction brings each runs row's documents
