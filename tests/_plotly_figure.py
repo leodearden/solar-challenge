@@ -24,7 +24,7 @@ Usage::
 
     assert traces(charts.fleet_heatmap(summaries).content)[0]["y"] == ["Home 1", "Home 2"]
     assert traces_by_name(charts.financial_breakdown(results, config).content)["Daily Cost"]["y"] == [2.88, 2.88]
-    assert annotation_texts(charts.financial_breakdown(unpriced_results, untariffed_config).content) == [
+    assert annotation_texts(charts.financial_breakdown(results, config_with_no_tariff_or_seg).content) == [
         "No tariff configured — cost and revenue tracking unavailable"
     ]
     soc_chart = charts.battery_soc_chart(results, BatteryConfig(capacity_kwh=10.0)).content

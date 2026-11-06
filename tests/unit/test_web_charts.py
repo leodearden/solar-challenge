@@ -345,6 +345,7 @@ class TestSankeyBatteryCharge:
             weather=weather_for(home, synthetic_june_weather("2024-06-21")),
         )
         summary = calculate_summary(results)
+        assert summary.total_pv_charge_kwh > 0.01 and summary.total_grid_charge_kwh > 0.01
 
         links = sankey_link_values(sankey_diagram(summary).content)
 
