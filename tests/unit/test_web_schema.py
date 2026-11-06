@@ -887,6 +887,49 @@ def test_migrate_store_reports_the_files_of_a_run_an_earlier_migration_left_by_t
     assert not (run_dir / "format.json").exists()
 
 
+def test_migrate_store_brings_the_runs_row_of_a_run_an_earlier_migration_left_in_format_1_forward_by_every_step_after_it(
+    store_at_version_2: Path,
+) -> None:
+    """A runs row records no format: one that v3 alone cannot bring forward from format 2 is brought forward from format 1, by v2 then v3."""
+    left = _install_a_run_in_format_1(store_at_version_2, "left-by-v2")
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    config = json.loads(_runs_rows(store_at_version_2)[left]["config_json"])
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    record = _storage_of(store_at_version_2).run_record(left)
+    assert record is not None
+    [home] = record.home_configs() or ()
+    assert home.battery_config is not None
+    assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+    assert [each for each in report.unmigrated_runs if each.run_id == left] == []
+
+
+def _install_a_run_lacking_generation(database_path: Path) -> str:
+    """Install _install_a_run_in_format_1's run as 'lacking-generation', without total_generation_kwh, which SummaryStatistics requires, in its summary.json and its runs.summary_json; return the id."""
+    lacking = _install_a_run_in_format_1(database_path, "lacking-generation")
+    _edit_stored_document(_run_dir(database_path, lacking) / "summary.json", _deleting("total_generation_kwh"))
+    _edit_runs_document(database_path, lacking, "summary_json", _deleting("total_generation_kwh"))
+    return lacking
+
+
+def test_migrate_store_reports_each_source_of_a_run_an_earlier_migration_left_once_by_its_own_fault(
+    store_at_version_2: Path,
+) -> None:
+    """Its files and its runs row are each reported by the figure their summary lacks, not by the import_limit_kw v2 drops from their config."""
+    lacking = _install_a_run_lacking_generation(store_at_version_2)
+    row_before = _runs_rows(store_at_version_2)[lacking]
+
+    report = migrate_store(store_at_version_2, store_at_version_2.parent)
+
+    assert len(report.unmigrated_runs) == 2
+    assert {(each.run_id, each.document, each.field) for each in report.unmigrated_runs} == {
+        (lacking, "summary.json", "total_generation_kwh"),
+        (lacking, "runs.summary_json", "total_generation_kwh"),
+    }
+    assert _runs_rows(store_at_version_2)[lacking] == row_before
+
+
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:

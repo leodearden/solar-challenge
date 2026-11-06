@@ -4,7 +4,10 @@
 The generic tests run every step in RUN_DOCUMENT_STEPS over every committed legacy fixture of
 tests/_stored_run_fixtures.py: the steps' versions ascend to RUN_FORMAT_VERSION, each step is
 idempotent on every fixture, and each step changes at least one fixture's documents, so a new
-step (contract C10) ships with a fixture that exercises it.
+step (contract C10) ships with a fixture that exercises it. Each step also changes nothing in
+documents a later step brought forward, a fixture's or those a save in the current format
+writes, which migration relies on to bring a runs row, which records no format, forward from the
+first format.
 
 The rest pins v2, the step that drops each key a document's dataclass does not have: what it
 drops, which dropped values it reports, what it leaves for the strict reader to refuse, and that
@@ -176,6 +179,44 @@ def test_every_step_changes_a_fixture_s_documents(step: RunDocumentStep) -> None
     ]
 
     assert changed, f"step {step.version} changes no fixture in {list(STORED_RUN_FIXTURES)}"
+
+
+_EACH_FIXTURE_AND_STEP_BEFORE_A_LATER_STEP = [
+    pytest.param(name, earlier, later, id=f"{name}-v{earlier.version}-after-v{later.version}")
+    for name in STORED_RUN_FIXTURES
+    for earlier in RUN_DOCUMENT_STEPS
+    for later in RUN_DOCUMENT_STEPS
+    if earlier.version < later.version
+]
+
+
+@pytest.mark.parametrize(("name", "earlier", "later"), _EACH_FIXTURE_AND_STEP_BEFORE_A_LATER_STEP)
+def test_every_step_changes_nothing_in_a_fixture_s_documents_a_later_step_brought_forward(
+    name: str, earlier: RunDocumentStep, later: RunDocumentStep
+) -> None:
+    """A runs row records no format, so migration brings a row it cannot bring forward from its store's format forward from the first (storage.migrate_runs_table_documents).
+
+    That is exact only while each step changes nothing in documents a later step brought
+    forward: a step that cannot keep to it must first give each runs row a format of its own.
+    """
+    run_type = fixture_run_type(name)
+    brought_forward = later.apply(run_type, _documents_before(later, name)).documents
+
+    result = earlier.apply(run_type, brought_forward)
+
+    assert result.documents == brought_forward
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize("step", RUN_DOCUMENT_STEPS, ids=lambda step: f"v{step.version}")
+def test_every_step_changes_nothing_in_the_documents_a_save_in_the_current_format_writes(step: RunDocumentStep) -> None:
+    """The config document of a home of every field shape, as a save writes it, is in the current format: no step changes it."""
+    documents = _every_shape_documents()
+
+    result = step.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
 
 
 def test_v2_drops_the_null_keys_of_the_other_dispatch_variants_and_reports_nothing() -> None:
