@@ -2,6 +2,7 @@
 
 import dataclasses
 import functools
+import math
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -29,6 +30,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
 )
 from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
+from tests._over_rounding_discharges import BATTERY_THEY_OVER_ROUND_ON, OVER_ROUNDING_DISCHARGES
 from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
@@ -1087,6 +1089,39 @@ class TestTouDispatchOnSpreadFreeTariff:
         assert tou.battery_discharge > 0.0
         assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy))
 
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(0.01, 0.03, id="short-by-0.02kW"),
+            pytest.param(
+                3.9243814029178457,
+                math.nextafter(3.9243814029178457, math.inf),
+                id="short-by-an-ulp-whose-energy-rounds-to-0",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_a_sunlit_shortfall_minute_discharges_exactly_as_self_consumption(
+        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> None:
+        """Both paths ask the battery for the same shortfall power whenever demand exceeds generation, so their flows agree to the last digit."""
+        tou = simulate_timestep_tou(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestamp=off_peak_ts,
+            tariff=tariff,
+            timestep_minutes=1.0,
+        )
+        greedy = simulate_timestep(
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=1.0,
+        )
+        assert greedy.battery_discharge > 0.0
+        assert dataclasses.astuple(tou) == dataclasses.astuple(greedy)
+
     @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
     def test_day_of_dispatch_matches_self_consumption(self, tariff: TariffConfig) -> None:
         """Every hour of a day, with the state of charge carried over, equals greedy dispatch."""
@@ -1372,6 +1407,29 @@ class TestStepAgainstABatteryPastAnAssignedSocLimit:
             "battery_soc": 4.0,
             "grid_charge": 0.0,
         }
+
+
+# ---------------------------------------------------------------------------
+# A battery's discharge is part of the self-consumption it supplies
+# ---------------------------------------------------------------------------
+
+class TestASunlessStepsDischargeIsPartOfItsSelfConsumption:
+    """With no PV, the battery's discharge is all the self-consumption a step has, so it cannot exceed it."""
+
+    @pytest.mark.parametrize(("demand_kw", "minutes"), OVER_ROUNDING_DISCHARGES)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_the_battery_discharges_no_more_than_the_self_consumption_it_supplies(
+        self, step: Callable[..., EnergyFlowResult], demand_kw: float, minutes: float
+    ) -> None:
+        """On the battery each shortfall here was found on, its withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
+        result = step(
+            generation_kw=0.0,
+            demand_kw=demand_kw,
+            battery=Battery(BATTERY_THEY_OVER_ROUND_ON),
+            timestep_minutes=minutes,
+        )
+        assert result.battery_discharge > 0.0
+        assert result.battery_discharge <= result.self_consumption
 
 
 # ---------------------------------------------------------------------------

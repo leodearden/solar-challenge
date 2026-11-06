@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name, and the demand each dispatch path's results carry.
+"""Tests for the dispatch paths simulate_home runs a home under: which one runs, as named by its results' strategy_name, and what each one's results carry, the home's demand and a battery discharge that is part of their self-consumption.
 
 A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
 and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
@@ -18,15 +18,17 @@ from solar_challenge.home import (
     HOME_DISPATCH_STRATEGIES,
     HomeConfig,
     SimulationResults,
+    calculate_summary,
     refuse_unknown_home_dispatch_strategy,
     simulate_home,
 )
 from solar_challenge.load import LoadConfig, generate_load_profile
+from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
-from tests._synthetic_weather import synthetic_june_weather, weather_for
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 _TOU_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
@@ -150,6 +152,49 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
     assert (results.battery_discharge > 0).any()
     assert results.window == window
     pd.testing.assert_series_equal(results.demand, load_profile, check_names=False, rtol=1e-12, atol=0.0)
+
+
+_SUNLESS_SEPTEMBER_HOME = HomeConfig(
+    pv_config=PVConfig(capacity_kw=4.0),
+    load_config=LoadConfig(annual_consumption_kwh=5000.0, seed=11),
+    battery_config=BatteryConfig(capacity_kwh=10.0, discharge_efficiency=0.975),
+    location=Location.bristol(),
+)
+
+
+@pytest.mark.parametrize(
+    ("home", "strategy_name"),
+    [
+        pytest.param(_SUNLESS_SEPTEMBER_HOME, "self_consumption", id="strategy-path"),
+        pytest.param(
+            dataclasses.replace(
+                _SUNLESS_SEPTEMBER_HOME,
+                tariff_config=TariffConfig.flat_rate(0.25),
+                seg_tariff=SEG_PRESETS["Octopus"],
+                dispatch_strategy="tou_optimized",
+            ),
+            "tou_optimized",
+            id="tariff-tou-path",
+        ),
+    ],
+)
+def test_on_a_sunless_day_each_dispatch_path_discharges_no_more_than_the_self_consumption_it_supplies(
+    home, strategy_name
+):
+    """With no PV, the battery supplies all the self-consumption, so no minute's discharge, and not the day's, exceeds it.
+
+    At the battery's 0.975 discharge efficiency, some of the day's minutes withdraw an energy that, less the
+    losses, rounds an ulp above the energy they ask for.
+    """
+    day = pd.Timestamp("2024-09-01")
+
+    results = simulate_home(home, day, day, weather=weather_for(home, sunless_weather(day, temp_air=12.0)))
+
+    summary = calculate_summary(results)
+    assert results.strategy_name == strategy_name
+    assert (results.generation == 0.0).all()
+    assert (results.battery_discharge <= results.self_consumption).all()
+    assert summary.total_battery_discharge_kwh <= summary.total_self_consumption_kwh
 
 
 def test_a_home_dispatches_by_name_greedy_or_tou_optimized() -> None:
