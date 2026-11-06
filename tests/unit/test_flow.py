@@ -1088,6 +1088,28 @@ class TestTouDispatchOnSpreadFreeTariff:
         assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy))
 
     @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
+    def test_a_sunlit_shortfall_minute_discharges_exactly_as_self_consumption(
+        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp
+    ) -> None:
+        """Both paths ask the battery for the same shortfall power, so their flows agree to the last digit."""
+        tou = simulate_timestep_tou(
+            generation_kw=0.01,
+            demand_kw=0.03,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestamp=off_peak_ts,
+            tariff=tariff,
+            timestep_minutes=1.0,
+        )
+        greedy = simulate_timestep(
+            generation_kw=0.01,
+            demand_kw=0.03,
+            battery=Battery(BatteryConfig.default_5kwh()),
+            timestep_minutes=1.0,
+        )
+        assert greedy.battery_discharge > 0.0
+        assert dataclasses.astuple(tou) == dataclasses.astuple(greedy)
+
+    @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
     def test_day_of_dispatch_matches_self_consumption(self, tariff: TariffConfig) -> None:
         """Every hour of a day, with the state of charge carried over, equals greedy dispatch."""
         tou_battery = Battery(BatteryConfig.default_5kwh())
