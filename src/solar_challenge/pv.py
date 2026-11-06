@@ -14,7 +14,7 @@ import pvlib
 from pvlib.location import Location as PVLibLocation
 from pvlib.modelchain import ModelChain
 from pvlib.pvsystem import Array, FixedMount, PVSystem
-from scipy.optimize import brentq  # type: ignore[import-untyped]  # debt: ticket tkt_0RW2C1V353XH8BQP3ZRB7SMERG
+from scipy.optimize import brentq
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
