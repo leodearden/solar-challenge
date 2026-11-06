@@ -32,7 +32,7 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.web.app import create_app
-from solar_challenge.web.database import Database, sql_string_literal
+from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
 from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.store_lock import acquire_store_lock
@@ -44,6 +44,7 @@ from tests._dashboard_databases import (
     write_pre_548_database,
 )
 from tests._html_page import headings
+from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import run_storage_over
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
@@ -339,19 +340,14 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
 def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of_the_steps_it_applied_then_the_refusal(
     legacy_run_ids: dict[str, str], tmp_path: Path
 ) -> None:
-    """A trigger refusing each update of the pre-787 fleet's runs row refuses version 3 after version 2 has committed, as only v3 rewrites that run's row."""
+    """Version 3's step is refused once version 2's has committed."""
     retired = _install_a_copy_editing_its_summary(
         tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
     )
     database = _store_database(tmp_path)
-    with Database(database).transaction() as conn:
-        conn.execute(
-            "CREATE TRIGGER refuse_pre_787_updates BEFORE UPDATE ON runs "
-            f"WHEN OLD.id = {sql_string_literal(legacy_run_ids['pre_787_dispatch_fleet'])} "
-            "BEGIN SELECT RAISE(ABORT, 'the pre-787 fleet may not be updated'); END"
-        )
 
-    result = _web(tmp_path, "migrate")
+    with the_step_to_version_3_refused(database, legacy_run_ids["pre_787_dispatch_fleet"]) as refusal:
+        result = _web(tmp_path, "migrate")
 
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
@@ -360,7 +356,7 @@ def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of
         assert named in result.stdout, (named, result.stdout)
     assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
     assert MIGRATIONS[2].description not in result.stdout
-    for named in ["schema version 3", "stays at version 2", "the pre-787 fleet may not be updated"]:
+    for named in ["schema version 3", "stays at version 2", refusal]:
         assert named in result.stderr, (named, result.stderr)
     assert result.output.index("Migrated the dashboard database") < result.output.index(
         "cannot be migrated to schema version 3"

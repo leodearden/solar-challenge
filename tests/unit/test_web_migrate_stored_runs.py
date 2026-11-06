@@ -45,7 +45,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.home import HomeConfig, SummaryStatistics
-from solar_challenge.web.database import Database, sql_string_literal
+from solar_challenge.web.database import Database
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
@@ -73,6 +73,7 @@ from tests._dashboard_databases import (
     write_database_at_schema_version,
 )
 from tests._finance_builders import make_home_config, make_sim_results
+from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
@@ -910,24 +911,17 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
 def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_leaves_the_store_at_version_2(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
-    """A trigger refusing each update of the pre-787 fleet's runs row fails version 3's transaction, after version 2's has committed.
-
-    Only v3 rewrites that run's runs row, as v2 leaves its documents as they are, so the value v2
-    dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
-    """
+    """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries."""
     run_id = install_stored_run_fixture(
         "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
     )
     _edit_stored_document(_run_dir(store_at_version_1, run_id) / "summary.json", _setting("retired_figure", 12.5))
     _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
-    with Database(store_at_version_1).transaction() as conn:
-        conn.execute(
-            "CREATE TRIGGER refuse_pre_787_updates BEFORE UPDATE ON runs "
-            f"WHEN OLD.id = {sql_string_literal(legacy_run_ids['pre_787_dispatch_fleet'])} "
-            "BEGIN SELECT RAISE(ABORT, 'the pre-787 fleet may not be updated'); END"
-        )
 
-    with pytest.raises(MigrationRefused) as refused:
+    with (
+        the_step_to_version_3_refused(store_at_version_1, legacy_run_ids["pre_787_dispatch_fleet"]),
+        pytest.raises(MigrationRefused) as refused,
+    ):
         migrate_store(store_at_version_1, store_at_version_1.parent)
 
     assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[2])
