@@ -237,14 +237,15 @@ def _body_witness(cls: type) -> types.FunctionType | None:
     """The first function in *cls*'s own namespace, read through spelled_function and unwrapped from any decorator that records it as __wrapped__, whose globals may check the module *cls*'s body ran in, as _witnesses_its_body finds; None if there is none.
 
     There is none if no function there is named after *cls*, as when its body compiled
-    none (an annotation-only body before Python 3.14, which compiles its __annotate__
-    unless the module imports annotations from __future__) and nothing since wrote one
-    there; or if may_be_generated finds a generator may have written each one that is,
-    as for a dataclass body whose only method is a hand-written __init__, in a module that
-    imports annotations from __future__ (without that import, Python 3.14 also compiles
-    the body's __annotate__, which may_be_generated does not flag, so it is the witness).
-    So a function a generator wrote there after the body ran, named after *cls*, can be
-    the witness unless may_be_generated finds it, even where the body compiled none.
+    none (an annotation-only body) and nothing since wrote one there; or if
+    may_be_generated finds a generator may have written each one that is, as for a
+    dataclass body whose only method is a hand-written __init__. So a function a
+    generator wrote there after the body ran, named after *cls*, can be the witness
+    unless may_be_generated finds it, even where the body compiled none.
+
+    Both examples have no witness only where the body compiles no __annotate__.
+    Python 3.14 compiles one for an annotated body unless its module imports annotations
+    from __future__; named after *cls* and not found by may_be_generated, it is a witness.
     """
     functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
@@ -261,7 +262,7 @@ def _body_witness(cls: type) -> types.FunctionType | None:
 
 
 def _witnesses_its_body(cls: type, function: types.FunctionType) -> bool:
-    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__ (the __annotate__ that Python 3.14 compiles for an annotated body, unless the module imports annotations from __future__, is named after *cls* and not flagged).
+    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__.
 
     Only *cls*'s class statement, read once its module is checked, could tell a function
     its body compiled from one a generator wrote.
