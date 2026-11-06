@@ -36,7 +36,7 @@ def _make_full_year_and_short_window_fleets() -> tuple:
         max_charge_kw=3.5,
         max_discharge_kw=3.5,
         calendar_fade_rate_per_year=0.005,
-        cycle_fade_per_equivalent_full_cycle=0.0002,
+        cycle_fade_per_equivalent_full_cycle=0.0001,
         soh_floor=0.60,
     )
     scenario, finance = make_scenario_and_finance(
