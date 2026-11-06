@@ -940,7 +940,9 @@ class TestExportAPI:
         self, storage: RunStorage, client: FlaskClient
     ) -> None:
         config = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 250.0}),
+            pv_config=PVConfig(
+                capacity_kw=4.0, custom_module_params={"pdc0": 250.0, "gamma_pdc": -0.004}
+            ),
             load_config=LoadConfig(),
         )
         _store_home_run(storage, "custom-pvlib", config)
