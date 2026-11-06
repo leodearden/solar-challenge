@@ -145,11 +145,11 @@ def _class_module(cls: type) -> types.ModuleType:
         f"{label_of(cls)} is not bound under {cls.__qualname__!r} in "
         f"{_located(module)}, which sys.modules holds under "
         f"the name {cls.__module__!r}: that module binds "
-        f"{'nothing' if bound is None else 'another object'} there. Read each module's "
-        "objects before importing another module of that name, or bind the class under its "
-        "qualified name. If the class's __module__ names a module that never bound it, as "
-        "that of a class dataclasses.make_dataclass makes on Python 3.11 names types, assign "
-        "it the __module__ of the module that binds it under its qualified name"
+        f"{'nothing' if bound is None else 'another object'} there. Either "
+        f"{_REPLACED_MODULE_REMEDY}, or bind the class under its qualified name. If the "
+        "class's __module__ names a module that never bound it, as that of a class "
+        "dataclasses.make_dataclass makes on Python 3.11 names types, assign it the "
+        "__module__ of the module that binds it under its qualified name"
     )
 
 
@@ -177,8 +177,7 @@ def _defined_elsewhere(
     """The error for *label*, defined in the module whose globals are *namespace*, once sys.modules holds *module* in its place under *name*."""
     return LookupError(
         f"{label} is defined in {_located_by_globals(namespace)}, but sys.modules "
-        f"holds {_located(module)} under the name {name!r}: "
-        "read each module's objects before importing another module of that name"
+        f"holds {_located(module)} under the name {name!r}: {_REPLACED_MODULE_REMEDY}"
     )
 
 
@@ -203,6 +202,17 @@ def _copy_of_globals_clause(module: types.ModuleType, name: str) -> str:
     )
 
 
+def _method_compiled_from_clause(cls: type, function: types.FunctionType) -> str:
+    """How an error names *cls*'s method *function*, as *cls*'s label dotted with the method's name, and the file its code was compiled from."""
+    return (
+        f"{label_of(cls)}.{function.__name__} was compiled from "
+        f"{function.__code__.co_filename!r}"
+    )
+
+
+_REPLACED_MODULE_REMEDY = "read each module's objects before importing another module of that name"
+
+
 _GENERATOR_RECORD_REMEDY = (
     f"If a generator wrote it, add a {MethodGenerator.__qualname__} record for that generator "
     f"to the generators that {MethodGenerator.__module__} lists"
@@ -214,14 +224,12 @@ def _compiled_with_a_copy_of_its_modules_globals(
 ) -> LookupError:
     """The error for *cls*, whose method *function*, named after it, carries a copy of the globals of *module*, which sys.modules holds under *cls*'s module name, as _copies_globals_of finds one: a generator that no MethodGenerator record lists may have written that method with that copy, which tells which module sys.modules held when the generator ran, not which module *cls*'s body ran in."""
     return LookupError(
-        f"{label_of(cls)}.{function.__name__} was compiled from "
-        f"{function.__code__.co_filename!r} with "
+        f"{_method_compiled_from_clause(cls, function)} with "
         f"{_copy_of_globals_clause(module, cls.__module__)}, not with those globals "
         "themselves, as a generator may compile a method it writes, so it does not tell which "
         f"module {label_of(cls)}'s body ran in. {_GENERATOR_RECORD_REMEDY}. If "
         f"{label_of(cls)} was built once another module named {cls.__module__!r} had taken its "
-        "own module's place in sys.modules, read each module's objects before importing "
-        "another module of that name"
+        f"own module's place in sys.modules, {_REPLACED_MODULE_REMEDY}"
     )
 
 
@@ -230,11 +238,10 @@ def _written_by_an_unlisted_generator(
 ) -> LookupError:
     """The error for *cls*, whose method *function*, named after it, carries globals that name no file and are not those of *module*, which sys.modules holds under *cls*'s module name: a generator that no MethodGenerator record lists may have written that method with globals of its own, or *cls*'s module, one with no file, may since have been replaced there."""
     return LookupError(
-        f"{label_of(cls)}.{function.__name__} was compiled from "
-        f"{function.__code__.co_filename!r} with globals that name no file and are not those "
-        f"of {_located(module)}, which sys.modules holds under the name {cls.__module__!r}. "
-        f"{_GENERATOR_RECORD_REMEDY}. If a module with no file defined {label_of(cls)}, read "
-        "each module's objects before importing another module of that name"
+        f"{_method_compiled_from_clause(cls, function)} with globals that name no file and are "
+        f"not those of {_located(module)}, which sys.modules holds under the name "
+        f"{cls.__module__!r}. {_GENERATOR_RECORD_REMEDY}. If a module with no file defined "
+        f"{label_of(cls)}, {_REPLACED_MODULE_REMEDY}"
     )
 
 
