@@ -319,9 +319,9 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   `tests/unit/test_web_run_document_steps.py`). A step that cannot keep to that must first add a
   format column to `runs`, with its schema step. After its steps, and also on a store already at
   `SCHEMA_VERSION`, `migrate_store` brings forward each run an earlier migration left in an older
-  format, e.g. once its documents are fixed, and reports again each it still cannot migrate. A
-  write it cannot make then is refused with `LaggingRunsRefused`, and the store stays at its
-  version.
+  format, e.g. once its documents are fixed, names each run whose files or runs row it so brings
+  forward, and reports again each it still cannot migrate. A write it cannot make then is refused
+  with `LaggingRunsRefused`, and the store stays at its version.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;

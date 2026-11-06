@@ -252,8 +252,9 @@ class MigrationReport:
 
     dropped_values are the values its run-document steps dropped that are not null,
     rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
-    they were, each once. brought_forward_runs are the id of each run whose files it brought
-    forward after its steps, which an earlier migration had left in an older stored-run format.
+    they were, each once. brought_forward_runs are the id of each run whose files or runs row it
+    brought forward after its steps, each once, which an earlier migration had left in an older
+    stored-run format.
     """
 
     path: Path
@@ -327,9 +328,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     After the steps, even when there were none, each run an earlier migration left in an older
     stored-run format is brought forward to RUN_FORMAT_VERSION, e.g. once its documents have been
     fixed, in its files and its runs row alike, and the store's version is left as it is
-    (_bring_lagging_runs_forward). The report names each run whose files that brought forward,
-    and each source it still cannot bring forward is reported again. A source a step of this
-    migration left is not tried again. Every connection is opened through Database.connect().
+    (_bring_lagging_runs_forward). The report names each run whose files or runs row that
+    brought forward, and each source it still cannot bring forward is reported again. A source a
+    step of this migration left is not tried again. Every connection is opened through
+    Database.connect().
 
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
@@ -368,7 +370,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         dropped_values=outcome.dropped,
         rewritten_values=outcome.rewritten,
         unmigrated_runs=tuple(dict.fromkeys(outcome.unmigrated)),
-        brought_forward_runs=caught_up.brought_forward_files,
+        brought_forward_runs=caught_up.brought_forward_runs,
     )
 
 

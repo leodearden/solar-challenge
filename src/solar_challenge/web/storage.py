@@ -315,11 +315,12 @@ def _run_dir(data_dir: Path, run_id: str) -> Path:
 
 @dataclass(frozen=True)
 class RunDocumentsOutcome:
-    """What a run-document step did to a store's runs: each value it dropped that is not null, each value it rewrote, each run it left unmigrated, and each run whose files it brought forward, in order.
+    """What a run-document step did to a store's runs: each value it dropped that is not null, each value it rewrote, each run it left unmigrated, and each run it brought forward, in order.
 
-    A run left unmigrated is recorded by the source a step left it in: unmigrated_files holds
-    each run whose files a step left as they were, and unmigrated_rows each run whose runs row
-    it left so. brought_forward_files holds the id of each run whose files a step wrote.
+    Each run is recorded by its source, its files or its runs row: unmigrated_files holds each
+    run whose files a step left as they were, and unmigrated_rows each run whose runs row it
+    left so; brought_forward_files holds the id of each run whose files a step wrote, and
+    brought_forward_rows the id of each run whose runs row it wrote.
     """
 
     dropped: tuple[DroppedValue, ...] = ()
@@ -327,11 +328,17 @@ class RunDocumentsOutcome:
     unmigrated_rows: tuple[UnmigratedRun, ...] = ()
     rewritten: tuple[RewrittenValue, ...] = ()
     brought_forward_files: tuple[str, ...] = ()
+    brought_forward_rows: tuple[str, ...] = ()
 
     @property
     def unmigrated(self) -> tuple[UnmigratedRun, ...]:
         """Each run left unmigrated: each whose files a step left, then each whose runs row it left."""
         return self.unmigrated_files + self.unmigrated_rows
+
+    @property
+    def brought_forward_runs(self) -> tuple[str, ...]:
+        """The id of each run whose files or runs row a step brought forward, each once, in order of id."""
+        return tuple(sorted({*self.brought_forward_files, *self.brought_forward_rows}))
 
     def __add__(self, later: "RunDocumentsOutcome") -> "RunDocumentsOutcome":
         """This outcome followed by *later*'s."""
@@ -341,6 +348,7 @@ class RunDocumentsOutcome:
             unmigrated_rows=self.unmigrated_rows + later.unmigrated_rows,
             rewritten=self.rewritten + later.rewritten,
             brought_forward_files=self.brought_forward_files + later.brought_forward_files,
+            brought_forward_rows=self.brought_forward_rows + later.brought_forward_rows,
         )
 
 
@@ -420,14 +428,16 @@ def migrate_runs_table_documents(
     it. *earlier* is what the earlier run-document steps of the same migration did. Each run's
     runs.config_json and runs.summary_json are brought forward from *from_version* to
     *to_version* by bring_run_documents_forward, and only a column the steps changed is
-    rewritten, as the JSON text a save writes. A runs row records no format of its own, and an
-    earlier migration may have left one in the first: so a row that cannot be brought forward
-    from *from_version* is brought forward from FIRST_FORMAT_VERSION instead. That is exact, as
-    each step changes nothing in documents a later step brought forward (RunDocumentStep). A row
-    that holds neither document is skipped, and so is a row *earlier* left unmigrated, as
-    web/schema.py's migrate_store says. A row whose documents cannot be decoded or brought
-    forward from either format, or that has no type, is left as it was and reported as
-    unmigrated, by the last refusal.
+    rewritten, as the JSON text a save writes. A run whose row had a column rewritten is
+    recorded as brought forward, as migrate_stored_run_files records a run whose files it
+    wrote; a row the steps left as it was is not. A runs row records no format of its own, and
+    an earlier migration may have left one in the first: so a row that cannot be brought
+    forward from *from_version* is brought forward from FIRST_FORMAT_VERSION instead. That is
+    exact, as each step changes nothing in documents a later step brought forward
+    (RunDocumentStep). A row that holds neither document is skipped, and so is a row *earlier*
+    left unmigrated, as web/schema.py's migrate_store says. A row whose documents cannot be
+    decoded or brought forward from either format, or that has no type, is left as it was and
+    reported as unmigrated, by the last refusal.
     """
     rows = conn.execute("SELECT id, type, config_json, summary_json FROM runs ORDER BY id").fetchall()
     left_unmigrated = {each.run_id for each in earlier.unmigrated_rows}
@@ -441,7 +451,7 @@ def migrate_runs_table_documents(
 
 
 def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: int, to_version: int) -> RunDocumentsOutcome:
-    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward from format *from_version* to *to_version*, as migrate_runs_table_documents does for each row."""
+    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward from format *from_version* to *to_version*, as migrate_runs_table_documents does for each row, recording the run as brought forward when a column is rewritten."""
     run_id = row["id"]
     try:
         typed = _run_type(run_id, row["type"])
@@ -453,10 +463,16 @@ def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: 
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_rows=(UnmigratedRun.of(refusal),))
     stepped = (result.documents.config, result.documents.summary)
-    for column, was, document in zip(_DOCUMENT_COLUMNS, (documents.config, documents.summary), stepped, strict=True):
-        if document.content != was.content:
-            conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
-    return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten)
+    changed = [
+        (column, document)
+        for column, was, document in zip(_DOCUMENT_COLUMNS, (documents.config, documents.summary), stepped, strict=True)
+        if document.content != was.content
+    ]
+    for column, document in changed:
+        conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document.content), run_id))
+    return RunDocumentsOutcome(
+        dropped=result.dropped, rewritten=result.rewritten, brought_forward_rows=(run_id,) if changed else ()
+    )
 
 
 def _row_brought_forward(
