@@ -14,7 +14,8 @@ cannot write a run's file, or whose transaction fails once it has brought the ru
 is refused, leaving the database at the version before it, and the migration run again once the
 fault is gone completes it. A step refused after an earlier step of the migration committed
 leaves the store at the version that step brought it to, and the refusal carries the report of
-the steps the migration applied.
+the steps the migration applied; the migration run again goes on from that version and reports
+none of their values again.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 A run that store's migration left in format 1, with no format.json, has its files brought
@@ -908,10 +909,16 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
-def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_leaves_the_store_at_version_2(
+def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_run_again_goes_on_from_version_2(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
-    """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries."""
+    """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
+
+    Run again, the migration goes on from version 2 and reports v3's rewrites of the pre-787
+    fleet's runs row alone: v3 brought the run files forward before its transaction failed, so
+    its rewrites of the fleet's config.json are reported by neither migration, as
+    migrate_store's docstring says (task 1369).
+    """
     run_id = install_stored_run_fixture(
         "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
     )
@@ -936,6 +943,20 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
         dropped_values=(
             DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
             DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1,
+        from_version=2,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(MIGRATIONS[2],),
+        rewritten_values=tuple(
+            each
+            for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+            if each.document == "runs.config_json"
         ),
     )
 

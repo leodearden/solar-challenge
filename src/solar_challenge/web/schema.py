@@ -360,10 +360,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     store's user_version together: a step that fails leaves the store at the version before it,
     as the steps before it left it. The run files it brought forward before it failed stay so,
     their format.json naming its format: a migration run again leaves them as they are, as they
-    are in that format already, and so reports none of the values the failed step dropped from
-    them. A run whose documents a run-document step cannot bring forward is left as it was and
-    reported, and the migration goes on. No later step of the migration is given that run's
-    files, or its runs row's copies, whichever the step left, as it would only refuse them
+    are in that format already, and so reports none of the values the failed step dropped or
+    rewrote in them. A run whose documents a run-document step cannot bring forward is left as
+    it was and reported, and the migration goes on. No later step of the migration is given that
+    run's files, or its runs row's copies, whichever the step left, as it would only refuse them
     again; so each is reported once, by the fault that kept it from that step.
 
     After the steps, even when there were none, the migration catches up, leaving the store's
