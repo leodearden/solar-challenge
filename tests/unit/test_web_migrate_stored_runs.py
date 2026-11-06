@@ -12,7 +12,9 @@ document and field, and the rest of the store migrates; so, once, is a run whose
 cannot be read, while a run whose format.json names a later format is left as it is. A step that
 cannot write a run's file, or whose transaction fails once it has brought the run files forward,
 is refused, leaving the database at the version before it, and the migration run again once the
-fault is gone completes it.
+fault is gone completes it. A step refused after an earlier step of the migration committed
+leaves the store at the version that step brought it to, and the refusal carries the report of
+the steps the migration applied.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 A run that store's migration left in format 1, with no format.json, has its files brought
@@ -42,7 +44,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.home import HomeConfig, SummaryStatistics
-from solar_challenge.web.database import Database
+from solar_challenge.web.database import Database, sql_string_literal
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
@@ -831,6 +833,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     message = str(refused.value)
     for named in [str(store_at_version_1), "schema version 2", "stays at version 1", str(fleet_dir / "format.json")]:
         assert named in message, (named, message)
+    assert refused.value.migrated == MigrationReport(store_at_version_1, 1, 1, ())
     assert user_version_of(store_at_version_1) == 1
     assert runs_rows_of(store_at_version_1) == rows_before
     assert _files_of(fleet_dir) == fleet_files_before
@@ -901,6 +904,45 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     [config] = record.home_configs() or ()
     assert config.battery_config is not None
     assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
+
+
+def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_leaves_the_store_at_version_2(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A trigger refusing each update of the pre-787 fleet's runs row fails version 3's transaction, after version 2's has committed.
+
+    Only v3 rewrites that run's runs row, as v2 leaves its documents as they are, so the value v2
+    dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
+    """
+    run_id = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
+    )
+    _edit_stored_document(_run_dir(store_at_version_1, run_id) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute(
+            "CREATE TRIGGER refuse_pre_787_updates BEFORE UPDATE ON runs "
+            f"WHEN OLD.id = {sql_string_literal(legacy_run_ids['pre_787_dispatch_fleet'])} "
+            "BEGIN SELECT RAISE(ABORT, 'the pre-787 fleet may not be updated'); END"
+        )
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[2])
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "stays at version 2" in str(refused.value)
+    assert user_version_of(store_at_version_1) == 2
+    assert refused.value.migrated == MigrationReport(
+        path=store_at_version_1,
+        from_version=1,
+        to_version=2,
+        applied_steps=(MIGRATIONS[1],),
+        dropped_values=(
+            DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+            DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
 
 
 @_NEEDS_PYARROW

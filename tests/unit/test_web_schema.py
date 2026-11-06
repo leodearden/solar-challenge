@@ -467,6 +467,7 @@ def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it
     cause = refused.value.__cause__
     assert isinstance(cause, RowRefused)
     assert (cause.table, cause.row_id, cause.column) == ("runs", row["id"], column)
+    assert refused.value.migrated == MigrationReport(legacy_store, 0, 0, ())
     assert schema_of(legacy_store) == schema_before
     assert user_version_of(legacy_store) == 0
     assert runs_rows_of(legacy_store) == rows_before
