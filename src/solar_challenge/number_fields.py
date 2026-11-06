@@ -12,7 +12,7 @@ truncated or read as 1.
 import math
 import numbers
 from collections.abc import Callable, Iterable, Mapping, Set
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final, TypeVar
 
 from solar_challenge.boolean_fields import is_boolean
@@ -22,7 +22,7 @@ from solar_challenge.whole_numbers import whole_number
 _Number = TypeVar("_Number", int, float)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Interval:
     """A non-empty interval of finite numbers, from *low* to *high*, each bound included unless it is open; an infinite bound is no bound."""
 
@@ -30,30 +30,35 @@ class Interval:
     high: float = math.inf
     low_open: bool = False
     high_open: bool = False
+    _low_admitted: bool = field(init=False, repr=False, compare=False)
+    _high_admitted: bool = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.low <= self.high:
             raise ValueError(
                 f"an Interval's low bound must be at most its high bound, got low={self.low!r} and high={self.high!r}"
             )
+        object.__setattr__(self, "_low_admitted", not self.low_open and self.low > -math.inf)
+        object.__setattr__(self, "_high_admitted", not self.high_open and self.high < math.inf)
         if self.low == self.high and not self.admits(self.low):
             raise ValueError(
                 f"an Interval must admit a finite number, so equal bounds must be finite and neither open, got {self!r}"
             )
 
     def admits(self, number: float) -> bool:
-        """Whether *number* is finite and inside the bounds; comparing it, never converting it, so an int too large for a float is compared too."""
-        return (
-            -math.inf < number < math.inf
-            and (self.low < number if self.low_open else self.low <= number)
-            and (number < self.high if self.high_open else number <= self.high)
+        """Whether *number* is finite and inside the bounds; comparing it, never converting it, so an int too large for a float is compared too.
+
+        A bound admits itself only when it is closed and finite, so the two comparisons alone refuse NaN and ±inf.
+        """
+        return (self.low <= number if self._low_admitted else self.low < number) and (
+            number <= self.high if self._high_admitted else number < self.high
         )
 
     def __str__(self) -> str:
         """The bounds as a refusal phrases them, each printed as given: "between 0 and 360", "greater than 0 and at most 1", or "" when there are none."""
-        bounded_below, bounded_above = self.low > -math.inf, self.high < math.inf
-        if bounded_below and bounded_above and not (self.low_open or self.high_open):
+        if self._low_admitted and self._high_admitted:
             return f"between {self.low} and {self.high}"
+        bounded_below, bounded_above = self.low > -math.inf, self.high < math.inf
         phrases: list[str] = []
         if bounded_below:
             phrases.append(f"greater than {self.low}" if self.low_open else f"at least {self.low}")
