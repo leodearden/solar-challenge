@@ -19,7 +19,17 @@ from typing import TYPE_CHECKING, Optional
 import pytest
 
 from tests._surface_forms import named_classes
-from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
+    Outer,
+    Preset,
+    imported_module,
+    made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
+)
 
 if TYPE_CHECKING:
     from decimal import Decimal
@@ -199,50 +209,24 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
-_UNBOUND_IN_TYPES = (
-    r"^types\.Made is not bound under 'Made' in the module at .*types\.py, which sys\.modules "
-    r"holds under the name 'types': that module binds nothing there\. .*\. If the class's "
-    r"__module__ names a module that never bound it, as that of a class "
-    r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
-    r"__module__ of the module that binds it under its qualified name$"
-)
-
-
 def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    newclassing = imported_module(
-        tmp_path,
-        monkeypatch,
-        "newclassing",
-        "import types\n"
-        "from dataclasses import dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
-        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
-    )
+    newclassing = imported_module(tmp_path, monkeypatch, "newclassing", NEW_CLASS_MADE_SOURCE)
 
-    with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
         named_classes(newclassing.Made)
 
 
-def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
     dataclassmaking = imported_module(
-        tmp_path,
-        monkeypatch,
-        "dataclassmaking",
-        "from dataclasses import make_dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+        tmp_path, monkeypatch, "dataclassmaking", MAKE_DATACLASS_MADE_SOURCE
     )
 
-    if sys.version_info < (3, 12):
-        with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+    if make_dataclass_records("dataclassmaking") == "types":
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
             named_classes(dataclassmaking.Made)
     else:
         assert named_classes(dataclassmaking.Made) == {decimal.Decimal}
@@ -256,11 +240,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_
         tmp_path,
         monkeypatch,
         "remaking",
-        "from dataclasses import make_dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
-        "Made.__module__ = __name__\n",
+        MAKE_DATACLASS_MADE_SOURCE + "Made.__module__ = __name__\n",
     )
 
     assert named_classes(remaking.Made) == {decimal.Decimal}
@@ -269,33 +249,16 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_
 def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_a_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """From 3.12, make_dataclass assigns the name of the module whose function calls it, not that of the module binding the class that function returns."""
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "dataclassfactories",
-        "from dataclasses import make_dataclass\n"
-        "\n"
-        "def made() -> type:\n"
-        "    return make_dataclass('Made', [('spare', 'Tap')])\n",
-    )
+    imported_module(tmp_path, monkeypatch, "dataclassfactories", MAKE_DATACLASS_FACTORY_SOURCE)
     factoring = imported_module(
         tmp_path,
         monkeypatch,
         "dataclassfactoring",
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "from dataclassfactories import made\n"
-        "\n"
-        "Made = made()\n",
+        make_dataclass_factoring_source("dataclassfactories"),
     )
-    recorded = "types" if sys.version_info < (3, 12) else "dataclassfactories"
+    recorded = make_dataclass_records("dataclassfactories")
 
-    with pytest.raises(
-        LookupError,
-        match=rf"^{recorded}\.Made is not bound under 'Made' in the module at .*\b{recorded}\.py, "
-        rf"which sys\.modules holds under the name '{recorded}': that module binds nothing there\. ",
-    ):
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
         named_classes(factoring.Made)
 
 
@@ -849,6 +812,58 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
     assert auditing.__file__ in str(raised.value)
     assert repr(replacement) in str(raised.value)
     assert "module at None" not in str(raised.value)
+
+
+_HAND_WRITTEN_INIT_SOURCE = (
+    "from dataclasses import dataclass\n"
+    "from fractions import Fraction as Share\n"
+    "\n"
+    "@dataclass\n"
+    "class D:\n"
+    "    share: Share\n"
+    "\n"
+    "    def __init__(self): ...\n"
+)
+
+
+def _dataclass_of_a_replaced_module_with_no_file(
+    source: str, monkeypatch: pytest.MonkeyPatch
+) -> type:
+    """D, as *source* defines it in a copy of the namespace of the module 'fileless', one with no file, which another module with no file then replaces in sys.modules until *monkeypatch* is undone."""
+    earlier = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", earlier)
+    namespace = dict(vars(earlier))
+    exec(source, namespace)
+    monkeypatch.setitem(sys.modules, "fileless", types.ModuleType("fileless"))
+    return namespace["D"]
+
+
+def test_a_dataclass_whose_only_method_is_a_hand_written_init_in_a_module_with_no_file_without_the_future_import_of_annotations_raises_a_lookup_error_naming_its_annotate_from_python_3_14_and_before_it_names_the_classes_its_annotations_name_once_another_module_with_no_file_has_replaced_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D's __init__ annotates nothing and does not take share, so only D's own module is looked up, for share. The replacement binds nothing under 'D' and has no source, so D is checked by its witness. The decorator may have written __init__, so it is no witness; from Python 3.14 the body also compiles __annotate__, named after D and carrying the globals D's body ran in, which name no file."""
+    made = _dataclass_of_a_replaced_module_with_no_file(_HAND_WRITTEN_INIT_SOURCE, monkeypatch)
+
+    if sys.version_info >= (3, 14):
+        with pytest.raises(
+            LookupError,
+            match=r"^fileless\.D\.__annotate__ was compiled from '<string>' with globals that name no file",
+        ):
+            named_classes(made)
+    else:
+        assert named_classes(made) == {fractions.Fraction}
+
+
+def test_a_dataclass_whose_only_method_is_a_hand_written_init_in_a_module_with_no_file_that_imports_annotations_from_future_has_no_witness_on_every_minor_so_a_string_annotation_raises_the_type_error_naming_the_module_with_no_source_once_another_module_with_no_file_has_replaced_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the __future__ import, D's body compiles only __init__ on every minor, 3.14 included, and the decorator may have written it, so D has no witness: the replacement is looked up unchecked, and 'Share' is read there."""
+    made = _dataclass_of_a_replaced_module_with_no_file(
+        "from __future__ import annotations\n\n" + _HAND_WRITTEN_INIT_SOURCE, monkeypatch
+    )
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'fileless'.*\bno source\b"):
+        named_classes(made)
 
 
 def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry_from_an_error_naming_the_module_with_no_source_raised_from_the_error_inspect_raised(

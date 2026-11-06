@@ -253,7 +253,7 @@ class TestBatterySohCountsThroughputToEachAge:
     """Each sampled age's battery SOH counts the battery throughput from installation to that age.
 
     Seed and bisection-trial ages alike, so battery_soh never rises year on
-    year.  Every battery fades 0.005/yr by calendar and 0.0002 per equivalent
+    year.  Every battery fades 0.005/yr by calendar and 0.0001 per equivalent
     full cycle.
     """
 
@@ -261,7 +261,7 @@ class TestBatterySohCountsThroughputToEachAge:
 
     def test_constant_discharge_soh_counts_discharge_times_years(self) -> None:
         """With a constant annual discharge D, year y's battery SOH is compute_soh(y, D × y)."""
-        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
         usable_kwh = battery.capacity_kwh * (battery.max_soc_fraction - battery.min_soc_fraction)
 
         curve = project_multi_year(
@@ -279,13 +279,39 @@ class TestBatterySohCountsThroughputToEachAge:
             )
             assert point.battery_soh == pytest.approx(expected_soh, abs=1e-12), f"year {point.year}"
 
+    def test_battery_soh_falls_by_its_calendar_and_cycle_fade_in_closed_form(self) -> None:
+        """Year y's battery SOH is 1 − 0.015 × y.
+
+        800 kWh/yr discharged over 8 kWh usable is 100 equivalent full cycles a year, so the
+        cycle fade is 1e-4 × 100 = 0.01/yr, beside the calendar fade of 0.005/yr.
+        """
+        scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
+        soh_fade_per_year = 0.015
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=self._ERROR_TARGET_PCT,
+            simulate=_make_battery_ageing_simulate(lambda home: _ANNUAL_DISCHARGE_KWH),
+        )
+
+        assert battery.nominal_usable_capacity_kwh == pytest.approx(8.0), "premise: the battery has 8 kWh usable"
+        assert len(curve.sampled_ages) > 3, "premise: bisection sampled ages between the three seeds"
+        assert 1 - soh_fade_per_year * curve.points[-1].year > battery.soh_floor, (
+            "premise: the SOH floor clamps no year"
+        )
+        for point in curve.points:
+            assert point.battery_soh == pytest.approx(1 - soh_fade_per_year * point.year, abs=1e-9), (
+                f"year {point.year}"
+            )
+
     def test_each_home_counts_its_own_discharge_and_battery_soh_is_their_mean(self) -> None:
         """Each home's SOH counts its own constant discharge D_h, and battery_soh is the mean over homes.
 
         The two homes' batteries differ in size and discharge, so year y's
         battery_soh is the mean over homes of compute_soh(y, D_h × y).
         """
-        one_home_scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        one_home_scenario, finance, battery = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
         small_battery = dataclasses.replace(battery, capacity_kwh=5.0)
         (home,) = one_home_scenario.homes
         scenario = dataclasses.replace(
@@ -340,7 +366,7 @@ class TestBatterySohCountsThroughputToEachAge:
         discharge_kwh: Callable[[HomeConfig], float],
     ) -> None:
         """battery_soh is non-increasing year on year, whether discharge falls or rises with age."""
-        scenario, finance, _ = _make_battery_scenario(cycle_fade=0.0002, calendar_fade=0.005)
+        scenario, finance, _ = _make_battery_scenario(cycle_fade=0.0001, calendar_fade=0.005)
 
         curve = project_multi_year(
             scenario,

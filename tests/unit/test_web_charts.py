@@ -13,7 +13,9 @@ import pytest
 
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.charts import (
     ChartPanel,
     ChartTab,
@@ -64,8 +66,17 @@ def _one_day_summary(
     )
 
 
-def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResults:
-    """The run of a home requested with an SEG rate and no tariff, over the day *weather* starts on.
+def _priced_home(*, tariff: bool, seg: bool) -> HomeConfig:
+    """make_home_config's home, on a 30 p/kWh flat tariff if *tariff* and paid a 5 p/kWh SEG if *seg*."""
+    return dataclasses.replace(
+        make_home_config(),
+        tariff_config=TariffConfig.flat_rate(0.30) if tariff else None,
+        seg_tariff=SEGTariff(name="", rate_pence_per_kwh=5.0) if seg else None,
+    )
+
+
+def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> tuple[HomeConfig, SimulationResults]:
+    """A home requested with an SEG rate and no tariff, and its run over the day *weather* starts on.
 
     The home is the one parse_home_config reads from the request; *weather* stands in for PVGIS's.
     """
@@ -79,7 +90,7 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> SimulationResult
             "end": day,
         }
     )
-    return simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
+    return config, simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
 
 
 def _drawn(panel: ChartPanel) -> bool:
@@ -157,7 +168,7 @@ class TestChartFunctions:
     def test_financial_breakdown_returns_json(self) -> None:
         """Test financial_breakdown returns a panel of Plotly figure JSON."""
         results = make_sinusoidal_sim_results(days=3)
-        output = financial_breakdown(results).content
+        output = financial_breakdown(results, make_home_config()).content
         assert isinstance(output, str)
         parsed = json.loads(output)
         assert "data" in parsed
@@ -322,6 +333,25 @@ class TestSankeyBatteryCharge:
         received_by_demand = sum(kwh for (_, target), kwh in links.items() if target == "Demand")
         assert received_by_demand == pytest.approx(summary.total_demand_kwh, abs=0.01)
 
+    def test_a_simulated_sunny_grid_charging_day_draws_the_batterys_charge_from_each_source_as_the_summary_splits_it(
+        self,
+    ) -> None:
+        """The home of scenarios/bristol-arbitrage.yaml on a clear 21 June charges its battery from PV and from the grid."""
+        home = bristol_arbitrage_home()
+        results = simulate_home(
+            home,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather=weather_for(home, synthetic_june_weather("2024-06-21")),
+        )
+        summary = calculate_summary(results)
+        assert summary.total_pv_charge_kwh > 0.01 and summary.total_grid_charge_kwh > 0.01
+
+        links = sankey_link_values(sankey_diagram(summary).content)
+
+        assert links[("PV Generation", "Battery")] == round(summary.total_pv_charge_kwh, 2)
+        assert links[("Grid", "Battery")] == round(summary.total_grid_charge_kwh, 2)
+
 
 class TestChartTotals:
     """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
@@ -338,7 +368,8 @@ class TestChartTotals:
     def test_financial_bars_are_each_days_pounds(self) -> None:
         by_name = traces_by_name(
             financial_breakdown(
-                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001),
+                _priced_home(tariff=True, seg=True),
             ).content
         )
 
@@ -354,7 +385,8 @@ class TestFinancialBreakdownNetCostLine:
     def test_is_the_running_total_of_each_days_import_cost_less_its_export_revenue(self) -> None:
         line = traces_by_name(
             financial_breakdown(
-                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001)
+                steady_run("2024-06-01", "2024-06-02", import_cost_gbp=0.002, export_revenue_gbp=0.001),
+                _priced_home(tariff=True, seg=True),
             ).content
         )["Cumulative Net Cost"]
 
@@ -372,13 +404,15 @@ class TestFinancialBreakdownNetCostLine:
         net_cost = calculate_summary(results).net_cost_gbp
         assert net_cost > 0
 
-        line = traces_by_name(financial_breakdown(results).content)["Cumulative Net Cost"]
+        figure = financial_breakdown(results, _priced_home(tariff=True, seg=True)).content
+        line = traces_by_name(figure)["Cumulative Net Cost"]
 
         assert line["y"][-1] == pytest.approx(net_cost, abs=0.005)
 
     def test_is_drawn_against_the_secondary_axis_titled_for_it(self) -> None:
         figure = financial_breakdown(
-            make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05)
+            make_sinusoidal_sim_results(days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05),
+            _priced_home(tariff=True, seg=True),
         ).content
 
         line = traces_by_name(figure)["Cumulative Net Cost"]
@@ -411,7 +445,7 @@ class TestFinancialBreakdownPricing:
             days=2, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
         )
 
-        by_name = traces_by_name(financial_breakdown(results).content)
+        by_name = traces_by_name(financial_breakdown(results, _priced_home(tariff=True, seg=True)).content)
 
         assert by_name["Daily Cost"]["y"] == results.import_cost.resample("D").sum().round(2).tolist()
         assert by_name["Daily Revenue"]["y"] == results.export_revenue.resample("D").sum().round(2).tolist()
@@ -423,89 +457,67 @@ class TestFinancialBreakdownPricing:
         assert peak_import_kw > 0
         assert peak_export_kw > 0
 
-        by_name = traces_by_name(financial_breakdown(results).content)
+        by_name = traces_by_name(financial_breakdown(results, make_home_config()).content)
 
         assert by_name["Daily Cost"]["y"] == [0.0, 0.0]
         assert by_name["Daily Revenue"]["y"] == [0.0, 0.0]
 
 
 class TestFinancialBreakdownNoTariffAnnotation:
-    """financial_breakdown notes on its chart that cost tracking is unavailable exactly when the run's import is not priced.
+    """financial_breakdown notes on its chart that cost tracking is unavailable exactly when the home the run simulated sets no import tariff.
 
-    It notes that revenue tracking is unavailable too when the run earns no export revenue.
+    It notes that revenue tracking is unavailable too when that home sets no SEG either.
     """
 
     @pytest.mark.parametrize(
-        ("import_rate", "export_rate", "notes"),
+        ("tariff", "seg", "notes"),
         [
             pytest.param(
-                0.0,
-                0.0,
+                False,
+                False,
                 ["No tariff configured — cost and revenue tracking unavailable"],
-                id="unpriced",
+                id="neither",
             ),
-            pytest.param(0.30, 0.0, [], id="import-priced-only"),
             pytest.param(
-                0.0,
-                0.05,
+                False,
+                True,
                 ["No import tariff configured — cost tracking unavailable"],
-                id="export-priced-only",
+                id="seg-only",
             ),
-            pytest.param(0.30, 0.05, [], id="import-and-export-priced"),
+            pytest.param(True, False, [], id="tariff-only"),
+            pytest.param(True, True, [], id="tariff-and-seg"),
         ],
     )
-    def test_is_drawn_exactly_when_import_is_not_priced_and_names_revenue_too_when_export_is_not_either(
-        self, import_rate: float, export_rate: float, notes: list[str]
+    def test_is_drawn_exactly_when_the_home_sets_no_tariff_and_names_revenue_too_when_it_sets_no_seg(
+        self, tariff: bool, seg: bool, notes: list[str]
     ) -> None:
-        results = make_sinusoidal_sim_results(
-            days=2, import_rate_gbp_per_kwh=import_rate, export_rate_gbp_per_kwh=export_rate
-        )
+        """Every case draws the same unpriced run, so the note reads the home and not the run's rates."""
+        results = make_sinusoidal_sim_results(days=2)
 
-        assert annotation_texts(financial_breakdown(results).content) == notes
-
-    @pytest.mark.parametrize(
-        "export_rate",
-        [pytest.param(0.0, id="export-unpriced"), pytest.param(0.05, id="export-priced")],
-    )
-    def test_is_not_drawn_for_a_run_whose_import_is_priced_though_it_imports_nothing(
-        self, export_rate: float
-    ) -> None:
-        results = make_sinusoidal_sim_results(
-            days=2,
-            demand_kw=0.0,
-            import_rate_gbp_per_kwh=0.30,
-            export_rate_gbp_per_kwh=export_rate,
-        )
-        assert results.grid_import.max() == 0
-
-        assert annotation_texts(financial_breakdown(results).content) == []
+        assert annotation_texts(financial_breakdown(results, _priced_home(tariff=tariff, seg=seg)).content) == notes
 
     def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_that_no_import_tariff_is_configured(
         self,
     ) -> None:
         """simulate_home prices such a run's export and leaves its import unpriced."""
-        results = _simulate_seg_rate_without_tariff(synthetic_june_weather("2024-06-21"))
+        config, results = _simulate_seg_rate_without_tariff(synthetic_june_weather("2024-06-21"))
 
         assert results.grid_import.sum() > 0
         assert results.export_revenue.sum() > 0
-        assert annotation_texts(financial_breakdown(results).content) == [
+        assert annotation_texts(financial_breakdown(results, config).content) == [
             "No import tariff configured — cost tracking unavailable"
         ]
 
-    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_notes_revenue_tracking_unavailable_when_it_exports_nothing(
+    def test_a_simulated_run_with_an_seg_rate_and_no_tariff_that_exports_nothing_notes_only_that_no_import_tariff_is_configured(
         self,
     ) -> None:
-        """The note's revenue half is false for this run: its SEG rate is set, and its £0 revenue is tracked.
-
-        SimulationResults records no export rate, so the chart cannot tell this run from one with no SEG rate.
-        A structured pricing fact on the results (task 667) would change this reading.
-        """
-        results = _simulate_seg_rate_without_tariff(sunless_weather("2024-01-15", temp_air=8.0))
+        """Its SEG rate is set, so its £0 revenue is tracked, though it exports nothing."""
+        config, results = _simulate_seg_rate_without_tariff(sunless_weather("2024-01-15", temp_air=8.0))
 
         assert results.grid_import.sum() > 0
         assert results.grid_export.sum() == 0
-        assert annotation_texts(financial_breakdown(results).content) == [
-            "No tariff configured — cost and revenue tracking unavailable"
+        assert annotation_texts(financial_breakdown(results, config).content) == [
+            "No import tariff configured — cost tracking unavailable"
         ]
 
 
@@ -542,6 +554,15 @@ class TestResultsTabs:
             ("battery_finance", "Battery & Finance", ["chart-financial", "chart-monthly"]),
             ("analysis", "Analysis", ["chart-seasonal"]),
         ]
+
+    def test_the_financial_panel_notes_the_pricing_its_homes_config_sets(self) -> None:
+        """The home sets an SEG and no tariff, and its run earns no export revenue, so only the config says its export is priced."""
+        results = make_sim_results(days=1)
+
+        tabs = home_results_tabs(_priced_home(tariff=False, seg=True), results, calculate_summary(results))
+
+        (financial,) = [panel for tab in tabs for panel in tab.panels if panel.dom_id == "chart-financial"]
+        assert annotation_texts(financial.content) == ["No import tariff configured — cost tracking unavailable"]
 
     def test_a_fleet_lists_every_fleet_chart(self) -> None:
         home_summaries = [calculate_summary(make_sim_results(days=1))] * 2

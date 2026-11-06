@@ -110,7 +110,7 @@ default name, its summary decoding and its listing each have one implementation.
 | `web/field_tree.py` | the field-tree codec: `field_tree`, `read_field_tree`, `without_unknown_keys`, `FieldTreeRefused`, `UnknownKey` | none |
 | `web/stored_json.py` | `decoded_json`, the value of a store's JSON text, and `UndecodableJson`, its one refusal of text `json.loads` cannot decode: not JSON, or nested too deeply; `decoded_json_object`, the JSON object a store's JSON text holds, and `JsonObjectRefused`, its one refusal: that text, with `decoded_json`'s reason, or JSON that is not an object | none |
 | `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, its documents' field trees, read and written through `field_tree`, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι but `field_tree` and `stored_json`, below it (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
-| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, stored_runs |
+| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`, `.summary_tree()`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, field_tree, stored_runs |
 | `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database, stored_json |
 | `web/chat_messages.py` | the `chat_messages` table and its store: `ChatRole`, `CHAT_MESSAGES_TABLE` and its migration functions, `save_chat_message`/`get_chat_history` | database, stored_json |
 | `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets, chat_messages |
@@ -309,6 +309,24 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   `os.replace`, then writes the marker.
 - A run whose documents fail validation (unloadable today too) is left untouched and reported, and
   migration continues. Afterwards that run's page names its field.
+- **Amendment (2026-11-06, task 1341):** a run's files are brought forward from the format their
+  `format.json` names, format 1 when there is none (`stored_runs.stored_format_version`), by
+  every run-document step after it; files already at the target format are left as they are. A
+  `runs` row records no format of its own: it is brought forward from the format its store's
+  schema version implies, and a row that cannot be is brought forward from the first format
+  instead. That fallback is exact only because each run-document step changes nothing in
+  documents a later step has brought forward (`RunDocumentStep`, checked over every fixture by
+  `tests/unit/test_web_run_document_steps.py`). A step that cannot keep to that must first add a
+  format column to `runs`, with its schema step. After its steps, and also on a store already at
+  `SCHEMA_VERSION`, `migrate_store` catches up: it brings forward each run's files whose
+  `format.json` names an older format or is missing, and each `runs` row that reads only from the
+  first format, such as a run an earlier migration left, once its documents are fixed. It names
+  each run whose files or row it so brings forward (`MigrationReport.caught_up_runs`), and
+  reports again each it still cannot migrate. A run in the current format is caught up the same
+  way when its save did not finish, leaving no `format.json`, or its row holds a shape only the
+  first format admits, such as an unknown key, which v2 then drops. A write it cannot make then
+  is refused with `LaggingRunsRefused`: the store stays at `SCHEMA_VERSION`, as it was or as the
+  migration's steps left it, and the message says which.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;

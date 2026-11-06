@@ -8,36 +8,28 @@ this module refuses: a new refusal gets a rule test, then an entry there.
 """
 
 import abc
-import ast
 import dataclasses
 import enum
 import functools
 import inspect
-import itertools
 import operator
 import types
 import typing
 import warnings
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 
 from tests._surface_forms_class_reads import (
+    namespace_holders,
     overriding_getattribute_holder,
-    own_annotations,
     own_namespace,
     recorded_mro,
 )
-from tests._surface_forms_generators import DATACLASS_DECORATOR, NAMEDTUPLE, MethodGenerator
+from tests._surface_forms_generated_constructors import generated_constructor_spelling_modules
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
-    NoSourceError,
-    bound_under,
-    class_statement,
     defining_module,
     is_get_delete_descriptor,
     is_routine,
-    names_declared_by,
-    scope_statements,
-    source_of,
 )
 
 
@@ -1058,13 +1050,12 @@ def _constructor_spelling_modules(
     assigns from another module, or that wraps one there as functools.wraps records one,
     is spelled in that other module. If the constructor is the one
     _first_read_constructor gives, and the function whose annotations that end holds, as
-    _annotations_author gives it, is one _generated_constructor_of finds a generator wrote
-    into the class holding it, as the dataclass decorator writes an __init__ and
-    collections.namedtuple a __new__, the constructor is spelled as that generator spells
-    what it wrote, unless _refuse_constructor_its_generator_records_unwritten refuses it;
-    if that function was generated for another class, TypeError names *cls* and the
-    function. A constructor defined in C, or one that wraps a callable defined in C,
-    spells no annotation, so the class's is spelled where _spelling_modules_over says;
+    _annotations_author gives it, is one a generator wrote into the class holding it, as
+    the dataclass decorator writes an __init__ and collections.namedtuple a __new__, the
+    constructor is spelled where generated_constructor_spelling_modules says, which
+    refuses one it cannot tell a generator wrote, or one generated for another class. A
+    constructor defined in C, or one that wraps a callable defined in C, spells no
+    annotation, so the class's is spelled where _spelling_modules_over says;
     _signature_holder checks every class that carries a signature before the constructor
     is read.
     """
@@ -1077,11 +1068,9 @@ def _constructor_spelling_modules(
     holder, name, held = _first_read_constructor(cls)
     constructor = _constructor_as_read(cls, name, held)
     author = _annotations_author(_chain_end(constructor))
-    generated = _generated_constructor_of(cls, holder, name, author)
+    generated = generated_constructor_spelling_modules(cls, holder, name, author, names)
     if generated is not None:
-        _refuse_constructor_its_generator_records_unwritten(cls, holder, author, generated)
-        return generated.spelling_modules(holder, names)
-    _refuse_constructor_generated_for_another_class(cls, holder, author)
+        return generated
     return _spelling_modules_over(constructor, signature_holder, names)
 
 
@@ -1108,39 +1097,6 @@ def _held_signature_module(holder: type, constructor: object) -> ModuleOrUnspell
     if _is_signature_of(own_namespace(holder)["__signature__"], link):
         return _carried_signature_module(link)
     return _MayCopyAConstructorLink(holder, link)
-
-
-def _refuse_constructor_generated_for_another_class(
-    cls: type, holder: type, author: object
-) -> None:
-    """Raise TypeError naming *cls* and *author*, the _annotations_author of the end of the constructor *holder* holds, if _class_named_by finds a class other than *holder* into which _generated_constructor_of finds a generator wrote *author* as its constructor.
-
-    A generated function assigned into *holder* keeps the name the generator gave it in
-    the class it was generated for, and no module is known to spell the fields that
-    class declares.
-    """
-    named = _class_named_by(author)
-    if named is None:
-        return
-    owner, name = named
-    if owner is not holder and _generated_constructor_of(cls, owner, name, author) is not None:
-        raise TypeError(
-            f"{label_of(cls)} is constructed through {label_of(author)}, a function generated "
-            f"for another class and assigned in the body of {label_of(holder)}, so no module is "
-            "known to spell the fields of the class it was generated for: make the name "
-            f"private, or define {name} with def"
-        )
-
-
-def _class_named_by(author: object) -> tuple[type, str] | None:
-    """The class *author*'s qualified name names before its last dot, as bound_under finds it in the module defining_module gives for *author*, with the name after that dot; None if *author* is no function, its qualified name holds no dot, or no class is bound there, as for a class defined inside a function."""
-    if not isinstance(author, types.FunctionType):
-        return None
-    owner_path, _, name = author.__qualname__.rpartition(".")
-    if not owner_path:
-        return None
-    owner = bound_under(owner_path, defining_module(author))
-    return (owner, name) if inspect.isclass(owner) else None
 
 
 def _constructor_as_read(cls: type, name: str, constructor: object) -> object:
@@ -1236,264 +1192,6 @@ def _metaclass_may_provide_signature(cls: type) -> bool:
         )
         or next(namespace_holders(recorded_mro(cls), "__signature__"), None) is None
     )
-
-
-def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
-    """The classes among *classes*, in their order, whose own namespace, as own_namespace reads it, holds one of *names*."""
-    return (cls for cls in classes if not own_namespace(cls).keys().isdisjoint(names))
-
-
-@dataclasses.dataclass(frozen=True)
-class _GeneratedConstructor:
-    """The constructor *generator* writes into each class it processes, by the rule it documents: its method *name*, unless that class's statement defines one, which it leaves in place; _GENERATED_CONSTRUCTORS holds one for each constructor such a generator writes, and _refuse_constructor_recorded_twice refuses two for one constructor.
-
-    *writes* finds whether the generator's record of a class it processed says it writes
-    the constructor there, and *spelling_modules* gives the module spelling each parameter
-    of the one it wrote.
-    """
-
-    generator: MethodGenerator
-    name: str
-    writes: Callable[[type], bool]
-    spelling_modules: Callable[[type, Iterable[str]], Mapping[str, types.ModuleType]]
-
-    def __post_init__(self) -> None:
-        """Refuse a constructor its generator's methods do not list, which _generated_constructor_of would never find written."""
-        if self.name not in self.generator.methods:
-            raise ValueError(
-                f"The constructor {self.name} is recorded as written by "
-                f"{self.generator.label}, whose methods do not list it, so no {self.name} "
-                f"would be read as one it wrote: list {self.name} among its methods"
-            )
-
-
-def _refuse_constructor_recorded_twice(constructors: Iterable[_GeneratedConstructor]) -> None:
-    """Raise ValueError naming the constructor and the generators of two of *constructors* that name the same constructor, since _generated_constructor_of could not tell which of those generators wrote a function both may have written, as into a class both processed."""
-    for earlier, later in itertools.combinations(constructors, 2):
-        if earlier.name == later.name:
-            raise ValueError(
-                f"The constructor {later.name} is recorded as written by both "
-                f"{earlier.generator.label} and {later.generator.label}, so which of them "
-                f"wrote a function both may have written into a class as its {later.name} "
-                "is not known: record each constructor once, or give "
-                "_generated_constructor_of a rule that tells which of them wrote it"
-            )
-
-
-def _generated_constructor_of(
-    cls: type, holder: type, name: str, author: object
-) -> _GeneratedConstructor | None:
-    """The constructor _GENERATED_CONSTRUCTORS holds that is named *name* and whose generator may have written *author*, a function, into *holder* as that constructor, as MethodGenerator.may_have_written finds, if no def statement of *holder*'s class statement wrote *author*, as _defined_in_body finds; None otherwise.
-
-    A function assigned from elsewhere keeps its own name. A function that records
-    __wrapped__ is none, whatever its name: functools.wraps named it after what it wraps.
-    _defined_in_body refuses, naming *cls*, the class constructed through *author*, where
-    it cannot tell whether a def statement wrote *author*.
-    """
-    if not isinstance(author, types.FunctionType) or hasattr(author, "__wrapped__"):
-        return None
-    written = tuple(
-        constructor
-        for constructor in _GENERATED_CONSTRUCTORS
-        if constructor.name == name and constructor.generator.may_have_written(holder, name, author)
-    )
-    _refuse_constructor_recorded_twice(written)
-    constructor = next(iter(written), None)
-    if constructor is None or _defined_in_body(cls, holder, constructor, author):
-        return None
-    return constructor
-
-
-def _refuse_constructor_its_generator_records_unwritten(
-    cls: type, holder: type, author: object, constructor: _GeneratedConstructor
-) -> None:
-    """Raise TypeError naming *cls* and *author*, the constructor *holder* holds that _generated_constructor_of finds *constructor*'s generator may have written there, if that generator's record of *holder* says it writes none there.
-
-    The dataclass decorator's says so once it last processed *holder* with init off,
-    though an earlier decoration may have written *author*: no rule tells what wrote it,
-    so no module is known to spell its parameters.
-    """
-    if not constructor.writes(holder):
-        raise TypeError(
-            f"{_generated_name_clause(cls, author, constructor)}, though its record of "
-            f"{label_of(holder)} says it writes none there, so no module is known to spell its "
-            f"parameters: make the name private, or define {constructor.name} with def"
-        )
-
-
-def _generated_name_clause(cls: type, author: object, constructor: _GeneratedConstructor) -> str:
-    """The clause opening a refusal of *cls*, constructed through *author*, that states *author* carries the name *constructor*'s generator gives the constructor it writes."""
-    return (
-        f"{label_of(cls)} is constructed through {label_of(author)}, which carries the name "
-        f"{constructor.generator.label} gives the {constructor.name} it writes"
-    )
-
-
-def _defined_in_body(
-    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
-) -> bool:
-    """Whether a def statement of *holder*'s class statement, as class_statement reads it, wrote *function*, the one *cls* is constructed through, as *constructor*'s name: a def or async def statement that scope_statements finds in any block of that body binds that name, which no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace, and inspect reads a source for *function*, as _inspect_reads_a_source_for finds.
-
-    Where that body binds the name so but inspect reads no source for *function*, TypeError
-    names *cls* if _refuse_def_written_member_of_another_class_statement finds a sign that
-    a def statement of another class statement wrote *function*. Where class_statement
-    reads no class statement for *holder*, False only once
-    _refuse_def_written_member_of_statementless_class finds no sign that a def statement
-    wrote *function*. docs/surface-forms-inspect-readings.md §3.5 says how each minor reads
-    a class's statement, and which def statements there write nothing the class holds, as
-    one under `if TYPE_CHECKING:` writes nothing.
-    """
-    statement = class_statement(holder)
-    if statement is None:
-        _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
-        return False
-    def_names = {
-        node.name
-        for node in scope_statements(statement.body)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    bound_outside = names_declared_by(statement.body, ast.Global, ast.Nonlocal)
-    if constructor.name not in def_names.difference(bound_outside):
-        return False
-    if _inspect_reads_a_source_for(function):
-        return True
-    _refuse_def_written_member_of_another_class_statement(cls, holder, constructor, function)
-    return False
-
-
-def _inspect_reads_a_source_for(function: types.FunctionType) -> bool:
-    """Whether inspect reads a source for *function*, as source_of finds.
-
-    On every admitted minor it reads one for each function a def statement in a source
-    file wrote, and none for a function compiled from text no file holds: one the
-    dataclass decorator or collections.namedtuple wrote, each compiled from text it writes,
-    or one a def statement in text given to exec wrote. docs/surface-forms-inspect-readings.md
-    §3.5 records these readings.
-    """
-    try:
-        source_of(function)
-    except NoSourceError:
-        return False
-    return True
-
-
-def _compiled_in_a_class_body(holder: type, name: str, function: types.FunctionType) -> bool:
-    """Whether *function*'s code carries *holder*'s __qualname__ dotted with *name*, the qualified name a def statement of *name* in the body of a class statement under *holder*'s qualified name compiles it under, while the dataclass decorator and collections.namedtuple compile each function they write under a qualified name of their own.
-
-    A generated function whose code was given that name, as code.replace gives it, carries
-    it too, so a rule reads it only to refuse: it fails closed.
-    docs/surface-forms-inspect-readings.md §3.5 records the qualified name each minor
-    compiles such code under.
-    """
-    return function.__code__.co_qualname == f"{holder.__qualname__}.{name}"
-
-
-def _compiled_in_a_class_body_clause(function: types.FunctionType) -> str:
-    """The clause stating the sign _compiled_in_a_class_body reads in *function*: the qualified name its code carries."""
-    return (
-        f"its code carries the qualified name {function.__code__.co_qualname!r}, as for a "
-        "function a def statement in a class body wrote"
-    )
-
-
-def _refuse_def_written_member_of_another_class_statement(
-    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
-) -> None:
-    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed, which carries the name *constructor*'s generator gives the constructor it writes into *holder* and for which inspect reads no source, and the module defining_module gives for *holder*, whose class statement in that module's source defines that constructor by a def statement, if *function*'s code carries the qualified name a def statement in *holder*'s class body gives it, as _compiled_in_a_class_body finds.
-
-    inspect reads a source for each function a def statement of that class statement
-    wrote, as _inspect_reads_a_source_for says, so none of them wrote *function*. A def
-    statement in another class statement under *holder*'s qualified name, as in text given
-    to exec, may have written it, and that statement, not the one the source holds, may
-    have defined *holder*, so whether it defines that constructor is not known. The remedy
-    defines *holder* by the class statement the source holds.
-    """
-    if not _compiled_in_a_class_body(holder, constructor.name, function):
-        return
-    module = defining_module(holder).__name__
-    raise TypeError(
-        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and "
-        f"{_compiled_in_a_class_body_clause(function)}, but inspect reads no source for it, "
-        "though it reads one for each function a def statement in the source of the module "
-        f"{module!r} wrote, so the class statement that source holds under the qualified name "
-        f"{holder.__qualname__!r} may not be the one that defined {label_of(holder)}, and "
-        f"whether that one defines {constructor.name} is not known: make the name private, or "
-        f"define {label_of(holder)} by the class statement that source holds"
-    )
-
-
-def _refuse_def_written_member_of_statementless_class(
-    cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
-) -> None:
-    """Raise TypeError naming *cls*, *function*, through which *cls* is constructed and which carries the name *constructor*'s generator gives the constructor it writes into *holder*, and the module defining_module gives for *holder*, whose source class_statement found holds no class statement for *holder*, if inspect reads a source for *function*, as _inspect_reads_a_source_for finds, or if its code carries the qualified name a def statement in *holder*'s class body gives it, as _compiled_in_a_class_body finds.
-
-    A function with either sign may be one the class statement that defined *holder*
-    defines, and that statement is elsewhere, as for a class whose __module__ names a
-    module that re-exports it, or in text given to exec, so whether it defines that
-    constructor is not known. class_statement looks that statement up by *holder*'s
-    __module__ and __qualname__ in the source of the module they name; the remedy leaves
-    those as the statement set them where inspect reads a source for *function*, and puts
-    the statement in that source otherwise. docs/surface-forms-inspect-readings.md §3.5
-    says how each minor reads the source of such a class.
-    """
-    module = defining_module(holder).__name__
-    if _inspect_reads_a_source_for(function):
-        evidence = "inspect reads a source for it, as for a function a def statement wrote"
-        remedy = (
-            f"leave the __module__ and __qualname__ of {label_of(holder)} as its class "
-            "statement set them"
-        )
-    elif _compiled_in_a_class_body(holder, constructor.name, function):
-        evidence = _compiled_in_a_class_body_clause(function)
-        remedy = (
-            f"define {label_of(holder)} by a class statement in the source of the module "
-            f"{module!r}"
-        )
-    else:
-        return
-    raise TypeError(
-        f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and "
-        f"{evidence}, but the source of the module {module!r} holds no class statement under "
-        f"the qualified name {holder.__qualname__!r}, so whether the class statement that "
-        f"defined {label_of(holder)} defines {constructor.name} is not known: make the name "
-        f"private, or {remedy}"
-    )
-
-
-def dataclass_parameter(cls: type, name: str) -> bool:
-    """Whether the dataclass decorator recorded its parameter *name* as on, in the __dataclass_params__ of the first class in *cls*'s MRO whose own namespace holds one: *cls*, if the decorator processed it, else the base it inherits the record from, as attribute lookup reads it."""
-    holder = next(namespace_holders(recorded_mro(cls), "__dataclass_params__"))
-    return bool(getattr(own_namespace(holder)["__dataclass_params__"], name))
-
-
-def _field_declaration_modules(
-    holder: type, names: Iterable[str]
-) -> dict[str, types.ModuleType]:
-    """The module spelling each of *names* in the __init__ the dataclass decorator wrote into *holder*: that of the nearest class in *holder*'s MRO that the decorator processed and whose own body annotates the name, or *holder*'s if none does."""
-    decorated = tuple(base for base in recorded_mro(holder) if DATACLASS_DECORATOR.processed(base))
-    return {
-        name: defining_module(
-            next((base for base in decorated if name in own_annotations(base)), holder)
-        )
-        for name in names
-    }
-
-
-_GENERATED_CONSTRUCTORS: tuple[_GeneratedConstructor, ...] = (
-    _GeneratedConstructor(
-        generator=DATACLASS_DECORATOR,
-        name="__init__",
-        writes=lambda cls: dataclass_parameter(cls, "init"),
-        spelling_modules=_field_declaration_modules,
-    ),
-    _GeneratedConstructor(
-        generator=NAMEDTUPLE,
-        name="__new__",
-        writes=lambda cls: True,
-        spelling_modules=lambda cls, names: dict.fromkeys(names, defining_module(cls)),
-    ),
-)
-_refuse_constructor_recorded_twice(_GENERATED_CONSTRUCTORS)
 
 
 def refuse_member_without_a_portable_form(label: str, member: object) -> None:

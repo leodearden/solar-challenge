@@ -47,23 +47,28 @@ import types
 import typing
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
-from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
+from tests._surface_forms_class_reads import (
+    namespace_holders,
+    own_annotations,
+    own_namespace,
+    recorded_mro,
+)
+from tests._surface_forms_generators import dataclass_parameter
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
+    class_namespace_defs,
     class_statement,
     defining_module,
     evaluated_in,
     is_immutable_type,
     is_routine,
-    scope_statements,
+    missing_class_statement_clause,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
     ModuleOrUnspelled,
     Unspelled,
-    dataclass_parameter,
     is_enum,
-    namespace_holders,
     refuse_member_without_a_portable_form,
     signature_of,
     spelling_modules,
@@ -292,11 +297,13 @@ def signature_closure(roots: Iterable[object], package: str) -> set[type]:
 def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The public attributes *cls*'s own __init__ and __post_init__ set on self that no class body in its MRO defines or declares.
 
-    An immutable type raises TypeError naming it before anything else is read, and a
-    class with no class statement inspect can read, such as ast.AST or _json.Scanner,
-    raises TypeError naming it when its source is read. A class whose metaclass shadows
-    __dict__ or overrides type's __getattribute__ raises the TypeError own_namespace
-    raises for it.
+    An immutable type raises TypeError naming it before anything else is read. A class
+    whose module's source holds no class statement under its qualified name, such as
+    ast.AST or a class whose __module__ names a module that re-exports it, raises
+    TypeError naming that module and that name, and a class whose module inspect reads
+    no source for, such as _json.Scanner, raises TypeError naming it, both when its
+    source is read. A class whose metaclass shadows __dict__ or overrides type's
+    __getattribute__ raises the TypeError own_namespace raises for it.
 
     A write to self whose attribute name the scan cannot read, such as
     setattr(self, name, value) or a reach into self.__dict__, raises TypeError naming
@@ -318,14 +325,11 @@ def undeclared_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[s
 def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
     """The attributes member_forms(cls) lists as declared that instances would lack: those *cls*'s own __init__ and __post_init__ never set on self, less each dataclass field with a default or a default factory, whose value the dataclass supplies, and each named tuple field its instances read from the tuple, which holds every field.
 
-    As in undeclared_attributes, an immutable type raises TypeError naming it before
-    anything else is read, a class with no class statement inspect can read raises
-    TypeError naming it when its source is read, a write to self whose attribute name the
-    scan cannot read raises TypeError unless *reviewed* holds its text, a text in
-    *reviewed* that is no such write's raises ValueError, and one string given as
-    *reviewed* raises TypeError. A reviewed write sets none of the declared attributes,
-    since its names are unknown. A class that member_forms refuses raises the TypeError
-    member_forms raises for it.
+    It raises as undeclared_attributes does for an immutable type, a class with no class
+    statement the scan can read, a write to self whose attribute name the scan cannot
+    read and a *reviewed* that is one string or holds a text that is no such write's. A
+    reviewed write sets none of the declared attributes, since its names are unknown. A
+    class that member_forms refuses raises the TypeError member_forms raises for it.
 
     A string annotation in *cls*'s own body is read as named_classes reads one, so a
     name its module does not bind raises NameError. Like such an annotation, *cls*'s
@@ -944,7 +948,7 @@ def _refuse_immutable_type(cls: type) -> None:
 
 
 def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
-    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines set on their receiver, each one's first parameter.
+    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines, as _initialisers finds them, set on their receiver, each one's first parameter.
 
     Each is read whole, a closure in it included. An attribute is set by any assignment
     to it on the receiver, or by setattr(receiver, "name", value),
@@ -999,17 +1003,18 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* if class_statement finds no class statement for it."""
+    """The __init__ and __post_init__ def statements that class_namespace_defs finds in *cls*'s class statement, as class_statement reads it; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
-            f"{label_of(cls)} has no class statement inspect can read, so the scan has no "
-            "__init__ or __post_init__ to read: pass a class that a class statement in a "
-            "source file defines"
+            f"{label_of(cls)} has no __init__ or __post_init__ the scan can read, since "
+            f"{missing_class_statement_clause(cls)}: pass a class that a class statement in a "
+            "source file defines, and leave its __module__ and __qualname__ as that statement "
+            "set them"
         )
     return [
         node
-        for node in scope_statements(statement.body)
+        for node in class_namespace_defs(statement)
         if isinstance(node, ast.FunctionDef) and node.name in _INITIALISERS
     ]
 

@@ -3,12 +3,13 @@
 
 from dataclasses import dataclass, fields
 from datetime import datetime
-from typing import Optional
+from typing import Final, Optional
 
 import pandas as pd
 
 from solar_challenge.battery import Battery
 from solar_challenge.dispatch import (
+    DispatchDecision,
     DispatchStrategy,
     GridChargeContext,
     SelfConsumptionStrategy,
@@ -178,41 +179,81 @@ def _build_grid_charge_context(
     )
 
 
-def _settle_timestep(
-    *,
-    generation_kwh: float,
-    demand_kwh: float,
-    pv_charge_stored_kwh: float,
-    grid_charge_stored_kwh: float,
-    battery_discharge_kwh: float,
-    battery_soc: float,
-) -> EnergyFlowResult:
-    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
-    excess_kwh = max(0.0, generation_kwh - demand_kwh)
-    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+@dataclass(frozen=True)
+class _StepEnergies:
+    """A timestep's duration in hours, its generation and demand as energies in kWh, and the excess and shortfall between them."""
 
-    battery_charge_kwh = pv_charge_stored_kwh + grid_charge_stored_kwh
+    duration_hours: float
+    generation_kwh: float
+    demand_kwh: float
+    excess_kwh: float
+    shortfall_kwh: float
+
+    @classmethod
+    def from_powers(cls, generation_kw: float, demand_kw: float, timestep_minutes: float) -> "_StepEnergies":
+        """Return the energies a timestep of timestep_minutes moves at generation_kw and demand_kw."""
+        duration_hours = timestep_minutes * HOURS_PER_MINUTE
+        generation_kwh = generation_kw * duration_hours
+        demand_kwh = demand_kw * duration_hours
+        return cls(
+            duration_hours=duration_hours,
+            generation_kwh=generation_kwh,
+            demand_kwh=demand_kwh,
+            excess_kwh=max(0.0, generation_kwh - demand_kwh),
+            shortfall_kwh=max(0.0, demand_kwh - generation_kwh),
+        )
+
+
+@dataclass(frozen=True)
+class _BatteryExchange:
+    """The energies a battery stored from PV and from the grid (after charge losses)
+    and delivered to the home's bus in one timestep, in kWh."""
+
+    pv_charge_kwh: float
+    grid_charge_kwh: float
+    discharge_kwh: float
+
+
+_NO_EXCHANGE: Final = _BatteryExchange(pv_charge_kwh=0.0, grid_charge_kwh=0.0, discharge_kwh=0.0)
+
+
+def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: float) -> _BatteryExchange:
+    """Run decision on battery for one timestep: its PV charge, then its grid charge, then its discharge, skipping each power not above 0."""
+    return _BatteryExchange(
+        pv_charge_kwh=battery.charge(decision.charge_kw, timestep_minutes) if decision.charge_kw > 0 else 0.0,
+        grid_charge_kwh=(
+            battery.charge(decision.grid_charge_kw, timestep_minutes) if decision.grid_charge_kw > 0 else 0.0
+        ),
+        discharge_kwh=(
+            battery.discharge(decision.discharge_kw, timestep_minutes) if decision.discharge_kw > 0 else 0.0
+        ),
+    )
+
+
+def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: float) -> EnergyFlowResult:
+    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
+    battery_charge_kwh = exchange.pv_charge_kwh + exchange.grid_charge_kwh
 
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
-    direct_consumption_kwh = min(generation_kwh, demand_kwh)
-    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
+    direct_consumption_kwh = min(step.generation_kwh, step.demand_kwh)
+    self_consumption_kwh = min(direct_consumption_kwh + exchange.discharge_kwh, step.demand_kwh)
 
     # Split-source grid flows, which keep validate_energy_balance closed
     # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
     # reduces export, and grid charge adds the energy it stored to import.
-    grid_export_kwh = max(0.0, excess_kwh - pv_charge_stored_kwh)
-    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh) + grid_charge_stored_kwh
+    grid_export_kwh = max(0.0, step.excess_kwh - exchange.pv_charge_kwh)
+    grid_import_kwh = max(0.0, step.shortfall_kwh - exchange.discharge_kwh) + exchange.grid_charge_kwh
 
     return EnergyFlowResult(
-        generation=generation_kwh,
-        demand=demand_kwh,
+        generation=step.generation_kwh,
+        demand=step.demand_kwh,
         self_consumption=self_consumption_kwh,
         battery_charge=battery_charge_kwh,
-        battery_discharge=battery_discharge_kwh,
+        battery_discharge=exchange.discharge_kwh,
         grid_export=grid_export_kwh,
         grid_import=grid_import_kwh,
-        battery_soc=battery_soc,
-        grid_charge=grid_charge_stored_kwh,
+        battery_soc=battery_soc_kwh,
+        grid_charge=exchange.grid_charge_kwh,
     )
 
 
@@ -254,65 +295,35 @@ def simulate_timestep(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes * HOURS_PER_MINUTE
+    step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
+    if battery is None:
+        return _settle(step, _NO_EXCHANGE, 0.0)
 
-    # Convert power to energy for this timestep
-    generation_kwh = generation_kw * duration_hours
-    demand_kwh = demand_kw * duration_hours
+    if strategy is None:
+        strategy = SelfConsumptionStrategy()
 
-    # Initialize battery-related values (split-source tracking)
-    pv_charge_stored_kwh = 0.0
-    grid_charge_stored_kwh = 0.0
-    battery_discharge_kwh = 0.0
-    battery_soc = 0.0
+    if timestamp is None:
+        timestamp = datetime(1970, 1, 1)
 
-    if battery is not None:
-        if strategy is None:
-            strategy = SelfConsumptionStrategy()
-
-        if timestamp is None:
-            timestamp = datetime(1970, 1, 1)
-
-        target_soc_kwh = battery.grid_charge_target_kwh
-        grid_charge_ctx = (
-            _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp), target_soc_kwh=target_soc_kwh)
-            if tariff is not None and target_soc_kwh is not None
-            else None
-        )
-
-        decision = strategy.decide_action(
-            timestamp=timestamp,
-            generation_kw=generation_kw,
-            demand_kw=demand_kw,
-            battery_soc_kwh=battery.soc_kwh,
-            battery_capacity_kwh=battery.effective_capacity_kwh,
-            timestep_minutes=timestep_minutes,
-            grid_charge_ctx=grid_charge_ctx,
-        )
-
-        # Split-source charge/discharge execution
-        pv_charge_stored_kwh = (
-            battery.charge(decision.charge_kw, timestep_minutes)
-            if decision.charge_kw > 0 else 0.0
-        )
-        grid_charge_stored_kwh = (
-            battery.charge(decision.grid_charge_kw, timestep_minutes)
-            if decision.grid_charge_kw > 0 else 0.0
-        )
-        battery_discharge_kwh = (
-            battery.discharge(decision.discharge_kw, timestep_minutes)
-            if decision.discharge_kw > 0 else 0.0
-        )
-        battery_soc = battery.soc_kwh
-
-    return _settle_timestep(
-        generation_kwh=generation_kwh,
-        demand_kwh=demand_kwh,
-        pv_charge_stored_kwh=pv_charge_stored_kwh,
-        grid_charge_stored_kwh=grid_charge_stored_kwh,
-        battery_discharge_kwh=battery_discharge_kwh,
-        battery_soc=battery_soc,
+    target_soc_kwh = battery.grid_charge_target_kwh
+    grid_charge_ctx = (
+        _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp), target_soc_kwh=target_soc_kwh)
+        if tariff is not None and target_soc_kwh is not None
+        else None
     )
+
+    decision = strategy.decide_action(
+        timestamp=timestamp,
+        generation_kw=generation_kw,
+        demand_kw=demand_kw,
+        battery_soc_kwh=battery.soc_kwh,
+        battery_capacity_kwh=battery.effective_capacity_kwh,
+        timestep_minutes=timestep_minutes,
+        grid_charge_ctx=grid_charge_ctx,
+    )
+
+    exchange = _execute(decision, battery, timestep_minutes)
+    return _settle(step, exchange, battery.soc_kwh)
 
 
 def simulate_timestep_tou(
@@ -353,66 +364,49 @@ def simulate_timestep_tou(
     Returns:
         EnergyFlowResult with all energy flows in kWh
     """
-    duration_hours = timestep_minutes * HOURS_PER_MINUTE
-
-    # Convert power to energy for this timestep
-    generation_kwh = generation_kw * duration_hours
-    demand_kwh = demand_kw * duration_hours
-
+    step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
     is_cheap_period = tariff.is_cheap_at(timestamp)
+    if battery is None:
+        return _settle(step, _NO_EXCHANGE, 0.0)
 
-    # Calculate excess and shortfall
-    excess_kwh = max(0.0, generation_kwh - demand_kwh)
-    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+    pv_charge_kwh = 0.0
+    grid_charge_kwh = 0.0
+    discharge_kwh = 0.0
+    if is_cheap_period:
+        # Off-peak: charge from excess PV, then optionally top-up from grid
+        if step.excess_kwh > 0:
+            excess_power_kw = step.excess_kwh / step.duration_hours
+            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
-    # Initialize battery-related values (split-source tracking)
-    pv_charge_stored_kwh = 0.0
-    grid_charge_stored_kwh = 0.0
-    battery_discharge_kwh = 0.0
-    battery_soc = 0.0
+        target_soc_kwh = battery.grid_charge_target_kwh
+        if target_soc_kwh is not None:
+            pv_charge_power_kw = min(
+                step.excess_kwh / step.duration_hours if step.excess_kwh > 0 else 0.0,
+                battery.max_charge_kw,
+            )
+            ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
+            grid_power = compute_grid_charge_power_kw(
+                ctx,
+                battery_soc_kwh=battery.soc_kwh,  # post-PV-charge SOC
+                pv_charge_power_kw=pv_charge_power_kw,
+                timestep_minutes=timestep_minutes,
+            )
+            if grid_power > 0:
+                grid_charge_kwh = battery.charge(grid_power, timestep_minutes)
+    else:
+        # Peak: discharge to meet shortfall, then charge from excess PV
+        if step.shortfall_kwh > 0:
+            shortfall_power_kw = step.shortfall_kwh / step.duration_hours
+            discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
 
-    if battery is not None:
-        if is_cheap_period:
-            # Off-peak: charge from excess PV, then optionally top-up from grid
-            if excess_kwh > 0:
-                excess_power_kw = excess_kwh / duration_hours
-                pv_charge_stored_kwh = battery.charge(excess_power_kw, timestep_minutes)
+        if step.excess_kwh > 0:
+            excess_power_kw = step.excess_kwh / step.duration_hours
+            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
-            target_soc_kwh = battery.grid_charge_target_kwh
-            if target_soc_kwh is not None:
-                pv_charge_power_kw = min(
-                    excess_kwh / duration_hours if excess_kwh > 0 else 0.0,
-                    battery.max_charge_kw,
-                )
-                ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
-                grid_power = compute_grid_charge_power_kw(
-                    ctx,
-                    battery_soc_kwh=battery.soc_kwh,  # post-PV-charge SOC
-                    pv_charge_power_kw=pv_charge_power_kw,
-                    timestep_minutes=timestep_minutes,
-                )
-                if grid_power > 0:
-                    grid_charge_stored_kwh = battery.charge(grid_power, timestep_minutes)
-        else:
-            # Peak: discharge to meet shortfall, then charge from excess PV
-            if shortfall_kwh > 0:
-                shortfall_power_kw = shortfall_kwh / duration_hours
-                battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
-
-            if excess_kwh > 0:
-                excess_power_kw = excess_kwh / duration_hours
-                pv_charge_stored_kwh = battery.charge(excess_power_kw, timestep_minutes)
-
-        battery_soc = battery.soc_kwh
-
-    return _settle_timestep(
-        generation_kwh=generation_kwh,
-        demand_kwh=demand_kwh,
-        pv_charge_stored_kwh=pv_charge_stored_kwh,
-        grid_charge_stored_kwh=grid_charge_stored_kwh,
-        battery_discharge_kwh=battery_discharge_kwh,
-        battery_soc=battery_soc,
+    exchange = _BatteryExchange(
+        pv_charge_kwh=pv_charge_kwh, grid_charge_kwh=grid_charge_kwh, discharge_kwh=discharge_kwh
     )
+    return _settle(step, exchange, battery.soc_kwh)
 
 
 def validate_energy_balance(
@@ -436,29 +430,11 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # Left side: energy in
+    # _settle derives the flows so that this balance closes whenever a step's PV charge is within
+    # its excess and its discharge within its shortfall.
     energy_in = result.generation + result.grid_import
-
-    # Right side: energy out
-    # Note: self_consumption is part of demand that was met
-    # Net storage = charge - discharge
     storage_delta = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + storage_delta
-
-    # generation + import = demand + export + (charge - discharge)
-    # This simplifies because:
-    # - self_consumption = min(gen, demand)
-    # - excess = gen - demand when positive
-    # - shortfall = demand - gen when positive
-    # - export = excess - charge
-    # - import = shortfall - discharge
-
-    # Let's verify:
-    # gen + import = demand + export + charge - discharge
-    # gen + (shortfall - discharge) = demand + (excess - charge) + charge - discharge
-    # gen + shortfall - discharge = demand + excess - charge + charge - discharge
-    # gen + shortfall = demand + excess
-    # This is true since shortfall = max(0, demand - gen) and excess = max(0, gen - demand)
 
     imbalance = abs(energy_in - energy_out)
 

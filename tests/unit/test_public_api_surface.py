@@ -278,6 +278,11 @@ def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
 # ---------------------------------------------------------------------------
 FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- signature-closure types ---
+    "SummaryStatistics": {
+        "total_pv_charge_kwh": "property (self) -> float",
+        "total_direct_self_consumption_kwh": "property (self) -> float",
+        "total_grid_to_demand_kwh": "property (self) -> float",
+    },
     "ScenarioConfig": {
         "is_fleet": "property (self) -> bool",
         "get_location": "(self) -> Location",

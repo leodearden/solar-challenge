@@ -1356,6 +1356,10 @@ class TestComputeSOH:
         expected = 1.0 - params.calendar_fade_rate_per_year * 5.0
         assert result == pytest.approx(max(params.soh_floor, min(1.0, expected)))
 
+    def test_one_equivalent_full_cycle_is_one_usable_capacity_of_discharged_energy(self) -> None:
+        """SOH = 1 − 0.02×12 calendar − 5e-5×(12000/4) cycle fade: 12,000 kWh discharged over 4 kWh usable is 3,000 equivalent full cycles."""
+        assert compute_soh(12.0, 12000.0, 4.0, BatteryConfig(capacity_kwh=5.0)) == pytest.approx(0.61, abs=1e-12)
+
 
 class TestBatteryConfigNominalUsableCapacity:
     """nominal_usable_capacity_kwh is the capacity between the SOC limits, before SOH de-rating."""
@@ -1408,6 +1412,10 @@ class TestBatterySOHDerating:
         cfg = BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)
         battery = Battery(cfg)
         assert battery.soh < 1.0
+
+    def test_single_run_soh_is_one_minus_its_calendar_fade(self) -> None:
+        """SOH = 1 − 0.02×10: a single run counts no throughput, so no cycle fade."""
+        assert Battery(BatteryConfig(capacity_kwh=5.0, system_age_years=10.0)).soh == pytest.approx(0.8, abs=1e-12)
 
     def test_aged_battery_usable_capacity_reduced(self) -> None:
         """Battery with age has strictly smaller usable_capacity_kwh than fresh battery."""

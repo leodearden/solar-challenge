@@ -50,8 +50,8 @@ def compare_page() -> str | Response:
     given or fewer than two of them are found in the database; a missing or
     empty ``ids`` renders the no-runs-selected empty state instead.
 
-    Each run found is compared by its columns and, as ``summary``, its summary's field
-    tree, {} while it has none. A run whose summary cannot be read is not compared as a run
+    Each run found is compared by its columns and, as ``summary``, its record's
+    RunRecord.summary_tree(). A run whose summary cannot be read is not compared as a run
     of zeros: the page redirects to the runs page, flashing its StoredRunUnreadable's message,
     which names the run, the document and the field.
 
@@ -75,11 +75,11 @@ def compare_page() -> str | Response:
         record = storage.run_record(rid)
         if record is not None:
             try:
-                summary = record.summary()
+                summary_tree = record.summary_tree()
             except StoredRunUnreadable as unreadable:
                 flash(str(unreadable), "error")
                 return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
-            runs.append({**asdict(record), "summary": {} if summary is None else asdict(summary)})
+            runs.append({**asdict(record), "summary": summary_tree})
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")

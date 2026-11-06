@@ -15,6 +15,7 @@
 **Unreleased on main** (task 702): `YearPoint.fleet_self_consumption_kwh`, the fleet's billed own-use (§4) and the cost-recovery solve's rate base (§5), is renamed `fleet_billed_own_use_kwh`; the 0.5.0 tag has the old name. `project_multi_year` also no longer floors a year's `fleet_revenue_gbp` at £0, so a `simulate` whose fleet earns a negative revenue projects, and the solve prices, that loss; the 0.5.0 tag projects it as £0. Its adaptive refinement measures each metric's interpolation error against the magnitude of that metric's age-0 value, so a fleet whose revenue is negative at age 0 and varies with age converges as the fleet earning the mirror revenue does; the 0.5.0 tag divides that fleet's revenue error by 1e-9, so its bisection typically runs to `MAX_NODES` and reports a meaningless `interp_error_estimate`. Fleets `simulate_fleet` builds are unaffected: their own-use, SEG and grid-services income is never negative.
 **Unreleased on main** (task 801): `project_multi_year` prices grid-services income from each simulated age's own fleet, seed and bisection-trial ages alike (§4, §8.1), so capacity-at-events income falls with battery SOH; the 0.5.0 tag books the age-0 event figure at every age. A flat rate prices the batteries of the fleet `simulate` returns, which `simulate_fleet` pairs with the scenario's homes, so the flat figure is unchanged. An event window the simulated period never enters is named in one `UserWarning` per projection (§4); the 0.5.0 tag prices it at £0 silently.
 **Unreleased on main** (task 778): the `sim_days_h` by which a home's window under 360 days is annualised (§4, *Annual basis*) is its calendar days, as `calculate_summary` now counts them. For a window that crosses the October clock change but not the March one, such as 2024-10-01 to 2024-11-30, that is 61 days, so `k_h = 365/61`; the 0.5.0 tag's `simulation_days` counts 62.
+**Unreleased on main** (task 865): each simulated age's battery SOH counts one equivalent full cycle per usable capacity of discharged energy (§4, *Battery ageing*); the 0.5.0 tag counts one per two usable capacities, so its cycle fade is half the configured `cycle_fade_per_equivalent_full_cycle`, and a battery fleet's later-year battery SOH and own-use read high there and its solved own-use rate low.
 
 ---
 
@@ -374,13 +375,20 @@ unchanged (`k_h = 1`).  A short window is still one season's sample, so board
 figures want `scenario.period` to cover about one full year.
 
 **Battery ageing.** `project_multi_year` simulates each sampled age `t` with
-every home's battery at `battery.compute_soh(t, T_h(t))`, where `T_h(t)` is the
-home's cumulative battery throughput (kWh) from installation to `t`.  Throughput
-accrues at the annualised discharge simulated at the latest seed age (0,
+every home's battery at `battery.compute_soh(t, T_h(t), U_h)`, where `T_h(t)` is
+the energy home h's battery has discharged (kWh) from installation to `t`, its
+cumulative throughput, and `U_h` is its nominal usable capacity
+(`BatteryConfig.nominal_usable_capacity_kwh`).  Throughput accrues at the
+annualised discharge simulated at the latest seed age (0,
 `asset_life_years // 2`, `asset_life_years − 1`) at or below `t`, for seed and
-bisection-trial ages alike (`_throughput_at`).  `T_h` never falls and
-`compute_soh` never rises in age or throughput, so `YearPoint.battery_soh` is
-non-increasing year on year
+bisection-trial ages alike (`_throughput_at`).  One equivalent full cycle is
+`U_h` of discharge, so the cycle fade at `t` is
+`cycle_fade_per_equivalent_full_cycle × T_h(t) / U_h`, beside the calendar fade
+`calendar_fade_rate_per_year × t`, and `compute_soh` clamps
+`1 − calendar fade − cycle fade` to `[soh_floor, 1]`
+(`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge::test_battery_soh_falls_by_its_calendar_and_cycle_fade_in_closed_form`).
+`T_h` never falls and `compute_soh` never rises in age or throughput, so
+`YearPoint.battery_soh` is non-increasing year on year
 (`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge`).
 A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.

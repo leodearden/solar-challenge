@@ -213,7 +213,7 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
     Returns:
         JSON with the job's run's id, name, type and creation time, and as ``summary`` its
-        summary's field tree, {} while it has none; or 404/409 on error. A run whose summary
+        record's RunRecord.summary_tree(); or 404/409 on error. A run whose summary
         cannot be read is answered 409 with its refusal, as the blueprint answers a
         StoredRunUnreadable.
     """
@@ -234,14 +234,13 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
 
     if run is None:
         return jsonify({"error": "Run not found"}), 404
-    summary = run.summary()
 
     return jsonify({
         "run_id": run_id,
         "name": run.name,
         "type": run.type,
         "created_at": run.created_at,
-        "summary": {} if summary is None else field_tree(summary),
+        "summary": run.summary_tree(),
     }), 200
 
 # ---------------------------------------------------------------------------

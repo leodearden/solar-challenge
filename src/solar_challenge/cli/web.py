@@ -101,7 +101,11 @@ def migrate() -> None:
     Brings the store under ~/.solar-challenge, which an older solar-challenge
     left, to the schema version this one reads, applying in order each
     migration step it is behind by, and prints each step it applied. A store
-    already at this version is left as it is.
+    already at this version has no step to apply. After the steps, even when
+    there were none, each run still in an older stored-run format or with no
+    format.json, e.g. one an earlier migration left whose documents have
+    since been fixed, is brought forward and printed, and each it still
+    cannot migrate is printed again.
 
     A step can bring each stored run to the stored-run format too: it prints
     each value it drops from a run's documents that is not null, naming the
@@ -121,13 +125,22 @@ def migrate() -> None:
     naming it. A step that cannot write a stored run's file, e.g. on a full
     disk, is refused too, naming the step and the fault: the store stays at
     the version before it, and the command, run again once the fault is
-    fixed, migrates it.
+    fixed, migrates it. So is a file of a run still in an older format that
+    it cannot write after the steps, naming the fault: the store is left at
+    this version, and the command, run again once the fault is fixed, brings
+    the run forward.
 
     Examples:
       solar-challenge web migrate
     """
     from solar_challenge.web.app import default_store_location
-    from solar_challenge.web.schema import MigrationRefused, SchemaVersionMismatch, StoreUnreadable, migrate_store
+    from solar_challenge.web.schema import (
+        LaggingRunsRefused,
+        MigrationRefused,
+        SchemaVersionMismatch,
+        StoreUnreadable,
+        migrate_store,
+    )
     from solar_challenge.web.store_lock import StoreLockError, acquire_store_lock
 
     location = default_store_location()
@@ -137,7 +150,7 @@ def migrate() -> None:
             report = migrate_store(location.database, location.data_dir)
         finally:
             store_lock.release()
-    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused) as refused:
+    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused, LaggingRunsRefused) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
     print_report(str(report))

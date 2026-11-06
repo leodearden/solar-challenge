@@ -29,8 +29,9 @@ members a class's own body defines, raises `TypeError` for one that is a
 `member_forms`, `undeclared_attributes` and `unset_attributes` raise `LookupError` for a
 class that `dataclasses.make_dataclass` makes in the module binding it, since 3.11 records
 `types` as its `__module__` (4.10). Each entry says how each minor reads its objects, and
-names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do.
-Each `TypeError` also states its own case's reading.
+names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do,
+and what `undeclared_attributes`, `unset_attributes` and `signature_closure` do where it
+states their readings. Each `TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -218,6 +219,14 @@ whose `__qualname__` was assigned another statement's qualified name by that oth
 statement, as 3.11 and 3.12 read it: `undeclared_attributes` reads the `Real` above by
 `class Decoy:`. No record on any minor tells which of a class's `__qualname__` and
 `__name__` was assigned, so no rule could refuse the one and still read the other.
+Where the source of the module a class's `__module__` names holds no class statement
+under its qualified name, as for the re-homed `Submeter` above, a class
+`collections.namedtuple` makes, or `ast.AST`, `undeclared_attributes` and
+`unset_attributes` have no `__init__` or `__post_init__` to read: both raise `TypeError`
+naming the class, that module and that qualified name, alike on every minor. The error's
+remedy defines the class by a class statement in a source file and leaves both
+`__module__` and `__qualname__` as that statement set them, as the remedy below for a
+constructor `inspect` reads a source for leaves them.
 
 The dataclass decorator writes an `__init__`, and `collections.namedtuple` a `__new__`,
 named after the class, unless its statement defines one. On every admitted minor
@@ -285,21 +294,22 @@ body defines `def __init__(self, tap: 'Tap')`, is refused so; read as the decora
 would name `{Fraction}` where `{Decimal}` is right.
 
 Pinned by:
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_in_a_class_whose_modules_source_holds_no_class_statement_for_it_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_whose_module_re_exports_it_raises_type_error_naming_the_class_the_constructor_and_that_module`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_modules_source_holds_no_class_statement_for_it_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_named_tuple_constructor_of_a_class_no_class_statement_made_names_the_classes_the_module_of_that_class_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_named_as_generated_in_a_class_whose_modules_source_holds_no_class_statement_for_it_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_dataclass_constructor_of_a_class_whose_module_assigns_it_the_module_name_it_already_holds_is_read_as_the_class_statement_that_defined_it_defines_it`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_module_assigns_it_the_module_name_it_already_holds_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_defined_with_def_in_a_dataclass_its_enclosing_function_or_class_body_declares_global_names_the_classes_its_own_module_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_generated_dataclass_constructor_of_a_class_whose_module_holds_another_class_statement_under_its_qualified_name_raises_type_error_naming_the_class`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_name_a_global_statement_in_another_body_declares_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_a_function_its_enclosing_function_declares_global_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_in_an_async_def_has_its_class_statement_read_by_undeclared_attributes_and_unset_attributes`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
-- `tests/unit/surface_forms_helper/test_named_classes_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_code_carries_another_qualified_name_than_a_def_in_its_class_body_gives_is_spelled_as_its_generator_spells_what_it_writes`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_generated_constructor_whose_class_body_holds_a_def_of_its_name_that_did_not_write_it_is_spelled_as_its_generator_spells_what_it_wrote`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
+- `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_code_carries_another_qualified_name_than_a_def_in_its_class_body_gives_is_spelled_as_its_generator_spells_what_it_writes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes`
 
 ## 4. Refused
 
@@ -1050,7 +1060,8 @@ class as `types.Made`, the module `types` by its file, and that this module bind
 under the class's qualified name. `member_forms`, `undeclared_attributes` and
 `unset_attributes` look the class's module up the same way and raise the same error.
 `surface_form` spells the class alike on every minor, as
-`dataclass[eq] (spare: Tap) -> None`. From 3.12 the class records the `__module__` and
+`dataclass[eq] (spare: Tap) -> None`, and spells the one `dataclass(types.new_class(...))`
+makes the same way. From 3.12 the class records the `__module__` and
 globals that one `dataclass(type(...))` makes in the calling module records, and reads as
 that one does (3.5): `named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
 `undeclared_attributes` and `unset_attributes` raise `TypeError`, as for any class with no
@@ -1081,9 +1092,16 @@ compiled carry.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it`
-- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_a_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_has_no_member_since_its_class_form_pins_its_one_field`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_dataclass_types_new_class_or_dataclasses_make_dataclass_makes_is_spelled_by_its_kind_then_its_constructor_signature_whatever_module_it_records`
 
 ## 5. When the Admitted Minors Change
 

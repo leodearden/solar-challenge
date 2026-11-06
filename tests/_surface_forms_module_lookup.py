@@ -2,8 +2,9 @@
 """The module that defined an object, as sys.modules holds it, checked to be that object's own, and what is read there: a string annotation, evaluated as a type checker reads it, and the class statement that defines a class, parsed from that module's source.
 
 That lookup reads an object's kind through is_routine, is_get_delete_descriptor,
-is_immutable_type and spelled_function, and the statements of a scope through
-scope_statements; the helper's other modules read objects and scopes through them too.
+is_immutable_type and spelled_function, and the helper's other modules read objects
+through them too; they read, through class_namespace_defs, the def statements that bind
+in the namespace of the class a class statement defines.
 Of the helper, this module imports only the modules below it in
 tests/unit/test_surface_forms_layers.py's LAYERS, which checks that.
 """
@@ -236,12 +237,15 @@ def _body_witness(cls: type) -> types.FunctionType | None:
     """The first function in *cls*'s own namespace, read through spelled_function and unwrapped from any decorator that records it as __wrapped__, whose globals may check the module *cls*'s body ran in, as _witnesses_its_body finds; None if there is none.
 
     There is none if no function there is named after *cls*, as when its body compiled
-    none (an annotation-only body before Python 3.14, which compiles its __annotate__
-    unless the module imports annotations from __future__) and nothing since wrote one
-    there; or if may_be_generated finds a generator may have written each one that is,
-    as for a dataclass body whose only method is a hand-written __init__. So a function
-    a generator wrote there after the body ran, named after *cls*, can be the witness
+    none (an annotation-only body) and nothing since wrote one there; or if
+    may_be_generated finds a generator may have written each one that is, as for a
+    dataclass body whose only method is a hand-written __init__. So a function a
+    generator wrote there after the body ran, named after *cls*, can be the witness
     unless may_be_generated finds it, even where the body compiled none.
+
+    Both examples have no witness only where the body compiles no __annotate__.
+    Python 3.14 compiles one for an annotated body unless its module imports annotations
+    from __future__; named after *cls* and not found by may_be_generated, it is a witness.
     """
     functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
@@ -258,11 +262,7 @@ def _body_witness(cls: type) -> types.FunctionType | None:
 
 
 def _witnesses_its_body(cls: type, function: types.FunctionType) -> bool:
-    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__.
-
-    Only *cls*'s class statement, read once its module is checked, could tell a function
-    its body compiled from one a generator wrote.
-    """
+    """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__."""
     return (
         function.__qualname__ == f"{cls.__qualname__}.{function.__name__}"
         and not may_be_generated(cls, function)
@@ -305,6 +305,14 @@ def class_statement(cls: type) -> ast.ClassDef | None:
         f"{label_of(cls)} is defined by one of several class statements its module's "
         f"source holds under the qualified name {cls.__qualname__!r}, which does not tell "
         "which of them defined it: define the class with one class statement"
+    )
+
+
+def missing_class_statement_clause(cls: type) -> str:
+    """What the helper's errors say where class_statement returns None for *cls*: that the source of the module defining_module gives for *cls* holds no class statement under *cls*'s qualified name."""
+    return (
+        f"the source of the module {defining_module(cls).__name__!r} holds no class statement "
+        f"under the qualified name {cls.__qualname__!r}"
     )
 
 
@@ -377,14 +385,14 @@ def _class_statements_named(qualified_name: str, source: str) -> tuple[ast.Class
 def _class_statements_in(
     nodes: Iterable[ast.AST], scope: str, declared_global: Collection[str]
 ) -> Iterator[tuple[str, ast.ClassDef]]:
-    """Each class statement that scope_statements finds among *nodes*, or in the body of a class or def statement it finds, at any depth, with the qualified name it gives the class it defines, as the compiler spells it: _qualified_name spells each class or function name from the scope of the body holding its statement and the names that body's global statements declare, *scope* and *declared_global* for the body *nodes* belong to; a class's body has its qualified name, dotted, as its scope, and a function's its qualified name, dotted with <locals>."""
-    for statement in scope_statements(nodes):
+    """Each class statement that _scope_statements finds among *nodes*, or in the body of a class or def statement it finds, at any depth, with the qualified name it gives the class it defines, as the compiler spells it: _qualified_name spells each class or function name from the scope of the body holding its statement and the names that body's global statements declare, *scope* and *declared_global* for the body *nodes* belong to; a class's body has its qualified name, dotted, as its scope, and a function's its qualified name, dotted with <locals>."""
+    for statement in _scope_statements(nodes):
         match statement:
             case ast.ClassDef(name=name, body=body):
                 qualified_name = _qualified_name(name, scope, declared_global)
                 yield qualified_name, statement
                 yield from _class_statements_in(
-                    body, f"{qualified_name}.", frozenset(names_declared_by(body, ast.Global))
+                    body, f"{qualified_name}.", frozenset(_names_declared_by(body, ast.Global))
                 )
             case ast.FunctionDef(name=name, body=body) | ast.AsyncFunctionDef(
                 name=name, body=body
@@ -392,7 +400,7 @@ def _class_statements_in(
                 yield from _class_statements_in(
                     body,
                     f"{_qualified_name(name, scope, declared_global)}.<locals>.",
-                    frozenset(names_declared_by(body, ast.Global)),
+                    frozenset(_names_declared_by(body, ast.Global)),
                 )
 
 
@@ -401,13 +409,13 @@ def _qualified_name(name: str, scope: str, declared_global: Collection[str]) -> 
     return name if name in declared_global else f"{scope}{name}"
 
 
-def names_declared_by(
+def _names_declared_by(
     nodes: Iterable[ast.AST],
     kind: type[ast.Global] | type[ast.Nonlocal],
     *other_kinds: type[ast.Global] | type[ast.Nonlocal],
 ) -> Iterator[str]:
-    """The names that the global or nonlocal statements of *kind* or one of *other_kinds* that scope_statements finds among *nodes* declare in the body *nodes* belong to, wherever in it they stand, even in a block that never runs; never those of one in a def or class statement among them, whose body declares its own."""
-    for statement in scope_statements(nodes):
+    """The names that the global or nonlocal statements of *kind* or one of *other_kinds* that _scope_statements finds among *nodes* declare in the body *nodes* belong to, wherever in it they stand, even in a block that never runs; never those of one in a def or class statement among them, whose body declares its own."""
+    for statement in _scope_statements(nodes):
         match statement:
             case ast.Global(names=names) | ast.Nonlocal(names=names) if isinstance(
                 statement, (kind, *other_kinds)
@@ -415,7 +423,20 @@ def names_declared_by(
                 yield from names
 
 
-def scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
+def class_namespace_defs(
+    statement: ast.ClassDef,
+) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Each def or async def statement that _scope_statements finds in *statement*'s body, in source order, even in a block that never runs, that binds its name in the namespace of the class *statement* defines: each one whose name no global or nonlocal statement of that body declares, as _names_declared_by finds them, since such a declaration makes the def bind it in the module's globals or an enclosing function's namespace."""
+    bound_outside = frozenset(_names_declared_by(statement.body, ast.Global, ast.Nonlocal))
+    for node in _scope_statements(statement.body):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name not in bound_outside
+        ):
+            yield node
+
+
+def _scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
     """Each statement among *nodes*, or in any block of theirs, in source order, even a block that never runs: an if, for, while, try, with or match statement's blocks, its except handlers and match cases included, so each statement of the scope *nodes* run in; never one in a def or class statement's body, which runs in a scope of its own, nor in an expression, which holds none."""
     for node in nodes:
         if isinstance(node, ast.stmt):
@@ -424,7 +445,7 @@ def scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
             case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef() | ast.expr():
                 pass
             case _:
-                yield from scope_statements(ast.iter_child_nodes(node))
+                yield from _scope_statements(ast.iter_child_nodes(node))
 
 
 class NoSourceError(Exception):

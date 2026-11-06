@@ -1100,6 +1100,27 @@ gains `grid_charge_target_kwh` and `max_charge_kw`. The platform's planner
 workaround of `soh=1.0` (task 875) stays correct and can go; it needs no other
 change.
 
+**Unreleased on main** (task 833): `SummaryStatistics` gains three read-only
+properties, each the difference of two of its totals, in kWh:
+`total_pv_charge_kwh`, the battery charge less `total_grid_charge_kwh`;
+`total_direct_self_consumption_kwh`, the self-consumption less the battery
+discharge, which `simulate_home` counts in self-consumption; and
+`total_grid_to_demand_kwh`, the grid import less `total_grid_charge_kwh`. The
+0.5.0 tag has none of them. Consumers need no change when they re-pin, and a
+subtraction of their own that computes one can go.
+
+**Unreleased on main** (task 865): `compute_soh` counts one
+equivalent full cycle per usable capacity of discharged energy, where the 0.5.0
+tag counts one per two usable capacities, so its cycle fade doubles:
+`compute_soh(12.0, 12000.0, 4.0, BatteryConfig(capacity_kwh=5.0))` returns 0.61
+where the tag returns 0.685. Its signature is unchanged, and so is a single
+run's SOH, which counts no throughput. Multi-year battery SOH, later-year
+own-use and the cost-recovery solve move for battery fleets
+([cost-recovery-finance-model.md](cost-recovery-finance-model.md) §4). The
+platform needs no code change: it does not call `compute_soh`, though the rate
+its `recommend_rate` takes from `solve_cost_recovery_rate` moves for a battery
+fleet.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

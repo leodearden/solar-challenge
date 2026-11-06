@@ -3,10 +3,10 @@
 
 import _json
 import _random
-import ast
 import collections
 import decimal
 import functools
+import importlib
 import pathlib
 import re
 import sys
@@ -18,10 +18,16 @@ import pytest
 
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
 from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
+    made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
     metaclass_whose_dict_gives,
     metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
@@ -354,7 +360,6 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 @pytest.mark.parametrize(
     ("cls", "naming_it"),
     [
-        pytest.param(ast.AST, r"\bast\.AST\b.*\bno class statement inspect can read\b", id="ast.AST"),
         pytest.param(
             _random.Random,
             r"\b_random\.Random\b.*\bno class statement inspect can read\b",
@@ -370,9 +375,101 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], cls: type, naming_it: str
 ) -> None:
-    """None is an immutable type: ast.AST's module has a source, _random.Random's has none, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
+    """None is an immutable type: _random.Random's module has no source, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
     with pytest.raises(TypeError, match=naming_it):
         scan(cls)
+
+
+def _no_class_statement_error(module: str, qualname: str) -> str:
+    """The whole TypeError the scans raise for the class *qualname* of the module *module*, whose source holds no class statement under that qualified name."""
+    return (
+        f"{module}.{qualname} has no __init__ or __post_init__ the scan can read, since the "
+        f"source of the module {module!r} holds no class statement under the qualified name "
+        f"{qualname!r}: pass a class that a class statement in a source file defines, and "
+        "leave its __module__ and __qualname__ as that statement set them"
+    )
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+@pytest.mark.parametrize(
+    ("sources", "module", "qualname"),
+    [
+        pytest.param(
+            {
+                "submeters": (
+                    "class Submeter:\n    def __init__(self) -> None:\n        self.site = 1\n"
+                ),
+                "storefront": "from submeters import Submeter\n\nSubmeter.__module__ = __name__\n",
+            },
+            "storefront",
+            "Submeter",
+            id="re-homed",
+        ),
+        pytest.param(
+            {"tupling": "import collections\n\nPlain = collections.namedtuple('Plain', ['kwh'])\n"},
+            "tupling",
+            "Plain",
+            id="namedtuple",
+        ),
+        pytest.param({}, "ast", "AST", id="ast.AST"),
+    ],
+)
+def test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    sources: dict[str, str],
+    module: str,
+    qualname: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A class statement in submeters defines storefront.Submeter, re-homed to storefront, which re-exports it; collections.namedtuple made tupling.Plain; ast binds ast.AST, and ast's source holds no class AST."""
+    for name, source in sources.items():
+        imported_module(tmp_path, monkeypatch, name, source)
+    expected = _no_class_statement_error(module, qualname)
+
+    with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
+        scan(getattr(importlib.import_module(module), qualname))
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scanclassing = imported_module(tmp_path, monkeypatch, "scanclassing", NEW_CLASS_MADE_SOURCE)
+
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
+        scan(scanclassing.Made)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scandataclassmaking = imported_module(
+        tmp_path, monkeypatch, "scandataclassmaking", MAKE_DATACLASS_MADE_SOURCE
+    )
+
+    if make_dataclass_records("scandataclassmaking") == "types":
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
+            scan(scandataclassmaking.Made)
+    else:
+        expected = _no_class_statement_error("scandataclassmaking", "Made")
+        with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
+            scan(scandataclassmaking.Made)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "scanfactories", MAKE_DATACLASS_FACTORY_SOURCE)
+    scanfactoring = imported_module(
+        tmp_path, monkeypatch, "scanfactoring", make_dataclass_factoring_source("scanfactories")
+    )
+    recorded = make_dataclass_records("scanfactories")
+
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
+        scan(scanfactoring.Made)
 
 
 _EACH_SCAN_OF_A_CLASS_THAT_SETS_SITE_AND_DECLARES_RATE = pytest.mark.parametrize(
@@ -636,3 +733,81 @@ def test_an_initialiser_the_class_body_defines_in_a_block_of_another_statement_i
 
     assert vars(blocking.Meter()).keys() == {"rate", "site"}
     assert scan(blocking.Meter) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, set(), id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global",
+        ),
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    if True:\n"
+            "        global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global-in-a-block",
+        ),
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    if False:\n"
+            "        global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global-in-a-block-that-never-runs",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    __init__ = None\n"
+            "\n"
+            "    class Meter:\n"
+            "        rate: float\n"
+            "\n"
+            "        nonlocal __init__\n"
+            "\n"
+            "        def __init__(self) -> None:\n"
+            "            self.rate = 1.0\n"
+            "            self.site = 'roof'\n"
+            "\n"
+            "    return Meter\n"
+            "\n"
+            "Meter = build()\n",
+            id="nonlocal",
+        ),
+    ],
+)
+def test_an_initialiser_whose_name_the_class_body_declares_global_or_nonlocal_is_not_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    source: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redeclaring = imported_module(tmp_path, monkeypatch, "redeclaring", source)
+
+    assert vars(redeclaring.Meter()) == {}
+    assert scan(redeclaring.Meter) == expected
