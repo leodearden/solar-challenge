@@ -325,7 +325,8 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   reports again each it still cannot migrate. A run in the current format is caught up the same
   way when its save did not finish, leaving no `format.json`, or its row holds a shape only the
   first format admits, such as an unknown key, which v2 then drops. A write it cannot make then
-  is refused with `LaggingRunsRefused`, and the store stays at its version.
+  is refused with `LaggingRunsRefused`: the store stays at `SCHEMA_VERSION`, as it was or as the
+  migration's steps left it, and the message says which.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;

@@ -1411,7 +1411,7 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
 
     assert isinstance(refused.value.__cause__, OSError)
     message = str(refused.value)
-    for named in [str(store), f"schema version {SCHEMA_VERSION}", str(RUN_FORMAT_VERSION), str(marker)]:
+    for named in [str(store), f"schema version {SCHEMA_VERSION}, as it was", str(RUN_FORMAT_VERSION), str(marker)]:
         assert named in message, (named, message)
     assert _user_version(store) == SCHEMA_VERSION
     assert _files_of(_run_dir(store, run_id)) == files_before
@@ -1426,6 +1426,20 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
 def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
     """No request causes it: the migration that meets the fault refuses to go on."""
     assert not issubclass(LaggingRunsRefused, ValueError)
+
+
+def test_a_lagging_runs_refused_after_its_migration_s_steps_names_the_version_they_brought_the_store_from(
+    tmp_path: Path,
+) -> None:
+    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before."""
+    path = tmp_path / "store.db"
+    fault = sqlite3.OperationalError("disk I/O error")
+
+    message = str(LaggingRunsRefused(path, 1, fault))
+
+    for named in [str(path), f"schema version {SCHEMA_VERSION}", "brought it from version 1", str(fault)]:
+        assert named in message, (named, message)
+    assert "as it was" not in message
 
 
 def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(

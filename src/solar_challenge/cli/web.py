@@ -125,9 +125,10 @@ def migrate() -> None:
     naming it. A step that cannot write a stored run's file, e.g. on a full
     disk, is refused too, naming the step and the fault: the store stays at
     the version before it, and the command, run again once the fault is
-    fixed, migrates it. So is a file of a run an earlier migration left that
-    it cannot write, naming the fault: the store stays at its version, and
-    the command, run again once the fault is fixed, brings the run forward.
+    fixed, migrates it. So is a file of a run still in an older format that
+    it cannot write after the steps, naming the fault: the store is left at
+    this version, and the command, run again once the fault is fixed, brings
+    the run forward.
 
     Examples:
       solar-challenge web migrate

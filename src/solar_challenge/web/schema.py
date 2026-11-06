@@ -130,18 +130,24 @@ class MigrationRefused(Exception):
 
 
 class LaggingRunsRefused(Exception):
-    """A store at its schema version whose lagging runs, those an earlier migration left in an older stored-run format, cannot be brought forward, as a run's file or the runs rows cannot be written; the message names the store, its schema version, the stored-run format version and the fault.
+    """A migration's catch-up that cannot bring forward the runs of a store still in an older stored-run format, as a run's file cannot be written or the runs rows cannot be read or written.
 
-    It is not a ValueError: no request causes it, as MigrationRefused is not one.
+    The message names the store, the stored-run format version, the schema version the store
+    stays at, SCHEMA_VERSION, and how it came to be there: as it was, when the migration found
+    it at that version, or else by the steps the migration applied from *found*, the version it
+    found it at, which stay applied; then the fault. It is not a ValueError: no request causes
+    it, as MigrationRefused is not one.
     """
 
-    def __init__(self, path: Path, fault: OSError | sqlite3.Error) -> None:
+    def __init__(self, path: Path, found: int, fault: OSError | sqlite3.Error) -> None:
+        arrival = "as it was" if found == SCHEMA_VERSION else f"to which this migration's steps brought it from version {found}"
         super().__init__(
-            f"The runs an earlier migration left in {path} cannot be brought forward to stored-run format version "
-            f"{RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, as it was, and the runs "
-            f"brought forward before the fault stay so: {fault}"
+            f"The runs of {path} still in an older stored-run format cannot be brought forward to stored-run format "
+            f"version {RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, {arrival}, and the "
+            f"runs brought forward before the fault stay so: {fault}"
         )
         self.path = path
+        self.found = found
 
 
 def _schema_v1(conn: sqlite3.Connection) -> None:
@@ -350,7 +356,9 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             nothing, so the store stays at the version before it.
         LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
             or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
-            stays at SCHEMA_VERSION, and the runs brought forward before the fault stay so.
+            stays at SCHEMA_VERSION, as it was or as the steps of this migration left it, and
+            the runs brought forward before the fault stay so. Those steps stay applied, but no
+            report of them is made, as none is of the steps before one MigrationRefused refuses.
         sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
@@ -367,7 +375,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     try:
         caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
     except (OSError, sqlite3.Error) as fault:
-        raise LaggingRunsRefused(database_path, fault) from fault
+        raise LaggingRunsRefused(database_path, found, fault) from fault
     outcome += caught_up
     return MigrationReport(
         database_path,
