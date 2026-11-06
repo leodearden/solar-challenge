@@ -42,6 +42,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     GetterDeleter,
     Outer,
     Preset,
+    imported_module,
 )
 
 
@@ -328,6 +329,27 @@ def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inhe
         def scaled(self, factor: float) -> float: ...
 
     assert surface_form(Scaled) == "dataclass[eq, frozen] (kwh: float) -> None"
+
+
+def test_a_dataclass_types_new_class_or_dataclasses_make_dataclass_makes_is_spelled_by_its_kind_then_its_constructor_signature_whatever_module_it_records(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NewClassed records 'types' as its __module__ on every minor, and Made on 3.11 alone; surface_form spells each without looking up the module it records."""
+    spelledmaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "spelledmaking",
+        "import types\n"
+        "from dataclasses import dataclass, make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "NewClassed = dataclass(types.new_class('NewClassed', (), {}, lambda namespace: "
+        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+
+    assert surface_form(spelledmaking.NewClassed) == "dataclass[eq] (spare: Tap) -> None"
+    assert surface_form(spelledmaking.Made) == "dataclass[eq] (spare: Tap) -> None"
 
 
 def test_an_enum_form_is_its_members_in_definition_order() -> None:
