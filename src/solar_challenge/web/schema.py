@@ -129,6 +129,21 @@ class MigrationRefused(Exception):
         self.step = step
 
 
+class LaggingRunsRefused(Exception):
+    """A store at its schema version whose lagging runs, those an earlier migration left in an older stored-run format, cannot be brought forward, as a run's file or the runs rows cannot be written; the message names the store, its schema version, the stored-run format version and the fault.
+
+    It is not a ValueError: no request causes it, as MigrationRefused is not one.
+    """
+
+    def __init__(self, path: Path, fault: OSError | sqlite3.Error) -> None:
+        super().__init__(
+            f"The runs an earlier migration left in {path} cannot be brought forward to stored-run format version "
+            f"{RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, as it was, and the runs "
+            f"brought forward before the fault stay so: {fault}"
+        )
+        self.path = path
+
+
 def _schema_v1(conn: sqlite3.Connection) -> None:
     """Version 1's database part: the retired jobs table dropped, then runs, config_presets and chat_messages rebuilt to their schema at version 1.
 
@@ -324,10 +339,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             (RowRefused), a table is not one it can rebuild (ValueError or sqlite3.Error), or
             a stored run's file cannot be written (OSError). The step's transaction has changed
             nothing, so the store stays at the version before it.
-        OSError: After the steps, a lagging run's file cannot be written; the store stays at
-            SCHEMA_VERSION.
-        sqlite3.Error: A new store cannot be created, or after the steps the runs rows cannot
-            be read or written; the store stays at SCHEMA_VERSION.
+        LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
+            or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
+            stays at SCHEMA_VERSION, and the runs brought forward before the fault stay so.
+        sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
     found = _version_of_existing_or_new_store(database)
@@ -340,7 +355,10 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             outcome += _apply_step(database, data_dir, step, outcome)
         except (RowRefused, ValueError, sqlite3.Error, OSError) as fault:
             raise MigrationRefused(database_path, step, fault) from fault
-    caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
+    try:
+        caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
+    except (OSError, sqlite3.Error) as fault:
+        raise LaggingRunsRefused(database_path, fault) from fault
     outcome += caught_up
     return MigrationReport(
         database_path,

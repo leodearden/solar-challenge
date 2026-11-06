@@ -127,7 +127,13 @@ def migrate() -> None:
       solar-challenge web migrate
     """
     from solar_challenge.web.app import default_store_location
-    from solar_challenge.web.schema import MigrationRefused, SchemaVersionMismatch, StoreUnreadable, migrate_store
+    from solar_challenge.web.schema import (
+        LaggingRunsRefused,
+        MigrationRefused,
+        SchemaVersionMismatch,
+        StoreUnreadable,
+        migrate_store,
+    )
     from solar_challenge.web.store_lock import StoreLockError, acquire_store_lock
 
     location = default_store_location()
@@ -137,7 +143,7 @@ def migrate() -> None:
             report = migrate_store(location.database, location.data_dir)
         finally:
             store_lock.release()
-    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused) as refused:
+    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused, LaggingRunsRefused) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
     print_report(str(report))
