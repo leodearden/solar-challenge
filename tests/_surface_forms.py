@@ -221,12 +221,12 @@ def named_classes(obj: object) -> set[type]:
     inside a function, and one the module found does not bind under its qualified name
     where inspect reads no source for that module, as _json binds _json.Scanner as
     make_scanner, are instead checked only by their witness, which must carry that
-    module's globals. A witness compiled with a copy of those globals, as a generator
-    may compile a method it writes, raises LookupError naming it, the file its code was
-    compiled from and a MethodGenerator record.
-    A class's witness is the first function in its own namespace, read
-    through spelled_function and unwrapped from any decorator that records it as
-    __wrapped__, that is named after the class and that may_be_generated in
+    module's globals. A witness compiled with a copy of those globals, or with other
+    globals that name no file, as a generator may compile a method it writes, raises
+    LookupError naming it, the file its code was compiled from and a MethodGenerator
+    record. A class's witness is the first function in its own namespace, read through
+    spelled_function and unwrapped from any decorator that records it as __wrapped__,
+    that is named after the class and that may_be_generated in
     tests/_surface_forms_generators.py does not find a generator may have written there.
     A class with no witness carries nothing to check its module by, so the module is
     looked up unchecked, though a string read in one inspect reads no source for still
