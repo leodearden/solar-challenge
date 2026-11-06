@@ -554,7 +554,7 @@ class TestSimulationResultsRefusesANaNAmount:
         assert results.total_amounts() == pytest.approx(built.total_amounts())
 
     def test_an_infinite_amount_is_kept_so_its_total_is_infinite(self):
-        """Boundary guard, green with or without the refusal: only NaN is refused, so an infinite total still reaches task 656's check in project_multi_year."""
+        """Boundary guard, green with or without the refusal: only NaN is refused, so an infinite total reaches the caller, and project_multi_year refuses a non-finite aggregate."""
         built = _results_with_every_series_set()
         demand = built.demand.copy()
         demand.iloc[2] = math.inf
