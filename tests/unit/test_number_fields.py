@@ -38,6 +38,9 @@ def test_importing_the_module_loads_only_errors_boolean_fields_and_whole_numbers
     }
 
 
+OPEN_INFINITE = Interval(-math.inf, math.inf, low_open=True, high_open=True)
+
+
 class TestInterval:
     """An Interval is a frozen value: it admits the finite numbers inside its bounds, and its str() phrases them for a refusal."""
 
@@ -169,8 +172,6 @@ class TestInterval:
             f"Interval(low={low!r}, high={high!r}, low_open={low_open!r}, high_open={high_open!r})"
             in str(exc_info.value)
         )
-
-    OPEN_INFINITE = Interval(-math.inf, math.inf, low_open=True, high_open=True)
 
     @pytest.mark.parametrize(
         ("interval", "number", "admitted"),

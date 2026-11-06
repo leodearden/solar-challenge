@@ -56,9 +56,9 @@ class Interval:
 
     def __str__(self) -> str:
         """The bounds as a refusal phrases them, each printed as given: "between 0 and 360", "greater than 0 and at most 1", or "" when there are none."""
-        bounded_below, bounded_above = self.low > -math.inf, self.high < math.inf
-        if bounded_below and bounded_above and not (self.low_open or self.high_open):
+        if self._low_admitted and self._high_admitted:
             return f"between {self.low} and {self.high}"
+        bounded_below, bounded_above = self.low > -math.inf, self.high < math.inf
         phrases: list[str] = []
         if bounded_below:
             phrases.append(f"greater than {self.low}" if self.low_open else f"at least {self.low}")
