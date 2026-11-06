@@ -142,12 +142,20 @@ def _component_record(
     return record
 
 
-def main() -> None:
-    """Write the golden of every pinned fleet of the checkout at REPOSITORY_ROOT."""
+def write_goldens(project_root: Path) -> list[Path]:
+    """Write the golden of every pinned fleet of the checkout at *project_root*, and return the paths written, in PINNED_FLEETS order."""
+    written: list[Path] = []
     for fleet in PINNED_FLEETS:
-        path = golden_path(REPOSITORY_ROOT, fleet)
+        path = golden_path(project_root, fleet)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(golden_text(fleet_pin(REPOSITORY_ROOT, fleet)), encoding="utf-8")
+        path.write_text(golden_text(fleet_pin(project_root, fleet)), encoding="utf-8")
+        written.append(path)
+    return written
+
+
+def main() -> None:
+    """Write the goldens of the checkout at REPOSITORY_ROOT, printing each path written."""
+    for path in write_goldens(REPOSITORY_ROOT):
         print(path)
 
 
