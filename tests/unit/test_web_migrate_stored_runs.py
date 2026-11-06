@@ -29,7 +29,8 @@ apply, once the run's documents are fixed, and reports again each it still canno
 goes by what a run's documents show, not by where they came from, so it catches up a run saved
 in the current format the same way when its save did not finish or its runs row holds a key no
 field has. A LaggingRunsRefused carries only the report of a migration that left the store at
-SCHEMA_VERSION.
+SCHEMA_VERSION, and, as a step's refusal does, the lagging runs whose files the catch-up brought
+forward before its fault, with each value it dropped or rewrote in them.
 """
 
 import importlib.util
@@ -1055,6 +1056,7 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
         assert named in message, (named, message)
     assert refused.value.path == store
     assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward()
     assert user_version_of(store) == SCHEMA_VERSION
     assert _files_of(_run_dir(store, run_id)) == files_before
 
@@ -1063,6 +1065,43 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
 
     assert report.caught_up_runs == (run_id,)
     assert _storage_of(store).load_run(run_id).run_id == run_id
+
+
+def test_migrate_store_refused_at_the_catch_up_s_transaction_carries_the_lagging_runs_whose_files_it_brought_forward_and_their_values(
+    tmp_path: Path,
+) -> None:
+    """A trigger refusing each update of a runs row fails the catch-up's transaction, once its run-file part has brought a lagging run's files forward, dropping a figure no field has.
+
+    The catch-up reads that run's runs row from RUN_FORMAT_VERSION, which refuses the figure,
+    then from the first format, from which v2 drops it, so the row is to be updated, which the
+    trigger refuses. The run's files stay brought forward, so the refusal carries the run and
+    the value dropped from its summary.json. Run again once the trigger is dropped, the
+    migration leaves those files as they are and reports only the value it drops from the row.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    retired = install_stored_run_fixture("pre_469_home", Database(store), store.parent, run_id="retired-figure")
+    _edit_stored_document(_run_dir(store, retired) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store, retired, "summary_json", _setting("retired_figure", 12.5))
+    with Database(store).transaction() as conn:
+        conn.execute(
+            "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
+        )
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=(retired,), dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+    )
+
+    with Database(store).transaction() as conn:
+        conn.execute("DROP TRIGGER refuse_run_updates")
+    report = migrate_store(store, store.parent)
+
+    assert report.caught_up_runs == (retired,)
+    assert report.dropped_values == (DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),)
 
 
 def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
