@@ -22,7 +22,7 @@ from solar_challenge.whole_numbers import whole_number
 _Number = TypeVar("_Number", int, float)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Interval:
     """A non-empty interval of finite numbers, from *low* to *high*, each bound included unless it is open; an infinite bound is no bound."""
 
