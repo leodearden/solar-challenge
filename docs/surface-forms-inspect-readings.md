@@ -29,8 +29,9 @@ members a class's own body defines, raises `TypeError` for one that is a
 `member_forms`, `undeclared_attributes` and `unset_attributes` raise `LookupError` for a
 class that `dataclasses.make_dataclass` makes in the module binding it, since 3.11 records
 `types` as its `__module__` (4.10). Each entry says how each minor reads its objects, and
-names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do.
-Each `TypeError` also states its own case's reading.
+names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do,
+and what `undeclared_attributes`, `unset_attributes` and `signature_closure` do where it
+states their readings. Each `TypeError` also states its own case's reading.
 
 The readings were measured on CPython 3.11.15, 3.12.3, 3.13.9 and 3.14.4 on 2026-10-25,
 and those of 4.6 again on those releases and on 3.11.17 on 2026-10-26, as §6 says. 4.5's
@@ -1059,7 +1060,8 @@ class as `types.Made`, the module `types` by its file, and that this module bind
 under the class's qualified name. `member_forms`, `undeclared_attributes` and
 `unset_attributes` look the class's module up the same way and raise the same error.
 `surface_form` spells the class alike on every minor, as
-`dataclass[eq] (spare: Tap) -> None`. From 3.12 the class records the `__module__` and
+`dataclass[eq] (spare: Tap) -> None`, and spells the one `dataclass(types.new_class(...))`
+makes the same way. From 3.12 the class records the `__module__` and
 globals that one `dataclass(type(...))` makes in the calling module records, and reads as
 that one does (3.5): `named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
 `undeclared_attributes` and `unset_attributes` raise `TypeError`, as for any class with no
@@ -1090,9 +1092,16 @@ compiled carry.
 
 Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it`
-- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to`
+- `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_assigns_it_that_modules_name_as_its_module_names_the_classes_that_module_binds_the_names_to`
 - `tests/unit/surface_forms_helper/test_named_classes_module_lookup.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_a_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_has_no_member_since_its_class_form_pins_its_one_field`
+- `tests/unit/surface_forms_helper/test_member_forms.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12_from_undeclared_attributes_and_unset_attributes`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_dataclass_types_new_class_or_dataclasses_make_dataclass_makes_is_spelled_by_its_kind_then_its_constructor_signature_whatever_module_it_records`
 
 ## 5. When the Admitted Minors Change
 

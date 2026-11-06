@@ -18,10 +18,16 @@ import pytest
 
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
 from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
+    made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
     metaclass_whose_dict_gives,
     metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
@@ -374,6 +380,16 @@ def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_na
         scan(cls)
 
 
+def _no_class_statement_error(module: str, qualname: str) -> str:
+    """The whole TypeError the scans raise for the class *qualname* of the module *module*, whose source holds no class statement under that qualified name."""
+    return (
+        f"{module}.{qualname} has no __init__ or __post_init__ the scan can read, since the "
+        f"source of the module {module!r} holds no class statement under the qualified name "
+        f"{qualname!r}: pass a class that a class statement in a source file defines, and "
+        "leave its __module__ and __qualname__ as that statement set them"
+    )
+
+
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
 @pytest.mark.parametrize(
     ("sources", "module", "qualname"),
@@ -409,15 +425,51 @@ def test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualifi
     """A class statement in submeters defines storefront.Submeter, re-homed to storefront, which re-exports it; collections.namedtuple made tupling.Plain; ast binds ast.AST, and ast's source holds no class AST."""
     for name, source in sources.items():
         imported_module(tmp_path, monkeypatch, name, source)
-    expected = (
-        f"{module}.{qualname} has no __init__ or __post_init__ the scan can read, since the "
-        f"source of the module {module!r} holds no class statement under the qualified name "
-        f"{qualname!r}: pass a class that a class statement in a source file defines, and "
-        "leave its __module__ and __qualname__ as that statement set them"
-    )
+    expected = _no_class_statement_error(module, qualname)
 
     with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
         scan(getattr(importlib.import_module(module), qualname))
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scanclassing = imported_module(tmp_path, monkeypatch, "scanclassing", NEW_CLASS_MADE_SOURCE)
+
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
+        scan(scanclassing.Made)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scandataclassmaking = imported_module(
+        tmp_path, monkeypatch, "scandataclassmaking", MAKE_DATACLASS_MADE_SOURCE
+    )
+
+    if make_dataclass_records("scandataclassmaking") == "types":
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
+            scan(scandataclassmaking.Made)
+    else:
+        expected = _no_class_statement_error("scandataclassmaking", "Made")
+        with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
+            scan(scandataclassmaking.Made)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "scanfactories", MAKE_DATACLASS_FACTORY_SOURCE)
+    scanfactoring = imported_module(
+        tmp_path, monkeypatch, "scanfactoring", make_dataclass_factoring_source("scanfactories")
+    )
+    recorded = make_dataclass_records("scanfactories")
+
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
+        scan(scanfactoring.Made)
 
 
 _EACH_SCAN_OF_A_CLASS_THAT_SETS_SITE_AND_DECLARES_RATE = pytest.mark.parametrize(

@@ -20,6 +20,9 @@ import pytest
 
 from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
     RELABELLED_REFUSAL,
     UNREADABLE_ROUTINES,
     CallableGetter,
@@ -30,6 +33,9 @@ from tests.unit.surface_forms_helper._fixtures import (
     dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
+    made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
     metaclass_whose_dict_gives,
     metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
@@ -306,6 +312,42 @@ def test_a_class_body_string_annotation_of_a_class_whose_module_another_module_o
         member_forms(earlier.Plain)
 
     assert later.__file__ in str(raised.value)
+
+
+def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memberclassing = imported_module(tmp_path, monkeypatch, "memberclassing", NEW_CLASS_MADE_SOURCE)
+
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
+        member_forms(memberclassing.Made)
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_has_no_member_since_its_class_form_pins_its_one_field(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memberdataclassmaking = imported_module(
+        tmp_path, monkeypatch, "memberdataclassmaking", MAKE_DATACLASS_MADE_SOURCE
+    )
+
+    if make_dataclass_records("memberdataclassmaking") == "types":
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
+            member_forms(memberdataclassmaking.Made)
+    else:
+        assert member_forms(memberdataclassmaking.Made) == {}
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    imported_module(tmp_path, monkeypatch, "memberfactories", MAKE_DATACLASS_FACTORY_SOURCE)
+    memberfactoring = imported_module(
+        tmp_path, monkeypatch, "memberfactoring", make_dataclass_factoring_source("memberfactories")
+    )
+    recorded = make_dataclass_records("memberfactories")
+
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
+        member_forms(memberfactoring.Made)
 
 
 def test_private_and_dunder_names_are_not_members() -> None:
