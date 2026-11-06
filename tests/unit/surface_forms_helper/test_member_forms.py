@@ -11,6 +11,7 @@ import functools
 import inspect
 import pathlib
 import re
+import sys
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from tests.unit.surface_forms_helper._fixtures import (
     dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
+    made_not_bound_in,
     metaclass_whose_dict_gives,
     metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
@@ -306,6 +308,75 @@ def test_a_class_body_string_annotation_of_a_class_whose_module_another_module_o
         member_forms(earlier.Plain)
 
     assert later.__file__ in str(raised.value)
+
+
+def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memberclassing = imported_module(
+        tmp_path,
+        monkeypatch,
+        "memberclassing",
+        "import types\n"
+        "from dataclasses import dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
+        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
+    )
+
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
+        member_forms(memberclassing.Made)
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_has_no_member_since_its_class_form_pins_its_one_field(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
+    memberdataclassmaking = imported_module(
+        tmp_path,
+        monkeypatch,
+        "memberdataclassmaking",
+        "from dataclasses import make_dataclass\n"
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+
+    if sys.version_info < (3, 12):
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
+            member_forms(memberdataclassmaking.Made)
+    else:
+        assert member_forms(memberdataclassmaking.Made) == {}
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From 3.12, make_dataclass assigns the name of the module whose function calls it, not that of the module binding the class that function returns."""
+    imported_module(
+        tmp_path,
+        monkeypatch,
+        "memberfactories",
+        "from dataclasses import make_dataclass\n"
+        "\n"
+        "def made() -> type:\n"
+        "    return make_dataclass('Made', [('spare', 'Tap')])\n",
+    )
+    memberfactoring = imported_module(
+        tmp_path,
+        monkeypatch,
+        "memberfactoring",
+        "from decimal import Decimal as Tap\n"
+        "\n"
+        "from memberfactories import made\n"
+        "\n"
+        "Made = made()\n",
+    )
+    recorded = "types" if sys.version_info < (3, 12) else "memberfactories"
+
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
+        member_forms(memberfactoring.Made)
 
 
 def test_private_and_dunder_names_are_not_members() -> None:
