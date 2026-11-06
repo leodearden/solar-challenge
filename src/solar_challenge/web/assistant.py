@@ -38,7 +38,6 @@ from solar_challenge.validation import (
 )
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
 from solar_challenge.web.database import Database
-from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
@@ -414,8 +413,8 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
 
     Returns:
         Dict with keys ``run_id``, ``name``, ``type``, ``status``,
-        ``created_at``, ``n_homes``, and ``summary``, the field tree of the
-        run's summary, {} while it has none. Returns ``{"error": "<reason>"}``
+        ``created_at``, ``n_homes``, and ``summary``, the run's
+        RunRecord.summary_tree(). Returns ``{"error": "<reason>"}``
         when not found, on any DB error, or when the run's summary cannot be
         read, the reason then RunRecord.summary's StoredRunUnreadable naming the
         run, runs.summary_json and the field. Never raises.
@@ -427,7 +426,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
     if run is None:
         return {"error": f"Run not found: {run_id_or_name!r}"}
     try:
-        summary = run.summary()
+        summary_tree = run.summary_tree()
     except StoredRunUnreadable as unreadable:
         return {"error": str(unreadable)}
     return {
@@ -437,7 +436,7 @@ def get_run_results(run_id_or_name: str, storage: RunStorage) -> dict[str, Any]:
         "status": run.status,
         "created_at": run.created_at,
         "n_homes": run.n_homes,
-        "summary": {} if summary is None else field_tree(summary),
+        "summary": summary_tree,
     }
 
 
