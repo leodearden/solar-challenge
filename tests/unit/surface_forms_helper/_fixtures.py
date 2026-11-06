@@ -233,6 +233,17 @@ def dict_intercepting_refusal(
     )
 
 
+def made_not_bound_in(module: str) -> str:
+    """The pattern of the whole LookupError for a class Made whose __module__ records *module*, the name of a module read from a file that binds nothing under 'Made', the remedy of assigning it the __module__ of the module that binds it included."""
+    return (
+        rf"^{module}\.Made is not bound under 'Made' in the module at .*\b{module}\.py, which "
+        rf"sys\.modules holds under the name '{module}': that module binds nothing there\. .*\. "
+        r"If the class's __module__ names a module that never bound it, as that of a class "
+        r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
+        r"__module__ of the module that binds it under its qualified name$"
+    )
+
+
 def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
     """*function*, carrying the string '(receiver, rate)' as its __signature__."""
     function.__signature__ = "(receiver, rate)"

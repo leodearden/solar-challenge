@@ -19,7 +19,12 @@ from typing import TYPE_CHECKING, Optional
 import pytest
 
 from tests._surface_forms import named_classes
-from tests.unit.surface_forms_helper._fixtures import Outer, Preset, imported_module
+from tests.unit.surface_forms_helper._fixtures import (
+    Outer,
+    Preset,
+    imported_module,
+    made_not_bound_in,
+)
 
 if TYPE_CHECKING:
     from decimal import Decimal
@@ -199,15 +204,6 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
     assert later.__file__ in str(unbound.value)
 
 
-_UNBOUND_IN_TYPES = (
-    r"^types\.Made is not bound under 'Made' in the module at .*types\.py, which sys\.modules "
-    r"holds under the name 'types': that module binds nothing there\. .*\. If the class's "
-    r"__module__ names a module that never bound it, as that of a class "
-    r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
-    r"__module__ of the module that binds it under its qualified name$"
-)
-
-
 def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -223,7 +219,7 @@ def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_t
         "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
     )
 
-    with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
         named_classes(newclassing.Made)
 
 
@@ -242,7 +238,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_o
     )
 
     if sys.version_info < (3, 12):
-        with pytest.raises(LookupError, match=_UNBOUND_IN_TYPES):
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
             named_classes(dataclassmaking.Made)
     else:
         assert named_classes(dataclassmaking.Made) == {decimal.Decimal}
@@ -291,11 +287,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_m
     )
     recorded = "types" if sys.version_info < (3, 12) else "dataclassfactories"
 
-    with pytest.raises(
-        LookupError,
-        match=rf"^{recorded}\.Made is not bound under 'Made' in the module at .*\b{recorded}\.py, "
-        rf"which sys\.modules holds under the name '{recorded}': that module binds nothing there\. ",
-    ):
+    with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
         named_classes(factoring.Made)
 
 
