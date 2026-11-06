@@ -1053,10 +1053,11 @@ def _constructor_spelling_modules(
     _annotations_author gives it, is one a generator wrote into the class holding it, as
     the dataclass decorator writes an __init__ and collections.namedtuple a __new__, the
     constructor is spelled where generated_constructor_spelling_modules says, which
-    refuses one it cannot tell a generator wrote there. A constructor defined in C, or
-    one that wraps a callable defined in C, spells no annotation, so the class's is
-    spelled where _spelling_modules_over says; _signature_holder checks every class that
-    carries a signature before the constructor is read.
+    refuses one it cannot tell a generator wrote, or one generated for another class. A
+    constructor defined in C, or one that wraps a callable defined in C, spells no
+    annotation, so the class's is spelled where _spelling_modules_over says;
+    _signature_holder checks every class that carries a signature before the constructor
+    is read.
     """
     if is_enum(cls):
         return dict.fromkeys(names, _EnumReadByMinor(cls))

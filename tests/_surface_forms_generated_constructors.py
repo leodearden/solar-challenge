@@ -36,10 +36,14 @@ def generated_constructor_spelling_modules(
 ) -> Mapping[str, types.ModuleType] | None:
     """The module spelling each of *names* in the constructor *holder* holds as *name*, through which *cls* is constructed, if a generator wrote *author*, the function whose annotations the end of that constructor's chain holds, there as that constructor; None if none did.
 
-    TypeError names *cls* and *author* if the generator's record of *holder* says it writes
-    no such constructor there, as _refuse_constructor_its_generator_records_unwritten
-    finds, or if *author* was generated for another class, as
-    _refuse_constructor_generated_for_another_class finds.
+    TypeError names *cls* and *author* if the generator's record of *holder* says it
+    writes no such constructor there, as
+    _refuse_constructor_its_generator_records_unwritten finds; if *author* was generated
+    for another class, as _refuse_constructor_generated_for_another_class finds; or if
+    _generated_constructor_of cannot tell whether a def statement of the class statement
+    of *holder*, or of the class *author*'s qualified name names, wrote *author*, as
+    _defined_in_body refuses. Where class_statement refuses to read that statement, its
+    TypeError names that class instead.
     """
     generated = _generated_constructor_of(cls, holder, name, author)
     if generated is None:
