@@ -279,11 +279,21 @@ class LaggingRunsRefused(Exception):
     applied from migrated's from_version, the version it found it at; then the fault. It is not
     a ValueError: no request causes it, as MigrationRefused is not one.
 
+    files_brought_forward is what the catch-up's run-file part did before the fault, which stays
+    done, as MigrationRefused's is: each lagging run whose files it brought forward and each
+    value it dropped or rewrote in them.
+
     Raises:
         ValueError: migrated's to_version is not SCHEMA_VERSION; the message names both versions.
     """
 
-    def __init__(self, migrated: MigrationReport, fault: OSError | sqlite3.Error) -> None:
+    def __init__(
+        self,
+        migrated: MigrationReport,
+        fault: RowRefused | ValueError | sqlite3.Error | OSError,
+        *,
+        files_brought_forward: RunFilesBroughtForward = RunFilesBroughtForward(),
+    ) -> None:
         if migrated.to_version != SCHEMA_VERSION:
             raise ValueError(
                 f"A migration's catch-up runs on a store at schema version {SCHEMA_VERSION}, so its refusal cannot "
@@ -301,6 +311,7 @@ class LaggingRunsRefused(Exception):
         )
         self.migrated = migrated
         self.path = migrated.path
+        self.files_brought_forward = files_brought_forward
 
 
 def _schema_v1(conn: sqlite3.Connection) -> None:
@@ -450,9 +461,11 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             each value the step dropped or rewrote in them, in files_brought_forward.
         LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
             or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
-            stays at SCHEMA_VERSION, as it was or as the steps of this migration left it, and
-            the runs brought forward before the fault stay so. Those steps stay applied, and the
-            refusal carries their report in migrated, as MigrationRefused does.
+            stays at SCHEMA_VERSION, as it was or as the steps of this migration left it. Those
+            steps stay applied, and the refusal carries their report in migrated, as
+            MigrationRefused does; the runs whose files the catch-up brought forward before the
+            fault stay so, and the refusal carries them, with each value it dropped or rewrote
+            in them, in files_brought_forward.
         sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
@@ -473,10 +486,12 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             ) from refused.fault
     try:
         caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
-    except RunFilesMigrationStopped as stopped:
-        raise LaggingRunsRefused(_report_of(database_path, found, pending, outcome), stopped.fault) from stopped.fault
-    except sqlite3.Error as fault:
-        raise LaggingRunsRefused(_report_of(database_path, found, pending, outcome), fault) from fault
+    except _PartRefused as refused:
+        raise LaggingRunsRefused(
+            _report_of(database_path, found, pending, outcome),
+            refused.fault,
+            files_brought_forward=_files_brought_forward(refused.files),
+        ) from refused.fault
     return _report_of(database_path, found, pending, outcome + caught_up, caught_up.brought_forward_runs)
 
 
@@ -568,16 +583,18 @@ def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: Run
     store whose runs are all in RUN_FORMAT_VERSION is read, and nothing is written to it.
 
     Raises:
-        RunFilesMigrationStopped: A run's file cannot be written; the runs before it have been
-            brought forward.
-        sqlite3.Error: The runs table cannot be read, or a runs row cannot be written; the
-            transaction has changed no row.
+        _PartRefused: A run's file cannot be written, as _run_files_forward refuses it, or the
+            runs table cannot be read or a runs row cannot be written (sqlite3.Error), the
+            fault. The transaction has changed no row; files is what the run-file part did.
     """
-    outcome = migrate_stored_run_files(database, data_dir, RUN_FORMAT_VERSION, earlier)
-    with database.transaction() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        outcome += migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
-    return outcome
+    files = _run_files_forward(database, data_dir, RUN_FORMAT_VERSION, earlier)
+    try:
+        with database.transaction() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
+    except sqlite3.Error as fault:
+        raise _PartRefused(fault, files) from fault
+    return files + rows
 
 
 def _run_files_forward(
