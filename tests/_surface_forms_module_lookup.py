@@ -264,8 +264,9 @@ def _body_witness(cls: type) -> types.FunctionType | None:
 def _witnesses_its_body(cls: type, function: types.FunctionType) -> bool:
     """Whether the globals *function* carries may check the module *cls*'s body ran in: it is named after *cls*, as the compiler names each function a class body compiles, and no generator may have written it there, as may_be_generated finds, even if *cls*'s body did compile it, as it compiles a dataclass's hand-written __init__.
 
-    Only *cls*'s class statement, read once its module is checked, could tell a function
-    its body compiled from one a generator wrote.
+    Only *cls*'s class statement, read once its module is checked, together with whether
+    inspect reads a source for *function*, could tell a function its body compiled from
+    one a generator wrote.
     """
     return (
         function.__qualname__ == f"{cls.__qualname__}.{function.__name__}"
