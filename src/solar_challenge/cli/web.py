@@ -101,7 +101,11 @@ def migrate() -> None:
     Brings the store under ~/.solar-challenge, which an older solar-challenge
     left, to the schema version this one reads, applying in order each
     migration step it is behind by, and prints each step it applied. A store
-    already at this version is left as it is.
+    already at this version has no step to apply. After the steps, even when
+    there were none, each run an earlier migration left in an older
+    stored-run format, e.g. one whose documents have since been fixed, is
+    brought forward and printed, and each it still cannot migrate is printed
+    again.
 
     A step can bring each stored run to the stored-run format too: it prints
     each value it drops from a run's documents that is not null, naming the
@@ -121,7 +125,9 @@ def migrate() -> None:
     naming it. A step that cannot write a stored run's file, e.g. on a full
     disk, is refused too, naming the step and the fault: the store stays at
     the version before it, and the command, run again once the fault is
-    fixed, migrates it.
+    fixed, migrates it. So is a file of a run an earlier migration left that
+    it cannot write, naming the fault: the store stays at its version, and
+    the command, run again once the fault is fixed, brings the run forward.
 
     Examples:
       solar-challenge web migrate

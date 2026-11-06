@@ -309,6 +309,19 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   `os.replace`, then writes the marker.
 - A run whose documents fail validation (unloadable today too) is left untouched and reported, and
   migration continues. Afterwards that run's page names its field.
+- **Amendment (2026-11-06, task 1341):** a run's files are brought forward from the format their
+  `format.json` names, format 1 when there is none (`stored_runs.stored_format_version`), by
+  every run-document step after it; files already at the target format are left as they are. A
+  `runs` row records no format of its own: it is brought forward from the format its store's
+  schema version implies, and a row that cannot be is brought forward from the first format
+  instead. That fallback is exact only because each run-document step changes nothing in
+  documents a later step has brought forward (`RunDocumentStep`, checked over every fixture by
+  `tests/unit/test_web_run_document_steps.py`). A step that cannot keep to that must first add a
+  format column to `runs`, with its schema step. After its steps, and also on a store already at
+  `SCHEMA_VERSION`, `migrate_store` brings forward each run an earlier migration left in an older
+  format, e.g. once its documents are fixed, and reports again each it still cannot migrate. A
+  write it cannot make then is refused with `LaggingRunsRefused`, and the store stays at its
+  version.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;
