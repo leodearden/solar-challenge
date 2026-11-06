@@ -8,7 +8,10 @@ write_database_at_schema_version writes an empty store at a schema version N, wh
 schema_v<N>.sql holds: the store a solar-challenge at that version created.
 write_database_a_newer_solar_challenge_wrote writes a store at the schema version after
 SCHEMA_VERSION. schema_of reads a database's schema as data, so a test can compare two stores'
-schemas. FIXTURES_DIR is the directory holding the database fixtures.
+schemas. user_version_of and runs_rows_of read a database's schema version and its runs rows,
+and insert_runs_row writes a runs row with SQL, so a test can read or seed a store at any
+schema version, which open_database would refuse. None of these four creates a database: each
+refuses a path no file is at. FIXTURES_DIR is the directory holding the database fixtures.
 
 Usage::
 
@@ -21,6 +24,7 @@ Usage::
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 from solar_challenge.web.database import Database
 from solar_challenge.web.schema import SCHEMA_VERSION, open_database
@@ -87,8 +91,52 @@ def schema_of(path: Path) -> list[tuple[str, str, str, str | None]]:
     Raises:
         FileNotFoundError: No file is at *path*; reading a schema never creates a database.
     """
-    if not path.is_file():
-        raise FileNotFoundError(f"No database file is at {path}")
+    _refuse_a_missing_database(path)
     with closing(sqlite3.connect(path)) as conn:
         rows = conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master").fetchall()
     return sorted((row[0], row[1], row[2], row[3]) for row in rows)
+
+
+def user_version_of(path: Path) -> int:
+    """The schema version the database file at *path* records: its PRAGMA user_version.
+
+    Raises:
+        FileNotFoundError: No file is at *path*; reading a schema version never creates a database.
+    """
+    _refuse_a_missing_database(path)
+    with closing(Database(path).connect()) as conn:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+
+
+def runs_rows_of(path: Path) -> dict[str, dict[str, Any]]:
+    """Each row of the runs table of the database file at *path*, as its columns by name, keyed by its id.
+
+    Raises:
+        FileNotFoundError: No file is at *path*; reading runs rows never creates a database.
+    """
+    _refuse_a_missing_database(path)
+    with closing(Database(path).connect()) as conn:
+        return {row["id"]: dict(row) for row in conn.execute("SELECT * FROM runs")}
+
+
+def insert_runs_row(path: Path, columns: dict[str, object]) -> None:
+    """Insert into the runs table of the database file at *path* the row *columns* gives by column name.
+
+    Raises:
+        FileNotFoundError: No file is at *path*; seeding a store never creates a database.
+    """
+    _refuse_a_missing_database(path)
+    names = ", ".join(columns)
+    placeholders = ", ".join(f":{name}" for name in columns)
+    with Database(path).transaction() as conn:
+        conn.execute(f"INSERT INTO runs ({names}) VALUES ({placeholders})", columns)
+
+
+def _refuse_a_missing_database(path: Path) -> None:
+    """Refuse *path* before anything opens it when no file is at it, since sqlite3.connect creates the file it is pointed at.
+
+    Raises:
+        FileNotFoundError: No file is at *path*; the message names it.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"No database file is at {path}")
