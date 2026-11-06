@@ -43,6 +43,7 @@ from solar_challenge.web.presets import CONFIG_PRESETS_TABLE, migrate_config_pre
 from solar_challenge.web.storage import (
     RUNS_TABLE,
     RunDocumentsOutcome,
+    RunFilesMigrationStopped,
     migrate_runs_table_documents,
     migrate_runs_table_v1,
     migrate_stored_run_files,
@@ -418,11 +419,12 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     as the steps before it left it. The run files it brought forward before it failed stay so,
     their format.json naming its format: a migration run again leaves them as they are, as they
     are in that format already, so the refusal reports them, with each value the step dropped
-    or rewrote in them, in its files_brought_forward. A run whose documents a run-document step
-    cannot bring forward is left as it was and reported, and the migration goes on. No later
-    step of the migration is given that run's files, or its runs row's copies, whichever the
-    step left, as it would only refuse them again; so each is reported once, by the fault that
-    kept it from that step.
+    or rewrote in them, in its files_brought_forward. The same holds for a step a run's file
+    stops part way: the runs it brought forward before the fault are in files_brought_forward.
+    A run whose documents a run-document step cannot bring forward is left as it was and
+    reported, and the migration goes on. No later step of the migration is given that run's
+    files, or its runs row's copies, whichever the step left, as it would only refuse them
+    again; so each is reported once, by the fault that kept it from that step.
 
     After the steps, even when there were none, the migration catches up, leaving the store's
     version as it is (_bring_lagging_runs_forward): each run's files whose format.json names an
@@ -471,7 +473,9 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             ) from refused.fault
     try:
         caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
-    except (OSError, sqlite3.Error) as fault:
+    except RunFilesMigrationStopped as stopped:
+        raise LaggingRunsRefused(_report_of(database_path, found, pending, outcome), stopped.fault) from stopped.fault
+    except sqlite3.Error as fault:
         raise LaggingRunsRefused(_report_of(database_path, found, pending, outcome), fault) from fault
     return _report_of(database_path, found, pending, outcome + caught_up, caught_up.brought_forward_runs)
 
@@ -564,7 +568,8 @@ def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: Run
     store whose runs are all in RUN_FORMAT_VERSION is read, and nothing is written to it.
 
     Raises:
-        OSError: A run's file cannot be written; the runs before it have been brought forward.
+        RunFilesMigrationStopped: A run's file cannot be written; the runs before it have been
+            brought forward.
         sqlite3.Error: The runs table cannot be read, or a runs row cannot be written; the
             transaction has changed no row.
     """
@@ -581,12 +586,15 @@ def _run_files_forward(
     """Bring the files of each run of the store of *database* and *data_dir* forward to format *to_version*, as migrate_stored_run_files does given *earlier*, and return what that did.
 
     Raises:
-        _PartRefused: A run's file cannot be written (OSError), or the runs table cannot be
-            read (sqlite3.Error), the fault; its files record nothing.
+        _PartRefused: A run's file cannot be written (OSError), the fault, its files being what
+            was done to the runs before it, which have been brought forward; or the runs table
+            cannot be read (sqlite3.Error), the fault, nothing having been written.
     """
     try:
         return migrate_stored_run_files(database, data_dir, to_version, earlier)
-    except (OSError, sqlite3.Error) as fault:
+    except RunFilesMigrationStopped as stopped:
+        raise _PartRefused(stopped.fault, stopped.brought_forward) from stopped.fault
+    except sqlite3.Error as fault:
         raise _PartRefused(fault, RunDocumentsOutcome()) from fault
 
 
