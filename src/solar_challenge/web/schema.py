@@ -151,8 +151,7 @@ class MigrationReport:
                 "Brought forward each run below, whose documents were in an older stored-run format or had no format.json:",
                 [f"run {run_id!r}" for run_id in self.caught_up_runs],
             ),
-            *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
-            *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
+            *_values_listed(self.dropped_values, self.rewritten_values),
             *_listed(
                 "Left each run below as it was, as its documents cannot be read; it cannot be loaded until they are fixed:",
                 self.unmigrated_runs,
@@ -169,6 +168,54 @@ class MigrationReport:
             else [f"The dashboard database {self.path} is at schema version {self.to_version}; no step was applied."]
         )
         return "\n".join([*steps, *listed])
+
+
+@dataclass(frozen=True)
+class RunFilesBroughtForward:
+    """The run files a refused part of a migration, a step or the catch-up after the steps, brought forward before its fault, which stay so.
+
+    runs are the id of each run whose files it brought forward, in order of id, dropped_values
+    each value that is not null it dropped from them, and rewritten_values each value it
+    rewrote in them. A migration run again leaves those files as they are, as they are in that
+    format already, so this is the one report of those values.
+
+    Raises:
+        ValueError: A value is of a run *runs* does not name; the message names that run and
+            *runs*.
+    """
+
+    runs: tuple[str, ...] = ()
+    dropped_values: tuple[DroppedValue, ...] = ()
+    rewritten_values: tuple[RewrittenValue, ...] = ()
+
+    def __post_init__(self) -> None:
+        values: tuple[DroppedValue | RewrittenValue, ...] = (*self.dropped_values, *self.rewritten_values)
+        for value in values:
+            if value.run_id not in self.runs:
+                raise ValueError(
+                    f"A report of the run files brought forward before a fault names the runs {list(self.runs)}, "
+                    f"so it cannot hold a value of run {value.run_id!r}"
+                )
+
+    def __str__(self) -> str:
+        """The report as `solar-challenge web migrate` prints it: each run, then each value dropped and each value rewritten; nothing at all when it names no run."""
+        return "\n".join(
+            [
+                *_listed(
+                    "Before the fault, brought forward the files of each run below, which stay so:",
+                    [f"run {run_id!r}" for run_id in self.runs],
+                ),
+                *_values_listed(self.dropped_values, self.rewritten_values),
+            ]
+        )
+
+
+def _values_listed(dropped: Sequence[DroppedValue], rewritten: Sequence[RewrittenValue]) -> list[str]:
+    """Each of *dropped*, then each of *rewritten*, under the heading a migration's reports list it under; no line for a heading with no value."""
+    return [
+        *_listed("Dropped each value below, which no field of its document holds:", dropped),
+        *_listed("Rewrote each value below to the setting its run actually ran by:", rewritten),
+    ]
 
 
 def _listed(
