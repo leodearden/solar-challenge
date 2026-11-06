@@ -129,7 +129,7 @@ then grid-charges from the SOC that charge leaves to 0.9 of capacity within the 
 headroom (Economy 7 passes the spread gate), and never discharges: the window's rules 1 to
 4. At the dear rate A discharges into a shortfall and charges an excess, as
 `SelfConsumptionStrategy` and B's base both do. Both paths settle each step through one
-`_settle_timestep`. `tests/unit/test_home_scheduled_charge.py` pins the equality to 1e-9
+`_settle`. `tests/unit/test_home_scheduled_charge.py` pins the equality to 1e-9
 on a clear June day and a sunless January day; measured, the runs differ by about 1e-16 kW
 a row. On this tariff, then, a GX window that mirrors the cheap period gains nothing over
 the home's own TOU dispatch (B − A), and D − C is what grid charging in that window adds

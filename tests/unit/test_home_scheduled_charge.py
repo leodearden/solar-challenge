@@ -45,7 +45,7 @@ _CHEAP_PERIOD_WINDOW = ChargeWindow("daily", time(0, 30), timedelta(hours=7), 0.
 def test_a_window_over_the_cheap_period_reproduces_the_homes_own_tou_optimized_run(
     base: DispatchStrategy, day: str, weather: pd.DataFrame
 ) -> None:
-    """Both take the PV charge first, size the grid charge from the SOC it leaves within the same headroom, and settle through one _settle_timestep, so only rounding parts them."""
+    """Both take the PV charge first, size the grid charge from the SOC it leaves within the same headroom, and settle through one _settle, so only rounding parts them."""
     home = bristol_arbitrage_home()
     run_day = pd.Timestamp(day)
     strategy = ScheduledChargeStrategy(base, (_CHEAP_PERIOD_WINDOW,), ZoneInfo(home.location.timezone))
