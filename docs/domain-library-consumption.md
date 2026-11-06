@@ -1109,9 +1109,9 @@ discharge, which `simulate_home` counts in self-consumption; and
 0.5.0 tag has none of them. Consumers need no change when they re-pin, and a
 subtraction of their own that computes one can go.
 
-**Unreleased on main** (task 865): `compute_soh` counts one equivalent full
-cycle per usable capacity of discharged energy, where the 0.5.0 tag counts one
-per two usable capacities, so its cycle fade doubles:
+**Unreleased on main** (task 865): `compute_soh` counts one
+equivalent full cycle per usable capacity of discharged energy, where the 0.5.0
+tag counts one per two usable capacities, so its cycle fade doubles:
 `compute_soh(12.0, 12000.0, 4.0, BatteryConfig(capacity_kwh=5.0))` returns 0.61
 where the tag returns 0.685. Its signature is unchanged, and so is a single
 run's SOH, which counts no throughput. Multi-year battery SOH, later-year

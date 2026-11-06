@@ -1403,7 +1403,7 @@ def _aged_homes(
     For each home the PV config's ``system_age_years`` is updated to ``age``.
     Each battery's SOH at that age comes from :func:`battery.compute_soh`,
     passed the home's discharged energy since installation (its
-    ``cum_throughput`` entry, the throughput compute_soh counts; none when
+    ``cum_throughput`` entry, the throughput compute_soh counts; 0.0 when
     ``cum_throughput`` is omitted) and the battery's nominal usable capacity.
     It is injected into the battery config via
     ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`Battery`

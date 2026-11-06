@@ -384,8 +384,8 @@ annualised discharge simulated at the latest seed age (0,
 bisection-trial ages alike (`_throughput_at`).  One equivalent full cycle is
 `U_h` of discharge, so the cycle fade at `t` is
 `cycle_fade_per_equivalent_full_cycle × T_h(t) / U_h`, beside the calendar fade
-`calendar_fade_rate_per_year × t`, and `compute_soh` clamps 1 less both fades to
-`[soh_floor, 1]`
+`calendar_fade_rate_per_year × t`, and `compute_soh` clamps
+`1 − calendar fade − cycle fade` to `[soh_floor, 1]`
 (`tests/unit/test_finance_projection_ageing.py::TestBatterySohCountsThroughputToEachAge::test_battery_soh_falls_by_its_calendar_and_cycle_fade_in_closed_form`).
 `T_h` never falls and `compute_soh` never rises in age or throughput, so
 `YearPoint.battery_soh` is non-increasing year on year
