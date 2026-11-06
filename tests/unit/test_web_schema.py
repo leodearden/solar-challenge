@@ -30,7 +30,10 @@ Version 1 names a legacy run after its home as the format reads the run's config
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 A run that store's migration left in format 1, with no format.json, has its files brought
-forward by every step after format 1, so it is reported, if at all, by its own fault.
+forward by every step after format 1, so it is reported, if at all, by its own fault. After its
+steps, migrate_store catches up: it brings forward each run an earlier migration left, also in a
+store at SCHEMA_VERSION, which has no step to apply, once the run's documents are fixed, and
+reports again each it still cannot migrate.
 """
 
 import functools
@@ -930,6 +933,57 @@ def test_migrate_store_reports_each_source_of_a_run_an_earlier_migration_left_on
     assert _runs_rows(store_at_version_2)[lacking] == row_before
 
 
+@_NEEDS_PYARROW
+def test_migrate_store_brings_forward_a_run_an_earlier_migration_left_once_its_documents_are_fixed(
+    store_at_version_1: Path,
+) -> None:
+    """The store is at SCHEMA_VERSION by the time the run's summaries hold the figure they lacked, so no step is pending; the run is brought forward even so."""
+    lacking = _install_a_run_lacking_generation(store_at_version_1)
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [each.run_id for each in first.unmigrated_runs] == [lacking, lacking]
+    committed = json.loads((STORED_RUN_FIXTURES_DIR / "pre_786_dispatch_home" / "run" / "summary.json").read_text())
+    restore = _setting("total_generation_kwh", committed["total_generation_kwh"])
+    _edit_stored_document(_run_dir(store_at_version_1, lacking) / "summary.json", restore)
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", restore)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        brought_forward_runs=(lacking,),
+    )
+    marker = json.loads((_run_dir(store_at_version_1, lacking) / "format.json").read_text())
+    assert marker == {"format_version": RUN_FORMAT_VERSION}
+    storage = _storage_of(store_at_version_1)
+    loaded = storage.load_run(lacking)
+    record = storage.run_record(lacking)
+    assert isinstance(loaded, StoredHomeRun)
+    assert record is not None
+    assert record.summary() == loaded.summary
+    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+
+
+def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_still_cannot_be_migrated(
+    store_at_version_1: Path,
+) -> None:
+    """Run again on the store, now at SCHEMA_VERSION, the migration applies no step but tries the run again, and reports each of its sources as the first migration did."""
+    lacking = _install_a_run_lacking_generation(store_at_version_1)
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [each.run_id for each in first.unmigrated_runs] == [lacking, lacking]
+    files_after_first, rows_after_first = _files_of(_run_dir(store_at_version_1, lacking)), _runs_rows(store_at_version_1)
+
+    second = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (second.applied_steps, second.brought_forward_runs) == ((), ())
+    assert second.unmigrated_runs == first.unmigrated_runs
+    assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
+    assert _runs_rows(store_at_version_1) == rows_after_first
+    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+
+
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
@@ -1283,6 +1337,29 @@ def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_ea
     for named in ["runs.summary_json", "total_generation_kwh", unmigrated.reason]:
         assert named in unmigrated_line, (named, unmigrated_line)
     assert len(steps) < lines.index(dropped_line) < lines.index(rewritten_line) < lines.index(unmigrated_line)
+
+
+def test_a_migration_report_of_no_step_lists_each_run_brought_forward_and_each_run_left(tmp_path: Path) -> None:
+    """A store at SCHEMA_VERSION has no step to apply, but a migration of it still brings forward, or leaves, the runs an earlier migration left."""
+    path = tmp_path / "store.db"
+    unmigrated = UnmigratedRun(
+        "run-2", "summary.json", "total_generation_kwh", "is missing, and SummaryStatistics has no default for it"
+    )
+    report = MigrationReport(
+        path, SCHEMA_VERSION, SCHEMA_VERSION, (), brought_forward_runs=("run-4",), unmigrated_runs=(unmigrated,)
+    )
+    leaving_only = MigrationReport(path, SCHEMA_VERSION, SCHEMA_VERSION, (), unmigrated_runs=(unmigrated,))
+
+    lines = str(report).splitlines()
+
+    assert str(path) in lines[0]
+    assert f"schema version {SCHEMA_VERSION}" in lines[0]
+    assert "nothing to migrate" not in str(report)
+    assert lines[lines.index("  run 'run-4'") - 1].startswith("Brought forward"), lines
+    [unmigrated_line] = [line for line in lines if "run-2" in line]
+    assert lines[lines.index(unmigrated_line) - 1].startswith("Left each run below"), lines
+    assert "nothing to migrate" not in str(leaving_only)
+    assert f"  {unmigrated}" in str(leaving_only).splitlines()
 
 
 RUNS_COLUMN_VALUES = [
