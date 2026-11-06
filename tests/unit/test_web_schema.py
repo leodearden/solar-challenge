@@ -189,13 +189,6 @@ def _create_statements(path: Path) -> str:
     return "\n".join(f"{row['sql']};" for row in rows)
 
 
-def _store_of_the_committed_schema(version: int, path: Path) -> Path:
-    """A new database file at *path* holding the schema committed for *version*, schema_v<version>.sql in tests/fixtures/databases."""
-    with closing(sqlite3.connect(path)) as conn:
-        conn.executescript((FIXTURES_DIR / f"schema_v{version}.sql").read_text())
-    return path
-
-
 def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> None:
     """Contract C10: a change to a table's schema changes a new store's, so it fails here until it ships as a new migration step, committed with its version's snapshot."""
     new_store = open_database(tmp_path / "new.db").path
@@ -208,7 +201,7 @@ def test_a_new_store_has_the_committed_schema_of_its_version(tmp_path: Path) -> 
     )
     assert committed.is_file(), remedy
 
-    snapshot = _store_of_the_committed_schema(SCHEMA_VERSION, tmp_path / "snapshot.db")
+    snapshot = write_database_at_schema_version(tmp_path / "snapshot.db", SCHEMA_VERSION)
 
     assert schema_of(snapshot) == schema_of(new_store), remedy
 
@@ -355,7 +348,7 @@ def test_version_1s_step_rebuilds_a_legacy_stores_tables_to_the_schema_committed
         conn.execute("BEGIN IMMEDIATE")
         MIGRATIONS[0].migrate_database(conn)
 
-    assert schema_of(legacy_store) == schema_of(_store_of_the_committed_schema(1, tmp_path / "schema_v1.db"))
+    assert schema_of(legacy_store) == schema_of(write_database_at_schema_version(tmp_path / "schema_v1.db", 1))
 
 
 @pytest.mark.parametrize(
