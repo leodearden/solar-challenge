@@ -322,6 +322,24 @@ class TestSankeyBatteryCharge:
         received_by_demand = sum(kwh for (_, target), kwh in links.items() if target == "Demand")
         assert received_by_demand == pytest.approx(summary.total_demand_kwh, abs=0.01)
 
+    def test_a_simulated_sunny_grid_charging_day_draws_the_batterys_charge_from_each_source_as_the_summary_splits_it(
+        self,
+    ) -> None:
+        """The home of scenarios/bristol-arbitrage.yaml on a clear 21 June charges its battery from PV and from the grid."""
+        home = bristol_arbitrage_home()
+        results = simulate_home(
+            home,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather=weather_for(home, synthetic_june_weather("2024-06-21")),
+        )
+        summary = calculate_summary(results)
+
+        links = sankey_link_values(sankey_diagram(summary).content)
+
+        assert links[("PV Generation", "Battery")] == round(summary.total_pv_charge_kwh, 2)
+        assert links[("Grid", "Battery")] == round(summary.total_grid_charge_kwh, 2)
+
 
 class TestChartTotals:
     """Each chart's totals are the run's per-minute amounts summed: kWh for power, £ as they are."""
