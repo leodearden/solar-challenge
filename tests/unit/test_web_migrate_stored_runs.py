@@ -12,7 +12,10 @@ document and field, and the rest of the store migrates; so, once, is a run whose
 cannot be read, while a run whose format.json names a later format is left as it is. A step that
 cannot write a run's file, or whose transaction fails once it has brought the run files forward,
 is refused, leaving the database at the version before it, and the migration run again once the
-fault is gone completes it. A step refused after an earlier step of the migration committed
+fault is gone completes it. The refusal of a step whose transaction fails also carries the runs
+whose files it brought forward, which stay so, with each value it dropped or rewrote in them, as
+the migration run again leaves those files as they are. A step refused after an earlier step of
+the migration committed
 leaves the store at the version that step brought it to, and the refusal carries the report of
 the steps the migration applied; the migration run again goes on from that version and reports
 none of their values again.
@@ -862,9 +865,10 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
 ) -> None:
     """A trigger refusing each update of a runs row fails version 2's transaction, once its run-file part has given every run its format.json.
 
-    Run again once the trigger is dropped, the migration leaves those files as they are until
-    v3, as they are in format 2 already, then brings them forward by v3, and brings the runs
-    rows forward.
+    The refusal names each run whose files stay brought forward; v2 drops only null keys from
+    them, so it names no value. Run again once the trigger is dropped, the migration leaves
+    those files as they are until v3, as they are in format 2 already, then brings them forward
+    by v3, and brings the runs rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(
@@ -883,6 +887,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     files_brought_forward = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
     markers = [json.loads(files["format.json"]) for files in files_brought_forward.values()]
     assert markers == [{"format_version": 2}] * len(legacy_run_ids)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(runs=tuple(sorted(legacy_run_ids.values())))
 
     with Database(store_at_version_1).transaction() as conn:
         conn.execute("DROP TRIGGER refuse_run_updates")
@@ -915,10 +920,10 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
 ) -> None:
     """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
 
-    Run again, the migration goes on from version 2 and reports v3's rewrites of the pre-787
-    fleet's runs row alone: v3 brought the run files forward before its transaction failed, so
-    its rewrites of the fleet's config.json are reported by neither migration, as
-    migrate_store's docstring says (task 1369).
+    v3 brought every run's files forward before its transaction failed, so the refusal also
+    carries those runs and v3's rewrites of the fleet's config.json, in files_brought_forward.
+    Run again, the migration goes on from version 2, leaves those files as they are, and so
+    reports v3's rewrites of the fleet's runs row alone.
     """
     run_id = install_stored_run_fixture(
         "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
@@ -944,6 +949,14 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
         dropped_values=(
             DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
             DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=tuple(sorted([*legacy_run_ids.values(), run_id])),
+        rewritten_values=tuple(
+            each
+            for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+            if each.document == "config.json"
         ),
     )
 
