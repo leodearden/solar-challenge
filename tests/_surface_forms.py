@@ -999,7 +999,7 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ def statements of *cls*'s own body that bind in *cls*'s namespace, as class_namespace_defs finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method, one whose name that body declares global or nonlocal, nor anything a function or a class nested in that body defines; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
+    """The __init__ and __post_init__ def statements that class_namespace_defs finds in *cls*'s class statement, as class_statement reads it; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
