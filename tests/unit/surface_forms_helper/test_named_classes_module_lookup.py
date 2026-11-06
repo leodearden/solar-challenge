@@ -851,6 +851,57 @@ def test_a_class_whose_module_one_with_no_source_has_since_replaced_in_sys_modul
     assert "module at None" not in str(raised.value)
 
 
+_HAND_WRITTEN_INIT_SOURCE = (
+    "from dataclasses import dataclass\n"
+    "from fractions import Fraction as Share\n"
+    "\n"
+    "@dataclass\n"
+    "class D:\n"
+    "    share: Share\n"
+    "\n"
+    "    def __init__(self): ...\n"
+)
+
+
+def _dataclass_of_a_replaced_module_with_no_file(
+    source: str, monkeypatch: pytest.MonkeyPatch
+) -> type:
+    """D, as *source* defines it in the module 'fileless', one with no file, which another module with no file then replaces in sys.modules until *monkeypatch* is undone."""
+    earlier = types.ModuleType("fileless")
+    monkeypatch.setitem(sys.modules, "fileless", earlier)
+    exec(source, vars(earlier))
+    monkeypatch.setitem(sys.modules, "fileless", types.ModuleType("fileless"))
+    return earlier.D
+
+
+def test_a_dataclass_whose_only_method_is_a_hand_written_init_in_a_module_with_no_file_without_the_future_import_of_annotations_raises_a_lookup_error_naming_its_annotate_from_python_3_14_and_before_it_names_the_classes_its_annotations_name_once_another_module_with_no_file_has_replaced_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D's __init__ annotates nothing and does not take share, so only D's own module is looked up, for share. The replacement binds nothing under 'D' and has no source, so D is checked by its witness. The decorator may have written __init__, so it is no witness; from Python 3.14 the body also compiles __annotate__, named after D and carrying the globals of the module that defined it, which name no file."""
+    made = _dataclass_of_a_replaced_module_with_no_file(_HAND_WRITTEN_INIT_SOURCE, monkeypatch)
+
+    if sys.version_info >= (3, 14):
+        with pytest.raises(
+            LookupError,
+            match=r"^fileless\.D\.__annotate__ was compiled from '<string>' with globals that name no file",
+        ):
+            named_classes(made)
+    else:
+        assert named_classes(made) == {fractions.Fraction}
+
+
+def test_a_dataclass_whose_only_method_is_a_hand_written_init_in_a_module_with_no_file_that_imports_annotations_from_future_has_no_witness_on_every_minor_so_a_string_annotation_raises_the_type_error_naming_the_module_with_no_source_once_another_module_with_no_file_has_replaced_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the __future__ import, D's body compiles only __init__ on every minor, 3.14 included, and the decorator may have written it, so D has no witness: the replacement is looked up unchecked, and 'Share' is read there."""
+    made = _dataclass_of_a_replaced_module_with_no_file(
+        "from __future__ import annotations\n\n" + _HAND_WRITTEN_INIT_SOURCE, monkeypatch
+    )
+
+    with pytest.raises(TypeError, match=r"'Share'.*\bmodule 'fileless'.*\bno source\b"):
+        named_classes(made)
+
+
 def test_a_named_tuple_class_a_module_with_no_source_binds_under_another_name_raises_a_type_error_naming_it_as_one_no_class_statement_inspect_can_read_defined_whatever_module_its_generated_methods_carry_from_an_error_naming_the_module_with_no_source_raised_from_the_error_inspect_raised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
