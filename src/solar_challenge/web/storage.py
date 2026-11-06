@@ -37,6 +37,7 @@ from typing import Any, Literal, TypedDict, assert_never, get_args
 from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_summaries, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.run_names import is_run_name, require_run_name
 from solar_challenge.web.stored_runs import (
     FIRST_FORMAT_VERSION,
@@ -129,6 +130,15 @@ class RunRecord:
                 refuses it; the document is then runs.summary_json.
         """
         return _run_summary(self.id, self.type, self.summary_json)
+
+    def summary_tree(self) -> dict[str, Any]:
+        """The field tree of the run's summary, as summary() reads it; {} while the run has none.
+
+        Raises:
+            StoredRunUnreadable: As RunRecord.summary() raises.
+        """
+        summary = self.summary()
+        return {} if summary is None else field_tree(summary)
 
     def home_configs(self) -> tuple[HomeConfig, ...] | None:
         """Each home's HomeConfig, in order, read from config_json as the run's kind reads it; None while the run has none.
