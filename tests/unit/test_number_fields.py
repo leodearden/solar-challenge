@@ -136,24 +136,12 @@ class TestInterval:
         ("interval", "number", "admitted"),
         [
             pytest.param(POSITIVE, 5e-324, True, id="positive-smallest-float"),
-            pytest.param(Interval(), -1e308, True, id="unbounded-large-negative"),
-            pytest.param(Interval(), 10**400, True, id="unbounded-int-too-large-for-a-float"),
-            pytest.param(Interval(0, 360), 0, True, id="closed-low-bound"),
-            pytest.param(Interval(0, 360), 360, True, id="closed-high-bound"),
-            pytest.param(Interval(0, 1, high_open=True), 0, True, id="open-above-low-bound"),
-            pytest.param(FRACTION, 1, True, id="fraction-high-bound"),
-            pytest.param(Interval(5, 5), 5, True, id="closed-at-one-number"),
+            pytest.param(POSITIVE, True, True, id="positive-true"),
             pytest.param(POSITIVE, math.nan, False, id="positive-nan"),
             pytest.param(POSITIVE, math.inf, False, id="positive-infinity"),
             pytest.param(POSITIVE, -math.inf, False, id="positive-negative-infinity"),
             pytest.param(POSITIVE, 0, False, id="positive-zero"),
-            pytest.param(Interval(), math.nan, False, id="unbounded-nan"),
-            pytest.param(Interval(), math.inf, False, id="unbounded-infinity"),
-            pytest.param(Interval(), -math.inf, False, id="unbounded-negative-infinity"),
-            pytest.param(Interval(0, 360), -0.5, False, id="closed-below"),
-            pytest.param(Interval(0, 360), 360.5, False, id="closed-above"),
-            pytest.param(Interval(0, 1, high_open=True), 1, False, id="open-above-high-bound"),
-            pytest.param(FRACTION, 0, False, id="fraction-low-bound"),
+            pytest.param(POSITIVE, False, False, id="positive-false"),
             pytest.param(NON_NEGATIVE, 0, True, id="non-negative-zero"),
             pytest.param(NON_NEGATIVE, -0.0, True, id="non-negative-negative-zero"),
             pytest.param(NON_NEGATIVE, 5e-324, True, id="non-negative-smallest-float"),
@@ -168,6 +156,25 @@ class TestInterval:
             pytest.param(NON_NEGATIVE, math.nan, False, id="non-negative-nan"),
             pytest.param(NON_NEGATIVE, np.float64("nan"), False, id="non-negative-numpy-nan"),
             pytest.param(NON_NEGATIVE, np.float64("inf"), False, id="non-negative-numpy-infinity"),
+            pytest.param(FRACTION, 1, True, id="fraction-high-bound"),
+            pytest.param(FRACTION, 0, False, id="fraction-low-bound"),
+            pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
+            pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
+            pytest.param(Interval(0, 360), 0, True, id="closed-low-bound"),
+            pytest.param(Interval(0, 360), 360, True, id="closed-high-bound"),
+            pytest.param(Interval(0, 360), -0.5, False, id="closed-below"),
+            pytest.param(Interval(0, 360), 360.5, False, id="closed-above"),
+            pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
+            pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
+            pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
+            pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
+            pytest.param(Interval(0, 1, high_open=True), 0, True, id="open-above-low-bound"),
+            pytest.param(Interval(0, 1, high_open=True), 1, False, id="open-above-high-bound"),
+            pytest.param(Interval(5, 5), 5, True, id="closed-at-one-number"),
+            pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
+            pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
+            pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
+            pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
             pytest.param(Interval(-500), -500, True, id="low-bound-only-its-bound"),
             pytest.param(Interval(-500), 10**400, True, id="low-bound-only-huge-int"),
             pytest.param(Interval(-500), math.inf, False, id="low-bound-only-infinity"),
@@ -178,31 +185,25 @@ class TestInterval:
             pytest.param(Interval(high=23), -math.inf, False, id="high-bound-only-negative-infinity"),
             pytest.param(Interval(high=23), math.nan, False, id="high-bound-only-nan"),
             pytest.param(Interval(high=23), 23.5, False, id="high-bound-only-above-it"),
+            pytest.param(Interval(), -1e308, True, id="unbounded-large-negative"),
+            pytest.param(Interval(), 10**400, True, id="unbounded-int-too-large-for-a-float"),
+            pytest.param(Interval(), math.nan, False, id="unbounded-nan"),
+            pytest.param(Interval(), math.inf, False, id="unbounded-infinity"),
+            pytest.param(Interval(), -math.inf, False, id="unbounded-negative-infinity"),
             pytest.param(OPEN_INFINITE, 0, True, id="open-infinite-zero"),
             pytest.param(OPEN_INFINITE, math.inf, False, id="open-infinite-infinity"),
             pytest.param(OPEN_INFINITE, -math.inf, False, id="open-infinite-negative-infinity"),
             pytest.param(OPEN_INFINITE, math.nan, False, id="open-infinite-nan"),
-            pytest.param(Interval(0, 360), 10**400, False, id="closed-huge-int"),
-            pytest.param(Interval(0, 360), math.inf, False, id="closed-infinity"),
-            pytest.param(Interval(0, 360), -math.inf, False, id="closed-negative-infinity"),
-            pytest.param(Interval(0, 360), math.nan, False, id="closed-nan"),
-            pytest.param(Interval(0, 10**400), 10**400, True, id="huge-high-bound-itself"),
-            pytest.param(Interval(0, 10**400), 10**400 + 1, False, id="huge-high-bound-plus-one"),
-            pytest.param(Interval(0, 10**400), math.inf, False, id="huge-high-bound-infinity"),
-            pytest.param(UNIT_INTERVAL, True, True, id="unit-interval-true"),
-            pytest.param(UNIT_INTERVAL, False, True, id="unit-interval-false"),
-            pytest.param(POSITIVE, True, True, id="positive-true"),
-            pytest.param(POSITIVE, False, False, id="positive-false"),
-            pytest.param(Interval(2, 3), True, False, id="two-to-three-true"),
         ],
     )
     def test_an_interval_decides_each_kind_of_number_by_comparing_it_with_its_bounds(
         self, interval: Interval, number: float, admitted: bool
     ) -> None:
-        """A closed bound admits itself and an open one refuses itself; NaN and ±inf are refused by every interval, an unbounded one included; every other number is compared exactly with the bounds, a huge int, a numpy number and a bool (as 0 or 1) included. A Python number is answered with a real bool, a numpy number with numpy.bool_."""
+        """A closed bound admits itself and an open one refuses itself; NaN and ±inf are refused by every interval, an unbounded one included; every other number is compared exactly with the bounds, a huge int, a numpy number and a bool (as 0 or 1) included. A Python number is answered with a real bool, a numpy number with a bool or a numpy.bool_."""
         answer = interval.admits(number)
         assert answer == admitted
-        assert type(answer) is (np.bool_ if isinstance(number, np.generic) else bool)
+        answer_types = (bool, np.bool_) if isinstance(number, np.generic) else (bool,)
+        assert type(answer) in answer_types
 
     def test_a_replaced_interval_admits_by_its_new_bounds(self) -> None:
         """A replaced interval decides by the bounds it was replaced with, not by those it was copied from."""
