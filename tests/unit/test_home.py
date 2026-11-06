@@ -27,6 +27,7 @@ from solar_challenge.seg import SEGTariff, SEG_PRESETS, calculate_seg_revenue, r
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE, SimulationWindow
 from solar_challenge.weather import PrefetchedWeather
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
 from tests._run_summaries import home_summary
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
@@ -1015,3 +1016,42 @@ class TestSummaryStatistics:
         """A summary whose simulation_days is not its window's days is refused, naming both."""
         with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
             home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
+
+    def test_each_flow_property_is_the_difference_of_two_of_its_totals(self):
+        summary = home_summary(
+            total_battery_charge_kwh=10.0,
+            total_grid_charge_kwh=4.0,
+            total_self_consumption_kwh=60.0,
+            total_battery_discharge_kwh=8.0,
+            total_grid_import_kwh=20.0,
+        )
+
+        assert (
+            summary.total_pv_charge_kwh,
+            summary.total_direct_self_consumption_kwh,
+            summary.total_grid_to_demand_kwh,
+        ) == (6.0, 52.0, 16.0)
+
+    def test_on_a_simulated_grid_charging_day_pv_and_demand_each_balance_through_the_flow_properties(self):
+        """The home of scenarios/bristol-arbitrage.yaml on a clear 21 June charges its battery from PV and from the grid.
+
+        PV sends its generation to the home, the battery and export; the demand is met by PV, the battery and the
+        grid. Each balance holds only through the engine's own split of self-consumption and battery charge.
+        """
+        home = bristol_arbitrage_home()
+        day = pd.Timestamp("2024-06-21")
+        summary = calculate_summary(
+            simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather("2024-06-21")))
+        )
+        assert summary.total_pv_charge_kwh > 0.01 and summary.total_grid_charge_kwh > 0.01
+
+        assert (
+            summary.total_direct_self_consumption_kwh + summary.total_pv_charge_kwh + summary.total_grid_export_kwh
+            == pytest.approx(summary.total_generation_kwh, abs=1e-9)
+        )
+        assert (
+            summary.total_direct_self_consumption_kwh
+            + summary.total_battery_discharge_kwh
+            + summary.total_grid_to_demand_kwh
+            == pytest.approx(summary.total_demand_kwh, abs=1e-9)
+        )

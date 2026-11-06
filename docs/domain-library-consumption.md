@@ -1100,6 +1100,15 @@ gains `grid_charge_target_kwh` and `max_charge_kw`. The platform's planner
 workaround of `soh=1.0` (task 875) stays correct and can go; it needs no other
 change.
 
+**Unreleased on main** (task 833): `SummaryStatistics` gains three read-only
+properties, each the difference of two of its totals, in kWh:
+`total_pv_charge_kwh`, the battery charge less `total_grid_charge_kwh`;
+`total_direct_self_consumption_kwh`, the self-consumption less the battery
+discharge, which `simulate_home` counts in self-consumption; and
+`total_grid_to_demand_kwh`, the grid import less `total_grid_charge_kwh`. The
+0.5.0 tag has none of them. Consumers need no change when they re-pin, and a
+subtraction of their own that computes one can go.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.

@@ -165,7 +165,7 @@ class SimulationResults:
     Attributes:
         generation: PV generation in kW
         demand: Load demand in kW
-        self_consumption: Direct PV consumption in kW
+        self_consumption: Demand met on site, by PV used directly and by battery discharge, in kW
         battery_charge: Power into battery in kW
         battery_discharge: Power out of battery in kW
         battery_soc: Battery state of charge in kWh
@@ -343,6 +343,21 @@ class SummaryStatistics:
                 f"got simulation_days={self.simulation_days!r} for a window of {window.days} days, "
                 f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
             )
+
+    @property
+    def total_pv_charge_kwh(self) -> float:
+        """Energy the battery stored from PV, in kWh: its total charge less the part it stored from the grid."""
+        return self.total_battery_charge_kwh - self.total_grid_charge_kwh
+
+    @property
+    def total_direct_self_consumption_kwh(self) -> float:
+        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too."""
+        return self.total_self_consumption_kwh - self.total_battery_discharge_kwh
+
+    @property
+    def total_grid_to_demand_kwh(self) -> float:
+        """Grid import that met demand, in kWh: the total import less the part the battery stored."""
+        return self.total_grid_import_kwh - self.total_grid_charge_kwh
 
 
 def self_consumption_ratio(*, self_consumption_kwh: float, generation_kwh: float) -> float:
