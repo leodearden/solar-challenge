@@ -235,7 +235,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "pv-cell-temperature\\.md"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "rebaseline-inside-slow-guard"
         binding: "probe: Bristol 993.14 → 1012.12 kWh/kWp; ratio ≈ 0.819 inside tests/integration/test_pv_performance_ratio.py's 0.76–0.84"

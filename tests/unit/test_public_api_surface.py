@@ -5,8 +5,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
 - The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
   the package to them, and the member guards, which accept the writes to self that
   REVIEWED_COMPUTED_NAME_WRITES lists.  A surface change edits the frozen tables' rows,
-  and adds its 'Unreleased on main' line to docs/domain-library-consumption.md in the
-  same commit.
+  and adds its release note, docs/unreleased/domain-library-consumption/<task id>.md, in
+  the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms.
 - Name resolution: every exported name resolves to its typed import, the object the
@@ -566,8 +566,8 @@ def test_pinned_classes_declare_the_public_attributes_they_set_on_self() -> None
         f"self: {unset}. "
         "member_forms reads class bodies, so FROZEN_MEMBERS cannot pin an attribute "
         "that is only set on self. Declare each such attribute in its class body, e.g. "
-        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its 'Unreleased on "
-        "main' line in docs/domain-library-consumption.md, or make it private; and set "
+        "`cache_dir: Path`, then add its FROZEN_MEMBERS entry and its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md, or make it private; and set "
         "each declared attribute in __init__ or __post_init__, or drop its declaration."
     )
 
@@ -607,9 +607,9 @@ def _drift_message(
     return (
         f"Surface forms differ from {table}:{symbols}\n"
         "Every change to the frozen public API (review/briefing.yaml), an addition "
-        "included, needs an 'Unreleased on main' release note in the 'Tag / release "
-        "convention' section of docs/domain-library-consumption.md, landed in the same "
-        f"commit as the {table} edit."
+        "included, needs a release note, docs/unreleased/domain-library-consumption/<task "
+        "id>.md ('Changes merged since the last tag' in docs/domain-library-consumption.md), "
+        f"landed in the same commit as the {table} edit."
     )
 
 

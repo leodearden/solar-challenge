@@ -150,8 +150,8 @@ conventions:
       backward-compatibility — do not "simplify" it away. tests/unit/config/test_fleet_generation_pins.py
       pins the drawn fields of every shipped fleet and of a probe set, both random orders included,
       and only a change meant to move generated fleets regenerates those goldens
-      (`uv run --locked --extra dev python -m tests._fleet_generation_pins`), with an Unreleased on
-      main line in docs/domain-library-consumption.md. A profile must not depend on what ran
+      (`uv run --locked --extra dev python -m tests._fleet_generation_pins`), with a release
+      note in docs/unreleased/domain-library-consumption/<task id>.md. A profile must not depend on what ran
       before it or beside it on another thread: tests/unit/test_load_reproducibility.py pins that,
       and tests/unit/web_jobs/test_seeded_jobs_reproduce.py pins it for two seeded dashboard jobs
       run together. tests/unit/test_global_rng_calls.py pins that the hand-off is the only src code
@@ -263,7 +263,9 @@ conventions:
       is the isolated external-wheel install test (imports every __all__ name in a fresh
       interpreter). All three tables are spelled alike
       on every admitted Python minor, and each fails until its table edit lands, naming every
-      drifted symbol and asking for the change's 'Unreleased on main' line in the same commit.
+      drifted symbol and asking for the change's release note, one file per task under
+      docs/unreleased/ (docs/domain-library-consumption.md, "Changes merged since the last
+      tag"), in the same commit.
       `__init__.py` is
       deliberately LAZY (PEP-562 __getattr__ + _SYMBOL_MODULE map) so `import solar_challenge`
       stays pvlib-free; the import-time check that __all__ lists each name once, that

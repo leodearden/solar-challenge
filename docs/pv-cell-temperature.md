@@ -155,8 +155,8 @@ task-823 amendment, or marks the figure as predating NOCT-SAM:
 - [tmy-irradiation-scaling.md](tmy-irradiation-scaling.md) §4 and §7;
 - [finance-spreadsheet-reconciliation.md](finance-spreadsheet-reconciliation.md) §4.2 and §5;
 - [pv-inverter-string-matching.md](pv-inverter-string-matching.md) §3–§7;
-- the consumer notice: [domain-library-consumption.md](domain-library-consumption.md)'s
-  Unreleased line for task 823.
+- the consumer notice: task 823's release note,
+  [unreleased/domain-library-consumption/823.md](unreleased/domain-library-consumption/823.md).
 
 ## 5. When to Revisit
 

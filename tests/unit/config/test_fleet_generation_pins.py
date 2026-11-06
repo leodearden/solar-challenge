@@ -21,8 +21,8 @@ def test_the_fleet_generates_the_homes_its_golden_pins(project_root: Path, fleet
     generated = fleet_pin(project_root, fleet)
     message = (
         f"{fleet} no longer generates the homes {golden_name} pins. Only a change meant to move generated "
-        f"fleets regenerates the goldens, with `{REGENERATE_COMMAND}`, and says so in an Unreleased on main "
-        "line of docs/domain-library-consumption.md."
+        f"fleets regenerates the goldens, with `{REGENERATE_COMMAND}`, and says so in its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md."
     )
     generated_sweep = [point["sweep_value"] for point in generated["points"]]
     golden_sweep = [point["sweep_value"] for point in golden["points"]]

@@ -570,6 +570,8 @@ Keys: fk-b3dfd41a4d6a fk-72af0b90338d fk-9cc706d3afdd fk-4cc34de4e649 fk-d63c41c
 
 ### D29. surface sequencing under D4 (S2 Q1, S10 Q3) — ruled_by: human
 
+Amended 2026-11-06 (docs/prds/release-note-fragments.md, Leo's ruling on sitting item 506): where this program says 'Unreleased on main' line or paragraph, the leaf writes its note file, docs/unreleased/<doc>/<task id>.md, and declares that file, never docs/domain-library-consumption.md, in metadata.files.
+
 Additive frozen-table edits land in-leaf with their FROZEN_* entry and an 'Unreleased on main' line (main's precedent, tasks 326 and 469); only renames and retirements are held leaves released by S29, which writes the one release section and consumer-recipe update.
 
 Options considered: additive in-leaf, retirements held; every frozen-table touch waits for S29.
