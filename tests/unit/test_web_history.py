@@ -1057,6 +1057,27 @@ class TestComparisonRoute:
         ]
         assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
 
+    def test_compare_of_runs_whose_summaries_carry_a_window_shows_both_runs_metrics(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """A summary's window, a date range and a timedelta cadence, does not stop the page from comparing the runs."""
+        _insert_test_run(
+            app, run_id="cmp-a", name="Compare A", summary=home_summary(total_generation_kwh=100.0, window=JUNE_WEEK_WINDOW)
+        )
+        _insert_test_run(
+            app, run_id="cmp-b", name="Compare B", summary=home_summary(total_generation_kwh=120.0, window=JUNE_WEEK_WINDOW)
+        )
+
+        response = client.get("/history/compare?ids=cmp-a,cmp-b")
+
+        assert response.status_code == 200
+        assert texts_after(response.get_data(as_text=True), "Total Generation", 4) == [
+            "100.0 kWh",
+            "120.0 kWh",
+            "+20.0 kWh",
+            "+20.0%",
+        ]
+
     @pytest.mark.parametrize(
         ("damaged_summary_json", "field"),
         [

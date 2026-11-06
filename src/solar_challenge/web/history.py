@@ -19,6 +19,7 @@ from flask import (
 )
 
 from solar_challenge.web.charts import comparison_tabs
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.shared import get_storage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -79,7 +80,7 @@ def compare_page() -> str | Response:
             except StoredRunUnreadable as unreadable:
                 flash(str(unreadable), "error")
                 return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
-            runs.append({**asdict(record), "summary": {} if summary is None else asdict(summary)})
+            runs.append({**asdict(record), "summary": {} if summary is None else field_tree(summary)})
 
     if len(runs) < 2:
         flash("Could not find at least 2 valid runs to compare.", "error")
