@@ -92,7 +92,10 @@ from solar_challenge.web.stored_runs import (
 )
 from tests._dashboard_databases import (
     FIXTURES_DIR,
+    insert_runs_row,
+    runs_rows_of,
     schema_of,
+    user_version_of,
     write_database_a_newer_solar_challenge_wrote,
     write_database_at_schema_version,
     write_pre_548_database,
@@ -108,12 +111,6 @@ _NEEDS_PYARROW = pytest.mark.skipif(
     importlib.util.find_spec("pyarrow") is None,
     reason="a stored run's time series is written and read with pyarrow, from the web extra",
 )
-
-
-def _user_version(path: Path) -> int:
-    """The schema version the database file at *path* records: its PRAGMA user_version."""
-    with closing(Database(path).connect()) as conn:
-        return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
 def _names_in_sqlite_master(path: Path, object_type: str) -> set[str]:
@@ -144,7 +141,7 @@ def test_open_database_creates_a_new_store_at_the_schema_version_with_one_runs_c
 
     assert path.parent.is_dir() and path.is_file()
     assert database == Database(path)
-    assert _user_version(path) == SCHEMA_VERSION
+    assert user_version_of(path) == SCHEMA_VERSION
     assert _runs_column_names(path) == [field.name for field in fields(RunRecord)]
 
 
@@ -173,7 +170,7 @@ def test_open_database_opens_a_store_it_created_as_it_is(new_store: Database) ->
     assert open_database(new_store.path) == new_store
 
     assert schema_of(new_store.path) == schema_before
-    assert _user_version(new_store.path) == SCHEMA_VERSION
+    assert user_version_of(new_store.path) == SCHEMA_VERSION
 
 
 def test_open_database_creates_a_store_all_or_nothing_so_a_statement_that_fails_leaves_no_table(
@@ -189,7 +186,7 @@ def test_open_database_creates_a_store_all_or_nothing_so_a_statement_that_fails_
         open_database(path)
 
     assert _names_in_sqlite_master(path, "table") == set(), "open_database must create a store in one transaction"
-    assert _user_version(path) == 0
+    assert user_version_of(path) == 0
 
 
 def _create_statements(path: Path) -> str:
@@ -273,7 +270,7 @@ def test_open_database_writes_nothing_to_a_store_it_refuses(
 
     assert path.read_bytes() == bytes_before
     assert schema_of(path) == schema_before
-    assert _user_version(path) == version
+    assert user_version_of(path) == version
 
 
 def test_a_schema_version_mismatch_is_not_a_value_error() -> None:
@@ -322,20 +319,6 @@ def legacy_store(tmp_path: Path) -> Path:
     return write_pre_548_database(tmp_path / "legacy.db")
 
 
-def _runs_rows(path: Path) -> dict[str, dict[str, Any]]:
-    """Each row of the runs table of the database file at *path*, as its columns by name, keyed by its id."""
-    with closing(Database(path).connect()) as conn:
-        return {row["id"]: dict(row) for row in conn.execute("SELECT * FROM runs")}
-
-
-def _insert_run(path: Path, columns: dict[str, object]) -> None:
-    """Insert into the runs table of the database file at *path* the row *columns* gives by column name."""
-    names = ", ".join(columns)
-    placeholders = ", ".join(f":{name}" for name in columns)
-    with Database(path).transaction() as conn:
-        conn.execute(f"INSERT INTO runs ({names}) VALUES ({placeholders})", columns)
-
-
 def test_migrate_store_brings_a_legacy_store_to_the_schema_version_with_the_tables_of_a_new_store(
     legacy_store: Path, tmp_path: Path
 ) -> None:
@@ -345,7 +328,7 @@ def test_migrate_store_brings_a_legacy_store_to_the_schema_version_with_the_tabl
     assert report == MigrationReport(
         path=legacy_store, from_version=0, to_version=SCHEMA_VERSION, applied_steps=MIGRATIONS
     )
-    assert _user_version(legacy_store) == SCHEMA_VERSION
+    assert user_version_of(legacy_store) == SCHEMA_VERSION
     assert _runs_column_names(legacy_store) == [field.name for field in fields(RunRecord)]
     assert schema_of(legacy_store) == schema_of(open_database(tmp_path / "fresh.db").path)
     assert "jobs" not in _names_in_sqlite_master(legacy_store, "table")
@@ -376,7 +359,7 @@ def test_migrate_store_names_each_run_with_no_name_as_a_job_given_none_names_it_
     legacy_store: Path, tmp_path: Path, run_id: str, name: str
 ) -> None:
     """Contract C7: a migrated run's name is never NULL or blank; its kind's default_name names it after its homes."""
-    row_before = _runs_rows(legacy_store)[run_id]
+    row_before = runs_rows_of(legacy_store)[run_id]
 
     migrate_store(legacy_store, legacy_store.parent)
 
@@ -386,12 +369,12 @@ def test_migrate_store_names_each_run_with_no_name_as_a_job_given_none_names_it_
 
 
 def test_migrate_store_keeps_every_run_chat_message_and_saved_preset(legacy_store: Path) -> None:
-    run_ids_before = set(_runs_rows(legacy_store))
+    run_ids_before = set(runs_rows_of(legacy_store))
 
     migrate_store(legacy_store, legacy_store.parent)
 
     database = open_database(legacy_store)
-    assert set(_runs_rows(legacy_store)) == run_ids_before
+    assert set(runs_rows_of(legacy_store)) == run_ids_before
     assert get_chat_history(database, "legacy-session") == [
         {
             "role": "user",
@@ -417,7 +400,7 @@ def test_migrate_store_names_a_nameless_run_whose_config_does_not_decode_as_its_
     legacy_store: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture, run_type: RunType
 ) -> None:
     """A damaged config does not strand the store: its run is named, and a warning names the run."""
-    _insert_run(legacy_store, {"id": "legacy-damaged", "name": None, "type": run_type, "config_json": "{not json"})
+    insert_runs_row(legacy_store, {"id": "legacy-damaged", "name": None, "type": run_type, "config_json": "{not json"})
     caplog.set_level(logging.WARNING)
 
     migrate_store(legacy_store, legacy_store.parent)
@@ -437,7 +420,7 @@ def test_migrate_store_names_a_nameless_run_stored_before_the_dispatch_union_aft
     """
     pre_union = json.loads((STORED_RUN_FIXTURES_DIR / "pre_dispatch_union_home_configs.json").read_text())
     config = {**pre_union["self_consumption"], "name": "North Roof"}
-    _insert_run(legacy_store, {"id": "legacy-pre-union", "name": None, "type": "home", "config_json": json.dumps(config)})
+    insert_runs_row(legacy_store, {"id": "legacy-pre-union", "name": None, "type": "home", "config_json": json.dumps(config)})
 
     migrate_store(legacy_store, legacy_store.parent)
 
@@ -495,7 +478,7 @@ def test_migrate_store_creates_a_new_store_at_the_schema_version_where_there_is_
     report = migrate_store(path, path.parent)
 
     assert report == MigrationReport(path=path, from_version=SCHEMA_VERSION, to_version=SCHEMA_VERSION, applied_steps=())
-    assert _user_version(path) == SCHEMA_VERSION
+    assert user_version_of(path) == SCHEMA_VERSION
     assert schema_of(path) == schema_of(open_database(tmp_path / "fresh.db").path)
 
 
@@ -515,8 +498,8 @@ def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it
     legacy_store: Path, row: dict[str, object], column: str, named_in_the_reason: list[str]
 ) -> None:
     """Version 1 refuses a run type other than RUN_TYPES and a nameless run with no type to name it after."""
-    _insert_run(legacy_store, row)
-    schema_before, rows_before = schema_of(legacy_store), _runs_rows(legacy_store)
+    insert_runs_row(legacy_store, row)
+    schema_before, rows_before = schema_of(legacy_store), runs_rows_of(legacy_store)
 
     with pytest.raises(MigrationRefused) as refused:
         migrate_store(legacy_store, legacy_store.parent)
@@ -531,8 +514,8 @@ def test_migrate_store_refuses_a_row_a_constraint_of_version_1_refuses_naming_it
     assert isinstance(cause, RowRefused)
     assert (cause.table, cause.row_id, cause.column) == ("runs", row["id"], column)
     assert schema_of(legacy_store) == schema_before
-    assert _user_version(legacy_store) == 0
-    assert _runs_rows(legacy_store) == rows_before
+    assert user_version_of(legacy_store) == 0
+    assert runs_rows_of(legacy_store) == rows_before
 
 
 def test_a_migration_refused_is_not_a_value_error() -> None:
@@ -558,7 +541,7 @@ def test_migrate_store_refuses_a_store_whose_tables_version_1_cannot_rebuild_nam
     """No solar-challenge left such a store: each created all four legacy tables, and only jobs referenced runs."""
     with Database(legacy_store).transaction() as conn:
         conn.execute(damage)
-    schema_before, rows_before = schema_of(legacy_store), _runs_rows(legacy_store)
+    schema_before, rows_before = schema_of(legacy_store), runs_rows_of(legacy_store)
 
     with pytest.raises(MigrationRefused) as refused:
         migrate_store(legacy_store, legacy_store.parent)
@@ -569,8 +552,8 @@ def test_migrate_store_refuses_a_store_whose_tables_version_1_cannot_rebuild_nam
         assert each in message, (each, message)
     assert isinstance(refused.value.__cause__, fault)
     assert schema_of(legacy_store) == schema_before
-    assert _user_version(legacy_store) == 0
-    assert _runs_rows(legacy_store) == rows_before
+    assert user_version_of(legacy_store) == 0
+    assert runs_rows_of(legacy_store) == rows_before
 
 
 def _migrate_store_in_its_directory(path: Path) -> MigrationReport:
@@ -606,7 +589,7 @@ def test_a_store_unreadable_is_not_a_value_error() -> None:
 
 def test_migrate_store_keeps_a_named_run_of_no_type_with_no_type(legacy_store: Path, tmp_path: Path) -> None:
     """Only a run with no name needs a kind to be named after, so a named run of no type migrates as it is."""
-    _insert_run(legacy_store, {"id": "legacy-untyped-named", "name": "Untyped Run", "type": None})
+    insert_runs_row(legacy_store, {"id": "legacy-untyped-named", "name": "Untyped Run", "type": None})
 
     migrate_store(legacy_store, legacy_store.parent)
 
@@ -716,7 +699,7 @@ def _edit_stored_document(path: Path, edit: Edit) -> None:
 
 def _edit_runs_document(database_path: Path, run_id: str, column: str, edit: Edit) -> None:
     """Rewrite run *run_id*'s *column*, config_json or summary_json, with *edit* applied to the document it holds."""
-    document = json.loads(_runs_rows(database_path)[run_id][column])
+    document = json.loads(runs_rows_of(database_path)[run_id][column])
     edit(document)
     with Database(database_path).transaction() as conn:
         conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document), run_id))
@@ -761,7 +744,7 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
         applied_steps=MIGRATIONS[older_store.version :],
         rewritten_values=_values_v3_changes_in_the_pre_787_fleet(older_store.run_ids["pre_787_dispatch_fleet"]),
     )
-    assert _user_version(older_store.path) == SCHEMA_VERSION
+    assert user_version_of(older_store.path) == SCHEMA_VERSION
 
 
 @_NEEDS_PYARROW
@@ -905,7 +888,7 @@ def test_migrate_store_brings_the_runs_row_of_a_run_an_earlier_migration_left_in
 
     report = migrate_store(store_at_version_2, store_at_version_2.parent)
 
-    config = json.loads(_runs_rows(store_at_version_2)[left]["config_json"])
+    config = json.loads(runs_rows_of(store_at_version_2)[left]["config_json"])
     assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
     record = _storage_of(store_at_version_2).run_record(left)
     assert record is not None
@@ -928,7 +911,7 @@ def test_migrate_store_reports_each_source_of_a_run_an_earlier_migration_left_on
 ) -> None:
     """Its files and its runs row are each reported by the figure their summary lacks, not by the import_limit_kw v2 drops from their config."""
     lacking = _install_a_run_lacking_generation(store_at_version_2)
-    row_before = _runs_rows(store_at_version_2)[lacking]
+    row_before = runs_rows_of(store_at_version_2)[lacking]
 
     report = migrate_store(store_at_version_2, store_at_version_2.parent)
 
@@ -937,7 +920,7 @@ def test_migrate_store_reports_each_source_of_a_run_an_earlier_migration_left_on
         (lacking, "summary.json", "total_generation_kwh"),
         (lacking, "runs.summary_json", "total_generation_kwh"),
     }
-    assert _runs_rows(store_at_version_2)[lacking] == row_before
+    assert runs_rows_of(store_at_version_2)[lacking] == row_before
 
 
 @_NEEDS_PYARROW
@@ -970,7 +953,7 @@ def test_migrate_store_brings_forward_a_run_an_earlier_migration_left_once_its_d
     assert isinstance(loaded, StoredHomeRun)
     assert record is not None
     assert record.summary() == loaded.summary
-    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
 
 
 def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_still_cannot_be_migrated(
@@ -980,15 +963,15 @@ def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_sti
     lacking = _install_a_run_lacking_generation(store_at_version_1)
     first = migrate_store(store_at_version_1, store_at_version_1.parent)
     assert [each.run_id for each in first.unmigrated_runs] == [lacking, lacking]
-    files_after_first, rows_after_first = _files_of(_run_dir(store_at_version_1, lacking)), _runs_rows(store_at_version_1)
+    files_after_first, rows_after_first = _files_of(_run_dir(store_at_version_1, lacking)), runs_rows_of(store_at_version_1)
 
     second = migrate_store(store_at_version_1, store_at_version_1.parent)
 
     assert (second.applied_steps, second.caught_up_runs) == ((), ())
     assert second.unmigrated_runs == first.unmigrated_runs
     assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
-    assert _runs_rows(store_at_version_1) == rows_after_first
-    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    assert runs_rows_of(store_at_version_1) == rows_after_first
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
 
 
 def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_earlier_migration_left_once_it_is_fixed(
@@ -1017,7 +1000,7 @@ def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_ea
     )
     assert "nothing to migrate" not in str(report)
     assert f"  run {lacking!r}" in str(report).splitlines()
-    config = json.loads(_runs_rows(store_at_version_1)[lacking]["config_json"])
+    config = json.loads(runs_rows_of(store_at_version_1)[lacking]["config_json"])
     assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
     record = _storage_of(store_at_version_1).run_record(lacking)
     assert record is not None
@@ -1090,7 +1073,7 @@ def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_r
 
     configs = [
         json.loads((_run_dir(store_at_version_1, run_id) / "config.json").read_text()),
-        json.loads(_runs_rows(store_at_version_1)[run_id]["config_json"]),
+        json.loads(runs_rows_of(store_at_version_1)[run_id]["config_json"]),
     ]
     assert [config["battery_config"]["dispatch_strategy"] for config in configs] == [
         {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
@@ -1116,14 +1099,14 @@ def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_writes_e
     """
     store = older_store.path
     files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in older_store.run_ids.values()}
-    rows_before = _runs_rows(store)
+    rows_before = runs_rows_of(store)
     rewritten = {
         older_store.run_ids[name] for version, name in _CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES if version > older_store.version
     }
 
     migrate_store(store, store.parent)
 
-    rows_after = _runs_rows(store)
+    rows_after = runs_rows_of(store)
     for run_id, before in files_before.items():
         after = _files_of(_run_dir(store, run_id))
         assert set(after) == {*before, "format.json"}, run_id
@@ -1156,7 +1139,7 @@ def test_migrate_store_reports_each_value_it_drops_that_is_not_null_naming_the_r
         DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
     }
     assert "retired_figure" not in json.loads((run_dir / "summary.json").read_text())
-    assert "retired_figure" not in json.loads(_runs_rows(store_at_version_1)[run_id]["summary_json"])
+    assert "retired_figure" not in json.loads(runs_rows_of(store_at_version_1)[run_id]["summary_json"])
     assert "retired_setting" not in json.loads((run_dir / "config.json").read_text())
 
 
@@ -1174,11 +1157,11 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
     )
     _edit_stored_document(_run_dir(store_at_version_1, lacking) / "summary.json", _deleting("total_generation_kwh"))
     _edit_runs_document(store_at_version_1, lacking, "summary_json", _deleting("total_generation_kwh"))
-    _insert_run(
+    insert_runs_row(
         store_at_version_1,
         {"id": "garbled-config", "name": "Garbled", "type": "home", "config_json": "{not json", "status": "completed"},
     )
-    files_before, rows_before = _files_of(_run_dir(store_at_version_1, lacking)), _runs_rows(store_at_version_1)
+    files_before, rows_before = _files_of(_run_dir(store_at_version_1, lacking)), runs_rows_of(store_at_version_1)
 
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
 
@@ -1191,11 +1174,11 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
     assert all(each.reason for each in report.unmigrated_runs)
     assert _files_of(_run_dir(store_at_version_1, lacking)) == files_before
     assert not (_run_dir(store_at_version_1, lacking) / "format.json").exists()
-    rows_after = _runs_rows(store_at_version_1)
+    rows_after = runs_rows_of(store_at_version_1)
     assert [rows_after[run_id] for run_id in (lacking, "garbled-config")] == [
         rows_before[run_id] for run_id in (lacking, "garbled-config")
     ]
-    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
 
@@ -1215,7 +1198,7 @@ def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_
     assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
         RewrittenValue(copy, "runs.config_json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
     )
-    assert json.loads(_runs_rows(store_at_version_1)[copy]["config_json"])["homes"][2]["dispatch_strategy"] == "greedy"
+    assert json.loads(runs_rows_of(store_at_version_1)[copy]["config_json"])["homes"][2]["dispatch_strategy"] == "greedy"
 
 
 @_NEEDS_PYARROW
@@ -1249,13 +1232,13 @@ def test_migrate_store_reports_a_run_of_no_type_once_as_unmigrated_naming_its_ty
     )
     with Database(store_at_version_1).transaction() as conn:
         conn.execute("UPDATE runs SET type = NULL WHERE id = ?", (run_id,))
-    files_before, row_before = _files_of(_run_dir(store_at_version_1, run_id)), _runs_rows(store_at_version_1)[run_id]
+    files_before, row_before = _files_of(_run_dir(store_at_version_1, run_id)), runs_rows_of(store_at_version_1)[run_id]
 
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
 
     assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [(run_id, "runs.type", None)]
     assert _files_of(_run_dir(store_at_version_1, run_id)) == files_before
-    assert _runs_rows(store_at_version_1)[run_id] == row_before
+    assert runs_rows_of(store_at_version_1)[run_id] == row_before
 
 
 def _put_a_directory_in_place_of(path: Path) -> None:
@@ -1284,7 +1267,7 @@ def test_migrate_store_reports_a_run_whose_document_cannot_be_read_as_unmigrated
     assert "is unreadable" in report.unmigrated_runs[0].reason
     assert _files_of(run_dir) == files_before
     assert not (run_dir / "format.json").exists()
-    assert _user_version(store_at_version_1) == SCHEMA_VERSION
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
 
@@ -1310,7 +1293,7 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     )
     run_dir = _run_dir(store_at_version_1, run_id)
     (run_dir / "format.json").write_text(marker)
-    files_before, row_before = _files_of(run_dir), _runs_rows(store_at_version_1)[run_id]
+    files_before, row_before = _files_of(run_dir), runs_rows_of(store_at_version_1)[run_id]
 
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
 
@@ -1318,7 +1301,7 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
         (run_id, "format.json", field)
     ]
     assert _files_of(run_dir) == files_before
-    assert _runs_rows(store_at_version_1)[run_id] == row_before
+    assert runs_rows_of(store_at_version_1)[run_id] == row_before
 
 
 def test_migrate_store_leaves_the_files_of_a_run_whose_format_json_names_a_later_format_as_they_are_and_reports_nothing_of_them(
@@ -1354,7 +1337,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     """
     fleet_dir = _run_dir(store_at_version_1, legacy_run_ids["legacy_fleet"])
     _put_a_directory_in_place_of(fleet_dir / "format.json")
-    fleet_files_before, rows_before = _files_of(fleet_dir), _runs_rows(store_at_version_1)
+    fleet_files_before, rows_before = _files_of(fleet_dir), runs_rows_of(store_at_version_1)
 
     with pytest.raises(MigrationRefused) as refused:
         migrate_store(store_at_version_1, store_at_version_1.parent)
@@ -1364,8 +1347,8 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     message = str(refused.value)
     for named in [str(store_at_version_1), "schema version 2", "stays at version 1", str(fleet_dir / "format.json")]:
         assert named in message, (named, message)
-    assert _user_version(store_at_version_1) == 1
-    assert _runs_rows(store_at_version_1) == rows_before
+    assert user_version_of(store_at_version_1) == 1
+    assert runs_rows_of(store_at_version_1) == rows_before
     assert _files_of(fleet_dir) == fleet_files_before
 
     (fleet_dir / "format.json").rmdir()
@@ -1396,7 +1379,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         conn.execute(
             "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
         )
-    rows_before = _runs_rows(store_at_version_1)
+    rows_before = runs_rows_of(store_at_version_1)
 
     with pytest.raises(MigrationRefused) as refused:
         migrate_store(store_at_version_1, store_at_version_1.parent)
@@ -1404,8 +1387,8 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     assert refused.value.step == MIGRATIONS[1]
     assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
     assert "no run may be updated" in str(refused.value)
-    assert _user_version(store_at_version_1) == 1
-    assert _runs_rows(store_at_version_1) == rows_before
+    assert user_version_of(store_at_version_1) == 1
+    assert runs_rows_of(store_at_version_1) == rows_before
     files_brought_forward = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
     markers = [json.loads(files["format.json"]) for files in files_brought_forward.values()]
     assert markers == [{"format_version": 2}] * len(legacy_run_ids)
@@ -1468,7 +1451,7 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
     message = str(refused.value)
     for named in [str(store), f"schema version {SCHEMA_VERSION}, as it was", str(RUN_FORMAT_VERSION), str(marker)]:
         assert named in message, (named, message)
-    assert _user_version(store) == SCHEMA_VERSION
+    assert user_version_of(store) == SCHEMA_VERSION
     assert _files_of(_run_dir(store, run_id)) == files_before
 
     marker.rmdir()
