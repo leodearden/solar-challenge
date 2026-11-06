@@ -202,22 +202,28 @@ class MigrationRefused(Exception):
 class LaggingRunsRefused(Exception):
     """A migration's catch-up that cannot bring forward the runs of a store still in an older stored-run format, as a run's file cannot be written or the runs rows cannot be read or written.
 
-    The message names the store, the stored-run format version, the schema version the store
-    stays at, SCHEMA_VERSION, and how it came to be there: as it was, when the migration found
-    it at that version, or else by the steps the migration applied from *found*, the version it
-    found it at, which stay applied; then the fault. It is not a ValueError: no request causes
-    it, as MigrationRefused is not one.
+    migrated is the report of the steps the migration applied before the catch-up, which stay
+    applied, with each value they dropped or rewrote and each run they left; a report of no step
+    when the migration found the store at SCHEMA_VERSION. The message names the store, the
+    stored-run format version, the schema version the store stays at, SCHEMA_VERSION, and how it
+    came to be there: as it was, when the migration found it at that version, or else by the
+    steps the migration applied from migrated's from_version, the version it found it at; then
+    the fault. It is not a ValueError: no request causes it, as MigrationRefused is not one.
     """
 
-    def __init__(self, path: Path, found: int, fault: OSError | sqlite3.Error) -> None:
-        arrival = "as it was" if found == SCHEMA_VERSION else f"to which this migration's steps brought it from version {found}"
-        super().__init__(
-            f"The runs of {path} still in an older stored-run format cannot be brought forward to stored-run format "
-            f"version {RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, {arrival}, and the "
-            f"runs brought forward before the fault stay so: {fault}"
+    def __init__(self, migrated: MigrationReport, fault: OSError | sqlite3.Error) -> None:
+        arrival = (
+            "as it was"
+            if migrated.from_version == SCHEMA_VERSION
+            else f"to which this migration's steps brought it from version {migrated.from_version}"
         )
-        self.path = path
-        self.found = found
+        super().__init__(
+            f"The runs of {migrated.path} still in an older stored-run format cannot be brought forward to stored-run "
+            f"format version {RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, {arrival}, and "
+            f"the runs brought forward before the fault stay so: {fault}"
+        )
+        self.migrated = migrated
+        self.path = migrated.path
 
 
 def _schema_v1(conn: sqlite3.Connection) -> None:
@@ -364,8 +370,8 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
             or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
             stays at SCHEMA_VERSION, as it was or as the steps of this migration left it, and
-            the runs brought forward before the fault stay so. Those steps stay applied, but no
-            report of them is made, as none is of the steps before one MigrationRefused refuses.
+            the runs brought forward before the fault stay so. Those steps stay applied, and the
+            refusal carries their report in migrated, as MigrationRefused does.
         sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
@@ -382,7 +388,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     try:
         caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
     except (OSError, sqlite3.Error) as fault:
-        raise LaggingRunsRefused(database_path, found, fault) from fault
+        raise LaggingRunsRefused(_report_of(database_path, found, pending, outcome), fault) from fault
     return _report_of(database_path, found, pending, outcome + caught_up, caught_up.brought_forward_runs)
 
 
