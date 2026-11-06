@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for which dispatch simulate_home runs a home under, as named by its results' strategy_name, the demand each dispatch path's results carry, and that each dispatch path's battery discharge is part of the self-consumption its results carry.
+"""Tests for the dispatch paths simulate_home runs a home under: which one runs, as named by its results' strategy_name, and what each one's results carry, the home's demand and a battery discharge that is part of their self-consumption.
 
 A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
 and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
