@@ -2,14 +2,14 @@
 """A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or overrides type's __getattribute__, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
 
 The helper's other modules read classes through own_namespace, own_annotations,
-recorded_mro and overriding_getattribute_holder. Of the helper, this module imports only
-the modules below it in tests/unit/test_surface_forms_layers.py's LAYERS, which checks
-that.
+recorded_mro, overriding_getattribute_holder and namespace_holders. Of the helper, this
+module imports only the modules below it in tests/unit/test_surface_forms_layers.py's
+LAYERS, which checks that.
 """
 
 import inspect
 import types
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from tests._surface_forms_labels import label_of
 
@@ -124,3 +124,8 @@ def recorded_mro(cls: type) -> tuple[type, ...]:
     """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
     mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
     return mro
+
+
+def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:
+    """The classes among *classes*, in their order, whose own namespace, as own_namespace reads it, holds one of *names*."""
+    return (cls for cls in classes if not own_namespace(cls).keys().isdisjoint(names))
