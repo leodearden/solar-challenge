@@ -424,6 +424,29 @@ def test_a_method_a_dataclass_body_compiled_under_a_name_the_decorator_never_wri
     assert later.__file__ in str(raised.value)
 
 
+_LOCAL_GENERATING_SOURCE = (
+    "from __future__ import annotations\n"
+    "\n"
+    "import sys\n"
+    "from fractions import Fraction as Share\n"
+    "\n"
+    "def generate(cls):\n"
+    "    namespace = {{}}\n"
+    "    exec(compile('def __init__(self): ...\\n', '<unlisted generator>', 'exec'), "
+    "{generator_globals}, namespace)\n"
+    "    namespace['__init__'].__qualname__ = f'{{cls.__qualname__}}.__init__'\n"
+    "    cls.__init__ = namespace['__init__']\n"
+    "    return cls\n"
+    "\n"
+    "def build():\n"
+    "    @generate\n"
+    "    class Local:\n"
+    "        share: Share\n"
+    "\n"
+    "    return Local\n"
+)
+
+
 @pytest.mark.parametrize(
     "generator_globals",
     [pytest.param("{}", id="no-file-key"), pytest.param("{'__file__': None}", id="file-is-none")],
@@ -436,24 +459,7 @@ def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_gl
         tmp_path,
         monkeypatch,
         "generating",
-        "from __future__ import annotations\n"
-        "\n"
-        "from fractions import Fraction as Share\n"
-        "\n"
-        "def generate(cls):\n"
-        "    namespace = {}\n"
-        "    exec(compile('def __init__(self): ...\\n', '<unlisted generator>', 'exec'), "
-        f"{generator_globals}, namespace)\n"
-        "    namespace['__init__'].__qualname__ = f'{cls.__qualname__}.__init__'\n"
-        "    cls.__init__ = namespace['__init__']\n"
-        "    return cls\n"
-        "\n"
-        "def build():\n"
-        "    @generate\n"
-        "    class Local:\n"
-        "        share: Share\n"
-        "\n"
-        "    return Local\n",
+        _LOCAL_GENERATING_SOURCE.format(generator_globals=generator_globals),
     )
 
     with pytest.raises(LookupError) as raised:
@@ -542,6 +548,81 @@ def test_a_routine_a_generator_compiled_with_a_copy_of_its_modules_globals_raise
 
     with pytest.raises(LookupError) as raised:
         named_classes(earlier.Top.__init__)
+
+    assert earlier.__file__ in str(raised.value)
+    assert later.__file__ in str(raised.value)
+    assert "MethodGenerator" not in str(raised.value)
+
+
+_LOCAL_GENERATING_SOURCE_COPYING_ITS_MODULES_GLOBALS = _LOCAL_GENERATING_SOURCE.format(
+    generator_globals="dict(vars(sys.modules[cls.__module__]))"
+)
+
+
+@pytest.mark.parametrize(
+    "built_once_another_module_took_its_place",
+    [
+        pytest.param(False, id="built-while-its-module-holds-its-place"),
+        pytest.param(True, id="built-once-another-module-took-its-place"),
+    ],
+)
+def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_a_copy_of_the_globals_of_the_module_sys_modules_holds_under_its_modules_name_raises_a_lookup_error_naming_that_functions_code_file_and_a_method_generator_record_not_a_replaced_module(
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    built_once_another_module_took_its_place: bool,
+) -> None:
+    """The module imports annotations from __future__, so on every minor, 3.14 included, Local's body compiles no function, not even __annotate__: the __init__ that generate writes is the only function named after Local, and so its witness. generate compiles it, as attrs compiles each __init__ it writes, with a copy of the dict of the module sys.modules holds under Local's module name, which holds that module's __name__, __file__ and very __spec__; once another module has taken the builder's place there, that copy is of the other module's dict, though Local's body ran in the builder's."""
+    builder = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "generating",
+        _LOCAL_GENERATING_SOURCE_COPYING_ITS_MODULES_GLOBALS,
+    )
+    if built_once_another_module_took_its_place:
+        imported_module(
+            tmp_path_factory.mktemp("later"),
+            monkeypatch,
+            "generating",
+            _LOCAL_GENERATING_SOURCE_COPYING_ITS_MODULES_GLOBALS,
+        )
+    local = builder.build()
+    held = sys.modules["generating"]
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(local)
+
+    message = str(raised.value)
+    clause = f"a copy of the globals of the module at {held.__file__}"
+    assert "generating.build.<locals>.Local.__init__" in message
+    assert "'<unlisted generator>'" in message
+    assert clause in message
+    assert held.__file__ not in message.replace(clause, "")
+    assert "add a MethodGenerator record" in message
+    assert "before importing another module of that name" in message
+    if built_once_another_module_took_its_place:
+        assert builder.__file__ not in message
+
+
+def test_a_class_whose_only_function_named_after_it_a_generator_compiled_with_a_copy_of_its_modules_globals_raises_a_lookup_error_naming_both_modules_once_another_module_of_the_same_name_has_since_replaced_its_own(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local is built while earlier holds its place in sys.modules, so the copy that generate compiles Local's __init__ with holds earlier's spec, not later's."""
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"),
+        monkeypatch,
+        "generating",
+        _LOCAL_GENERATING_SOURCE_COPYING_ITS_MODULES_GLOBALS,
+    )
+    local = earlier.build()
+    later = imported_module(
+        tmp_path_factory.mktemp("later"),
+        monkeypatch,
+        "generating",
+        _LOCAL_GENERATING_SOURCE_COPYING_ITS_MODULES_GLOBALS,
+    )
+
+    with pytest.raises(LookupError) as raised:
+        named_classes(local)
 
     assert earlier.__file__ in str(raised.value)
     assert later.__file__ in str(raised.value)
