@@ -686,6 +686,8 @@ class TestSimulateTimestepGridCharge:
     Tests (a)-(f) cover the tariff keyword argument of simulate_timestep.
     Test (c-i) covers the case where no tariff is given, so the grid-charge
     context stays None.
+    Test (g) pins the order in which simulate_timestep runs a decision's
+    charges: PV first, then the grid.
     """
 
     def test_accepts_tariff_kwarg(
@@ -866,7 +868,7 @@ class TestSimulateTimestepGridCharge:
     def test_a_decision_that_charges_from_pv_and_the_grid_stores_the_pv_charge_first_when_the_battery_cannot_take_both(
         self,
     ) -> None:
-        """The PV charge runs before the grid charge, so when the battery has room for only part of the two, PV takes it and the grid stores nothing."""
+        """(g) The PV charge runs before the grid charge, so when the battery has room for only part of the two, PV takes it and the grid stores nothing."""
         battery = Battery(
             BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5),
             initial_soc_kwh=4.0,
