@@ -113,8 +113,9 @@ has a release note: one file,
 `docs/unreleased/domain-library-consumption/<task id>.md`, named by the id of
 the task that makes the change and added by the same commit. A change to what a
 finance-model name returns has its note in
-`docs/unreleased/cost-recovery-finance-model/<task id>.md` instead, for readers
-of [cost-recovery-finance-model.md](cost-recovery-finance-model.md). A note is
+`docs/unreleased/cost-recovery-finance-model/<task id>.md`, for readers of
+[cost-recovery-finance-model.md](cost-recovery-finance-model.md); a change both
+kinds of reader need has a note in each. A note is
 the paragraph the release lists under its task id: what changed against the
 last tag, ending with what a consumer does when they re-pin. A later change to
 the same note edits that file. Neither doc holds an unreleased note, so tasks

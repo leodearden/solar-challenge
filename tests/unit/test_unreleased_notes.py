@@ -1,11 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Release notes for changes merged since the last tag: one file per task, never a paragraph in a doc.
 
-The rule is docs/domain-library-consumption.md's "Changes merged since the last tag": a
-change's note is docs/unreleased/<doc>/<task id>.md, where <doc> is the stem of the doc
-whose readers it serves, and the next release folds the notes into its notes and deletes
-them. A note in its own file lets the tasks that write notes run side by side, where a
-paragraph in a shared doc made each wait for that doc's file lock.
+The rule is docs/domain-library-consumption.md's "Changes merged since the last tag";
+docs/prds/release-note-fragments.md says why.
 """
 
 from pathlib import Path
@@ -85,6 +82,6 @@ def test_no_doc_holds_an_unreleased_note(project_root: Path, doc: str) -> None:
     assert not paragraphs, (
         f"docs/{doc}.md holds {UNRELEASED_PARAGRAPH} paragraphs at lines {paragraphs}. Write "
         f"each as its own file, {NOTES_DIR}/{doc}/<task id>.md, holding the paragraph without "
-        "its prefix, and leave the doc unedited (docs/domain-library-consumption.md, 'Changes "
-        "merged since the last tag')."
+        "its prefix, and do not add the paragraph to the doc (docs/domain-library-consumption.md, "
+        "'Changes merged since the last tag')."
     )
