@@ -6,7 +6,9 @@ and RunRecord.home_configs(): a home run's summary is a SummaryStatistics and a 
 a FleetSummary, and each run's config is its homes' HomeConfigs, in order. A run with no
 document yet answers None. A document that cannot be read is refused with a
 StoredRunUnreadable naming the run, the column, e.g. runs.summary_json, and the field; so is
-each document of a record with no type, naming runs.type. run_headline maps a summary of
+each document of a record with no type, naming runs.type. RunRecord.summary_tree() answers
+the field tree of the summary RunRecord.summary() reads, {} while the run has none, and
+refuses a summary as RunRecord.summary() refuses it. run_headline maps a summary of
 either kind to the generation and self-consumption ratio a run list shows, and refuses a
 summary whose figure for either is not a finite number.
 
@@ -37,6 +39,7 @@ pytest.importorskip("pyarrow")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary, calculate_fleet_summary
 from solar_challenge.home import SummaryStatistics, calculate_summary
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import (
     RUN_SORTS,
     RunHeadline,
@@ -53,7 +56,7 @@ from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config, make_sim_results
 from tests._run_stores import empty_run_storage
-from tests._run_summaries import fleet_summary, home_summary, summary_json
+from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._web_runs import store_fleet_run, store_home_run
 
 
@@ -234,6 +237,36 @@ class TestRunRecordTypedDocuments:
         assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == ("untyped-run", "runs.type", None)
         assert "untyped-run" in str(refusal.value)
         assert str(refusal.value) == str(kind_refusal.value)
+
+
+class TestRunRecordSummaryTree:
+    """RunRecord.summary_tree(): the field tree of the run's summary, {} while it has none."""
+
+    def test_a_run_with_a_summary_answers_its_summary_s_field_tree(self, storage: RunStorage) -> None:
+        summary = home_summary(window=JUNE_WEEK_WINDOW)
+        record = dataclasses.replace(_store_a_home_run(storage, "windowed-run"), summary_json=summary_json(summary))
+        assert field_tree(summary) != dataclasses.asdict(summary), "the summary's field tree is its asdict, so an answer of asdict would pass"
+
+        assert record.summary_tree() == field_tree(summary)
+
+    def test_a_fleet_run_answers_its_fleet_summary_s_field_tree(self, storage: RunStorage) -> None:
+        fleet = make_fleet_results(n_homes=2, days=1)
+        store_fleet_run(storage, "fleet-run", fleet)
+
+        assert _record(storage, "fleet-run").summary_tree() == field_tree(calculate_fleet_summary(fleet))
+
+    def test_a_run_whose_job_is_still_running_answers_an_empty_tree(self, storage: RunStorage) -> None:
+        storage.create_run("running-1", run_type="fleet", name="North Roof", n_homes=3, created_at="2026-10-20T09:00:00+00:00")
+
+        assert _record(storage, "running-1").summary_tree() == {}
+
+    def test_a_summary_that_cannot_be_read_is_refused_as_summary_refuses_it(self, storage: RunStorage) -> None:
+        garbled = dataclasses.replace(_store_a_home_run(storage, "garbled-run"), summary_json="{not json")
+
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            garbled.summary_tree()
+
+        assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", "runs.summary_json")
 
 
 class TestRunHeadline:
