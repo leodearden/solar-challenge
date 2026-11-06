@@ -16,7 +16,9 @@ at version 1 to the stored-run format too, reporting each value it drops that is
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
 format version (B5). It refuses a step that cannot write a run's file, exiting 1 with the
 refusal naming the step and the fault, and so it does a run an earlier migration left lagging
-whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault.
+whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused
+after it applied a step, it first prints on stdout the report of the steps it applied, which
+stay applied, then the refusal on stderr; refused before any step, it prints no report.
 """
 
 import json
@@ -42,6 +44,7 @@ from tests._dashboard_databases import (
     write_pre_548_database,
 )
 from tests._html_page import headings
+from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import run_storage_over
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
@@ -331,6 +334,33 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
     assert "Traceback" not in result.output
     for named in [str(database), "schema version 2", "stays at version 1", str(marker)]:
         assert named in result.stderr, (named, result.stderr)
+    assert result.stdout == ""
+
+
+def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of_the_steps_it_applied_then_the_refusal(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """Version 3's step is refused once version 2's has committed."""
+    retired = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    database = _store_database(tmp_path)
+
+    with the_step_to_version_3_refused(database, legacy_run_ids["pre_787_dispatch_fleet"]) as refusal:
+        result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    for named in [str(database), "from schema version 1 to 2", MIGRATIONS[1].description]:
+        assert named in result.stdout, (named, result.stdout)
+    assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
+    assert MIGRATIONS[2].description not in result.stdout
+    for named in ["schema version 3", "stays at version 2", refusal]:
+        assert named in result.stderr, (named, result.stderr)
+    assert result.output.index("Migrated the dashboard database") < result.output.index(
+        "cannot be migrated to schema version 3"
+    ), result.output
 
 
 def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_store_and_the_fault(tmp_path: Path) -> None:
@@ -347,6 +377,7 @@ def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_sto
     assert "Traceback" not in result.output
     for named in [str(database.path), f"schema version {SCHEMA_VERSION}", str(marker)]:
         assert named in result.stderr, (named, result.stderr)
+    assert result.stdout == ""
 
 
 def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads_it_with_no_grid_charge(

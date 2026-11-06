@@ -327,6 +327,10 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   first format admits, such as an unknown key, which v2 then drops. A write it cannot make then
   is refused with `LaggingRunsRefused`: the store stays at `SCHEMA_VERSION`, as it was or as the
   migration's steps left it, and the message says which.
+- **Amendment (2026-11-06, task 1359):** both refusals that can follow a step the migration
+  applied, `MigrationRefused` and `LaggingRunsRefused`, carry the report of the steps it applied
+  (`migrated`, a `MigrationReport`, of no step when the refusal comes before any), and `web
+  migrate` prints that report, when it names a step, before the refusal. Those steps stay applied.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;

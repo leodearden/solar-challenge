@@ -12,7 +12,10 @@ document and field, and the rest of the store migrates; so, once, is a run whose
 cannot be read, while a run whose format.json names a later format is left as it is. A step that
 cannot write a run's file, or whose transaction fails once it has brought the run files forward,
 is refused, leaving the database at the version before it, and the migration run again once the
-fault is gone completes it.
+fault is gone completes it. A step refused after an earlier step of the migration committed
+leaves the store at the version that step brought it to, and the refusal carries the report of
+the steps the migration applied; the migration run again goes on from that version and reports
+none of their values again.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 A run that store's migration left in format 1, with no format.json, has its files brought
@@ -22,7 +25,8 @@ files or its runs row, naming each, also in a store at SCHEMA_VERSION, which has
 apply, once the run's documents are fixed, and reports again each it still cannot migrate. It
 goes by what a run's documents show, not by where they came from, so it catches up a run saved
 in the current format the same way when its save did not finish or its runs row holds a key no
-field has.
+field has. A LaggingRunsRefused carries only the report of a migration that left the store at
+SCHEMA_VERSION.
 """
 
 import importlib.util
@@ -70,6 +74,7 @@ from tests._dashboard_databases import (
     write_database_at_schema_version,
 )
 from tests._finance_builders import make_home_config, make_sim_results
+from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
@@ -831,6 +836,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     message = str(refused.value)
     for named in [str(store_at_version_1), "schema version 2", "stays at version 1", str(fleet_dir / "format.json")]:
         assert named in message, (named, message)
+    assert refused.value.migrated == MigrationReport(store_at_version_1, 1, 1, ())
     assert user_version_of(store_at_version_1) == 1
     assert runs_rows_of(store_at_version_1) == rows_before
     assert _files_of(fleet_dir) == fleet_files_before
@@ -903,6 +909,58 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
+def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v2_and_run_again_goes_on_from_version_2(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
+
+    Run again, the migration goes on from version 2 and reports v3's rewrites of the pre-787
+    fleet's runs row alone: v3 brought the run files forward before its transaction failed, so
+    its rewrites of the fleet's config.json are reported by neither migration, as
+    migrate_store's docstring says (task 1369).
+    """
+    run_id = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
+    )
+    _edit_stored_document(_run_dir(store_at_version_1, run_id) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
+
+    with (
+        the_step_to_version_3_refused(store_at_version_1, legacy_run_ids["pre_787_dispatch_fleet"]),
+        pytest.raises(MigrationRefused) as refused,
+    ):
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (refused.value.path, refused.value.step) == (store_at_version_1, MIGRATIONS[2])
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert "stays at version 2" in str(refused.value)
+    assert user_version_of(store_at_version_1) == 2
+    assert refused.value.migrated == MigrationReport(
+        path=store_at_version_1,
+        from_version=1,
+        to_version=2,
+        applied_steps=(MIGRATIONS[1],),
+        dropped_values=(
+            DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+            DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
+    )
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        path=store_at_version_1,
+        from_version=2,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(MIGRATIONS[2],),
+        rewritten_values=tuple(
+            each
+            for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+            if each.document == "runs.config_json"
+        ),
+    )
+
+
 @_NEEDS_PYARROW
 def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_its_runs_files(tmp_path: Path) -> None:
     """Every run of a store at SCHEMA_VERSION is in the current format, so no run-document step is pending."""
@@ -935,6 +993,8 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
     message = str(refused.value)
     for named in [str(store), f"schema version {SCHEMA_VERSION}, as it was", str(RUN_FORMAT_VERSION), str(marker)]:
         assert named in message, (named, message)
+    assert refused.value.path == store
+    assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
     assert user_version_of(store) == SCHEMA_VERSION
     assert _files_of(_run_dir(store, run_id)) == files_before
 
@@ -953,15 +1013,36 @@ def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
 def test_a_lagging_runs_refused_after_its_migration_s_steps_names_the_version_they_brought_the_store_from(
     tmp_path: Path,
 ) -> None:
-    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before."""
+    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before.
+
+    No store makes the catch-up fail right after steps, as once they have run it has nothing left
+    to write, so the refusal is built here from the report such a migration carries.
+    """
     path = tmp_path / "store.db"
     fault = sqlite3.OperationalError("disk I/O error")
+    migrated = MigrationReport(path, 1, SCHEMA_VERSION, MIGRATIONS[1:])
 
-    message = str(LaggingRunsRefused(path, 1, fault))
+    refused = LaggingRunsRefused(migrated, fault)
 
+    message = str(refused)
     for named in [str(path), f"schema version {SCHEMA_VERSION}", "brought it from version 1", str(fault)]:
         assert named in message, (named, message)
     assert "as it was" not in message
+    assert refused.migrated is migrated
+    assert refused.path == path
+
+
+def test_a_lagging_runs_refused_refuses_the_report_of_a_migration_that_left_the_store_below_the_schema_version(
+    tmp_path: Path,
+) -> None:
+    """The catch-up runs once the store is at SCHEMA_VERSION, the version the refusal says it stays at."""
+    left_at_version_2 = MigrationReport(tmp_path / "store.db", 1, 2, (MIGRATIONS[1],))
+
+    with pytest.raises(ValueError) as refused:
+        LaggingRunsRefused(left_at_version_2, sqlite3.OperationalError("disk I/O error"))
+
+    for named in [f"store at schema version {SCHEMA_VERSION}", "left the store at version 2"]:
+        assert named in str(refused.value), (named, str(refused.value))
 
 
 def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(

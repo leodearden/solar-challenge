@@ -130,6 +130,13 @@ def migrate() -> None:
     this version, and the command, run again once the fault is fixed, brings
     the run forward.
 
+    A step refused after earlier steps applied, or a run's file it cannot
+    write after the steps, first prints the report of the steps it applied,
+    as a migration that finishes does, with each value they dropped or
+    rewrote and each run they left. Those steps stay applied, and the
+    command, run again once the fault is fixed, goes on from the version
+    they brought the store to.
+
     Examples:
       solar-challenge web migrate
     """
@@ -150,7 +157,12 @@ def migrate() -> None:
             report = migrate_store(location.database, location.data_dir)
         finally:
             store_lock.release()
-    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable, MigrationRefused, LaggingRunsRefused) as refused:
+    except (StoreLockError, SchemaVersionMismatch, StoreUnreadable) as refused:
+        print_error(str(refused))
+        raise typer.Exit(1) from refused
+    except (MigrationRefused, LaggingRunsRefused) as refused:
+        if refused.migrated.applied_steps:
+            print_report(str(refused.migrated))
         print_error(str(refused))
         raise typer.Exit(1) from refused
     print_report(str(report))
