@@ -42,8 +42,8 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
   that names no dispatch strategy and no tariff, so it ran self-consumption.
 
-PRE_DISPATCH_UNION_HOME_CONFIGS is a file of FIXTURES_DIR beside those directories: the stored
-config of a home run per dispatch strategy, from before the strategies were variants of one union.
+PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
+docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
 
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
@@ -133,6 +133,21 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *,
     installed_id: str = row["id"]
     shutil.copytree(stored_run_fixture_dir(name), stored_run_dir(RunStorage(database, data_dir), installed_id))
     return installed_id
+
+
+def pre_dispatch_union_home_config(strategy_type: str) -> dict[str, Any]:
+    """The stored config that PRE_DISPATCH_UNION_HOME_CONFIGS holds for dispatch strategy *strategy_type*.
+
+    Raises:
+        ValueError: The file holds no config for *strategy_type*.
+    """
+    configs: dict[str, dict[str, Any]] = json.loads(PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())
+    if strategy_type not in configs:
+        raise ValueError(
+            f"{PRE_DISPATCH_UNION_HOME_CONFIGS.name} has no config for dispatch strategy {strategy_type!r}; "
+            f"its strategies are {list(configs)}"
+        )
+    return configs[strategy_type]
 
 
 def _fixture_dir(name: str) -> Path:

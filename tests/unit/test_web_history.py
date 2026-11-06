@@ -46,7 +46,7 @@ from tests._html_page import element_attributes, element_count, texts, texts_aft
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
-from tests._stored_run_fixtures import PRE_DISPATCH_UNION_HOME_CONFIGS
+from tests._stored_run_fixtures import pre_dispatch_union_home_config
 from tests._web_app import (
     build_test_app,
     database_of,
@@ -915,7 +915,7 @@ class TestExportAPI:
         """
         store = tmp_path / "store"
         database = write_database_at_schema_version(database_path_in(store), 1)
-        stored = json.loads(PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
+        stored = pre_dispatch_union_home_config(strategy.strategy_type)
         with Database(database).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status) VALUES (?, ?, ?, ?, ?, ?)",

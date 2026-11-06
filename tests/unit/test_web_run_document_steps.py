@@ -52,9 +52,9 @@ from solar_challenge.web.stored_runs import (
 )
 from tests._every_field_shape import home_of_every_field_shape
 from tests._stored_run_fixtures import (
-    PRE_DISPATCH_UNION_HOME_CONFIGS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
+    pre_dispatch_union_home_config,
     stored_run_fixture_dir,
 )
 
@@ -198,7 +198,7 @@ def test_v2_migrates_a_config_stored_before_the_dispatch_union_then_it_loads_as_
 ) -> None:
     """786's pre-union configs: v2 reports nothing, and once every step has brought one forward it reads as the home that ran."""
     tag = strategy.strategy_type
-    stored = json.loads(PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[tag]
+    stored = pre_dispatch_union_home_config(tag)
     documents = dataclasses.replace(
         _fixture_documents("pre_786_dispatch_home"), config=StoredDocument("pre-union-001", "config.json", stored)
     )

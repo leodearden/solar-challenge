@@ -89,9 +89,9 @@ from tests._finance_builders import make_home_config, make_sim_results
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import (
-    PRE_DISPATCH_UNION_HOME_CONFIGS,
     STORED_RUN_FIXTURES,
     install_stored_run_fixture,
+    pre_dispatch_union_home_config,
 )
 from tests._web_runs import store_home_run
 
@@ -433,8 +433,7 @@ def test_migrate_store_names_a_nameless_run_stored_before_the_dispatch_union_aft
     Such a config holds the null keys of the other dispatch variants, which no field has, so read
     as it is stored it would be refused, and its run named as a run of no homes.
     """
-    pre_union = json.loads(PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())
-    config = {**pre_union["self_consumption"], "name": "North Roof"}
+    config = {**pre_dispatch_union_home_config("self_consumption"), "name": "North Roof"}
     _insert_run(legacy_store, {"id": "legacy-pre-union", "name": None, "type": "home", "config_json": json.dumps(config)})
 
     migrate_store(legacy_store, legacy_store.parent)
