@@ -206,7 +206,8 @@ class _StepEnergies:
 
 @dataclass(frozen=True)
 class _BatteryExchange:
-    """The energies a battery exchanged with the home's bus in one timestep, in kWh."""
+    """The energies a battery stored from PV and from the grid (after charge losses)
+    and delivered to the home's bus in one timestep, in kWh."""
 
     pv_charge_kwh: float
     grid_charge_kwh: float
