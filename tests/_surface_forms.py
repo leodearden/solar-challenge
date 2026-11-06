@@ -50,13 +50,13 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from tests._surface_forms_class_reads import own_annotations, own_namespace, recorded_mro
 from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
+    class_namespace_defs,
     class_statement,
     defining_module,
     evaluated_in,
     is_immutable_type,
     is_routine,
     missing_class_statement_clause,
-    scope_statements,
     spelled_function,
 )
 from tests._surface_forms_signatures import (
@@ -944,7 +944,7 @@ def _refuse_immutable_type(cls: type) -> None:
 
 
 def _attributes_set_on_self(cls: type, reviewed: Collection[str]) -> set[str]:
-    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines set on their receiver, each one's first parameter.
+    """The public attributes that the __init__ and __post_init__ *cls*'s own body defines, as _initialisers finds them, set on their receiver, each one's first parameter.
 
     Each is read whole, a closure in it included. An attribute is set by any assignment
     to it on the receiver, or by setattr(receiver, "name", value),
@@ -999,7 +999,7 @@ _INITIALISERS: tuple[str, ...] = ("__init__", "__post_init__")
 
 
 def _initialisers(cls: type) -> list[ast.FunctionDef]:
-    """The __init__ and __post_init__ def statements of *cls*'s own body, as scope_statements finds them in its class statement, as class_statement reads it: those in a block of another statement there included, even one that never runs, but never another method nor anything a function or a class nested in that body defines; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
+    """The __init__ and __post_init__ def statements that class_namespace_defs finds in *cls*'s class statement, as class_statement reads it; TypeError naming *cls* and what missing_class_statement_clause states if class_statement finds no class statement for it, as for a class collections.namedtuple makes or one whose __module__ names a module that re-exports it; docs/surface-forms-inspect-readings.md §3.5 says how the helper finds a class's statement."""
     statement = class_statement(cls)
     if statement is None:
         raise TypeError(
@@ -1010,7 +1010,7 @@ def _initialisers(cls: type) -> list[ast.FunctionDef]:
         )
     return [
         node
-        for node in scope_statements(statement.body)
+        for node in class_namespace_defs(statement)
         if isinstance(node, ast.FunctionDef) and node.name in _INITIALISERS
     ]
 

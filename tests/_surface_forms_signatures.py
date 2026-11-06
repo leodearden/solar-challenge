@@ -8,7 +8,6 @@ this module refuses: a new refusal gets a rule test, then an entry there.
 """
 
 import abc
-import ast
 import dataclasses
 import enum
 import functools
@@ -31,13 +30,12 @@ from tests._surface_forms_labels import label_of
 from tests._surface_forms_module_lookup import (
     NoSourceError,
     bound_under,
+    class_namespace_defs,
     class_statement,
     defining_module,
     is_get_delete_descriptor,
     is_routine,
     missing_class_statement_clause,
-    names_declared_by,
-    scope_statements,
     source_of,
 )
 
@@ -1333,7 +1331,7 @@ def _generated_name_clause(cls: type, author: object, constructor: _GeneratedCon
 def _defined_in_body(
     cls: type, holder: type, constructor: _GeneratedConstructor, function: types.FunctionType
 ) -> bool:
-    """Whether a def statement of *holder*'s class statement, as class_statement reads it, wrote *function*, the one *cls* is constructed through, as *constructor*'s name: a def or async def statement that scope_statements finds in any block of that body binds that name, which no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a statement makes the def bind it in the module's globals or an enclosing function's namespace, and inspect reads a source for *function*, as _inspect_reads_a_source_for finds.
+    """Whether a def statement of *holder*'s class statement, as class_statement reads it, wrote *function*, the one *cls* is constructed through, as *constructor*'s name: a def or async def statement of that body binds that name in *holder*'s namespace, as class_namespace_defs finds it, and inspect reads a source for *function*, as _inspect_reads_a_source_for finds.
 
     Where that body binds the name so but inspect reads no source for *function*, TypeError
     names *cls* if _refuse_def_written_member_of_another_class_statement finds a sign that
@@ -1348,13 +1346,7 @@ def _defined_in_body(
     if statement is None:
         _refuse_def_written_member_of_statementless_class(cls, holder, constructor, function)
         return False
-    def_names = {
-        node.name
-        for node in scope_statements(statement.body)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    bound_outside = names_declared_by(statement.body, ast.Global, ast.Nonlocal)
-    if constructor.name not in def_names.difference(bound_outside):
+    if not any(node.name == constructor.name for node in class_namespace_defs(statement)):
         return False
     if _inspect_reads_a_source_for(function):
         return True
