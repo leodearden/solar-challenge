@@ -24,6 +24,34 @@ _TAPPING_SOURCE = (
     "    tap: 'Tap'\n"
 )
 
+_SOURCING_SOURCE = (
+    "from dataclasses import dataclass\n"
+    "from fractions import Fraction as Share\n"
+    "\n"
+    "@dataclass\n"
+    "class Source:\n"
+    "    share: 'Share'\n"
+)
+
+_BORROWING_SOURCE = (
+    "from decimal import Decimal as Share\n"
+    "from functools import wraps\n"
+    "\n"
+    "from sourcing import Source\n"
+    "\n"
+    "class Assigned:\n"
+    "    __init__ = Source.__init__\n"
+    "\n"
+    "class Wrapping:\n"
+    "    @wraps(Source.__init__)\n"
+    "    def __init__(self, *args, **kwargs) -> None: ...\n"
+)
+
+_BORROWING_CLASSES = (
+    pytest.param("Assigned", id="assigned"),
+    pytest.param("Wrapping", id="functools-wraps-wrapper"),
+)
+
 
 def test_a_generated_dataclass_constructor_names_the_classes_the_module_of_each_field_declaration_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
@@ -1074,47 +1102,46 @@ def test_a_named_tuple_constructor_whose_code_carries_its_own_qualified_name_nam
     assert named_classes(Subpoint) == {decimal.Decimal}
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param("Assigned", id="assigned"),
-        pytest.param("Wrapping", id="functools-wraps-wrapper"),
-    ],
-)
+@pytest.mark.parametrize("name", _BORROWING_CLASSES)
 def test_a_constructor_generated_for_another_class_than_the_one_assigning_it_raises_type_error_naming_that_class_and_the_function(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "sourcing",
-        "from dataclasses import dataclass\n"
-        "from fractions import Fraction as Share\n"
-        "\n"
-        "@dataclass\n"
-        "class Source:\n"
-        "    share: 'Share'\n",
-    )
-    borrowing = imported_module(
-        tmp_path,
-        monkeypatch,
-        "borrowing",
-        "from decimal import Decimal as Share\n"
-        "from functools import wraps\n"
-        "\n"
-        "from sourcing import Source\n"
-        "\n"
-        "class Assigned:\n"
-        "    __init__ = Source.__init__\n"
-        "\n"
-        "class Wrapping:\n"
-        "    @wraps(Source.__init__)\n"
-        "    def __init__(self, *args, **kwargs) -> None: ...\n",
-    )
+    imported_module(tmp_path, monkeypatch, "sourcing", _SOURCING_SOURCE)
+    borrowing = imported_module(tmp_path, monkeypatch, "borrowing", _BORROWING_SOURCE)
 
     with pytest.raises(
         TypeError,
         match=rf"^borrowing\.{name} is constructed through sourcing\.Source\.__init__, "
         rf"a function generated for another class and assigned in the body of borrowing\.{name}, ",
     ):
+        named_classes(getattr(borrowing, name))
+
+
+@pytest.mark.parametrize("name", _BORROWING_CLASSES)
+@pytest.mark.parametrize(
+    ("statements_after_source", "refusal"),
+    [
+        pytest.param(
+            "\ndel __file__\n",
+            r"^sourcing\.Source has no class statement inspect can read",
+            id="whose-module-inspect-reads-no-source-for",
+        ),
+        pytest.param(
+            "\nif False:\n    class Source:\n        pass\n",
+            r"^sourcing\.Source is defined by one of several class statements",
+            id="whose-module-holds-another-class-statement-under-its-qualified-name",
+        ),
+    ],
+)
+def test_a_constructor_generated_for_another_class_whose_class_statement_cannot_be_read_raises_type_error_naming_the_class_it_was_generated_for(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    statements_after_source: str,
+    refusal: str,
+) -> None:
+    imported_module(tmp_path, monkeypatch, "sourcing", _SOURCING_SOURCE + statements_after_source)
+    borrowing = imported_module(tmp_path, monkeypatch, "borrowing", _BORROWING_SOURCE)
+
+    with pytest.raises(TypeError, match=refusal):
         named_classes(getattr(borrowing, name))
