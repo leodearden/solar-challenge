@@ -2,6 +2,7 @@
 
 import dataclasses
 import functools
+import math
 import re
 from collections.abc import Callable
 from datetime import datetime
@@ -1088,22 +1089,33 @@ class TestTouDispatchOnSpreadFreeTariff:
         assert tou.battery_discharge > 0.0
         assert dataclasses.asdict(tou) == pytest.approx(dataclasses.asdict(greedy))
 
+    @pytest.mark.parametrize(
+        ("generation_kw", "demand_kw"),
+        [
+            pytest.param(0.01, 0.03, id="short-by-0.02kW"),
+            pytest.param(
+                3.9243814029178457,
+                math.nextafter(3.9243814029178457, math.inf),
+                id="short-by-an-ulp-whose-energy-rounds-to-0",
+            ),
+        ],
+    )
     @pytest.mark.parametrize("tariff", SPREAD_FREE_TARIFFS)
     def test_a_sunlit_shortfall_minute_discharges_exactly_as_self_consumption(
-        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp
+        self, tariff: TariffConfig, off_peak_ts: pd.Timestamp, generation_kw: float, demand_kw: float
     ) -> None:
-        """Both paths ask the battery for the same shortfall power, so their flows agree to the last digit."""
+        """Both paths ask the battery for the same shortfall power whenever demand exceeds generation, so their flows agree to the last digit."""
         tou = simulate_timestep_tou(
-            generation_kw=0.01,
-            demand_kw=0.03,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
             battery=Battery(BatteryConfig.default_5kwh()),
             timestamp=off_peak_ts,
             tariff=tariff,
             timestep_minutes=1.0,
         )
         greedy = simulate_timestep(
-            generation_kw=0.01,
-            demand_kw=0.03,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
             battery=Battery(BatteryConfig.default_5kwh()),
             timestep_minutes=1.0,
         )

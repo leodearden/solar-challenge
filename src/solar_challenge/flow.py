@@ -350,8 +350,8 @@ def simulate_timestep_tou(
          returns
     4. During expensive periods (peak):
        - Discharge battery to meet demand before importing from grid, asking it
-         for the shortfall power demand_kw - generation_kw, as the dispatch
-         strategies ask
+         for the shortfall power demand_kw - generation_kw whenever that is above
+         0, as the dispatch strategies ask
        - Excess PV charges battery (saving for later peak use)
        - Export only if battery is full
 
@@ -397,8 +397,8 @@ def simulate_timestep_tou(
                 grid_charge_kwh = battery.charge(grid_power, timestep_minutes)
     else:
         # Peak: discharge to meet shortfall, then charge from excess PV
-        if step.shortfall_kwh > 0:
-            shortfall_kw = max(0.0, demand_kw - generation_kw)
+        shortfall_kw = max(0.0, demand_kw - generation_kw)
+        if shortfall_kw > 0:
             discharge_kwh = battery.discharge(shortfall_kw, timestep_minutes)
 
         if step.excess_kwh > 0:
