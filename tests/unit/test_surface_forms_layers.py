@@ -23,6 +23,7 @@ LAYERS = (
     "_surface_forms_class_reads",
     "_surface_forms_generators",
     "_surface_forms_module_lookup",
+    "_surface_forms_generated_constructors",
     "_surface_forms_signatures",
     "_surface_forms",
 )
