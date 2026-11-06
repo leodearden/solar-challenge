@@ -108,9 +108,7 @@ _GATE_DETECTORS: tuple[_Detector, ...] = (
 def sites_in_tests() -> _SitesByDetector:
     """The (module, site) of every line each of _GATE_DETECTORS finds in the syntax tree of a Python module under tests/, in sorted module order: a module is its path from the repository root, and its site reads module:line: source.
 
-    Each module is read and parsed once, for every detector, and its tree is dropped at once: the trees of
-    every module kept alive make the cyclic collector scan them again and again, which cancels what sharing
-    the parse saves.
+    It parses each module once and keeps none of the trees; commit 839219c says why.
     """
     sites: _SitesByDetector = {detector: [] for detector in _GATE_DETECTORS}
     for path in sorted((REPOSITORY_ROOT / "tests").rglob("*.py")):
