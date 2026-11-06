@@ -906,6 +906,23 @@ def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_
     )
 
 
+def test_migrate_store_refuses_a_step_whose_run_file_part_cannot_read_the_runs_table_and_carries_no_run_files(
+    store_at_version_1: Path,
+) -> None:
+    """A store at version 1 with no runs table stands in for one whose runs table cannot be read as v2's run-file part starts: it has written nothing, so the refusal names no run."""
+    with Database(store_at_version_1).transaction() as conn:
+        conn.execute("DROP TABLE runs")
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, sqlite3.OperationalError)
+    assert refused.value.migrated == MigrationReport(store_at_version_1, 1, 1, ())
+    assert refused.value.files_brought_forward == RunFilesBroughtForward()
+    assert user_version_of(store_at_version_1) == 1
+
+
 @_NEEDS_PYARROW
 def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_forward_migrates_the_store_when_run_again(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
@@ -931,8 +948,8 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     assert "no run may be updated" in str(refused.value)
     assert user_version_of(store_at_version_1) == 1
     assert runs_rows_of(store_at_version_1) == rows_before
-    files_brought_forward = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
-    markers = [json.loads(files["format.json"]) for files in files_brought_forward.values()]
+    files_after_refusal = {run_id: _files_of(_run_dir(store_at_version_1, run_id)) for run_id in legacy_run_ids.values()}
+    markers = [json.loads(files["format.json"]) for files in files_after_refusal.values()]
     assert markers == [{"format_version": 2}] * len(legacy_run_ids)
     assert refused.value.files_brought_forward == RunFilesBroughtForward(runs=tuple(sorted(legacy_run_ids.values())))
 
@@ -948,7 +965,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         applied_steps=MIGRATIONS[1:],
         rewritten_values=_values_v3_changes_in_the_pre_787_fleet(pre_787),
     )
-    for run_id, before in files_brought_forward.items():
+    for run_id, before in files_after_refusal.items():
         after = _files_of(_run_dir(store_at_version_1, run_id))
         assert {path for path in before if after[path] != before[path]} == (
             {"format.json", "config.json"} if run_id == pre_787 else {"format.json"}
@@ -1065,6 +1082,48 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
 
     assert report.caught_up_runs == (run_id,)
     assert _storage_of(store).load_run(run_id).run_id == run_id
+
+
+def test_migrate_store_refused_by_a_lagging_run_s_file_it_cannot_write_carries_the_lagging_runs_it_brought_forward_before_and_the_values_it_dropped_from_them(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of a lagging copy of pre_469_home, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and 'retired-figure' sorts before 'unwritable', so
+    the catch-up brings that lagging copy of pre_469_home forward before the fault, dropping a
+    figure no field has from its summary.json, and its files stay so. The refusal carries that
+    run and that value. Run again once the fault is gone, the migration leaves those files as
+    they are, so it reports only the value it drops from that run's runs row.
+    """
+    store = open_database(tmp_path / "store" / "solar-challenge.db").path
+    database = Database(store)
+    retired = install_stored_run_fixture("pre_469_home", database, store.parent, run_id="retired-figure")
+    _edit_stored_document(_run_dir(store, retired) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store, retired, "summary_json", _setting("retired_figure", 12.5))
+    unwritable = install_stored_run_fixture("pre_469_home", database, store.parent, run_id="unwritable")
+    unwritable_marker = _run_dir(store, unwritable) / "format.json"
+    _put_a_directory_in_place_of(unwritable_marker)
+
+    with pytest.raises(LaggingRunsRefused) as refused:
+        migrate_store(store, store.parent)
+
+    assert isinstance(refused.value.__cause__, OSError)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=(retired,), dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+    )
+    assert json.loads((_run_dir(store, retired) / "format.json").read_text()) == {"format_version": RUN_FORMAT_VERSION}
+
+    unwritable_marker.rmdir()
+    report = migrate_store(store, store.parent)
+
+    assert report == MigrationReport(
+        store,
+        SCHEMA_VERSION,
+        SCHEMA_VERSION,
+        (),
+        dropped_values=(DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),),
+        caught_up_runs=(retired, unwritable),
+    )
 
 
 def test_migrate_store_refused_at_the_catch_up_s_transaction_carries_the_lagging_runs_whose_files_it_brought_forward_and_their_values(
