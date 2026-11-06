@@ -157,7 +157,7 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
 _SUNLESS_SEPTEMBER_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
     load_config=LoadConfig(annual_consumption_kwh=5000.0, seed=11),
-    battery_config=BatteryConfig(capacity_kwh=10.0),
+    battery_config=BatteryConfig(capacity_kwh=10.0, discharge_efficiency=0.975),
     location=Location.bristol(),
 )
 
@@ -181,7 +181,11 @@ _SUNLESS_SEPTEMBER_HOME = HomeConfig(
 def test_on_a_sunless_day_each_dispatch_path_discharges_no_more_than_the_self_consumption_it_supplies(
     home, strategy_name
 ):
-    """With no PV, the battery supplies all the self-consumption, so no minute's discharge, and not the day's, exceeds it."""
+    """With no PV, the battery supplies all the self-consumption, so no minute's discharge, and not the day's, exceeds it.
+
+    At the battery's 0.975 discharge efficiency, some of the day's minutes withdraw an energy that, less the
+    losses, rounds an ulp above the energy they ask for.
+    """
     day = pd.Timestamp("2024-09-01")
 
     results = simulate_home(home, day, day, weather=weather_for(home, sunless_weather(day, temp_air=12.0)))

@@ -21,6 +21,7 @@ from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.timebase import HOURS_PER_MINUTE
+from tests._over_rounding_discharges import BATTERY_THEY_OVER_ROUND_ON, OVER_ROUNDING_DISCHARGES
 from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -1021,26 +1022,26 @@ class TestBatteryDischargeToMeetDemand:
         assert isinstance(energy, float)
         assert energy >= 0
 
-    @pytest.mark.parametrize(
-        ("config", "power_kw", "duration_minutes", "asked_kw"),
-        [
-            pytest.param(BatteryConfig.default_5kwh(), 0.463, 1.0, 0.463, id="0.463kW-1min"),
-            pytest.param(BatteryConfig.default_5kwh(), 0.737, 5.0, 0.737, id="0.737kW-5min"),
-            pytest.param(BatteryConfig.default_5kwh(), 0.247, 30.0, 0.247, id="0.247kW-30min"),
-            pytest.param(BatteryConfig.default_5kwh(), 0.494, 60.0, 0.494, id="0.494kW-60min"),
-            pytest.param(
-                BatteryConfig(capacity_kwh=5.0, max_discharge_kw=0.463), math.inf, 1.0, 0.463, id="rate-limited-inf"
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("power_kw", "duration_minutes"), OVER_ROUNDING_DISCHARGES)
     def test_discharge_delivers_what_it_was_asked_for_and_never_more(
-        self, config: BatteryConfig, power_kw: float, duration_minutes: float, asked_kw: float
+        self, power_kw: float, duration_minutes: float
     ) -> None:
-        """Each request here is one whose withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
-        asked_kwh = asked_kw * (duration_minutes * HOURS_PER_MINUTE)
-        delivered = Battery(config).discharge(power_kw, duration_minutes)
+        """On the battery each request here was found on, its withdrawal, less the discharge losses, rounds an ulp above the energy asked for."""
+        asked_kwh = power_kw * (duration_minutes * HOURS_PER_MINUTE)
+        delivered = Battery(BATTERY_THEY_OVER_ROUND_ON).discharge(power_kw, duration_minutes)
         assert delivered <= asked_kwh
         assert delivered == pytest.approx(asked_kwh, rel=1e-12)
+
+    @pytest.mark.parametrize(("limit_kw", "duration_minutes"), OVER_ROUNDING_DISCHARGES)
+    def test_a_discharge_held_to_its_rate_limit_delivers_the_limit_for_the_duration_and_never_more(
+        self, limit_kw: float, duration_minutes: float
+    ) -> None:
+        """Asked for an infinite power, the battery discharges at its max_discharge_kw, each limit here a power whose request over-rounds."""
+        limit_kwh = limit_kw * (duration_minutes * HOURS_PER_MINUTE)
+        config = dataclasses.replace(BATTERY_THEY_OVER_ROUND_ON, max_discharge_kw=limit_kw)
+        delivered = Battery(config).discharge(math.inf, duration_minutes)
+        assert delivered <= limit_kwh
+        assert delivered == pytest.approx(limit_kwh, rel=1e-12)
 
 
 class TestBatterySOCTimeSeries:
