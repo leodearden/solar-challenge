@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import pvlib
 import pytest
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
@@ -147,42 +148,63 @@ class TestCellTemperatureIsNoctSamFromTheModule:
         assert (ac_kw[clear_day["ghi"] == 0] == 0).all(), ac_kw[clear_day["ghi"] == 0]
 
 
+UNHEATABLE_KEYS_AND_VALUES = [
+    ("T_NOCT", math.nan),
+    ("T_NOCT", 20.0),
+    ("A_c", math.nan),
+    ("A_c", 0.0),
+    pytest.param("A_c", 0.4, id="A_c-0.4-so-an-efficiency-of-1.0"),
+]
+"""Each a key of the default module and a value with which NOCT-SAM cannot heat its cells above the air."""
+
+
 class TestAModuleWhoseCellsCannotHeatIsRefused:
     """NOCT-SAM heats a sunlit cell above the air only for a T_NOCT above NOCT's 20 °C test air and an efficiency below its 0.9 transmittance-absorptance."""
 
-    @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            ("T_NOCT", math.nan),
-            ("T_NOCT", 20.0),
-            ("A_c", math.nan),
-            ("A_c", 0.0),
-            pytest.param("A_c", 0.4, id="A_c-0.4-so-an-efficiency-of-1.0"),
-        ],
-    )
-    def test_naming_its_key_and_value(self, key: str, value: float) -> None:
-        config = PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), key: value})
+    @pytest.mark.parametrize(("key", "value"), UNHEATABLE_KEYS_AND_VALUES)
+    def test_at_construction_naming_its_key_and_value(self, key: str, value: float) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), key: value})
 
-        with pytest.raises(ValueError) as building:
+        message = str(refusal.value)
+        assert f"{key}={value}" in message, message
+
+    @pytest.mark.parametrize(("key", "value"), UNHEATABLE_KEYS_AND_VALUES)
+    def test_at_use_for_a_module_edited_after_construction(self, key: str, value: float) -> None:
+        """A PVConfig keeps the caller's own module dict, so an edit after construction reaches use, which refuses it as construction does."""
+        module = default_module()
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module)
+        module[key] = value
+
+        with pytest.raises(ConfigurationError) as building:
             create_pv_system(config)
-        with pytest.raises(ValueError) as wiring:
+        with pytest.raises(ConfigurationError) as wiring:
             wired_dc_capacity_kw(config)
+        with pytest.raises(ConfigurationError) as constructing:
+            PVConfig(capacity_kw=4.0, custom_module_params=dict(module))
 
         message = str(building.value)
         assert f"{key}={value}" in message, message
         assert str(wiring.value) == message
+        assert str(constructing.value) == message
 
     def test_naming_a_value_it_lacks_as_the_default_modules(self) -> None:
         """One 4000 W PVWatts module for a whole 4 kW array, lacking A_c, takes the default module's: an efficiency of 4000 / 1990 = 2.0."""
-        config = PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004})
+        with pytest.raises(ConfigurationError) as refusal:
+            PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004})
 
-        with pytest.raises(ValueError) as building:
-            create_pv_system(config)
-        with pytest.raises(ValueError) as wiring:
-            wired_dc_capacity_kw(config)
-
-        message = str(building.value)
+        message = str(refusal.value)
         default_area = f"A_c={default_module()['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
         assert default_area in message, message
         assert "Give the module its own A_c" in message, message
-        assert str(wiring.value) == message
+
+    def test_a_set_module_efficiency_gives_such_a_module_its_area(self) -> None:
+        """A module_efficiency of 0.2 spreads the same 4000 W over 20 m², so the module is in NOCT-SAM's domain at construction as at use."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004},
+            module_efficiency=0.2,
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(0.2)
