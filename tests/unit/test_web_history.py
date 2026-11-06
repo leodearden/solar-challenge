@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 pytest.importorskip("flask")
-from flask import Flask
+from flask import Flask, template_rendered
 from flask.testing import FlaskClient
 
 from solar_challenge.battery import BatteryConfig
@@ -1056,6 +1056,26 @@ class TestComparisonRoute:
             "2025-06-01T12:00:00",
         ]
         assert texts_after(page, "Total Generation", 4) == ["100.0 kWh", "120.0 kWh", "+20.0 kWh", "+20.0%"]
+
+    def test_compare_of_runs_whose_summaries_carry_a_window_gives_the_page_each_summary_as_its_field_tree(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Each run's summary reaches the page as its field tree: a window's dates and cadence as JSON text, not as a date range and a timedelta."""
+        summary_a = home_summary(total_generation_kwh=100.0, window=JUNE_WEEK_WINDOW)
+        summary_b = home_summary(total_generation_kwh=120.0, window=JUNE_WEEK_WINDOW)
+        _insert_test_run(app, run_id="cmp-a", name="Compare A", summary=summary_a)
+        _insert_test_run(app, run_id="cmp-b", name="Compare B", summary=summary_b)
+        contexts: list[dict] = []
+
+        def keep_context(sender: Flask, context: dict, **rendering: object) -> None:
+            contexts.append(context)
+
+        with template_rendered.connected_to(keep_context, app):
+            response = client.get("/history/compare?ids=cmp-a,cmp-b")
+
+        assert response.status_code == 200
+        [context] = contexts
+        assert [run["summary"] for run in context["runs"]] == [field_tree(summary_a), field_tree(summary_b)]
 
     @pytest.mark.parametrize(
         ("damaged_summary_json", "field"),
