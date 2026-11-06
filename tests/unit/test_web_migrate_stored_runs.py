@@ -977,6 +977,8 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
     message = str(refused.value)
     for named in [str(store), f"schema version {SCHEMA_VERSION}, as it was", str(RUN_FORMAT_VERSION), str(marker)]:
         assert named in message, (named, message)
+    assert refused.value.path == store
+    assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
     assert user_version_of(store) == SCHEMA_VERSION
     assert _files_of(_run_dir(store, run_id)) == files_before
 
@@ -995,15 +997,23 @@ def test_a_lagging_runs_refused_is_not_a_value_error() -> None:
 def test_a_lagging_runs_refused_after_its_migration_s_steps_names_the_version_they_brought_the_store_from(
     tmp_path: Path,
 ) -> None:
-    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before."""
+    """The catch-up runs after the steps its migration applied, which stay applied, so a store it refuses then was not at SCHEMA_VERSION before.
+
+    No store makes the catch-up fail right after steps, as once they have run it has nothing left
+    to write, so the refusal is built here from the report such a migration carries.
+    """
     path = tmp_path / "store.db"
     fault = sqlite3.OperationalError("disk I/O error")
+    migrated = MigrationReport(path, 1, SCHEMA_VERSION, MIGRATIONS[1:])
 
-    message = str(LaggingRunsRefused(path, 1, fault))
+    refused = LaggingRunsRefused(migrated, fault)
 
+    message = str(refused)
     for named in [str(path), f"schema version {SCHEMA_VERSION}", "brought it from version 1", str(fault)]:
         assert named in message, (named, message)
     assert "as it was" not in message
+    assert refused.migrated is migrated
+    assert refused.path == path
 
 
 def test_a_migration_report_lists_each_value_dropped_each_value_rewritten_and_each_run_left_unmigrated_after_the_steps(
