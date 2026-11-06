@@ -31,9 +31,9 @@ A store at version 2, whose runs a solar-challenge at that version saved in form
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
 A run that store's migration left in format 1, with no format.json, has its files brought
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
-steps, migrate_store catches up: it brings forward each run an earlier migration left, also in a
-store at SCHEMA_VERSION, which has no step to apply, once the run's documents are fixed, and
-reports again each it still cannot migrate.
+steps, migrate_store catches up: it brings forward each run an earlier migration left in its
+files or its runs row, naming each, also in a store at SCHEMA_VERSION, which has no step to
+apply, once the run's documents are fixed, and reports again each it still cannot migrate.
 """
 
 import functools
@@ -55,7 +55,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.home import HomeConfig
+from solar_challenge.home import HomeConfig, SummaryStatistics
 from solar_challenge.web.chat_messages import CHAT_ROLES, get_chat_history
 from solar_challenge.web.database import Database, RowRefused
 from solar_challenge.web.presets import PRESET_TYPES, home_presets
@@ -983,6 +983,42 @@ def test_migrate_store_reports_again_each_run_an_earlier_migration_left_that_sti
     assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
     assert _runs_rows(store_at_version_1) == rows_after_first
     assert _user_version(store_at_version_1) == SCHEMA_VERSION
+
+
+def test_migrate_store_brings_forward_and_names_a_run_whose_runs_row_alone_an_earlier_migration_left_once_it_is_fixed(
+    store_at_version_1: Path,
+) -> None:
+    """Only its runs.summary_json lacked the figure, so the first migration brought its files forward and left its row; the catch-up brings the fixed row forward and names the run."""
+    lacking = _install_a_run_in_format_1(store_at_version_1, "lacking-generation")
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", _deleting("total_generation_kwh"))
+    first = migrate_store(store_at_version_1, store_at_version_1.parent)
+    assert [(each.run_id, each.document, each.field) for each in first.unmigrated_runs] == [
+        (lacking, "runs.summary_json", "total_generation_kwh")
+    ]
+    committed = json.loads((STORED_RUN_FIXTURES_DIR / "pre_786_dispatch_home" / "run" / "summary.json").read_text())
+    restore = _setting("total_generation_kwh", committed["total_generation_kwh"])
+    _edit_runs_document(store_at_version_1, lacking, "summary_json", restore)
+    files_after_first = _files_of(_run_dir(store_at_version_1, lacking))
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=SCHEMA_VERSION,
+        to_version=SCHEMA_VERSION,
+        applied_steps=(),
+        brought_forward_runs=(lacking,),
+    )
+    assert "nothing to migrate" not in str(report)
+    assert f"  run {lacking!r}" in str(report).splitlines()
+    config = json.loads(_runs_rows(store_at_version_1)[lacking]["config_json"])
+    assert config["battery_config"]["dispatch_strategy"] == {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
+    record = _storage_of(store_at_version_1).run_record(lacking)
+    assert record is not None
+    summary = record.summary()
+    assert isinstance(summary, SummaryStatistics)
+    assert summary.total_generation_kwh == committed["total_generation_kwh"]
+    assert _files_of(_run_dir(store_at_version_1, lacking)) == files_after_first
 
 
 def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_row_alike(
