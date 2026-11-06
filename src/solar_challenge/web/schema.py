@@ -114,18 +114,88 @@ class MigrationStep:
     run_documents: RunDocumentStep | None = None
 
 
+@dataclass(frozen=True)
+class MigrationReport:
+    """What migrate_store did to the store at *path*: the schema version it found it at, the one it left it at, and each step it applied, in order.
+
+    dropped_values are the values its run-document steps dropped that are not null,
+    rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
+    they were, each once. caught_up_runs are the id of each run whose files or runs row its
+    catch-up after the steps brought forward, each once: files whose format.json names an older
+    stored-run format or is missing, and a runs row that reads only once brought forward from the
+    first. Most are runs an earlier migration left, e.g. once their documents are fixed, but a
+    run saved in the current format is caught up the same way when its save did not finish,
+    leaving no format.json, or its runs row holds a shape only the first format admits, such as
+    a key no field has, which is then dropped.
+    """
+
+    path: Path
+    from_version: int
+    to_version: int
+    applied_steps: tuple[MigrationStep, ...]
+    dropped_values: tuple[DroppedValue, ...] = ()
+    unmigrated_runs: tuple[UnmigratedRun, ...] = ()
+    rewritten_values: tuple[RewrittenValue, ...] = ()
+    caught_up_runs: tuple[str, ...] = ()
+
+    def __str__(self) -> str:
+        """The report as `solar-challenge web migrate` prints it.
+
+        That is the store's database, both versions and each step applied, or that no step was
+        applied; then each run caught up after the steps, each value dropped, each value
+        rewritten and each run left unmigrated. A report of no step and nothing else says there
+        was nothing to migrate.
+        """
+        listed = [
+            *_listed(
+                "Brought forward each run below, whose documents were in an older stored-run format or had no format.json:",
+                [f"run {run_id!r}" for run_id in self.caught_up_runs],
+            ),
+            *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
+            *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
+            *_listed(
+                "Left each run below as it was, as its documents cannot be read; it cannot be loaded until they are fixed:",
+                self.unmigrated_runs,
+            ),
+        ]
+        if not self.applied_steps and not listed:
+            return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
+        steps = (
+            [
+                f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
+                *(f"  {step.version}. {step.description}" for step in self.applied_steps),
+            ]
+            if self.applied_steps
+            else [f"The dashboard database {self.path} is at schema version {self.to_version}; no step was applied."]
+        )
+        return "\n".join([*steps, *listed])
+
+
+def _listed(
+    heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun] | Sequence[str]
+) -> list[str]:
+    """*heading*, then each of *items* on a line of its own; no line at all when there is no item."""
+    return [heading, *(f"  {item}" for item in items)] if items else []
+
+
 class MigrationRefused(Exception):
     """A migration step that cannot run on a store, as a constraint it adds refuses a row, a table is not one it can rebuild, or a stored run's file cannot be written; the message names the store, the step's version, the version the store stays at, and the fault.
 
-    It is not a ValueError: no request causes it, as SchemaVersionMismatch is not one.
+    migrated is the report of what the migration did before the step: the steps it applied,
+    which stay applied, each value they dropped or rewrote and each run they left; a report of
+    no step when the step is the migration's first. It is not a ValueError: no request causes
+    it, as SchemaVersionMismatch is not one.
     """
 
-    def __init__(self, path: Path, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error | OSError) -> None:
+    def __init__(
+        self, migrated: MigrationReport, step: MigrationStep, fault: RowRefused | ValueError | sqlite3.Error | OSError
+    ) -> None:
         super().__init__(
-            f"{path} cannot be migrated to schema version {step.version}, so it stays at version "
+            f"{migrated.path} cannot be migrated to schema version {step.version}, so it stays at version "
             f"{step.version - 1}, and the step has changed nothing in it: {fault}"
         )
-        self.path = path
+        self.migrated = migrated
+        self.path = migrated.path
         self.step = step
 
 
@@ -252,70 +322,6 @@ def open_database(path: Path) -> Database:
     return database
 
 
-@dataclass(frozen=True)
-class MigrationReport:
-    """What migrate_store did to the store at *path*: the schema version it found it at, the one it left it at, and each step it applied, in order.
-
-    dropped_values are the values its run-document steps dropped that are not null,
-    rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
-    they were, each once. caught_up_runs are the id of each run whose files or runs row its
-    catch-up after the steps brought forward, each once: files whose format.json names an older
-    stored-run format or is missing, and a runs row that reads only once brought forward from the
-    first. Most are runs an earlier migration left, e.g. once their documents are fixed, but a
-    run saved in the current format is caught up the same way when its save did not finish,
-    leaving no format.json, or its runs row holds a shape only the first format admits, such as
-    a key no field has, which is then dropped.
-    """
-
-    path: Path
-    from_version: int
-    to_version: int
-    applied_steps: tuple[MigrationStep, ...]
-    dropped_values: tuple[DroppedValue, ...] = ()
-    unmigrated_runs: tuple[UnmigratedRun, ...] = ()
-    rewritten_values: tuple[RewrittenValue, ...] = ()
-    caught_up_runs: tuple[str, ...] = ()
-
-    def __str__(self) -> str:
-        """The report as `solar-challenge web migrate` prints it.
-
-        That is the store's database, both versions and each step applied, or that no step was
-        applied; then each run caught up after the steps, each value dropped, each value
-        rewritten and each run left unmigrated. A report of no step and nothing else says there
-        was nothing to migrate.
-        """
-        listed = [
-            *_listed(
-                "Brought forward each run below, whose documents were in an older stored-run format or had no format.json:",
-                [f"run {run_id!r}" for run_id in self.caught_up_runs],
-            ),
-            *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
-            *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
-            *_listed(
-                "Left each run below as it was, as its documents cannot be read; it cannot be loaded until they are fixed:",
-                self.unmigrated_runs,
-            ),
-        ]
-        if not self.applied_steps and not listed:
-            return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
-        steps = (
-            [
-                f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
-                *(f"  {step.version}. {step.description}" for step in self.applied_steps),
-            ]
-            if self.applied_steps
-            else [f"The dashboard database {self.path} is at schema version {self.to_version}; no step was applied."]
-        )
-        return "\n".join([*steps, *listed])
-
-
-def _listed(
-    heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun] | Sequence[str]
-) -> list[str]:
-    """*heading*, then each of *items* on a line of its own; no line at all when there is no item."""
-    return [heading, *(f"  {item}" for item in items)] if items else []
-
-
 def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
     """Bring the store at *database_path*, whose run files are under *data_dir*, to SCHEMA_VERSION, applying each step of MIGRATIONS after its version, in order.
 
@@ -353,7 +359,8 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         MigrationRefused: A step fails, the cause: a constraint the step adds refuses a row
             (RowRefused), a table is not one it can rebuild (ValueError or sqlite3.Error), or
             a stored run's file cannot be written (OSError). The step's transaction has changed
-            nothing, so the store stays at the version before it.
+            nothing, so the store stays at the version before it. The steps applied before it
+            stay applied, and the refusal carries their report in migrated.
         LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
             or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
             stays at SCHEMA_VERSION, as it was or as the steps of this migration left it, and
@@ -367,25 +374,35 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         raise SchemaVersionMismatch(database_path, found, SCHEMA_VERSION)
     pending = tuple(step for step in MIGRATIONS if step.version > found)
     outcome = RunDocumentsOutcome()
-    for step in pending:
+    for index, step in enumerate(pending):
         try:
             outcome += _apply_step(database, data_dir, step, outcome)
         except (RowRefused, ValueError, sqlite3.Error, OSError) as fault:
-            raise MigrationRefused(database_path, step, fault) from fault
+            raise MigrationRefused(_report_of(database_path, found, pending[:index], outcome), step, fault) from fault
     try:
         caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
     except (OSError, sqlite3.Error) as fault:
         raise LaggingRunsRefused(database_path, found, fault) from fault
-    outcome += caught_up
+    return _report_of(database_path, found, pending, outcome + caught_up, caught_up.brought_forward_runs)
+
+
+def _report_of(
+    path: Path,
+    found: int,
+    applied: tuple[MigrationStep, ...],
+    outcome: RunDocumentsOutcome,
+    caught_up_runs: tuple[str, ...] = (),
+) -> MigrationReport:
+    """The report of a migration of the store at *path* from schema version *found* by the steps *applied*, whose run-document steps, and catch-up if any, did *outcome*."""
     return MigrationReport(
-        database_path,
+        path,
         from_version=found,
-        to_version=SCHEMA_VERSION,
-        applied_steps=pending,
+        to_version=applied[-1].version if applied else found,
+        applied_steps=applied,
         dropped_values=outcome.dropped,
         rewritten_values=outcome.rewritten,
         unmigrated_runs=tuple(dict.fromkeys(outcome.unmigrated)),
-        caught_up_runs=caught_up.brought_forward_runs,
+        caught_up_runs=caught_up_runs,
     )
 
 
