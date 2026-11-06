@@ -12,9 +12,9 @@ document and field, and the rest of the store migrates; so, once, is a run whose
 cannot be read, while a run whose format.json names a later format is left as it is. A step that
 cannot write a run's file, or whose transaction fails once it has brought the run files forward,
 is refused, leaving the database at the version before it, and the migration run again once the
-fault is gone completes it. The refusal of a step whose transaction fails also carries the runs
-whose files it brought forward, which stay so, with each value it dropped or rewrote in them, as
-the migration run again leaves those files as they are. A step refused after an earlier step of
+fault is gone completes it. Either refusal also carries the runs whose files the step brought
+forward before the fault, which stay so, with each value it dropped or rewrote in them, as the
+migration run again leaves those files as they are. A step refused after an earlier step of
 the migration committed
 leaves the store at the version that step brought it to, and the refusal carries the report of
 the steps the migration applied; the migration run again goes on from that version and reports
@@ -857,6 +857,52 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
     )
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_it_brought_forward_before_and_the_values_it_dropped_from_them(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """A directory in the place of the format.json of a copy of pre_469_home stands in for a file a step cannot write, e.g. on a full disk.
+
+    Runs are brought forward in order of id, and 'unwritable' sorts after every other run, so v2
+    brings each other run's files forward before the fault, and they stay so; among them is a
+    copy of pre_469_home holding a figure no field has, which v2 drops. The refusal carries
+    those runs and that value. Run again once the fault is gone, the migration leaves those
+    files as they are, so it reports only the value v2 drops from that copy's runs row.
+    """
+    database = Database(store_at_version_1)
+    retired = install_stored_run_fixture("pre_469_home", database, store_at_version_1.parent, run_id="retired-figure")
+    _edit_stored_document(_run_dir(store_at_version_1, retired) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store_at_version_1, retired, "summary_json", _setting("retired_figure", 12.5))
+    unwritable = install_stored_run_fixture("pre_469_home", database, store_at_version_1.parent, run_id="unwritable")
+    unwritable_marker = _run_dir(store_at_version_1, unwritable) / "format.json"
+    _put_a_directory_in_place_of(unwritable_marker)
+
+    with pytest.raises(MigrationRefused) as refused:
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, OSError)
+    assert user_version_of(store_at_version_1) == 1
+    brought_forward = tuple(sorted([*legacy_run_ids.values(), retired]))
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        runs=brought_forward, dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+    )
+    markers = [json.loads((_run_dir(store_at_version_1, run_id) / "format.json").read_text()) for run_id in brought_forward]
+    assert markers == [{"format_version": 2}] * len(brought_forward)
+    assert unwritable_marker.is_dir()
+
+    unwritable_marker.rmdir()
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),),
+        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+    )
 
 
 @_NEEDS_PYARROW
