@@ -681,3 +681,81 @@ def test_an_initialiser_the_class_body_defines_in_a_block_of_another_statement_i
 
     assert vars(blocking.Meter()).keys() == {"rate", "site"}
     assert scan(blocking.Meter) == expected
+
+
+@pytest.mark.parametrize(
+    ("scan", "expected"),
+    [
+        pytest.param(undeclared_attributes, set(), id="undeclared_attributes"),
+        pytest.param(unset_attributes, {"rate"}, id="unset_attributes"),
+    ],
+)
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global",
+        ),
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    if True:\n"
+            "        global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global-in-a-block",
+        ),
+        pytest.param(
+            "class Meter:\n"
+            "    rate: float\n"
+            "\n"
+            "    if False:\n"
+            "        global __init__\n"
+            "\n"
+            "    def __init__(self) -> None:\n"
+            "        self.rate = 1.0\n"
+            "        self.site = 'roof'\n",
+            id="global-in-a-block-that-never-runs",
+        ),
+        pytest.param(
+            "def build():\n"
+            "    __init__ = None\n"
+            "\n"
+            "    class Meter:\n"
+            "        rate: float\n"
+            "\n"
+            "        nonlocal __init__\n"
+            "\n"
+            "        def __init__(self) -> None:\n"
+            "            self.rate = 1.0\n"
+            "            self.site = 'roof'\n"
+            "\n"
+            "    return Meter\n"
+            "\n"
+            "Meter = build()\n",
+            id="nonlocal",
+        ),
+    ],
+)
+def test_an_initialiser_whose_name_the_class_body_declares_global_or_nonlocal_is_not_read_by_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    expected: set[str],
+    source: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redeclaring = imported_module(tmp_path, monkeypatch, "redeclaring", source)
+
+    assert vars(redeclaring.Meter()) == {}
+    assert scan(redeclaring.Meter) == expected
