@@ -20,10 +20,15 @@ import pytest
 
 from tests._surface_forms import named_classes
 from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
     Outer,
     Preset,
     imported_module,
     made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
 )
 
 if TYPE_CHECKING:
@@ -207,37 +212,20 @@ def test_a_class_its_module_no_longer_binds_since_another_module_of_the_same_nam
 def test_a_dataclass_types_new_class_makes_raises_a_lookup_error_naming_it_and_the_module_types_with_the_remedy_of_assigning_it_the_module_that_binds_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    newclassing = imported_module(
-        tmp_path,
-        monkeypatch,
-        "newclassing",
-        "import types\n"
-        "from dataclasses import dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
-        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
-    )
+    newclassing = imported_module(tmp_path, monkeypatch, "newclassing", NEW_CLASS_MADE_SOURCE)
 
     with pytest.raises(LookupError, match=made_not_bound_in("types")):
         named_classes(newclassing.Made)
 
 
-def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_names_the_classes_the_module_calling_it_binds_the_names_to(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
     dataclassmaking = imported_module(
-        tmp_path,
-        monkeypatch,
-        "dataclassmaking",
-        "from dataclasses import make_dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+        tmp_path, monkeypatch, "dataclassmaking", MAKE_DATACLASS_MADE_SOURCE
     )
 
-    if sys.version_info < (3, 12):
+    if make_dataclass_records("dataclassmaking") == "types":
         with pytest.raises(LookupError, match=made_not_bound_in("types")):
             named_classes(dataclassmaking.Made)
     else:
@@ -252,11 +240,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_
         tmp_path,
         monkeypatch,
         "remaking",
-        "from dataclasses import make_dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
-        "Made.__module__ = __name__\n",
+        MAKE_DATACLASS_MADE_SOURCE + "Made.__module__ = __name__\n",
     )
 
     assert named_classes(remaking.Made) == {decimal.Decimal}
@@ -265,27 +249,14 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_whose_calling_module_then_
 def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_a_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """From 3.12, make_dataclass assigns the name of the module whose function calls it, not that of the module binding the class that function returns."""
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "dataclassfactories",
-        "from dataclasses import make_dataclass\n"
-        "\n"
-        "def made() -> type:\n"
-        "    return make_dataclass('Made', [('spare', 'Tap')])\n",
-    )
+    imported_module(tmp_path, monkeypatch, "dataclassfactories", MAKE_DATACLASS_FACTORY_SOURCE)
     factoring = imported_module(
         tmp_path,
         monkeypatch,
         "dataclassfactoring",
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "from dataclassfactories import made\n"
-        "\n"
-        "Made = made()\n",
+        make_dataclass_factoring_source("dataclassfactories"),
     )
-    recorded = "types" if sys.version_info < (3, 12) else "dataclassfactories"
+    recorded = make_dataclass_records("dataclassfactories")
 
     with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
         named_classes(factoring.Made)

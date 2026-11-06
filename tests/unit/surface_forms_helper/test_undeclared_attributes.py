@@ -18,11 +18,16 @@ import pytest
 
 from tests._surface_forms import member_forms, undeclared_attributes, unset_attributes
 from tests.unit.surface_forms_helper._fixtures import (
+    MAKE_DATACLASS_FACTORY_SOURCE,
+    MAKE_DATACLASS_MADE_SOURCE,
+    NEW_CLASS_MADE_SOURCE,
     REFUSED_ROUTINE_AND_PARTIAL_MEMBERS,
     dict_intercepting_refusal,
     dict_shadowing_refusal,
     imported_module,
     made_not_bound_in,
+    make_dataclass_factoring_source,
+    make_dataclass_records,
     metaclass_whose_dict_gives,
     metaclass_whose_getattribute_gives_dict,
     metaclass_whose_mro_gives,
@@ -430,38 +435,21 @@ def test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualifi
 def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    scanclassing = imported_module(
-        tmp_path,
-        monkeypatch,
-        "scanclassing",
-        "import types\n"
-        "from dataclasses import dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
-        "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n",
-    )
+    scanclassing = imported_module(tmp_path, monkeypatch, "scanclassing", NEW_CLASS_MADE_SOURCE)
 
     with pytest.raises(LookupError, match=made_not_bound_in("types")):
         scan(scanclassing.Made)
 
 
 @pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
-def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes(
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_the_type_error_naming_the_module_whose_source_holds_no_class_statement_for_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On 3.11, make_dataclass leaves the class's __module__ as 'types'; from 3.12 it assigns the calling module's name."""
     scandataclassmaking = imported_module(
-        tmp_path,
-        monkeypatch,
-        "scandataclassmaking",
-        "from dataclasses import make_dataclass\n"
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "Made = make_dataclass('Made', [('spare', 'Tap')])\n",
+        tmp_path, monkeypatch, "scandataclassmaking", MAKE_DATACLASS_MADE_SOURCE
     )
 
-    if sys.version_info < (3, 12):
+    if make_dataclass_records("scandataclassmaking") == "types":
         with pytest.raises(LookupError, match=made_not_bound_in("types")):
             scan(scandataclassmaking.Made)
     else:
@@ -474,27 +462,11 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_raises_that_lookup_error_o
 def test_a_dataclass_dataclasses_make_dataclass_makes_in_a_function_of_another_module_raises_the_lookup_error_naming_the_module_it_records_types_on_python_3_11_and_that_module_from_python_3_12_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """From 3.12, make_dataclass assigns the name of the module whose function calls it, not that of the module binding the class that function returns."""
-    imported_module(
-        tmp_path,
-        monkeypatch,
-        "scanfactories",
-        "from dataclasses import make_dataclass\n"
-        "\n"
-        "def made() -> type:\n"
-        "    return make_dataclass('Made', [('spare', 'Tap')])\n",
-    )
+    imported_module(tmp_path, monkeypatch, "scanfactories", MAKE_DATACLASS_FACTORY_SOURCE)
     scanfactoring = imported_module(
-        tmp_path,
-        monkeypatch,
-        "scanfactoring",
-        "from decimal import Decimal as Tap\n"
-        "\n"
-        "from scanfactories import made\n"
-        "\n"
-        "Made = made()\n",
+        tmp_path, monkeypatch, "scanfactoring", make_dataclass_factoring_source("scanfactories")
     )
-    recorded = "types" if sys.version_info < (3, 12) else "scanfactories"
+    recorded = make_dataclass_records("scanfactories")
 
     with pytest.raises(LookupError, match=made_not_bound_in(recorded)):
         scan(scanfactoring.Made)

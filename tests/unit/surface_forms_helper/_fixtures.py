@@ -11,6 +11,7 @@ import functools
 import importlib.util
 import inspect
 import pathlib
+import re
 import sys
 import types
 from collections.abc import Callable
@@ -234,14 +235,49 @@ def dict_intercepting_refusal(
 
 
 def made_not_bound_in(module: str) -> str:
-    """The pattern of the whole LookupError for a class Made whose __module__ records *module*, the name of a module read from a file that binds nothing under 'Made', the remedy of assigning it the __module__ of the module that binds it included."""
+    """The pattern of the whole LookupError for a class Made whose __module__ records *module*, the name of a module read from the file *module*.py that binds nothing under 'Made', the remedy of assigning it the __module__ of the module that binds it included."""
+    escaped = re.escape(module)
     return (
-        rf"^{module}\.Made is not bound under 'Made' in the module at .*\b{module}\.py, which "
-        rf"sys\.modules holds under the name '{module}': that module binds nothing there\. .*\. "
+        rf"^{escaped}\.Made is not bound under 'Made' in the module at .*\b{escaped}\.py, which "
+        rf"sys\.modules holds under the name '{escaped}': that module binds nothing there\. .*\. "
         r"If the class's __module__ names a module that never bound it, as that of a class "
         r"dataclasses\.make_dataclass makes on Python 3\.11 names types, assign it the "
         r"__module__ of the module that binds it under its qualified name$"
     )
+
+
+NEW_CLASS_MADE_SOURCE = (
+    "import types\n"
+    "from dataclasses import dataclass\n"
+    "from decimal import Decimal as Tap\n"
+    "\n"
+    "Made = dataclass(types.new_class('Made', (), {}, lambda namespace: "
+    "namespace.update({'__annotations__': {'spare': 'Tap'}})))\n"
+)
+
+MAKE_DATACLASS_MADE_SOURCE = (
+    "from dataclasses import make_dataclass\n"
+    "from decimal import Decimal as Tap\n"
+    "\n"
+    "Made = make_dataclass('Made', [('spare', 'Tap')])\n"
+)
+
+MAKE_DATACLASS_FACTORY_SOURCE = (
+    "from dataclasses import make_dataclass\n"
+    "\n"
+    "def made() -> type:\n"
+    "    return make_dataclass('Made', [('spare', 'Tap')])\n"
+)
+
+
+def make_dataclass_factoring_source(factory: str) -> str:
+    """The source of a module that binds Tap to decimal.Decimal, and Made to what made returns, imported from the module *factory* that MAKE_DATACLASS_FACTORY_SOURCE writes."""
+    return f"from decimal import Decimal as Tap\n\nfrom {factory} import made\n\nMade = made()\n"
+
+
+def make_dataclass_records(caller: str) -> str:
+    """The __module__ dataclasses.make_dataclass records for a class that code of the module *caller* calls it to make, whichever module then binds the class: 'types' on Python 3.11, and *caller* from 3.12."""
+    return "types" if sys.version_info < (3, 12) else caller
 
 
 def with_a_string_signature(function: Callable[..., object]) -> Callable[..., object]:
