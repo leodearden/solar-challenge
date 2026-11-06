@@ -148,7 +148,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "sankey_diagram": _FigureCase(charts.sankey_diagram, lambda build: (build(_SUMMARY),)),
     "daily_energy_balance": _FigureCase(charts.daily_energy_balance, lambda build: (build(_year()),)),
     "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: (build(_year()),)),
-    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year()),)),
+    "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
     "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
     "comparison_bar_chart": _FigureCase(
