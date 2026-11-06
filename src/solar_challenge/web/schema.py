@@ -20,12 +20,15 @@ table's current schema, so a later step changes no earlier one.
 
 A step may also carry a run-document step of the stored-run format (stored_runs.RUN_DOCUMENT_STEPS),
 the step of the same version, as version 2 carries the first: migrate_store brings the stored
-runs' files forward by it before the step's transaction, and the runs rows' copies inside it.
+runs' files forward to its format before the step's transaction, and the runs rows' copies
+inside it.
 Each run-document step is carried by the step of its version, so the format version is never
 past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs whose documents
-are in the current format or runs its migration reported it could not migrate. A run's time
-series have no format version, and migration reads none of them, as migrate_stored_run_files
-says.
+are in the current format or runs a migration reported it could not migrate. Such a store has no
+step to apply, but migrate_store still catches up each run still in an older format, such as one
+an earlier migration left once its documents are fixed, and reports again each it still cannot.
+A run's time series have no format version, and migration reads none of them, as
+migrate_stored_run_files says.
 """
 
 import sqlite3
@@ -45,7 +48,9 @@ from solar_challenge.web.storage import (
     migrate_stored_run_files,
 )
 from solar_challenge.web.stored_runs import (
+    FIRST_FORMAT_VERSION,
     RUN_DOCUMENT_STEPS,
+    RUN_FORMAT_VERSION,
     DroppedValue,
     RewrittenValue,
     RunDocumentStep,
@@ -99,8 +104,8 @@ class MigrationStep:
     cannot rebuild, e.g. one another table's foreign key references or one the store lacks.
     description says what the step does, for the report of a migration. run_documents is the
     run-document step of the same version that the step carries, if any: migrate_store brings
-    each stored run's files forward by it first, then each runs row's copies inside the step's
-    transaction.
+    each stored run's files forward to its format first, then each runs row's copies inside the
+    step's transaction.
     """
 
     version: int
@@ -122,6 +127,27 @@ class MigrationRefused(Exception):
         )
         self.path = path
         self.step = step
+
+
+class LaggingRunsRefused(Exception):
+    """A migration's catch-up that cannot bring forward the runs of a store still in an older stored-run format, as a run's file cannot be written or the runs rows cannot be read or written.
+
+    The message names the store, the stored-run format version, the schema version the store
+    stays at, SCHEMA_VERSION, and how it came to be there: as it was, when the migration found
+    it at that version, or else by the steps the migration applied from *found*, the version it
+    found it at, which stay applied; then the fault. It is not a ValueError: no request causes
+    it, as MigrationRefused is not one.
+    """
+
+    def __init__(self, path: Path, found: int, fault: OSError | sqlite3.Error) -> None:
+        arrival = "as it was" if found == SCHEMA_VERSION else f"to which this migration's steps brought it from version {found}"
+        super().__init__(
+            f"The runs of {path} still in an older stored-run format cannot be brought forward to stored-run format "
+            f"version {RUN_FORMAT_VERSION}, so the store stays at schema version {SCHEMA_VERSION}, {arrival}, and the "
+            f"runs brought forward before the fault stay so: {fault}"
+        )
+        self.path = path
+        self.found = found
 
 
 def _schema_v1(conn: sqlite3.Connection) -> None:
@@ -232,7 +258,13 @@ class MigrationReport:
 
     dropped_values are the values its run-document steps dropped that are not null,
     rewritten_values the values they rewrote, and unmigrated_runs the stored runs they left as
-    they were, each once.
+    they were, each once. caught_up_runs are the id of each run whose files or runs row its
+    catch-up after the steps brought forward, each once: files whose format.json names an older
+    stored-run format or is missing, and a runs row that reads only once brought forward from the
+    first. Most are runs an earlier migration left, e.g. once their documents are fixed, but a
+    run saved in the current format is caught up the same way when its save did not finish,
+    leaving no format.json, or its runs row holds a shape only the first format admits, such as
+    a key no field has, which is then dropped.
     """
 
     path: Path
@@ -242,29 +274,44 @@ class MigrationReport:
     dropped_values: tuple[DroppedValue, ...] = ()
     unmigrated_runs: tuple[UnmigratedRun, ...] = ()
     rewritten_values: tuple[RewrittenValue, ...] = ()
+    caught_up_runs: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         """The report as `solar-challenge web migrate` prints it.
 
-        That is the store's database, both versions and each step applied, then each value
-        dropped, each value rewritten and each run left unmigrated; or that there was nothing to
-        migrate.
+        That is the store's database, both versions and each step applied, or that no step was
+        applied; then each run caught up after the steps, each value dropped, each value
+        rewritten and each run left unmigrated. A report of no step and nothing else says there
+        was nothing to migrate.
         """
-        if not self.applied_steps:
-            return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
-        return "\n".join([
-            f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
-            *(f"  {step.version}. {step.description}" for step in self.applied_steps),
+        listed = [
+            *_listed(
+                "Brought forward each run below, whose documents were in an older stored-run format or had no format.json:",
+                [f"run {run_id!r}" for run_id in self.caught_up_runs],
+            ),
             *_listed("Dropped each value below, which no field of its document holds:", self.dropped_values),
             *_listed("Rewrote each value below to the setting its run actually ran by:", self.rewritten_values),
             *_listed(
                 "Left each run below as it was, as its documents cannot be read; it cannot be loaded until they are fixed:",
                 self.unmigrated_runs,
             ),
-        ])
+        ]
+        if not self.applied_steps and not listed:
+            return f"The dashboard database {self.path} is at schema version {self.to_version}; there is nothing to migrate."
+        steps = (
+            [
+                f"Migrated the dashboard database {self.path} from schema version {self.from_version} to {self.to_version}:",
+                *(f"  {step.version}. {step.description}" for step in self.applied_steps),
+            ]
+            if self.applied_steps
+            else [f"The dashboard database {self.path} is at schema version {self.to_version}; no step was applied."]
+        )
+        return "\n".join([*steps, *listed])
 
 
-def _listed(heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun]) -> list[str]:
+def _listed(
+    heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun] | Sequence[str]
+) -> list[str]:
     """*heading*, then each of *items* on a line of its own; no line at all when there is no item."""
     return [heading, *(f"  {item}" for item in items)] if items else []
 
@@ -274,19 +321,30 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
 
     The store's version is read before anything is written. A file that holds no table is
     created as open_database creates a new store, at SCHEMA_VERSION, so no step is applied to
-    it, and a store at SCHEMA_VERSION is left as it is. A step carrying a run-document step
-    first brings each stored run's files forward by it, as migrate_stored_run_files does. Each
-    step is then applied in a transaction of its own, which writes the step's database part,
-    brings each runs row's documents forward by its run-document step, and records the step's
-    version as the store's user_version together: a step that fails leaves the store at the
-    version before it, as the steps before it left it. The run files it brought forward before
-    it failed stay so: a migration run again brings them forward again, which changes nothing
-    in them, and so reports none of the values the failed step dropped from them. A run whose
-    documents a run-document step cannot bring forward is left as it was and reported, and the
-    migration goes on. No later step of the migration is given that run's files, or its runs
-    row's copies, whichever the step left, as no later step can bring forward documents still
-    in the format before that step; so each is reported once, by the fault that kept it from
-    that step. Every connection is opened through Database.connect().
+    it, nor to a store at SCHEMA_VERSION. A step carrying a run-document step
+    first brings each stored run's files forward to its format, from the format each run's
+    format.json names, as migrate_stored_run_files does. Each step is then applied in a
+    transaction of its own, which writes the step's database part, brings each runs row's
+    documents forward to its run-document step's format, and records the step's version as the
+    store's user_version together: a step that fails leaves the store at the version before it,
+    as the steps before it left it. The run files it brought forward before it failed stay so,
+    their format.json naming its format: a migration run again leaves them as they are, as they
+    are in that format already, and so reports none of the values the failed step dropped from
+    them. A run whose documents a run-document step cannot bring forward is left as it was and
+    reported, and the migration goes on. No later step of the migration is given that run's
+    files, or its runs row's copies, whichever the step left, as it would only refuse them
+    again; so each is reported once, by the fault that kept it from that step.
+
+    After the steps, even when there were none, the migration catches up, leaving the store's
+    version as it is (_bring_lagging_runs_forward): each run's files whose format.json names an
+    older stored-run format or is missing, and each runs row that reads only once brought
+    forward from the first format, are brought forward to RUN_FORMAT_VERSION. That is a run an
+    earlier migration left, e.g. once its documents have been fixed, or a run in the current
+    format whose save did not finish or whose runs row holds a shape only the first format
+    admits, such as a key no field has. The report names each run whose files or runs row that
+    brought forward, and each source it still cannot bring forward is reported again. A source a
+    step of this migration left is not tried again. Every connection is opened through
+    Database.connect().
 
     Raises:
         SchemaVersionMismatch: The store is at a version above SCHEMA_VERSION, which a newer
@@ -296,6 +354,11 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             (RowRefused), a table is not one it can rebuild (ValueError or sqlite3.Error), or
             a stored run's file cannot be written (OSError). The step's transaction has changed
             nothing, so the store stays at the version before it.
+        LaggingRunsRefused: After the steps, a lagging run's file cannot be written (OSError),
+            or the runs rows cannot be read or written (sqlite3.Error), the cause. The store
+            stays at SCHEMA_VERSION, as it was or as the steps of this migration left it, and
+            the runs brought forward before the fault stay so. Those steps stay applied, but no
+            report of them is made, as none is of the steps before one MigrationRefused refuses.
         sqlite3.Error: A new store cannot be created.
     """
     database = Database(database_path)
@@ -309,6 +372,11 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
             outcome += _apply_step(database, data_dir, step, outcome)
         except (RowRefused, ValueError, sqlite3.Error, OSError) as fault:
             raise MigrationRefused(database_path, step, fault) from fault
+    try:
+        caught_up = _bring_lagging_runs_forward(database, data_dir, outcome)
+    except (OSError, sqlite3.Error) as fault:
+        raise LaggingRunsRefused(database_path, found, fault) from fault
+    outcome += caught_up
     return MigrationReport(
         database_path,
         from_version=found,
@@ -317,6 +385,7 @@ def migrate_store(database_path: Path, data_dir: Path) -> MigrationReport:
         dropped_values=outcome.dropped,
         rewritten_values=outcome.rewritten,
         unmigrated_runs=tuple(dict.fromkeys(outcome.unmigrated)),
+        caught_up_runs=caught_up.brought_forward_runs,
     )
 
 
@@ -325,9 +394,10 @@ def _apply_step(
 ) -> RunDocumentsOutcome:
     """Apply *step* to the store of *database* and *data_dir*, which is at the version before it, and return what its run-document step did.
 
-    The run-document step, if the step carries one, first brings the stored runs' files
-    forward. Then one transaction writes the step's database part, brings the runs rows'
-    documents forward by the same run-document step, and records the step's version as the
+    If the step carries a run-document step, the stored runs' files are first brought forward
+    to its format, each from the format they are in. Then one transaction writes the step's
+    database part, brings the runs rows' documents forward to the same format from the one a
+    store at the version before *step* holds them in, and records the step's version as the
     store's user_version. Both run-document parts are given *earlier*, the migration's outcome
     before *step*.
     """
@@ -335,15 +405,45 @@ def _apply_step(
     outcome = (
         RunDocumentsOutcome()
         if document_step is None
-        else migrate_stored_run_files(database, data_dir, document_step, earlier)
+        else migrate_stored_run_files(database, data_dir, document_step.version, earlier)
     )
     with database.transaction() as conn:
         conn.execute("BEGIN IMMEDIATE")
         step.migrate_database(conn)
         if document_step is not None:
-            outcome += migrate_runs_table_documents(conn, document_step, earlier)
+            outcome += migrate_runs_table_documents(
+                conn, _run_format_at(step.version - 1), document_step.version, earlier
+            )
         conn.execute(f"PRAGMA user_version = {step.version}")
     return outcome
+
+
+def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: RunDocumentsOutcome) -> RunDocumentsOutcome:
+    """Bring each run of the store of *database* and *data_dir*, at SCHEMA_VERSION, still in an older stored-run format forward to RUN_FORMAT_VERSION, and return what that did.
+
+    The runs' files come first, each from the format its format.json names, as
+    migrate_stored_run_files brings them. Then one transaction brings each runs row's documents
+    forward from RUN_FORMAT_VERSION, or else from the first format, as
+    migrate_runs_table_documents does, and leaves the store's user_version as it is. Both are
+    given *earlier*, the migration's outcome before, so no source it left is tried again. A
+    store whose runs are all in RUN_FORMAT_VERSION is read, and nothing is written to it.
+
+    Raises:
+        OSError: A run's file cannot be written; the runs before it have been brought forward.
+        sqlite3.Error: The runs table cannot be read, or a runs row cannot be written; the
+            transaction has changed no row.
+    """
+    outcome = migrate_stored_run_files(database, data_dir, RUN_FORMAT_VERSION, earlier)
+    with database.transaction() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        outcome += migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
+    return outcome
+
+
+def _run_format_at(version: int) -> int:
+    """The stored-run format the runs rows of a store at schema *version* are in: that of the last run-document step the steps to *version* carry, FIRST_FORMAT_VERSION when they carry none."""
+    carried = [step.run_documents.version for step in MIGRATIONS[:version] if step.run_documents is not None]
+    return carried[-1] if carried else FIRST_FORMAT_VERSION
 
 
 def _version_of_existing_or_new_store(database: Database) -> int:
