@@ -85,11 +85,7 @@ def _routine_module(routine: Callable[..., object]) -> types.ModuleType:
     if vars(module) is namespace:
         return module
     if _copies_globals_of(namespace, module):
-        raise _compiled_with_globals_of_no_module(
-            routine,
-            f"a copy of the globals of {_located(module)}, which sys.modules holds under the "
-            f"name {name!r}",
-        )
+        raise _compiled_with_globals_of_no_module(routine, _copy_of_globals_clause(module, name))
     raise _defined_elsewhere(label_of(routine), namespace, module, name)
 
 
@@ -160,14 +156,16 @@ def _class_module(cls: type) -> types.ModuleType:
 def _checked_by_body_witness(cls: type, module: types.ModuleType) -> types.ModuleType:
     """*module*, checked to hold as its globals those *cls*'s body witness carries, as _body_witness finds it; unchecked if it finds none.
 
-    Otherwise LookupError. If the globals the witness carries name no file, as the
-    globals a generator may compile a method it writes with name none, the error names
-    the witness's code file and a MethodGenerator record; if they name one, it names
-    *cls* and both modules.
+    Otherwise LookupError. If the witness carries a copy of *module*'s globals, as
+    _copies_globals_of finds one, or globals that name no file, either of which a
+    generator may compile a method it writes with, the error names the witness's code
+    file and a MethodGenerator record; otherwise it names *cls* and both modules.
     """
     witness = _body_witness(cls)
     if witness is None or witness.__globals__ is vars(module):
         return module
+    if _copies_globals_of(witness.__globals__, module):
+        raise _compiled_with_a_copy_of_its_modules_globals(cls, witness, module)
     if witness.__globals__.get("__file__") is None:
         raise _written_by_an_unlisted_generator(cls, witness, module)
     raise _defined_elsewhere(label_of(cls), witness.__globals__, module, cls.__module__)
@@ -197,10 +195,34 @@ def _located_by_globals(namespace: dict[str, object]) -> str:
     return _located(holder)
 
 
+def _copy_of_globals_clause(module: types.ModuleType, name: str) -> str:
+    """How an error names globals that copy *module*'s, as _copies_globals_of finds them, *module* being the one sys.modules holds under *name*."""
+    return (
+        f"a copy of the globals of {_located(module)}, which sys.modules holds under the "
+        f"name {name!r}"
+    )
+
+
 _GENERATOR_RECORD_REMEDY = (
     f"If a generator wrote it, add a {MethodGenerator.__qualname__} record for that generator "
     f"to the generators that {MethodGenerator.__module__} lists"
 )
+
+
+def _compiled_with_a_copy_of_its_modules_globals(
+    cls: type, function: types.FunctionType, module: types.ModuleType
+) -> LookupError:
+    """The error for *cls*, whose method *function*, named after it, carries a copy of the globals of *module*, which sys.modules holds under *cls*'s module name, as _copies_globals_of finds one: a generator that no MethodGenerator record lists may have written that method with that copy, which tells which module sys.modules held when the generator ran, not which module *cls*'s body ran in."""
+    return LookupError(
+        f"{label_of(cls)}.{function.__name__} was compiled from "
+        f"{function.__code__.co_filename!r} with "
+        f"{_copy_of_globals_clause(module, cls.__module__)}, not with those globals "
+        "themselves, as a generator may compile a method it writes, so it does not tell which "
+        f"module {label_of(cls)}'s body ran in. {_GENERATOR_RECORD_REMEDY}. If "
+        f"{label_of(cls)} was built once another module named {cls.__module__!r} had taken its "
+        "own module's place in sys.modules, read each module's objects before importing "
+        "another module of that name"
+    )
 
 
 def _written_by_an_unlisted_generator(
