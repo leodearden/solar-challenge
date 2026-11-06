@@ -35,6 +35,7 @@ from tests._surface_forms_module_lookup import (
     defining_module,
     is_get_delete_descriptor,
     is_routine,
+    missing_class_statement_clause,
     names_declared_by,
     scope_statements,
     source_of,
@@ -1453,10 +1454,9 @@ def _refuse_def_written_member_of_statementless_class(
         return
     raise TypeError(
         f"{_generated_name_clause(cls, function, constructor)} into {label_of(holder)}, and "
-        f"{evidence}, but the source of the module {module!r} holds no class statement under "
-        f"the qualified name {holder.__qualname__!r}, so whether the class statement that "
-        f"defined {label_of(holder)} defines {constructor.name} is not known: make the name "
-        f"private, or {remedy}"
+        f"{evidence}, but {missing_class_statement_clause(holder)}, so whether the class "
+        f"statement that defined {label_of(holder)} defines {constructor.name} is not known: "
+        f"make the name private, or {remedy}"
     )
 
 

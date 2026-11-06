@@ -3,10 +3,10 @@
 
 import _json
 import _random
-import ast
 import collections
 import decimal
 import functools
+import importlib
 import pathlib
 import re
 import sys
@@ -354,7 +354,6 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 @pytest.mark.parametrize(
     ("cls", "naming_it"),
     [
-        pytest.param(ast.AST, r"\bast\.AST\b.*\bno class statement inspect can read\b", id="ast.AST"),
         pytest.param(
             _random.Random,
             r"\b_random\.Random\b.*\bno class statement inspect can read\b",
@@ -370,9 +369,55 @@ def test_an_immutable_type_raises_a_type_error_naming_it_before_anything_is_read
 def test_a_class_with_no_class_statement_inspect_can_read_raises_a_type_error_naming_it_from_undeclared_attributes_and_unset_attributes(
     scan: Callable[[type], set[str]], cls: type, naming_it: str
 ) -> None:
-    """None is an immutable type: ast.AST's module has a source, _random.Random's has none, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
+    """None is an immutable type: _random.Random's module has no source, and _json.Scanner's has none and binds it as make_scanner, not under its qualified name."""
     with pytest.raises(TypeError, match=naming_it):
         scan(cls)
+
+
+@pytest.mark.parametrize("scan", [undeclared_attributes, unset_attributes])
+@pytest.mark.parametrize(
+    ("sources", "module", "qualname"),
+    [
+        pytest.param(
+            {
+                "submeters": (
+                    "class Submeter:\n    def __init__(self) -> None:\n        self.site = 1\n"
+                ),
+                "storefront": "from submeters import Submeter\n\nSubmeter.__module__ = __name__\n",
+            },
+            "storefront",
+            "Submeter",
+            id="re-homed",
+        ),
+        pytest.param(
+            {"tupling": "import collections\n\nPlain = collections.namedtuple('Plain', ['kwh'])\n"},
+            "tupling",
+            "Plain",
+            id="namedtuple",
+        ),
+        pytest.param({}, "ast", "AST", id="ast.AST"),
+    ],
+)
+def test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes(
+    scan: Callable[[type], set[str]],
+    sources: dict[str, str],
+    module: str,
+    qualname: str,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A class statement in submeters defines storefront.Submeter, re-homed to storefront, which re-exports it; collections.namedtuple made tupling.Plain; ast binds ast.AST, and ast's source holds no class AST."""
+    for name, source in sources.items():
+        imported_module(tmp_path, monkeypatch, name, source)
+    expected = (
+        f"{module}.{qualname} has no __init__ or __post_init__ the scan can read, since the "
+        f"source of the module {module!r} holds no class statement under the qualified name "
+        f"{qualname!r}: pass a class that a class statement in a source file defines, and "
+        "leave its __module__ and __qualname__ as that statement set them"
+    )
+
+    with pytest.raises(TypeError, match=f"^{re.escape(expected)}$"):
+        scan(getattr(importlib.import_module(module), qualname))
 
 
 _EACH_SCAN_OF_A_CLASS_THAT_SETS_SITE_AND_DECLARES_RATE = pytest.mark.parametrize(
