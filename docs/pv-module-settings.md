@@ -1,7 +1,7 @@
 # PV Module Settings: Module Efficiency and Temperature Coefficient Derive the Module
 
-**Task:** #825
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`)
+**Task:** #825, #1029
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`)
 **Measurement:** [`tests/unit/test_pv_module_settings.py`](../tests/unit/test_pv_module_settings.py)
 
 ---
@@ -36,18 +36,23 @@
   PVWatts module, else `STC`. It acts on output through NOCT-SAM's cell temperature
   ([pv-cell-temperature.md](pv-cell-temperature.md)): a less efficient module turns
   more of its light into heat. It takes any module form that has a rating.
-- **Refusals**, each a `ValueError` naming the field and its value:
+- **Refusals**, each a `ValueError` naming what it refuses, and a `ConfigurationError`
+  at construction and at use for each rule construction also checks:
   - At construction (`PVConfig.__post_init__`): an efficiency outside (0, 0.9), 0.9
     being NOCT-SAM's transmittance–absorptance, at which a cell no longer heats; a
-    coefficient outside [−0.01, 0) per K; and a set coefficient on custom parameters in
+    coefficient outside [−0.01, 0) per K; a set coefficient on custom parameters in
     neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of each
-    form.
+    form; then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor
+    `STC`), or outside NOCT-SAM's domain once a set efficiency's area is applied
+    (`_template_with_set_efficiency`), through `_temperature_model_parameters`, the
+    function use runs ([pv-cell-temperature.md](pv-cell-temperature.md)).
   - At use (`create_pv_system`, and so every chain builder and `wired_dc_capacity_kw`):
-    the same form rule, through the same function; a CEC template whose `alpha_sc` is
-    0, since `Adjust` scales only `alpha_sc` and so cannot move the coefficient; and a
-    coefficient beyond the reach of the bracket's ends, naming the bracket and the
-    reach. The efficiency's use-time check is NOCT-SAM's own
-    (`_require_cells_noct_sam_can_heat`).
+    the same form rule, rating and NOCT-SAM checks, through the same functions, since a
+    `PVConfig` keeps the caller's own dict and a module edited after construction
+    reaches use; a CEC template whose `alpha_sc` is 0, since `Adjust` scales only
+    `alpha_sc` and so cannot move the coefficient; and a coefficient beyond the reach of
+    the bracket's ends, naming the bracket and the reach. The efficiency's use-time
+    check is NOCT-SAM's own (`_require_cells_noct_sam_can_heat`).
 - `scenario_writer` writes both keys, an unset one as null, and `_parse_pv_config` hands
   a null on as `None`, so a written home loads back equal. A fleet distribution that
   draws no `module_efficiency` gives every home `None`.

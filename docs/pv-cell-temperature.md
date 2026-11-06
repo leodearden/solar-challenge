@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
-**Task:** #823
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
+**Task:** #823, #1029
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -24,25 +24,30 @@
   `PVConfig.custom_module_params`' docstring states the rule.
 - **A module NOCT-SAM cannot heat is refused.** pvlib's `noct_sam` raises a sunlit cell
   above the air in proportion to (T_NOCT − 20 °C)(1 − efficiency / 0.9). So
-  `_require_cells_noct_sam_can_heat` refuses, with a `ValueError` naming the key, its
-  value and the domain:
+  `_require_cells_noct_sam_can_heat` refuses, with a `ConfigurationError`, a
+  `ValueError`, naming the key, its value and the domain:
   - a `T_NOCT` that is not a finite temperature above 20 °C, the air temperature at
     which NOCT is measured;
   - an `A_c` that is not a finite area over which the rating is an efficiency below the
     transmittance–absorptance 0.9.
 
   Outside that domain a cell runs no hotter than the air, or colder; a NaN gives NaN
-  cells, so no DC, with no error. The refusal reaches `create_pv_system`,
-  `create_model_chain`, `simulate_pv_output` and `wired_dc_capacity_kw`. Every one of
-  pvlib's 21,535 CECMod rows lies inside the domain (NOCT 41.2–63.7 °C, efficiency
-  0.036–0.227, no NaN `T_NOCT`, `A_c` or `STC`), so only hand-built module dicts are
-  refused.
+  cells, so no DC, with no error. `PVConfig`'s construction refuses
+  `custom_module_params` outside the domain, reading the area a set
+  `module_efficiency` gives (`_template_with_set_efficiency`), and so do
+  `create_pv_system`, `create_model_chain`, `simulate_pv_output` and
+  `wired_dc_capacity_kw` at use. Both run `_temperature_model_parameters`. A
+  `PVConfig` keeps the caller's own dict, so a module edited after construction
+  reaches use, which checks again. Every one of pvlib's 21,535 CECMod rows lies inside
+  the domain (NOCT 41.2–63.7 °C, efficiency 0.036–0.227, no NaN `T_NOCT`, `A_c` or
+  `STC`), so only hand-built module dicts are refused.
 
-  A value the module lacks is checked too, and the `ValueError` names it as
+  A value the module lacks is checked too, and the `ConfigurationError` names it as
   `DEFAULT_CEC_MODULE`'s and asks for the module's own (`_NoctSamInput`). So a module
   rated at 1791 W or more without its own `A_c`, such as one PVWatts module standing
-  for a whole array, is refused: over the default's 1.99 m² its rating is an efficiency
-  of 0.9 or more (1.99 m² × 0.9 × 1000 W/m² = 1791 W).
+  for a whole array, is refused unless a set `module_efficiency` gives it an area: over
+  the default's 1.99 m² its rating is an efficiency of 0.9 or more (1.99 m² × 0.9 ×
+  1000 W/m² = 1791 W).
 - **Installation takes pvlib's defaults:** one storey (`array_height=1`), and a 4 in
   standoff (`mount_standoff=4`), which adjusts NOCT by 0 °C. The transmittance–absorptance
   is pvlib's default 0.9, which `pv.py` passes explicitly as `_TRANSMITTANCE_ABSORPTANCE`,
