@@ -44,12 +44,11 @@
     neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of each
     form; then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor
     `STC`), or outside NOCT-SAM's domain once a set efficiency's area is applied
-    (`_template_with_set_efficiency`), through `_temperature_model_parameters`, the
-    function use runs ([pv-cell-temperature.md](pv-cell-temperature.md)).
+    (`_template_with_set_efficiency`), through `_require_cells_noct_sam_can_heat`,
+    which use runs too ([pv-cell-temperature.md](pv-cell-temperature.md)).
   - At use (`create_pv_system`, and so every chain builder and `wired_dc_capacity_kw`):
-    the same form rule, rating and NOCT-SAM checks, through the same functions, since a
-    `PVConfig` keeps the caller's own dict and a module edited after construction
-    reaches use; a CEC template whose `alpha_sc` is 0, since `Adjust` scales only
+    the same form rule, rating and NOCT-SAM checks, through the same functions, on the
+    module it wires; a CEC template whose `alpha_sc` is 0, since `Adjust` scales only
     `alpha_sc` and so cannot move the coefficient; and a coefficient beyond the reach of
     the bracket's ends, naming the bracket and the reach. The efficiency's use-time
     check is NOCT-SAM's own (`_require_cells_noct_sam_can_heat`).

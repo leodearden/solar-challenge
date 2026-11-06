@@ -158,7 +158,7 @@ class PVConfig:
     system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient, or that have no rating or cells NOCT-SAM cannot heat (_temperature_model_parameters, which use runs too)."""
+        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient, or that have no rating or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat, which use runs too)."""
         read_field(self, "capacity_kw", as_finite_float, POSITIVE)
         read_field(self, "azimuth", as_finite_float, Interval(0, 360))
         read_field(self, "tilt", as_finite_float, Interval(0, 90))
@@ -180,7 +180,7 @@ class PVConfig:
                 self.custom_module_params, self.temperature_coefficient
             )
         if self.custom_module_params is not None:
-            _temperature_model_parameters(_template_with_set_efficiency(self))
+            _require_cells_noct_sam_can_heat(_template_with_set_efficiency(self))
 
     @property
     def effective_inverter_capacity_kw(self) -> float:
@@ -736,15 +736,17 @@ class _NoctSamInput:
         )
 
 
-def _require_cells_noct_sam_can_heat(
-    t_noct: _NoctSamInput, area: _NoctSamInput, rating_w: float
-) -> None:
-    """Refuse a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
+def _require_cells_noct_sam_can_heat(module_params: Mapping[str, float]) -> None:
+    """Refuse a module with no rating (_module_rating_w), or a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
 
     That takes a finite T_NOCT above NOCT's test air, and a finite area A_c over
     which the module's rating is an efficiency, rating / (A_c × 1000), below
-    _TRANSMITTANCE_ABSORPTANCE.
+    _TRANSMITTANCE_ABSORPTANCE. A module that lacks T_NOCT or A_c is checked with
+    DEFAULT_CEC_MODULE's value of that key (_NoctSamInput).
     """
+    t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
+    area = _NoctSamInput.for_module(module_params, "A_c")
+    rating_w = _module_rating_w(module_params)
     if not _NOCT_TEST_AIR_C < t_noct.value < math.inf:
         raise t_noct.refusal(
             f"a finite temperature above {_NOCT_TEST_AIR_C:g} °C, the air temperature at which "
@@ -763,16 +765,16 @@ def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[st
     """pvlib's NOCT-SAM parameters for the module's cells: its T_NOCT, and its rating over its area, A_c × 1000 W/m², as its efficiency.
 
     A module that lacks T_NOCT or A_c takes DEFAULT_CEC_MODULE's value of that
-    key (_NoctSamInput; docs/pv-cell-temperature.md). A module whose cells
-    NOCT-SAM cannot heat above the air is refused (_require_cells_noct_sam_can_heat).
+    key (_NoctSamInput; docs/pv-cell-temperature.md). A module with no rating, or
+    whose cells NOCT-SAM cannot heat above the air, is refused
+    (_require_cells_noct_sam_can_heat).
     """
+    _require_cells_noct_sam_can_heat(module_params)
     t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
     area = _NoctSamInput.for_module(module_params, "A_c")
-    rating_w = _module_rating_w(module_params)
-    _require_cells_noct_sam_can_heat(t_noct, area, rating_w)
     return {
         "noct": t_noct.value,
-        "module_efficiency": rating_w / (area.value * 1000),
+        "module_efficiency": _module_rating_w(module_params) / (area.value * 1000),
         "transmittance_absorptance": _TRANSMITTANCE_ABSORPTANCE,
     }
 

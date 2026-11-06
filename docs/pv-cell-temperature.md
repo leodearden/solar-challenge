@@ -34,13 +34,12 @@
   Outside that domain a cell runs no hotter than the air, or colder; a NaN gives NaN
   cells, so no DC, with no error. `PVConfig`'s construction refuses
   `custom_module_params` outside the domain, reading the area a set
-  `module_efficiency` gives (`_template_with_set_efficiency`), and so do
-  `create_pv_system`, `create_model_chain`, `simulate_pv_output` and
-  `wired_dc_capacity_kw` at use. Both run `_temperature_model_parameters`. A
-  `PVConfig` keeps the caller's own dict, so a module edited after construction
-  reaches use, which checks again. Every one of pvlib's 21,535 CECMod rows lies inside
-  the domain (NOCT 41.2–63.7 °C, efficiency 0.036–0.227, no NaN `T_NOCT`, `A_c` or
-  `STC`), so only hand-built module dicts are refused.
+  `module_efficiency` gives (`_template_with_set_efficiency`). `create_pv_system`,
+  `create_model_chain`, `simulate_pv_output` and `wired_dc_capacity_kw` check again
+  at use, on the module they wire, a second enforcement point of the same check: both
+  run `_require_cells_noct_sam_can_heat`. Every one of pvlib's 21,535 CECMod rows lies
+  inside the domain (NOCT 41.2–63.7 °C, efficiency 0.036–0.227, no NaN `T_NOCT`, `A_c`
+  or `STC`), so only hand-built module dicts are refused.
 
   A value the module lacks is checked too, and the `ConfigurationError` names it as
   `DEFAULT_CEC_MODULE`'s and asks for the module's own (`_NoctSamInput`). So a module
