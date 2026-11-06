@@ -1372,7 +1372,7 @@ class _NodeData:
     """Shortest per-home simulated window (days) the energy totals were annualised from."""
 
     per_home_throughput: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
-    """Per-home cumulative battery throughput (kWh) from installation to this age, which its battery SOH counts."""
+    """Per-home battery discharge (kWh) from installation to this age, the cumulative throughput :func:`battery.compute_soh` counts."""
 
     def __post_init__(self) -> None:
         """Refuse an aggregate that is NaN or infinite, naming the age and each such aggregate and its value."""
@@ -1401,17 +1401,20 @@ def _aged_homes(
     """Return HomeConfig list with PV system_age_years and battery SOH set to ``age``.
 
     For each home the PV config's ``system_age_years`` is updated to ``age``.
-    When ``cum_throughput`` is provided (a per-home list of kWh accumulated
-    since installation), battery SOH at that age is computed via
-    :func:`battery.compute_soh` and injected into the battery config via
+    Each battery's SOH at that age comes from :func:`battery.compute_soh`,
+    passed the home's discharged energy since installation (its
+    ``cum_throughput`` entry, the throughput compute_soh counts; none when
+    ``cum_throughput`` is omitted) and the battery's nominal usable capacity.
+    It is injected into the battery config via
     ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`Battery`
     uses it directly at construction time.
 
     Args:
         homes: Original fleet home configs.
         age: System age in calendar years.
-        cum_throughput: Per-home cumulative battery throughput in kWh (0.0 if
-            no history yet or if the home has no battery).
+        cum_throughput: Per-home battery discharge in kWh since installation,
+            the throughput :func:`battery.compute_soh` counts (0.0 if no
+            history yet or if the home has no battery).
 
     Returns:
         New list of HomeConfig with aged PV and (optionally) aged battery.
@@ -1442,7 +1445,7 @@ def _aged_homes(
 
 
 def _throughput_at(age: int, seeds: Mapping[int, _NodeData]) -> List[float]:
-    """Per-home cumulative battery throughput (kWh) from installation to ``age``.
+    """Each home's battery discharge (kWh) from installation to ``age``, the cumulative throughput :func:`battery.compute_soh` counts.
 
     Throughput accrues at the annual discharge simulated at the latest seed age
     at or below ``age``.  Every sampled age, seed or bisection trial, reads this
@@ -1454,7 +1457,7 @@ def _throughput_at(age: int, seeds: Mapping[int, _NodeData]) -> List[float]:
         seeds: The seed-age nodes simulated so far, keyed by age.
 
     Returns:
-        One cumulative throughput (kWh) per home, in fleet order.
+        One cumulative battery discharge (kWh) per home, in fleet order.
     """
     base_age = max(seed_age for seed_age in seeds if seed_age <= age)
     base = seeds[base_age]
