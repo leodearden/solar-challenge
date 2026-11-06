@@ -14,6 +14,7 @@ import pytest
 
 NOTES_DIR = "docs/unreleased"
 NOTE_DOCS = ("domain-library-consumption", "cost-recovery-finance-model")
+NOTES_README = "README.md"
 UNRELEASED_PARAGRAPH = "**Unreleased on main**"
 
 
@@ -22,10 +23,11 @@ def _notes_root(project_root: Path) -> Path:
 
 
 def _note_files(project_root: Path) -> list[Path]:
+    """Every file under NOTES_DIR except its README, which outlives each release's notes."""
     notes_root = _notes_root(project_root)
-    if not notes_root.is_dir():
-        return []
-    return sorted(path for path in notes_root.rglob("*") if path.is_file())
+    return sorted(
+        path for path in notes_root.rglob("*") if path.is_file() and path != notes_root / NOTES_README
+    )
 
 
 def _is_note_path(relative: Path) -> bool:
@@ -34,6 +36,13 @@ def _is_note_path(relative: Path) -> bool:
         return False
     doc, stem = relative.parts[0], relative.stem
     return doc in NOTE_DOCS and stem.isdigit() and str(int(stem)) == stem
+
+
+def test_the_notes_directory_keeps_its_readme(project_root: Path) -> None:
+    """The README keeps docs/unreleased on main between releases, so a grep scoped to it stays live."""
+    assert (_notes_root(project_root) / NOTES_README).is_file(), (
+        f"{NOTES_DIR}/{NOTES_README} is gone; a release deletes the notes, never the README"
+    )
 
 
 @pytest.mark.parametrize("doc", NOTE_DOCS)

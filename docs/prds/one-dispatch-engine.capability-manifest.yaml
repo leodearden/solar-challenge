@@ -111,7 +111,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "charg(e|ing) loss"
-          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md"]
+          paths: ["docs/cost-recovery-finance-model.md", "docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "briefing-balance-convention-on-bus-energy"
         binding: "built by γ; review/briefing.yaml's energy-balance convention names no storage identity test at 1fa8f79"

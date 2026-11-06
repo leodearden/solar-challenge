@@ -17,6 +17,16 @@
 - **Approach:** B + H. The work is three small leaves. The stakes are a release that a consumer pins and an ordering across 16 held leaves of 15 streams, so §4 is a contract and §5 a boundary-test sketch.
 - **Code anchors** verified against main `beb1d9103ad8` (2026-10-18). The task store was read at 2026-10-18T09:14:46Z. Main moves fast: cite symbols and re-read at implementation time.
 
+## Amendment (2026-11-06): release notes are files
+
+[release-note-fragments.md](release-note-fragments.md) (Leo's ruling on sitting item 506) moves every "Unreleased on main" paragraph out of both docs, into one file per task, `docs/unreleased/<doc>/<task id>.md`. Where this PRD says "line" or "paragraph" for a change's release text, read "note file". The clauses it changes:
+
+- **W1.** α still opens `### solar-challenge-v0.6.0`, with its open-window line, the group labels and decision 6's convention paragraph. α's own additive line is its note, `docs/unreleased/domain-library-consumption/<α>.md`. A held leaf writes its note file, ending with its consumer action. It does not write under the heading.
+- **W3.** A non-held leaf writes its note file too. β tells held from non-held by its inventory and its dependency list, not by where the note sits.
+- **Decision 5 and W4.** β folds the text of every note under `docs/unreleased/*/` into the 0.6.0 section's groups, keeping each task id, and deletes the notes. It keeps `docs/unreleased/README.md`. Notes under `cost-recovery-finance-model/` go under "Results that move", as the header lines did. β declares `docs/unreleased`.
+- **R4.** After β, `docs/unreleased` holds only its README, and every task id that had a note appears in the 0.6.0 section. `tests/unit/test_unreleased_notes.py` checks that neither doc holds an Unreleased paragraph, before and after β.
+- **§2.1's counts** (25 paragraphs and 7 lines at `beb1d91`) are history. At `073da99` there were 54 notes for the guide and 11 for the finance-model doc.
+
 ## 1. Goal
 
 The program ends in one release, `solar-challenge-v0.6.0`. Every rename and retirement the program makes lands inside one release window. One release commit bumps the version and folds every "Unreleased on main" line into one release section. The platform consumer re-pins once, following one recipe.

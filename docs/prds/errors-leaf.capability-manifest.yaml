@@ -52,7 +52,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "solar_challenge\\.errors"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "finance-construction-loads-no-config-or-pvlib"
         binding: "probe on main: FinanceConfig(...) and GridServicesEventsConfig() load solar_challenge.config and pvlib (RED); α's fresh-interpreter test asserts both absent"
@@ -86,7 +86,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "ConfigurationError` subclasses `ValueError`"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "event-window-refusal-not-relabelled"
         binding: "ran on main: finance run on months [13] prints the EventWindow message; naive subclass relabels it 'contains a non-numeric value' (probed); β's CliRunner test pins it"

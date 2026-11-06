@@ -132,7 +132,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "annual_income_gbp"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
   - label: "α′"
     task_id: 837
@@ -217,7 +217,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "delivery_baseline"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "june-prd-points-here"
         binding: "grep: docs/prds/enhanced-grid-services-capacity-at-events.md never names this PRD on main"
@@ -317,7 +317,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "capacity_at_events"
-          paths: ["docs/domain-library-consumption.md"]
+          paths: ["docs/domain-library-consumption.md", "docs/unreleased"]
           expect: present
       - name: "construction-refusals-fire"
         binding: "silent accept observed: the finding measured FinanceConfig(..., grid_services_model='capacity_at_events') constructs; rejection is new code in β"
