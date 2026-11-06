@@ -486,13 +486,22 @@ class TestSimulationResultsRefusesANaNAmount:
 
     @pytest.mark.parametrize("name", AMOUNT_SERIES)
     def test_a_nan_in_an_amount_series_is_refused_naming_its_column_first_nan_and_count(self, name):
-        """A NaN in any amount series is refused, naming its column, its first NaN and when, and how many minutes are NaN."""
+        """A NaN in any amount series is refused, naming its column, its first NaN and when, and how many rows are NaN."""
         built = _results_with_every_series_set()
         series = getattr(built, name).copy()
         series.iloc[[5, 9]] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"{series.name}=nan at {series.index[5]} (2 of 60 minutes)")):
+        with pytest.raises(ValueError, match=re.escape(f"{series.name}=nan at {series.index[5]} (2 of 60 rows)")):
             dataclasses.replace(built, **{name: series})
+
+    def test_a_nan_is_counted_in_rows_however_long_each_row_lasts(self):
+        """A NaN in half-hourly results is counted among their rows, each half an hour long, not in minutes."""
+        week = _steady_week("30min")
+        demand = week.demand.copy()
+        demand.iloc[3] = math.nan
+
+        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {demand.index[3]} (1 of 336 rows)")):
+            dataclasses.replace(week, demand=demand)
 
     def test_every_amount_series_holding_a_nan_is_named_in_field_order(self):
         """Every amount series holding a NaN is named, in field declaration order, whatever order they were given in."""
@@ -505,8 +514,8 @@ class TestSimulationResultsRefusesANaNAmount:
             dataclasses.replace(built, import_cost=pd.Series(math.nan, index=index), demand=demand)
 
         assert str(refusal.value) == (
-            "SimulationResults' amount series are what its totals sum, so each holds a number at every minute: "
-            f"got demand_kw=nan at {index[3]} (1 of 60 minutes), import_cost_gbp=nan at {index[0]} (60 of 60 minutes)"
+            "SimulationResults' amount series are what its totals sum, so each holds a number in every row: "
+            f"got demand_kw=nan at {index[3]} (1 of 60 rows), import_cost_gbp=nan at {index[0]} (60 of 60 rows)"
         )
 
     def test_from_dataframe_refuses_a_frame_whose_amount_column_holds_a_nan(self):
@@ -514,7 +523,7 @@ class TestSimulationResultsRefusesANaNAmount:
         frame = _results_with_every_series_set().to_dataframe()
         frame.loc[frame.index[7], "grid_export_kw"] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"grid_export_kw=nan at {frame.index[7]} (1 of 60 minutes)")):
+        with pytest.raises(ValueError, match=re.escape(f"grid_export_kw=nan at {frame.index[7]} (1 of 60 rows)")):
             SimulationResults.from_dataframe(frame, strategy_name="tou_optimized")
 
     @pytest.mark.parametrize(
@@ -532,7 +541,7 @@ class TestSimulationResultsRefusesANaNAmount:
         results = dataclasses.replace(_results_with_every_series_set(), grid_charge=None)
         results.demand.iloc[5] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {results.demand.index[5]} (1 of 60 minutes)")):
+        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {results.demand.index[5]} (1 of 60 rows)")):
             read(results)
 
     @pytest.mark.parametrize("name", LEVELS)
