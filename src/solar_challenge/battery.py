@@ -475,7 +475,8 @@ class Battery:
             duration_minutes: Duration of discharging in minutes, positive and finite
 
         Returns:
-            Actual energy output in kWh (after efficiency losses)
+            Actual energy output in kWh (after efficiency losses), never more than the
+            requested power, capped at max_discharge_kw, for duration_minutes
 
         Raises:
             ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
@@ -499,8 +500,7 @@ class Battery:
         if energy_needed_kwh > max_available:
             energy_needed_kwh = max_available
 
-        # Calculate actual output
-        energy_output_kwh = energy_needed_kwh * self.discharge_efficiency
+        energy_output_kwh = min(energy_requested_kwh, energy_needed_kwh * self.discharge_efficiency)
 
         # Update SOC
         self._soc_kwh -= energy_needed_kwh
