@@ -40,7 +40,7 @@ from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
 
-from tests._dashboard_databases import write_database_at_schema_version_1
+from tests._dashboard_databases import write_database_at_schema_version
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests._html_page import element_attributes, element_count, texts, texts_after
 from tests._run_storage_layout import stored_run_dir
@@ -918,7 +918,7 @@ class TestExportAPI:
         those keys.
         """
         store = tmp_path / "store"
-        database = write_database_at_schema_version_1(database_path_in(store))
+        database = write_database_at_schema_version(database_path_in(store), 1)
         stored = json.loads(_PRE_DISPATCH_UNION_HOME_CONFIGS.read_text())[strategy.strategy_type]
         with Database(database).transaction() as conn:
             conn.execute(

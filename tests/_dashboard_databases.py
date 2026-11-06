@@ -4,8 +4,8 @@
 write_pre_548_database writes the store tests/fixtures/databases/pre_548_store.sql holds: the
 schema init_db created before task 548, whose runs table admits 'sweep' runs and nameless runs
 and which keeps the retired jobs table, with a few rows and no schema version.
-write_database_at_schema_version_1 writes an empty store at schema version 1, whose schema
-schema_v1.sql holds: the store a solar-challenge at that version left.
+write_database_at_schema_version writes an empty store at a schema version N, whose schema
+schema_v<N>.sql holds: the store a solar-challenge at that version created.
 write_database_a_newer_solar_challenge_wrote writes a store at the schema version after
 SCHEMA_VERSION. schema_of reads a database's schema as data, so a test can compare two stores'
 schemas. FIXTURES_DIR is the directory holding the database fixtures.
@@ -37,18 +37,22 @@ def write_pre_548_database(path: Path) -> Path:
     return _write_new_database(path, "the pre-548 store", (FIXTURES_DIR / "pre_548_store.sql").read_text())
 
 
-def write_database_at_schema_version_1(path: Path) -> Path:
-    """Write a store at schema version 1 as a new database file at *path*, creating its directory; return *path*.
+def write_database_at_schema_version(path: Path, version: int) -> Path:
+    """Write a store at schema version *version* as a new database file at *path*, creating its directory; return *path*.
 
-    Its schema is the one schema_v1.sql holds, its tables hold no row, its user_version is 1 and
-    it journals in WAL mode, as a store a solar-challenge at schema version 1 created does.
+    Its schema is the one schema_v<version>.sql holds, its tables hold no row, its user_version
+    is *version* and it journals in WAL mode, as a store a solar-challenge at that schema version
+    created does.
 
     Raises:
+        FileNotFoundError: No schema_v<version>.sql is committed in FIXTURES_DIR, so no file is written.
         FileExistsError: A file is already at *path*, so the store would not be the fixture's alone.
     """
-    script = (FIXTURES_DIR / "schema_v1.sql").read_text()
+    script = (FIXTURES_DIR / f"schema_v{version}.sql").read_text()
     return _write_new_database(
-        path, "the store at schema version 1", f"PRAGMA journal_mode=WAL;\n{script}\nPRAGMA user_version = 1;\n"
+        path,
+        f"the store at schema version {version}",
+        f"PRAGMA journal_mode=WAL;\n{script}\nPRAGMA user_version = {version};\n",
     )
 
 
