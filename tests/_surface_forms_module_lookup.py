@@ -423,6 +423,19 @@ def names_declared_by(
                 yield from names
 
 
+def class_namespace_defs(
+    statement: ast.ClassDef,
+) -> Iterator[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Each def or async def statement that scope_statements finds in *statement*'s body, in source order, even in a block that never runs, that binds its name in the namespace of the class *statement* defines: each one whose name no global or nonlocal statement of that body declares, as names_declared_by finds them, since such a declaration makes the def bind it in the module's globals or an enclosing function's namespace."""
+    bound_outside = frozenset(names_declared_by(statement.body, ast.Global, ast.Nonlocal))
+    for node in scope_statements(statement.body):
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name not in bound_outside
+        ):
+            yield node
+
+
 def scope_statements(nodes: Iterable[ast.AST]) -> Iterator[ast.stmt]:
     """Each statement among *nodes*, or in any block of theirs, in source order, even a block that never runs: an if, for, while, try, with or match statement's blocks, its except handlers and match cases included, so each statement of the scope *nodes* run in; never one in a def or class statement's body, which runs in a scope of its own, nor in an expression, which holds none."""
     for node in nodes:
