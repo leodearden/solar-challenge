@@ -199,8 +199,12 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         assert default_area in message, message
         assert "Give the module its own A_c" in message, message
 
-    def test_a_set_module_efficiency_gives_such_a_module_its_area(self) -> None:
-        """A module_efficiency of 0.2 spreads the same 4000 W over 20 m², so the module is in NOCT-SAM's domain at construction as at use."""
+
+class TestASetModuleEfficiencyGivesTheCheckedArea:
+    """Construction checks the module at the area A_c over which a set module_efficiency spreads its rating, rating / (efficiency × 1000 W/m²), the area its arrays are wired with."""
+
+    def test_instead_of_the_default_modules_to_a_module_with_no_area(self) -> None:
+        """A 4000 W module with no A_c would take DEFAULT_CEC_MODULE's 1.99 m², an efficiency of 2.0 that construction refuses; a module_efficiency of 0.2 spreads its 4000 W over 20 m², so construction accepts it and its cells run at 0.2."""
         config = PVConfig(
             capacity_kw=4.0,
             custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004},
