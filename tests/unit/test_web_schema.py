@@ -23,9 +23,11 @@ tests/_stored_run_fixtures.py among them, to the stored-run format, in its files
 alike, so each then loads (D-S19-5). It rewrites only the documents the step changes, then
 writes the run's format.json, and reports each value it drops that is not null. A run whose
 documents it cannot migrate, or cannot read, is left as it was and reported by id, document and
-field, and the rest of the store migrates. A step that cannot write a run's file, or whose
-transaction fails once it has brought the run files forward, is refused, leaving the database
-at the version before it, and the migration run again once the fault is gone completes it.
+field, and the rest of the store migrates; so, once, is a run whose format.json cannot be read,
+while a run whose format.json names a later format is left as it is. A step that cannot write a
+run's file, or whose transaction fails once it has brought the run files forward, is refused,
+leaving the database at the version before it, and the migration run again once the fault is
+gone completes it.
 Version 1 names a legacy run after its home as the format reads the run's config once migrated.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
@@ -1285,6 +1287,59 @@ def test_migrate_store_reports_a_run_whose_document_cannot_be_read_as_unmigrated
     assert _user_version(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+_FORMAT_MARKERS_THAT_NAME_NO_FORMAT = [
+    pytest.param("not json", None, id="not-json"),
+    pytest.param(json.dumps({"format_version": "x"}), "format_version", id="format-version-not-a-number"),
+]
+"""The text of a format.json that names no format, and the field of it the refusal names, None for the document as a whole."""
+
+
+@pytest.mark.parametrize(("marker", "field"), _FORMAT_MARKERS_THAT_NAME_NO_FORMAT)
+def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it_and_leaves_its_files_and_runs_row_as_they_were(
+    store_at_version_1: Path, marker: str, field: str | None
+) -> None:
+    """A run's files are in the format their format.json names, so one that cannot be read leaves no format to bring them forward from.
+
+    No later step of the migration, nor its catch-up, is given the files, so they are reported
+    once. pre_469_home's runs row is one no step changes, so it is as it was too.
+    """
+    run_id = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    (run_dir / "format.json").write_text(marker)
+    files_before, row_before = _files_of(run_dir), _runs_rows(store_at_version_1)[run_id]
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert [(each.run_id, each.document, each.field) for each in report.unmigrated_runs] == [
+        (run_id, "format.json", field)
+    ]
+    assert _files_of(run_dir) == files_before
+    assert _runs_rows(store_at_version_1)[run_id] == row_before
+
+
+def test_migrate_store_leaves_the_files_of_a_run_whose_format_json_names_a_later_format_as_they_are_and_reports_nothing_of_them(
+    store_at_version_1: Path,
+) -> None:
+    """A run a newer solar-challenge saved is in a format past every step's, so no step brings its files forward or reports them; its load refuses it, naming the newer solar-challenge."""
+    run_id = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="saved-by-a-newer-solar-challenge"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    write_run_documents(run_dir, (), RUN_FORMAT_VERSION + 1)
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert (report.unmigrated_runs, report.caught_up_runs) == ((), ())
+    assert _files_of(run_dir) == files_before
+    with pytest.raises(StoredRunUnreadable) as refused:
+        _storage_of(store_at_version_1).load_run(run_id)
+    assert (refused.value.document, refused.value.field) == ("format.json", "format_version")
+    assert "a newer solar-challenge saved it" in refused.value.reason
 
 
 @_NEEDS_PYARROW
