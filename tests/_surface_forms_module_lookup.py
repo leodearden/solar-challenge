@@ -237,12 +237,15 @@ def _body_witness(cls: type) -> types.FunctionType | None:
     """The first function in *cls*'s own namespace, read through spelled_function and unwrapped from any decorator that records it as __wrapped__, whose globals may check the module *cls*'s body ran in, as _witnesses_its_body finds; None if there is none.
 
     There is none if no function there is named after *cls*, as when its body compiled
-    none (an annotation-only body before Python 3.14, which compiles its __annotate__
-    unless the module imports annotations from __future__) and nothing since wrote one
-    there; or if may_be_generated finds a generator may have written each one that is,
-    as for a dataclass body whose only method is a hand-written __init__. So a function
-    a generator wrote there after the body ran, named after *cls*, can be the witness
+    none (an annotation-only body) and nothing since wrote one there; or if
+    may_be_generated finds a generator may have written each one that is, as for a
+    dataclass body whose only method is a hand-written __init__. So a function a
+    generator wrote there after the body ran, named after *cls*, can be the witness
     unless may_be_generated finds it, even where the body compiled none.
+
+    Both examples have no witness only where the body compiles no __annotate__.
+    Python 3.14 compiles one for an annotated body unless its module imports annotations
+    from __future__; named after *cls* and not found by may_be_generated, it is a witness.
     """
     functions = (spelled_function(member) or member for member in own_namespace(cls).values())
     unwrapped = (
