@@ -883,22 +883,15 @@ class TestWiredDcCapacity:
 
         assert wired_dc_capacity_kw(config) == pytest.approx(expected_kw)
 
-    def test_a_module_with_neither_pdc0_nor_stc_is_refused_at_construction(self) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            PVConfig(capacity_kw=4.0, custom_module_params=sapm_library_module())
-
-        message = str(refusal.value)
-        assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
-
     @pytest.mark.parametrize(
         "custom_inverter_params",
         [None, create_simple_inverter_params()],
         ids=["voltage-matched-inverter", "custom-sandia-inverter"],
     )
-    def test_a_module_with_neither_pdc0_nor_stc_is_refused_at_use(
+    def test_a_module_with_neither_pdc0_nor_stc_is_refused_at_construction_and_at_use(
         self, custom_inverter_params: dict[str, float] | None
     ) -> None:
-        """A PVConfig keeps the caller's own module dict, so an STC deleted after construction reaches use, which refuses the module before it reads any inverter."""
+        """A PVConfig keeps the caller's own module dict, so an STC deleted after construction reaches use, which refuses the module as construction does, before it reads any inverter."""
         module = rated_sapm_module()
         config = PVConfig(
             capacity_kw=4.0,
@@ -907,13 +900,16 @@ class TestWiredDcCapacity:
         )
         del module["STC"]
 
+        with pytest.raises(ConfigurationError) as constructing:
+            dataclasses.replace(config)
         with pytest.raises(ConfigurationError) as building:
             create_pv_system(config)
         with pytest.raises(ConfigurationError) as wiring:
             wired_dc_capacity_kw(config)
 
-        message = str(building.value)
+        message = str(constructing.value)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
+        assert str(building.value) == message
         assert str(wiring.value) == message
 
     @pytest.mark.parametrize(

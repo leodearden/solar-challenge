@@ -6,6 +6,7 @@ feed pvlib's noct_sam; a module lacking either key takes DEFAULT_CEC_MODULE's va
 docs/pv-cell-temperature.md records the decision and its measurements.
 """
 
+import dataclasses
 import math
 from collections.abc import Callable
 
@@ -148,52 +149,52 @@ class TestCellTemperatureIsNoctSamFromTheModule:
         assert (ac_kw[clear_day["ghi"] == 0] == 0).all(), ac_kw[clear_day["ghi"] == 0]
 
 
-UNHEATABLE_KEYS_AND_VALUES = [
-    ("T_NOCT", math.nan),
-    ("T_NOCT", 20.0),
-    ("A_c", math.nan),
-    ("A_c", 0.0),
-    pytest.param("A_c", 0.4, id="A_c-0.4-so-an-efficiency-of-1.0"),
-]
-"""Each a key of the default module and a value with which NOCT-SAM cannot heat its cells above the air."""
+def _one_refusal_at_construction_and_at_use(config: PVConfig) -> str:
+    """The message with which PVConfig refuses config built again, its custom module edited since, asserting that create_pv_system and wired_dc_capacity_kw refuse config with that same message."""
+    with pytest.raises(ConfigurationError) as constructing:
+        dataclasses.replace(config)
+    with pytest.raises(ConfigurationError) as building:
+        create_pv_system(config)
+    with pytest.raises(ConfigurationError) as wiring:
+        wired_dc_capacity_kw(config)
+
+    message = str(constructing.value)
+    assert str(building.value) == message
+    assert str(wiring.value) == message
+    return message
 
 
 class TestAModuleWhoseCellsCannotHeatIsRefused:
     """NOCT-SAM heats a sunlit cell above the air only for a T_NOCT above NOCT's 20 °C test air and an efficiency below its 0.9 transmittance-absorptance."""
 
-    @pytest.mark.parametrize(("key", "value"), UNHEATABLE_KEYS_AND_VALUES)
-    def test_at_construction_naming_its_key_and_value(self, key: str, value: float) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), key: value})
-
-        message = str(refusal.value)
-        assert f"{key}={value}" in message, message
-
-    @pytest.mark.parametrize(("key", "value"), UNHEATABLE_KEYS_AND_VALUES)
-    def test_at_use_for_a_module_edited_after_construction(self, key: str, value: float) -> None:
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("T_NOCT", math.nan),
+            ("T_NOCT", 20.0),
+            ("A_c", math.nan),
+            ("A_c", 0.0),
+            pytest.param("A_c", 0.4, id="A_c-0.4-so-an-efficiency-of-1.0"),
+        ],
+    )
+    def test_at_construction_and_at_use_naming_its_key_and_value(
+        self, key: str, value: float
+    ) -> None:
         """A PVConfig keeps the caller's own module dict, so an edit after construction reaches use, which refuses it as construction does."""
         module = default_module()
         config = PVConfig(capacity_kw=4.0, custom_module_params=module)
         module[key] = value
 
-        with pytest.raises(ConfigurationError) as building:
-            create_pv_system(config)
-        with pytest.raises(ConfigurationError) as wiring:
-            wired_dc_capacity_kw(config)
-        with pytest.raises(ConfigurationError) as constructing:
-            PVConfig(capacity_kw=4.0, custom_module_params=dict(module))
-
-        message = str(building.value)
+        message = _one_refusal_at_construction_and_at_use(config)
         assert f"{key}={value}" in message, message
-        assert str(wiring.value) == message
-        assert str(constructing.value) == message
 
     def test_naming_a_value_it_lacks_as_the_default_modules(self) -> None:
-        """One 4000 W PVWatts module for a whole 4 kW array, lacking A_c, takes the default module's: an efficiency of 4000 / 1990 = 2.0."""
-        with pytest.raises(ConfigurationError) as refusal:
-            PVConfig(capacity_kw=4.0, custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004})
+        """A 300 W PVWatts module, rerated after construction as one 4000 W module for a whole 4 kW array, lacks A_c, so takes the default module's: an efficiency of 4000 / 1990 = 2.0."""
+        module = pvwatts_300_w_module()
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module)
+        module["pdc0"] = 4000.0
 
-        message = str(refusal.value)
+        message = _one_refusal_at_construction_and_at_use(config)
         default_area = f"A_c={default_module()['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
         assert default_area in message, message
         assert "Give the module its own A_c" in message, message
@@ -208,3 +209,31 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
 
         for array in create_pv_system(config).arrays:
             assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(0.2)
+
+    @pytest.mark.parametrize(
+        ("template", "rating_key", "coefficient_key", "coefficient_value"),
+        [
+            pytest.param(pvwatts_300_w_module, "pdc0", "gamma_pdc", -0.005, id="a-300-W-PVWatts-module"),
+            pytest.param(default_module, "STC", "gamma_r", -0.5, id="DEFAULT_CEC_MODULE-row"),
+        ],
+    )
+    def test_a_set_temperature_coefficient_keeps_the_area_a_set_efficiency_gives(
+        self,
+        template: Callable[[], dict[str, float]],
+        rating_key: str,
+        coefficient_key: str,
+        coefficient_value: float,
+    ) -> None:
+        """Construction checks the module with a set module_efficiency's area but not a set temperature_coefficient, which changes none of the rating, T_NOCT and A_c NOCT-SAM reads: the module use wires takes both settings, and its cells run at the set efficiency."""
+        module = template()
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=module,
+            module_efficiency=0.15,
+            temperature_coefficient=-0.005,
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["A_c"] == pytest.approx(module[rating_key] / (0.15 * 1000))
+            assert array.module_parameters[coefficient_key] == pytest.approx(coefficient_value)
+            assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(0.15)
