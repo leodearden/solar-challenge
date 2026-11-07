@@ -90,7 +90,10 @@ class SimulationWindow:
     timezone: str | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a last_day before first_day through covered_days, the one home of that rule, which names both days; and refuse a cadence that is not positive, naming it."""
+        """Refuse a first_day or last_day that is not exactly a date, and a cadence that is not exactly a timedelta, a pd.Timestamp, a datetime or a pd.Timedelta among them, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
+        _require_exactly(date, "first_day", self.first_day)
+        _require_exactly(date, "last_day", self.last_day)
+        _require_exactly(timedelta, "cadence", self.cadence)
         covered_days(self.first_day, self.last_day)
         if self.cadence <= timedelta(0):
             raise ValueError(
@@ -217,6 +220,15 @@ class SimulationWindow:
             for as_dst in (True, False)
         )
         return read_as_dst.where(read_as_dst <= read_as_standard, read_as_standard)
+
+
+def _require_exactly(kind: type, field: str, value: object) -> None:
+    """Refuse value, SimulationWindow's field, unless its type is kind itself, never a subclass of it, naming field and value."""
+    if type(value) is not kind:
+        raise ValueError(
+            f"SimulationWindow's {field} is exactly the standard library's {kind.__name__}, "
+            f"never a subclass of it or any other type: got {field}={value!r}"
+        )
 
 
 def _cadence(index: pd.DatetimeIndex) -> timedelta:
