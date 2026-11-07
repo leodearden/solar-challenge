@@ -86,10 +86,7 @@ class CommunityConfig:
     def __post_init__(self) -> None:
         """Refuse an unknown sharing mode, or a community battery the mode does not take, raising ConfigurationError."""
         if self.sharing_mode not in ("p2p", "community_battery"):
-            raise ConfigurationError(
-                f"sharing_mode must be 'p2p' or 'community_battery', "
-                f"got {self.sharing_mode!r}"
-            )
+            raise ConfigurationError.must_be("sharing_mode", "'p2p' or 'community_battery'", got=self.sharing_mode)
         if self.sharing_mode == "p2p" and self.community_battery is not None:
             raise ConfigurationError(
                 "sharing_mode='p2p' must not have a community_battery; "
