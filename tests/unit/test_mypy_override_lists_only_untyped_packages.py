@@ -12,11 +12,15 @@ The check looks for the markers through which mypy reads a package's own types; 
 directory counts even when its py.typed marks it partial, though mypy then reads the modules it omits as untyped.
 """
 
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from tests._pyproject import load_pyproject
+from tests._repository_paths import REPOSITORY_ROOT
 
 
 def _untyped_override_entries(pyproject: Mapping[str, Any]) -> list[str]:
@@ -52,6 +56,20 @@ def _assert_names_an_untyped_package(entry: str, search_dirs: Sequence[Path]) ->
         f"this environment: {', '.join(map(str, markers))}. mypy reads them whether it is listed or not "
         f"(docs/type-check.md §1), so the entry changes nothing: drop {entry!r} from that override's module list."
     )
+
+
+@pytest.mark.parametrize(
+    "entry", [pytest.param(entry, id=entry) for entry in _untyped_override_entries(load_pyproject(REPOSITORY_ROOT))]
+)
+def test_each_listed_package_ships_no_types(entry: str) -> None:
+    """The listed package has no py.typed and no NAME-stubs in the environment pytest runs in.
+
+    In the verify that is the locked dev+web environment. tests/_newest_releases_deselections.py names this test for
+    the newest-releases check to deselect, because the override answers for the releases uv.lock pins, and the check's
+    copy installs newer ones. tests/unit/test_newest_releases_lane.py fails until a rename of this test renames that
+    entry too, and while another test of this module begins with this test's name.
+    """
+    _assert_names_an_untyped_package(entry, [Path(path) for path in sys.path])
 
 
 def _site_packages(directory: Path, files: Iterable[str]) -> Path:
