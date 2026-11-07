@@ -339,6 +339,7 @@ class FleetDistributionConfig:
             )
         _refuse_keys_held_where_no_row_puts_them(self)
         _refuse_required_keys_not_drawn(self)
+        _refuse_specs_their_kinds_cannot_draw(self)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
         _refuse_rounded_counts_with_no_whole_number(self)
@@ -419,6 +420,12 @@ def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
     for name, (block, component) in _fleet_components(config).items():
         if component is not None:
             _refuse_required_fleet_keys_left_out(block, component.draws, _child_path(_FLEET_DISTRIBUTION_PATH, name))
+
+
+def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
+    for path, row, spec in _component_draws(config):
+        _refuse_a_spec_its_row_cannot_draw(row, spec, _child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
 
 
 def _shuffled_pools(
@@ -740,6 +747,77 @@ class FleetField:
         if (self.kind is FieldKind.CHOICE) != bool(self.choices):
             needs = "must list its choices" if self.kind is FieldKind.CHOICE else "takes no choices"
             raise ConfigurationError(f"FleetField: a {self.kind.name} field {needs}, got {self.choices!r}")
+
+
+@dataclass(frozen=True)
+class _DrawnKindRule:
+    """What a fleet may give a key of one drawn kind: the specs the kind draws, and the values a spec of it may list.
+
+    *spec_types* are the types of the specs the kind draws, beside null. *admits* says whether a
+    value a spec lists, or a bare spec, is one the kind admits for a key of the row given; null
+    always is. *specs* and *values* phrase, for a refusal naming a key of the row, the specs the
+    kind draws and the values it admits.
+    """
+
+    spec_types: tuple[type[DistributionSpec], ...]
+    admits: Callable[[SpecValue, FleetField], bool]
+    specs: Callable[[FleetField], str]
+    values: Callable[[FleetField], str]
+
+
+#: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
+_NUMBER_KIND_RULE = _DrawnKindRule(
+    spec_types=(
+        int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
+        ShuffledPoolDistribution, ProportionalDistribution,
+    ),
+    admits=lambda value, row: not isinstance(value, str),
+    specs=lambda row: "null, a number, or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers",
+    values=lambda row: "null or a number",
+)
+
+_CHOICE_KIND_RULE = _DrawnKindRule(
+    spec_types=(str, WeightedDiscreteDistribution, ShuffledPoolDistribution),
+    admits=lambda value, row: value in row.choices,
+    specs=lambda row: f"null, one of {list(row.choices)}, or a weighted_discrete or shuffled_pool of them and nulls",
+    values=lambda row: f"null or one of {list(row.choices)}",
+)
+
+#: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
+#: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
+_DRAWN_KIND_RULES: Mapping[FieldKind, _DrawnKindRule] = MappingProxyType({
+    FieldKind.NUMBER: _NUMBER_KIND_RULE,
+    FieldKind.COUNT: _NUMBER_KIND_RULE,
+    FieldKind.CHOICE: _CHOICE_KIND_RULE,
+})
+
+
+def _listed_values(spec: DistributionSpec) -> tuple[SpecValue, ...]:
+    """The values *spec* lists: a weighted_discrete's or shuffled_pool's values; a normal, uniform or proportional_to lists none, and any other spec lists itself."""
+    if isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
+        return spec.values
+    if isinstance(spec, (NormalDistribution, UniformDistribution, ProportionalDistribution)):
+        return ()
+    return (spec,)
+
+
+def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str, written: object) -> DistributionSpec:
+    """Return *spec*, the spec of the drawn key at *path* whose fleet row is *row*, refusing it unless it is null or a spec the row's kind draws, every value it lists one the kind admits.
+
+    A spec of a type the kind does not draw is refused naming *path* and *written*, the spec as
+    its block gives it. A value it lists, or a bare spec, that the kind does not admit is refused
+    naming *path* and the value, even one no home would draw. _DRAWN_KIND_RULES holds each
+    kind's rule.
+    """
+    if spec is None:
+        return None
+    rule = _DRAWN_KIND_RULES[row.kind]
+    if not isinstance(spec, rule.spec_types):
+        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.specs(row)}")
+    for value in _listed_values(spec):
+        if value is not None and not rule.admits(value, row):
+            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.values(row)}")
+    return spec
 
 
 def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
@@ -1580,30 +1658,15 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     return block_type.build(data, param_name)
 
 
-def _parse_choice_spec(data: object, choices: tuple[str, ...], key_path: str) -> DistributionSpec:
-    """Read a CHOICE key's spec: null, one of *choices* given bare, or a weighted_discrete or shuffled_pool of them and nulls.
+def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
+    """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
 
-    Any other spec is refused naming *key_path*, the spec as written and *choices*; so is a
-    value, bare or listed, that is not one of *choices*, even one no home would draw.
+    A CHOICE's value that is not a mapping is the spec as written; any other value is read as
+    _parse_distribution_spec reads it. A spec the row's kind does not draw is refused naming
+    *key_path* and the spec as written.
     """
-    spec = _parse_distribution_spec(data, key_path) if isinstance(data, dict) else data
-    if spec is None:
-        return None
-    if isinstance(spec, str):
-        listed: tuple[SpecValue, ...] = (spec,)
-    elif isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
-        listed = spec.values
-    else:
-        raise ConfigurationError(
-            f"Invalid {key_path} {data!r}; valid specs: null, one of {list(choices)}, "
-            "or a weighted_discrete or shuffled_pool of them and nulls"
-        )
-    for value in listed:
-        if value is not None and value not in choices:
-            raise ConfigurationError(
-                f"Invalid {key_path} value {value!r}; valid values: null or one of {list(choices)}"
-            )
-    return spec
+    spec = data if row.kind is FieldKind.CHOICE and not isinstance(data, dict) else _parse_distribution_spec(data, key_path)
+    return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
 
 
 def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
@@ -1626,8 +1689,7 @@ def _parse_component_distribution(
     A key outside the rows is refused, and so is a required key left out, naming its path. A
     SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
     false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
-    even when null: a CHOICE's as _parse_choice_spec reads it, any other's as
-    _parse_distribution_spec does.
+    even when null, as _parse_drawn_spec reads it.
     """
     mapping = _refuse_unrecognised_keys(block_path, data, block.fleet)
     _refuse_required_fleet_keys_left_out(block, mapping, block_path)
@@ -1637,10 +1699,8 @@ def _parse_component_distribution(
         if key not in mapping:
             continue
         value, key_path = mapping[key], _child_path(block_path, key)
-        if row.kind is FieldKind.CHOICE:
-            draws[key] = _parse_choice_spec(value, row.choices, key_path)
-        elif row.kind not in _GIVEN_EVERY_HOME:
-            draws[key] = _parse_distribution_spec(value, key_path)
+        if row.kind not in _GIVEN_EVERY_HOME:
+            draws[key] = _parse_drawn_spec(row, value, key_path)
         elif value is not None:
             settings[key] = _read_setting(block, key, value, key_path)
     return ComponentDistribution(draws, settings)
