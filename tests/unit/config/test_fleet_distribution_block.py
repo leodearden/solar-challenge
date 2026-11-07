@@ -14,6 +14,7 @@ from solar_challenge.config import (
     ComponentDistribution,
     FleetDistributionConfig,
     NormalDistribution,
+    ProportionalDistribution,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
@@ -45,6 +46,33 @@ def _charger_type_value_refusal(value: object) -> str:
         f"Invalid fleet_distribution.ev.charger_type value {value!r}; "
         "valid values: null or one of ['3.6kW', '7kW', '22kW']"
     )
+
+
+def _number_spec_refusal(path: str, spec: object) -> str:
+    """The refusal of *spec*, given the number or count field at *path*, whose kind draws no such spec."""
+    return (
+        f"Invalid {path} {spec!r}; valid specs: null, a number, "
+        "or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers"
+    )
+
+
+def _number_value_refusal(path: str, value: object) -> str:
+    """The refusal of *value*, listed in the spec of the number or count field at *path*, which is not a number."""
+    return f"Invalid {path} value {value!r}; valid values: null or a number"
+
+
+def _heat_pump_type_spec_refusal(spec: object) -> str:
+    """The refusal of *spec*, given a fleet's heat_pump.heat_pump_type, whose kind draws no such spec."""
+    return (
+        f"Invalid fleet_distribution.heat_pump.heat_pump_type {spec!r}; "
+        "valid specs: null, one of ['ASHP', 'GSHP'], or a weighted_discrete or shuffled_pool of them and nulls"
+    )
+
+
+#: The refusal of 'XSHP', given or listed as a fleet's heat_pump.heat_pump_type, which names no heat pump type.
+_XSHP_HEAT_PUMP_TYPE_REFUSAL = (
+    "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
+)
 
 
 def _pickle_round_trip(fleet: FleetDistributionConfig) -> FleetDistributionConfig:
@@ -787,6 +815,106 @@ class TestAComponentDistributionDrawsItsRequiredKeys:
 
         assert str(parser_refusal.value) == f"Missing required keys in fleet_distribution.{component}: {path}"
         assert str(construction_refusal.value) == str(parser_refusal.value)
+
+
+class TestASpecIsOneItsFieldsKindDraws:
+    """A drawn key's spec is one its field's kind draws, and each value it lists one the kind admits: a number or count field's is no string, a choice field's is one of its choices or null; the fleet is refused otherwise, naming the key's path, as the block is read or the fleet is built."""
+
+    @pytest.mark.parametrize(
+        ("sections", "path", "value"),
+        [
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"type": "weighted_discrete", "values": [30, "35"], "weights": [1, 1]}}},
+                "fleet_distribution.pv.tilt",
+                "35",
+                id="a string among a number's weighted values",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"type": "shuffled_pool", "values": ["30"], "counts": [1]}}},
+                "fleet_distribution.pv.tilt",
+                "30",
+                id="a string in a number's pool",
+            ),
+            pytest.param(
+                {
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"household_occupants": {"type": "weighted_discrete", "values": ["2"], "weights": [1]}},
+                },
+                "fleet_distribution.load.household_occupants",
+                "2",
+                id="a string among a count's weighted values",
+            ),
+        ],
+    )
+    def test_a_string_among_a_number_fields_values_is_refused_at_read_naming_its_path_and_the_value(
+        self, sections: dict[str, Any], path: str, value: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(**sections)
+
+        assert str(refusal.value) == _number_value_refusal(path, value)
+
+    @pytest.mark.parametrize(
+        ("tilt", "refusal"),
+        [
+            pytest.param("30", _number_spec_refusal("fleet_distribution.pv.tilt", "30"), id="a string"),
+            pytest.param(
+                WeightedDiscreteDistribution(values=(30.0, "35"), weights=(1.0, 1.0)),
+                _number_value_refusal("fleet_distribution.pv.tilt", "35"),
+                id="a string among weighted values",
+            ),
+        ],
+    )
+    def test_a_number_field_given_a_spec_its_kind_does_not_draw_is_refused_at_construction(
+        self, tilt: object, refusal: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(n_homes=1, pv=ComponentDistribution({"capacity_kw": 4.0, "tilt": tilt}))
+
+        assert str(construction_refusal.value) == refusal
+
+    _A_NORMAL = NormalDistribution(mean=1.0, std=0.1)
+    _A_PROPORTIONAL_TO = ProportionalDistribution(source="pv.capacity_kw")
+
+    @pytest.mark.parametrize(
+        ("components", "refusal"),
+        [
+            pytest.param(
+                {"heat_pump": ComponentDistribution({"heat_pump_type": _A_NORMAL})},
+                _heat_pump_type_spec_refusal(_A_NORMAL),
+                id="a normal on a heat pump type",
+            ),
+            pytest.param(
+                {"ev": ComponentDistribution({"charger_type": _A_PROPORTIONAL_TO})},
+                f"Invalid fleet_distribution.ev.charger_type {_A_PROPORTIONAL_TO!r}; "
+                "valid specs: null, one of ['3.6kW', '7kW', '22kW'], "
+                "or a weighted_discrete or shuffled_pool of them and nulls",
+                id="a proportional_to on a charger type",
+            ),
+            pytest.param(
+                {"heat_pump": ComponentDistribution({"heat_pump_type": "XSHP"})},
+                _XSHP_HEAT_PUMP_TYPE_REFUSAL,
+                id="a bare heat pump type outside its choices",
+            ),
+            pytest.param(
+                {
+                    "heat_pump": ComponentDistribution(
+                        {"heat_pump_type": WeightedDiscreteDistribution(values=("ASHP", "XSHP"), weights=(1.0, 0.0))}
+                    )
+                },
+                _XSHP_HEAT_PUMP_TYPE_REFUSAL,
+                id="a listed heat pump type outside its choices that no home draws",
+            ),
+        ],
+    )
+    def test_a_choice_field_given_a_spec_or_value_its_kind_does_not_draw_is_refused_at_construction(
+        self, components: dict[str, ComponentDistribution], refusal: str
+    ) -> None:
+        """A fleet built in code is refused in the words the parser refuses such a block with."""
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), **components})
+
+        assert str(construction_refusal.value) == refusal
 
 
 class TestANullSettingReadsAsAbsent:

@@ -684,21 +684,19 @@ fleet_distribution:
             pytest.param(WeightedDiscreteDistribution(values=("XSHP",), weights=(1.0,)), id="weighted"),
         ],
     )
-    def test_a_sampled_type_outside_heat_pump_types_is_refused_naming_every_type(
+    def test_a_type_outside_heat_pump_types_is_refused_at_construction_naming_every_type(
         self, heat_pump_type: Union[str, WeightedDiscreteDistribution]
     ) -> None:
-        """A heat pump type outside heat_pump.HEAT_PUMP_TYPES, fixed or drawn, in a fleet built in code is refused as HeatPumpConfig refuses it, naming the component and the home."""
-        config = FleetDistributionConfig(
-            n_homes=1,
-            pv=ComponentDistribution({"capacity_kw": 4.0}),
-            heat_pump=ComponentDistribution({"heat_pump_type": heat_pump_type}),
-            seed=42,
-        )
-
+        """A heat pump type outside heat_pump.HEAT_PUMP_TYPES, fixed or listed, in a fleet built in code is refused as the fleet is built, naming its path and every type, as the parser refuses it; no home draws it."""
         with pytest.raises(ConfigurationError) as exc_info:
-            generate_homes_from_distribution(config, Location.bristol())
+            FleetDistributionConfig(
+                n_homes=1,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                heat_pump=ComponentDistribution({"heat_pump_type": heat_pump_type}),
+                seed=42,
+            )
         assert str(exc_info.value) == (
-            "fleet_distribution.heat_pump, home 1: Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'"
+            "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
         )
 
 
