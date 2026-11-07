@@ -295,6 +295,15 @@ def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, e
     raise ValueError("a plain ValueError raised while the fleet simulates")
 
 
+_HANDLED_ERRORS_AND_LABELS = [
+    pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),
+    pytest.param(FileNotFoundError, "File not found", id="FileNotFoundError"),
+    pytest.param(ValueError, "Invalid value", id="ValueError"),
+    pytest.param(WeatherDataError, "Weather data unavailable", id="WeatherDataError"),
+]
+"""Each error type handle_errors prints, with the label it prints it under."""
+
+
 class TestErrorHandling:
     """Tests for CLI error handling."""
 
@@ -455,15 +464,7 @@ class TestErrorHandling:
         assert result.stdout == ""
         assert " ".join(result.stderr.split()).endswith(error_line)
 
-    @pytest.mark.parametrize(
-        ("error_type", "label"),
-        [
-            pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),
-            pytest.param(FileNotFoundError, "File not found", id="FileNotFoundError"),
-            pytest.param(ValueError, "Invalid value", id="ValueError"),
-            pytest.param(WeatherDataError, "Weather data unavailable", id="WeatherDataError"),
-        ],
-    )
+    @pytest.mark.parametrize(("error_type", "label"), _HANDLED_ERRORS_AND_LABELS)
     def test_an_errors_text_is_printed_verbatim(
         self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
     ) -> None:
@@ -478,6 +479,26 @@ class TestErrorHandling:
 
         assert exit_.value.exit_code == 1
         assert " ".join(capsys.readouterr().err.split()) == f"{label}: {_TEXT_RICH_WOULD_PARSE}"
+
+    @pytest.mark.parametrize(("error_type", "label"), _HANDLED_ERRORS_AND_LABELS)
+    def test_each_of_an_errors_notes_is_printed_verbatim_on_its_own_line_under_its_text(
+        self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
+    ) -> None:
+        """A note, such as the one naming a fleet's failed home, prints as the error has it, text Rich would read as markup ([/b]) included."""
+
+        @handle_errors
+        def fail() -> None:
+            error = error_type("it failed")
+            error.add_note("first note")
+            error.add_note("second note [/b]")
+            raise error
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
+        assert lines == [f"{label}: it failed", "first note", "second note [/b]"]
 
 
 class TestPrintHelpers:
@@ -1026,6 +1047,35 @@ def _run_fleet(*argv: str) -> Result:
         ["fleet", *argv, "--start", _DAY, "--end", _DAY, "--sequential"],
         catch_exceptions=False,
     )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetRunNamesTheHomeWhoseSimulationFailed:
+    """`fleet run` prints the refusal of a home it could not simulate, then a line naming that home and its place in the fleet."""
+
+    def test_a_heat_pump_home_refused_a_days_weather_is_named_under_the_refusal(self) -> None:
+        plain = {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400, "use_stochastic": False}}
+        Path("fleet.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "name": "Street",
+                    "homes": [
+                        {"name": "Home A", **plain},
+                        {"name": "Home B", **plain},
+                        {"name": "Home C", **plain, "heat_pump": {"heat_pump_type": "ASHP"}},
+                    ],
+                }
+            )
+        )
+
+        result = _run_fleet("run", "fleet.yaml")
+
+        assert result.exit_code == 1, result.output
+        assert "Invalid value: the weather for" in " ".join(result.stderr.split())
+        assert "not one year of hourly rows" in " ".join(result.stderr.split())
+        lines = [line.strip() for line in result.stderr.splitlines()]
+        refusal = next(index for index, line in enumerate(lines) if "Invalid value:" in line)
+        assert "simulating home 2 ('Home C') of fleet 0 ('Street')" in lines[refusal + 1 :]
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
