@@ -142,6 +142,27 @@ class RunRecord:
         summary = self.summary()
         return {} if summary is None else field_tree(summary)
 
+    def headline(self) -> "RunHeadline | None":
+        """The run's headline: run_headline of the summary summary() reads; None while the run has none.
+
+        Raises:
+            StoredRunUnreadable: As summary() raises, or when run_headline refuses the summary for
+                a figure that is not a finite number. Then the document is runs.summary_json, the
+                field None, and the cause run_headline's ValueError.
+        """
+        summary = self.summary()
+        if summary is None:
+            return None
+        try:
+            return run_headline(summary)
+        except ValueError as refusal:
+            raise StoredRunUnreadable(
+                self.id,
+                _row_document_name("summary_json"),
+                None,
+                f"holds a figure the run's headline cannot show: {refusal}",
+            ) from refusal
+
     def home_configs(self) -> tuple[HomeConfig, ...] | None:
         """Each home's HomeConfig, in order, read from config_json as the run's kind reads it; None while the run has none.
 
@@ -191,13 +212,18 @@ def _run_summary(
 _DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
 
 
+def _row_document_name(column: _DocumentColumn) -> str:
+    """The name of the document runs *column* holds, runs.*column*, as StoredRunUnreadable names it."""
+    return f"runs.{column}"
+
+
 def _row_document(run_id: str, column: _DocumentColumn, text: str | None) -> StoredDocument:
     """The document runs.*column* of run *run_id*, whose JSON text is *text*; its content is None when *text* is.
 
     Raises:
         StoredRunUnreadable: *text* is not JSON; the document is runs.*column* and the field None.
     """
-    name = f"runs.{column}"
+    name = _row_document_name(column)
     return StoredDocument(run_id, name, None) if text is None else StoredDocument.decoded(run_id, name, text)
 
 
