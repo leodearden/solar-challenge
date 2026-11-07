@@ -45,6 +45,7 @@ from solar_challenge.web.stored_runs import (
     RUN_TYPES,
     DroppedValue,
     RewrittenValue,
+    RunDocumentsWriteStopped,
     RunKind,
     RunType,
     StepResult,
@@ -365,8 +366,8 @@ class RunDocumentsOutcome:
 class RunFilesMigrationStopped(Exception):
     """An OSError that stopped migrate_stored_run_files part way; the message is the OSError's.
 
-    brought_forward is what it did to the runs before the fault, whose files stay brought
-    forward, and fault the OSError, which is also its cause.
+    brought_forward is what was done before the fault, which stays done, and fault the OSError,
+    which is also its cause.
     """
 
     def __init__(self, brought_forward: RunDocumentsOutcome, fault: OSError) -> None:
@@ -413,6 +414,8 @@ def migrate_stored_run_files(
             continue
         try:
             outcome += _migrate_run_files(data_dir, row["id"], row["type"], to_version)
+        except RunFilesMigrationStopped as stopped:
+            raise RunFilesMigrationStopped(outcome + stopped.brought_forward, stopped.fault) from stopped.fault
         except OSError as fault:
             raise RunFilesMigrationStopped(outcome, fault) from fault
     return outcome
@@ -431,7 +434,9 @@ def _migrate_run_files(data_dir: Path, run_id: str, run_type: RunType | None, to
     """Bring the files of run *run_id* of *run_type* under *data_dir* forward to format *to_version*, as migrate_stored_run_files does for each run; a run with no directory there is skipped.
 
     Raises:
-        OSError: A file cannot be written, or the run's directory cannot be looked for.
+        RunFilesMigrationStopped: A file cannot be written, e.g. on a full disk, the OSError
+            being its fault and its cause; its brought_forward is empty.
+        OSError: The run's directory cannot be looked for.
     """
     run_dir = _existing_run_dir(data_dir, run_id)
     if run_dir is None:
@@ -445,7 +450,10 @@ def _migrate_run_files(data_dir: Path, run_id: str, run_type: RunType | None, to
         result = bring_run_documents_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_files=(UnmigratedRun.of(refusal),))
-    write_run_documents(run_dir, result.documents.changed_from(documents), to_version)
+    try:
+        write_run_documents(run_dir, result.documents.changed_from(documents), to_version)
+    except RunDocumentsWriteStopped as stopped:
+        raise RunFilesMigrationStopped(RunDocumentsOutcome(), stopped.fault) from stopped.fault
     return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten, brought_forward_files=(run_id,))
 
 

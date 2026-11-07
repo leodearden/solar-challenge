@@ -43,8 +43,9 @@ bring_run_documents_forward, by each step after the format they are in up to a l
 checks that the documents it brings forward will read once at RUN_FORMAT_VERSION. A run's files
 are in the format their format.json names, as stored_format_version reads it, and in
 FIRST_FORMAT_VERSION when it has none. write_run_documents then writes the documents the steps
-changed and the run's format.json last. A run whose documents cannot be brought forward is left
-as it was, an UnmigratedRun naming it.
+changed and the run's format.json last; a fault that stops it part way is a
+RunDocumentsWriteStopped naming the documents it wrote. A run whose documents cannot be brought
+forward is left as it was, an UnmigratedRun naming it.
 
 A change to a stored dataclass's shape, such as a renamed or retired field or a new field
 with no default, ships with a RunDocumentStep of the next version appended to
@@ -977,6 +978,19 @@ def bring_run_documents_forward(
     return result
 
 
+class RunDocumentsWriteStopped(Exception):
+    """An OSError that stopped write_run_documents part way; the message is the OSError's.
+
+    written names each document written before the fault, each whole, in the order written;
+    format.json, written last, is never among them. fault is the OSError, which is also its cause.
+    """
+
+    def __init__(self, written: tuple[str, ...], fault: OSError) -> None:
+        super().__init__(str(fault))
+        self.written = written
+        self.fault = fault
+
+
 def write_run_documents(run_dir: Path, documents: Sequence[StoredDocument], format_version: int) -> None:
     """Write each of *documents*, the JSON documents of the run in *run_dir*, over its file there, then last format.json naming *format_version*.
 
@@ -984,9 +998,15 @@ def write_run_documents(run_dir: Path, documents: Sequence[StoredDocument], form
     each file is written whole or not at all, to a temporary file then moved over it.
 
     Raises:
-        OSError: A file cannot be written, e.g. on a full disk; each document before it has
-            been written, and format.json has not.
+        RunDocumentsWriteStopped: A file cannot be written, e.g. on a full disk, the OSError
+            being its fault; its written names each document written before it, and format.json
+            has not been written.
     """
-    for document in documents:
-        _write_json(run_dir / document.name, document.content)
-    _write_format_marker(run_dir, format_version)
+    written: list[str] = []
+    try:
+        for document in documents:
+            _write_json(run_dir / document.name, document.content)
+            written.append(document.name)
+        _write_format_marker(run_dir, format_version)
+    except OSError as fault:
+        raise RunDocumentsWriteStopped(tuple(written), fault) from fault
