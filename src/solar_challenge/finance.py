@@ -370,6 +370,12 @@ class BillDistribution:
     max_gbp: float
     """Maximum total annual outlay across the fleet (£)."""
 
+    annualised_from: SimulationWindow | None = None
+    """The window the yearly figures were annualised from: the summaries' one window.
+
+    None only for a distribution built by hand, until the field is required.
+    """
+
 
 # ---------------------------------------------------------------------------
 # CostRecoverySolution — solve_cost_recovery_rate output
@@ -1153,6 +1159,13 @@ class MultiYearCurve:
     (fleet_billed_own_use_kwh, fleet_export_kwh, fleet_import_kwh,
     fleet_revenue_gbp), convergence invariant of the adaptive loop."""
 
+    annualised_from: SimulationWindow | None
+    """The window the projection's yearly figures were annualised from, the fleet's one window.
+
+    None for an analytic curve whose yearly figures are yearly assumptions,
+    annualised from no simulated window (:func:`spreadsheet_revenue_curve`).
+    """
+
     def __post_init__(self) -> None:
         if not self.points:
             raise ValueError("points must be non-empty")
@@ -1337,7 +1350,7 @@ def bill_distribution(
     """
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
-    _one_window(summaries)
+    window = _one_window(summaries)
     _require_summary_days(simulation_days, summaries[0])
 
     bills = [
@@ -1368,6 +1381,7 @@ def bill_distribution(
         mean_gbp=float(series.mean()),
         median_gbp=median_val,
         max_gbp=float(series.max()),
+        annualised_from=window,
     )
 
 
@@ -1425,8 +1439,8 @@ class _NodeData:
     fleet_revenue: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """CBS fleet revenue: own-use + SEG + grid-services (£)."""
 
-    annualised_from_days: int
-    """Shortest per-home simulated window (days) the energy totals were annualised from."""
+    annualised_from: SimulationWindow
+    """The fleet's one simulated window, the energy totals were annualised from."""
 
     per_home_throughput: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home battery discharge (kWh) from installation to this age, the cumulative throughput :func:`battery.compute_soh` counts."""
@@ -1677,7 +1691,7 @@ def project_multi_year(
             mean_pv_soh=mean_pv_soh,
             mean_battery_soh=mean_battery_soh,
             fleet_revenue=fleet_revenue,
-            annualised_from_days=min(s.simulation_days for s in per_home_summaries),
+            annualised_from=_one_window(per_home_summaries),
             per_home_throughput=tuple(cum_tp),
         )
 
@@ -1817,6 +1831,7 @@ def project_multi_year(
         points=points,
         sampled_ages=tuple(ages_sorted),
         interp_error_estimate=max_deviation,
+        annualised_from=sampled_data[0].annualised_from,
     )
 
 
@@ -2143,6 +2158,7 @@ def spreadsheet_revenue_curve(
         points=points,
         sampled_ages=(0,),          # analytic; no simulation nodes
         interp_error_estimate=0.0,  # exact; no interpolation
+        annualised_from=None,       # yearly assumptions; no simulated window
     )
 
 

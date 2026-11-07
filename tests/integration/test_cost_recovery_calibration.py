@@ -174,6 +174,7 @@ def _surplus_the_bills_fund_cr6(
         ),
         sampled_ages=(0,),
         interp_error_estimate=0.0,
+        annualised_from=None,
     )
     return project_economics(curve, scenario, finance).net_surplus_per_home_per_year_gbp
 
