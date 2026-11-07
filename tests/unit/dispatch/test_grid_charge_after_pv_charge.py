@@ -79,7 +79,7 @@ class TestACheapMinuteWhosePvChargeReachesTheTarget:
 
 
 class TestTheMorningDrainDay:
-    """The day from 1.0 kWh: the morning drain empties the battery in the expensive morning, and the cheap afternoon's PV and grid charge refill it to the target."""
+    """The day from 1.0 kWh: the cheap night grid-charges the battery to its target, the expensive morning's drain discharges it, and in the cheap afternoon PV recharges it while the grid tops up what that PV charge leaves short of the target."""
 
     def test_the_strategy_route_grid_charges_what_simulate_timestep_tou_does(self) -> None:
         inline = [result.grid_charge for result in _inline_day(_battery(1.0))]
