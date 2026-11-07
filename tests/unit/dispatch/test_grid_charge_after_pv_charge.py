@@ -48,11 +48,18 @@ def _demand_kw(minute: pd.Timestamp) -> float:
     return 0.4 + (3.5 if 6 <= h < 13 else 0.0) + (1.5 if 17 <= h < 20 else 0.0)
 
 
+_TOU = TOUOptimizedStrategy([(5, 13), (16, 20), (22, 24)])
+"""TOU dispatch whose peak hours are Economy 10's expensive hours, the minutes in which simulate_timestep_tou discharges the battery."""
+
 _STRATEGIES = [
-    pytest.param(TOUOptimizedStrategy([(5, 13), (16, 20), (22, 24)]), id="tou_optimized"),
-    pytest.param(PeakShavingStrategy(2.0), id="peak_shaving"),
+    pytest.param(_TOU, id="tou_optimized"),
+    pytest.param(PeakShavingStrategy(1.0), id="peak_shaving"),
 ]
-"""Both strategies that grid-charge in a cheap minute; the TOU peak hours are Economy 10's expensive hours. Both are stateless, so one instance serves every run."""
+"""Both strategies that grid-charge in a cheap minute. Both are stateless, so one instance serves every run.
+
+Peak shaving's 1.0 kW import limit has the morning drain discharge the battery to its floor, as _TOU does, so under both the
+cheap afternoon has minutes in which the grid charges the battery alongside PV.
+"""
 
 
 def _strategy_day(battery: Battery, strategy: DispatchStrategy) -> list[EnergyFlowResult]:
@@ -83,8 +90,7 @@ class TestTheMorningDrainDay:
 
     def test_the_strategy_route_grid_charges_what_simulate_timestep_tou_does(self) -> None:
         inline = [result.grid_charge for result in _inline_day(_battery(1.0))]
-        strategy = TOUOptimizedStrategy([(5, 13), (16, 20), (22, 24)])
-        routed = [result.grid_charge for result in _strategy_day(_battery(1.0), strategy)]
+        routed = [result.grid_charge for result in _strategy_day(_battery(1.0), _TOU)]
 
         assert sum(inline) == pytest.approx(5.045223, abs=1e-6)
         assert routed == pytest.approx(inline, abs=1e-9)
