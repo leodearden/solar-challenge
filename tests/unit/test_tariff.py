@@ -409,17 +409,20 @@ class TestTariffConfigGetRate:
         assert tariff.get_rate(pd.Timestamp("2024-01-15 23:30:00")) == 0.15
 
     @pytest.mark.parametrize(
-        "timestamp",
+        ("timestamp", "rate"),
         [
-            pytest.param(pd.Timestamp("2024-01-15 03:00"), id="naive-pd-timestamp"),
-            pytest.param(datetime(2024, 1, 15, 3, 0), id="naive-datetime"),
+            pytest.param(pd.Timestamp("2024-01-15 03:00"), 0.09, id="naive-pd-timestamp"),
+            pytest.param(datetime(2024, 1, 15, 3, 0), 0.09, id="naive-datetime"),
+            # 07:30 BST on 2024-06-21 is 06:30 UTC, a Night minute.
             pytest.param(
-                pd.Timestamp("2024-01-15 03:00", tz="Europe/London"), id="london-pd-timestamp"
+                pd.Timestamp("2024-06-21 07:30", tz="Europe/London"), 0.25, id="london-bst-07:30"
             ),
         ],
     )
-    def test_get_rate_reads_any_datetimes_wall_clock_minute(self, timestamp: datetime) -> None:
-        assert NIGHT_DAY_EVENING_TARIFF.get_rate(timestamp) == 0.09
+    def test_get_rate_reads_any_datetimes_wall_clock_minute(
+        self, timestamp: datetime, rate: float
+    ) -> None:
+        assert NIGHT_DAY_EVENING_TARIFF.get_rate(timestamp) == rate
 
     def test_a_tariff_with_a_gap_is_refused_at_construction(self):
         """No constructed tariff has a minute without a rate: a 09:00-17:00 period alone is refused."""
