@@ -15,12 +15,14 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
+    FleetRunner,
     FleetSummary,
     MultiSweepResults,
     aggregate_home_summaries,
     calculate_fleet_summary,
     calculate_home_summaries,
     collect_multi_sweep_results,
+    default_runner,
     simulate_fleet,
     simulate_fleet_iter,
     simulate_multi_sweep_iter,
@@ -607,6 +609,35 @@ def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
     multiprocessing.set_start_method(request.param, force=True)
     yield request.param
     multiprocessing.set_start_method(previous, force=True)
+
+
+class TestFleetRunnerPolicy:
+    """A FleetRunner's worker count is None or a whole number of at least 1, and default_runner() runs simulate_home in parallel over default_weather()."""
+
+    @pytest.mark.parametrize("max_workers", [0, -1, 1.5, True])
+    def test_a_worker_count_other_than_a_whole_number_of_at_least_one_is_refused_naming_it(
+        self, max_workers: object
+    ) -> None:
+        with pytest.raises(ValueError) as caught:
+            FleetRunner(weather=default_weather(), home_simulator=simulate_home, max_workers=max_workers)
+
+        assert "max_workers" in str(caught.value)
+        assert repr(max_workers) in str(caught.value)
+
+    @pytest.mark.parametrize("max_workers", [None, 3])
+    def test_no_worker_count_or_a_whole_number_of_at_least_one_is_kept(self, max_workers: int | None) -> None:
+        runner = FleetRunner(weather=default_weather(), home_simulator=simulate_home, max_workers=max_workers)
+
+        assert runner.max_workers == max_workers
+
+    @pytest.mark.usefixtures("bristol_june_tmy")
+    def test_the_default_runner_runs_simulate_home_in_parallel_over_the_default_weather(self) -> None:
+        runner = default_runner()
+
+        assert runner.home_simulator is simulate_home
+        assert runner.parallel is True
+        assert runner.max_workers is None
+        pd.testing.assert_frame_equal(runner.weather.get(Location.bristol()), default_weather().get(Location.bristol()))
 
 
 @pytest.mark.usefixtures("bristol_june_tmy")
