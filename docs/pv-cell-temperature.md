@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
 **Task:** #823, #1029, #1374
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -41,9 +41,12 @@
   `module_efficiency` gives (`_template_with_set_efficiency`). `create_pv_system`,
   `create_model_chain`, `simulate_pv_output` and `wired_dc_capacity_kw` check again
   at use, on the module they wire, a second enforcement point of the same check: both
-  run `_require_cells_noct_sam_can_heat`. Every one of pvlib's 21,535 CECMod rows lies
-  inside the domain (NOCT 41.2–63.7 °C, efficiency 0.036–0.227, no NaN `T_NOCT`, `A_c`
-  or `STC`), so only hand-built module dicts are refused.
+  run `_require_cells_noct_sam_can_heat`. It returns the `_NoctSamModule` it checked,
+  whose construction holds the domain, and use builds each array's NOCT-SAM parameters
+  from it, so the check and the wired parameters read one `T_NOCT`, `A_c` and rating.
+  Every one of pvlib's 21,535 CECMod rows lies inside the domain (NOCT 41.2–63.7 °C,
+  efficiency 0.036–0.227, no NaN `T_NOCT`, `A_c` or `STC`), so only hand-built module
+  dicts are refused.
 
   A value the module lacks is checked too, and the `ConfigurationError` names it as
   `DEFAULT_CEC_MODULE`'s and asks for the module's own (`_NoctSamInput`). So a module
