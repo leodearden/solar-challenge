@@ -879,7 +879,7 @@ _UPLOADED_FORM_GENERAL_FIELDS: dict[str, Any] = {
                 "load_distribution_type": "shuffled_pool",
                 "load_sp_entries": [{"value": 2900, "count": 6}, {"value": 4100, "count": 6}],
             },
-            id="distribution rows and min 0",
+            id="distribution-rows-and-min-0",
         ),
         pytest.param(
             {
@@ -892,7 +892,7 @@ _UPLOADED_FORM_GENERAL_FIELDS: dict[str, Any] = {
                 "battery_capacity_kwh": 0,
                 "annual_consumption_kwh": 3100,
             },
-            id="fixed values and uniform",
+            id="fixed-values-and-uniform",
         ),
     ],
 )
@@ -977,7 +977,7 @@ _RUN_EXPORT_YAML = scenario_yaml(
 @pytest.mark.parametrize(
     ("yaml_text", "refusal"),
     [
-        pytest.param(_RUN_EXPORT_YAML, "fleet_distribution", id="run-history export"),
+        pytest.param(_RUN_EXPORT_YAML, "fleet_distribution", id="run-history-export"),
         pytest.param(
             yaml.safe_dump(
                 {
@@ -989,7 +989,7 @@ _RUN_EXPORT_YAML = scenario_yaml(
                 }
             ),
             "fleet_distribution.pv.capacity_kw",
-            id="weighted_discrete without values",
+            id="weighted_discrete-without-values",
         ),
     ],
 )
