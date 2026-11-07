@@ -889,7 +889,7 @@ def _age0_baseline_outlay(
         calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
         for r in fleet_results.per_home_results
     ]
-    sim_days = summaries[0].simulation_days if summaries else 365
+    sim_days = summaries[0].simulation_days
     dist = bill_distribution(summaries, finance, sim_days)
     return dist.representative.total_outlay_gbp
 

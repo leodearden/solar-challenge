@@ -55,6 +55,7 @@ from solar_challenge.number_fields import (
     as_whole_number,
     read_field,
 )
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
@@ -479,6 +480,63 @@ DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 _ANNUALISATION_DAYS = 365
 #: Simulation periods shorter than this number of days trigger annualisation.
 _SHORT_PERIOD_THRESHOLD = 360
+
+
+# ---------------------------------------------------------------------------
+# The window a bill is computed over (D27 invariant 8)
+# ---------------------------------------------------------------------------
+
+
+def _summary_window(summary: "SummaryStatistics") -> SimulationWindow:
+    """The window *summary*'s totals cover.
+
+    Raises:
+        ValueError: If its window is None, which only a hand-built summary has,
+            naming calculate_summary, which sets it.
+    """
+    window = summary.window
+    if window is None:
+        raise ValueError(
+            "finance bills a summary's totals over the window they cover, and this SummaryStatistics' "
+            "window is None: build it with calculate_summary, which sets its window, or set window "
+            f"to the SimulationWindow its {summary.simulation_days} days cover"
+        )
+    return window
+
+
+def _require_summary_days(simulation_days: int, summary: "SummaryStatistics") -> None:
+    """Refuse a *simulation_days* other than *summary*'s own day count (INV-8).
+
+    Raises:
+        ValueError: Naming both day counts and the first and last day of the
+            summary's window; or as :func:`_summary_window` does.
+    """
+    window = _summary_window(summary)
+    if simulation_days != summary.simulation_days:
+        raise ValueError(
+            "a bill is computed over its summary's own days (INV-8): "
+            f"got simulation_days={simulation_days!r} for a summary of {summary.simulation_days} days, "
+            f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
+        )
+
+
+def _one_window(summaries: Sequence["SummaryStatistics"]) -> SimulationWindow:
+    """The one window all of *summaries*, at least one, cover.
+
+    Raises:
+        ValueError: If a summary's window differs from the first's, naming the
+            first such position and both windows; or as :func:`_summary_window`
+            does.
+    """
+    windows = [_summary_window(summary) for summary in summaries]
+    first = windows[0]
+    for position, window in enumerate(windows):
+        if window != first:
+            raise ValueError(
+                "summaries billed or projected together cover one window: "
+                f"the summary at position {position} covers {window!r}, where the first covers {first!r}"
+            )
+    return first
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +984,21 @@ def householder_bill(
 
     Returns:
         A fully computed, frozen BillBreakdown (delegated to :func:`bill`).
+
+    Raises:
+        ValueError: If the summary has no window; if *simulation_days* is not
+            the summary's own day count (INV-8), naming both; or if
+            *annual_self_consumption_kwh* is not from 0 to the summary's
+            ``total_demand_kwh``, naming both, NaN included.
     """
+    _require_summary_days(simulation_days, summary)
+    if not 0.0 <= annual_self_consumption_kwh <= summary.total_demand_kwh:
+        raise ValueError(
+            "householder_bill's annual_self_consumption_kwh is the home's own-use over its summary's "
+            "window, so it lies from 0 to the window's total_demand_kwh: "
+            f"got annual_self_consumption_kwh={annual_self_consumption_kwh!r}, "
+            f"total_demand_kwh={summary.total_demand_kwh!r}"
+        )
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
     override = finance.self_consumption_override
 
@@ -1278,10 +1350,15 @@ def bill_distribution(
         A BillDistribution with representative and per-home statistics.
 
     Raises:
-        ValueError: If ``summaries`` is empty.
+        ValueError: If ``summaries`` is empty; if a summary has no window; if
+            the summaries cover different windows, naming the first position
+            whose window differs and both windows; or if *simulation_days* is
+            not the summaries' own day count (INV-8), naming both.
     """
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
+    _one_window(summaries)
+    _require_summary_days(simulation_days, summaries[0])
 
     bills = [
         householder_bill(
