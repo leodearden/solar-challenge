@@ -55,7 +55,7 @@ COP_CURVES: Mapping[HeatPumpType, CopCurve] = MappingProxyType({
 def _refuse_unknown_heat_pump_type(heat_pump_type: object) -> None:
     """Raise ConfigurationError, naming HEAT_PUMP_TYPES, unless heat_pump_type is one of them."""
     if heat_pump_type not in HEAT_PUMP_TYPES:
-        raise ConfigurationError(f"Heat pump type must be one of {HEAT_PUMP_TYPES}, got {heat_pump_type!r}")
+        raise ConfigurationError.must_be("Heat pump type", f"one of {HEAT_PUMP_TYPES}", got=heat_pump_type)
 
 
 # Base temperature for heating degree day calculations

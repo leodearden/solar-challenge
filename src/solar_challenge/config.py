@@ -1704,7 +1704,7 @@ _TRUNCATED_COUNTS: frozenset[str] = frozenset({"ev.arrival_hour", "ev.departure_
 def _refuse_unless_finite(value: SpecValue, path: str) -> None:
     """Refuse *value*, a count of the field at *path* to convert, if it is an infinity or a NaN, naming *path* and the value."""
     if isinstance(value, float) and not math.isfinite(value):
-        raise ConfigurationError(f"{path} must be a finite number, got {value!r}")
+        raise ConfigurationError.must_be(path, "a finite number", got=value)
 
 
 def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
