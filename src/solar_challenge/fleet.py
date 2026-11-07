@@ -343,6 +343,10 @@ class FleetRunner:
         Each distinct location's weather is fetched once, in this process, before any home runs, and
         each home's job carries its own location's alone. progress, when given, is told in this process
         after each home finishes: (homes finished, homes in the call).
+
+        A home that fails re-raises its own exception, with a note naming the home and its fleet; an
+        exception progress raises propagates as raised. Either, or closing the iterator early, cancels
+        the homes not yet started, and the call ends once the homes already running have finished.
         """
         return _simulate_fleets(self, fleets, start_date, end_date, progress)
 
@@ -425,22 +429,45 @@ def _finished_homes(
     """Each job with its home's results as the home finishes: in turn in this process, or in one process pool when runner is parallel and there are two jobs or more.
 
     A pool's job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and
-    its weather provider are never pickled.
+    its weather provider are never pickled. A home's exception carries a note naming the home. In turn, no later home
+    starts once the generator stops; a pool that stops, for whatever exception or when the generator is closed,
+    cancels the homes not yet started and waits for those running.
     """
     if not runner.parallel or len(jobs) < 2:
         for job in jobs:
-            yield job, runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
+            with _naming_the_home(job):
+                results = runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
+            yield job, results
         return
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
-            ): job
-            for job in jobs
-        }
-        for future in as_completed(futures):
-            yield futures[future], future.result()
+        try:
+            futures = {
+                pool.submit(
+                    runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
+                ): job
+                for job in jobs
+            }
+            for future in as_completed(futures):
+                job = futures[future]
+                with _naming_the_home(job):
+                    results = future.result()
+                yield job, results
+        except BaseException:
+            pool.shutdown(cancel_futures=True)
+            raise
+
+
+@contextlib.contextmanager
+def _naming_the_home(job: _HomeJob) -> Iterator[None]:
+    """Re-raise an exception the block raises, that same object, with a note naming job's home and fleet."""
+    try:
+        yield
+    except Exception as error:
+        error.add_note(
+            f"simulating home {job.home_index} ({job.home.name!r}) of fleet {job.fleet_index} ({job.fleet.name!r})"
+        )
+        raise
 
 
 def _simulate_fleets(
