@@ -6,6 +6,7 @@ import math
 import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from numbers import Real
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -710,7 +711,11 @@ def _arrays(
 
 
 def _module_rating_w(module_params: Mapping[str, float]) -> float:
-    """Each module's rated DC power in watts, a finite number above 0: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC."""
+    """Each module's rated DC power in watts, a finite number above 0: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC.
+
+    The rating must already be a number: text that float() reads as one would pass
+    as_finite_float, but pvlib reads the module's own pdc0.
+    """
     if _is_pvwatts_module(module_params):
         key = "pdc0"
     elif "STC" in module_params:
@@ -721,7 +726,10 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
             "module, nor an STC rating, so the modules cannot be counted; add STC, the "
             "module's DC power in W at standard test conditions"
         )
-    return as_finite_float(module_params[key], f"Module parameter {key}", POSITIVE)
+    field, rating = f"Module parameter {key}", module_params[key]
+    if not isinstance(rating, Real):
+        raise ConfigurationError.must_be(field, "a finite number", got=rating)
+    return as_finite_float(rating, field, POSITIVE)
 
 
 _NOCT_TEST_AIR_C = 20.0

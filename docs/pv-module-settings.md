@@ -50,9 +50,9 @@
       naming the bracket and the reach (`_require_adjust_reaches`). Construction
       evaluates only the bracket's two ends, not the solve;
     - then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor `STC`),
-      or whose rating is not a finite number above 0, naming its key and value
-      (`_module_rating_w`), or outside NOCT-SAM's domain once a set efficiency's area
-      is applied (`_template_with_set_efficiency`), through
+      or whose rating is not a finite number above 0, text that reads as one included,
+      naming its key and value (`_module_rating_w`), or outside NOCT-SAM's domain once
+      a set efficiency's area is applied (`_template_with_set_efficiency`), through
       `_require_cells_noct_sam_can_heat`, which use runs too
       ([pv-cell-temperature.md](pv-cell-temperature.md)).
   - At use (`create_pv_system`, and so every chain builder and `wired_dc_capacity_kw`):

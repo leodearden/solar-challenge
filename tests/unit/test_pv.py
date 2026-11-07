@@ -915,19 +915,21 @@ class TestWiredDcCapacity:
             pytest.param(pvwatts_300_w_module, "pdc0", -250.0, id="pdc0-negative"),
             pytest.param(pvwatts_300_w_module, "pdc0", math.nan, id="pdc0-nan"),
             pytest.param(pvwatts_300_w_module, "pdc0", math.inf, id="pdc0-inf"),
+            pytest.param(pvwatts_300_w_module, "pdc0", "300", id="pdc0-text"),
             pytest.param(default_module, "STC", 0.0, id="STC-0"),
             pytest.param(default_module, "STC", -400.0, id="STC-negative"),
             pytest.param(default_module, "STC", math.nan, id="STC-nan"),
+            pytest.param(default_module, "STC", "400.428", id="STC-text"),
         ],
     )
     def test_a_rating_that_is_not_a_finite_number_above_0_is_refused_at_construction_and_at_use(
         self,
         build: Callable[[], dict[str, float]],
         key: str,
-        value: float,
+        value: float | str,
         module_efficiency: float | None,
     ) -> None:
-        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it."""
+        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as the module's own rating, since pvlib reads the module's own pdc0."""
         module = build()
         config = PVConfig(
             capacity_kw=4.0, custom_module_params=module, module_efficiency=module_efficiency

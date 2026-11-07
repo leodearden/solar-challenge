@@ -17,7 +17,8 @@
     `STC`, the same rating that counts the modules and gives the wired DC.
     `_module_rating_w` refuses a rating that is not a finite number above 0 with a
     `ConfigurationError` naming its key and value, at construction and at use, before
-    anything divides by it.
+    anything divides by it. It refuses text even when the text reads as such a number,
+    since pvlib reads the module's own `pdc0`.
   - So `DEFAULT_CEC_MODULE` runs at a NOCT of 45.1 °C and an efficiency of
     400.428 / (1.99 × 1000) = 0.2012.
 - **A missing key takes the default module's value.** A module that lacks `T_NOCT` or
