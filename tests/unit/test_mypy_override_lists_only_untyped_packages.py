@@ -12,11 +12,21 @@ The check looks for the markers through which mypy reads a package's own types; 
 directory counts even when its py.typed marks it partial, though mypy then reads the modules it omits as untyped.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+
+def _untyped_override_entries(pyproject: Mapping[str, Any]) -> list[str]:
+    """Return the module entries, as written, of the [[tool.mypy.overrides]] tables that set ignore_missing_imports.
+
+    mypy reads a table's module as one pattern or a list of them, so a string is one entry.
+    """
+    overrides = pyproject["tool"]["mypy"].get("overrides", [])
+    modules = [table["module"] for table in overrides if table.get("ignore_missing_imports", False)]
+    return [entry for module in modules for entry in ([module] if isinstance(module, str) else list(module))]
 
 
 def _typing_markers(package: str, search_dirs: Iterable[Path]) -> list[Path]:
