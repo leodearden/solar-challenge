@@ -75,6 +75,19 @@ _XSHP_HEAT_PUMP_TYPE_REFUSAL = (
 )
 
 
+def _proportional_to(source: str, **spec: float) -> dict[str, Any]:
+    """A proportional_to spec scaling *source*, with *spec*'s multiplier or offset."""
+    return {"type": "proportional_to", "source": source, **spec}
+
+
+def _source_refusal(path: str, source: str, sources: list[str]) -> str:
+    """The refusal of *source*, the source of the proportional_to at *path*, where *sources*, in draw order, are those it may name."""
+    return (
+        f"Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
+        f"for every home that draws it, one of {sources!r}"
+    )
+
+
 def _pickle_round_trip(fleet: FleetDistributionConfig) -> FleetDistributionConfig:
     """*fleet* restored from its pickle."""
     clone: FleetDistributionConfig = pickle.loads(pickle.dumps(fleet))
@@ -915,6 +928,164 @@ class TestASpecIsOneItsFieldsKindDraws:
             FleetDistributionConfig(n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), **components})
 
         assert str(construction_refusal.value) == refusal
+
+
+class TestAProportionalToSourceIsDrawnEarlierForEveryHomeThatDrawsIt:
+    """A proportional_to's source is a number or count field drawn earlier for every home that draws the dependent: one pv or load draws, or one the dependent's own component draws before it; the fleet is refused otherwise as it is read, whatever it draws."""
+
+    @pytest.mark.parametrize(
+        ("sections", "path", "source", "sources"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": _proportional_to("pv.capacity")}},
+                "fleet_distribution.battery.capacity_kwh",
+                "pv.capacity",
+                ["pv.capacity_kw"],
+                id="a path no field has",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "azimuth": _proportional_to("pv.tilt"), "tilt": 30}},
+                "fleet_distribution.pv.azimuth",
+                "pv.tilt",
+                ["pv.capacity_kw"],
+                id="a later field of the same component",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": _proportional_to("battery.capacity_kwh")}, "battery": {"capacity_kwh": 5.0}},
+                "fleet_distribution.pv.tilt",
+                "battery.capacity_kwh",
+                ["pv.capacity_kw"],
+                id="a later component",
+            ),
+            pytest.param(
+                {
+                    "battery": {"capacity_kwh": 5.0, "max_charge_kw": 2.0},
+                    "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": _proportional_to("battery.max_charge_kw")},
+                },
+                "fleet_distribution.heat_pump.thermal_capacity_kw",
+                "battery.max_charge_kw",
+                ["pv.capacity_kw"],
+                id="another optional component, though every home has it",
+            ),
+            pytest.param(
+                {"heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": _proportional_to("heat_pump.heat_pump_type")}},
+                "fleet_distribution.heat_pump.thermal_capacity_kw",
+                "heat_pump.heat_pump_type",
+                ["pv.capacity_kw"],
+                id="a choice",
+            ),
+            pytest.param(
+                {
+                    "load": {"use_stochastic": False},
+                    "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": _proportional_to("load.use_stochastic")},
+                },
+                "fleet_distribution.heat_pump.thermal_capacity_kw",
+                "load.use_stochastic",
+                ["pv.capacity_kw"],
+                id="a flag",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": _proportional_to("pv.azimuth")}},
+                "fleet_distribution.pv.tilt",
+                "pv.azimuth",
+                ["pv.capacity_kw"],
+                id="a field the fleet does not draw",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": _proportional_to("pv.tilt")}},
+                "fleet_distribution.pv.tilt",
+                "pv.tilt",
+                ["pv.capacity_kw"],
+                id="itself",
+            ),
+            pytest.param(
+                {
+                    "pv": {"capacity_kw": 4.0, "tilt": 30.0},
+                    "load": {"annual_consumption_kwh": 3400.0, "household_occupants": 3},
+                    "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to("ev.departure_hour"), "departure_hour": 8},
+                },
+                "fleet_distribution.ev.arrival_hour",
+                "ev.departure_hour",
+                ["pv.capacity_kw", "pv.tilt", "load.annual_consumption_kwh", "load.household_occupants"],
+                id="a later field of its own component, beside the fields drawn earlier for every home",
+            ),
+        ],
+    )
+    def test_a_source_not_drawn_earlier_for_every_home_is_refused_at_read_naming_the_path_the_source_and_the_valid_sources(
+        self, sections: dict[str, Any], path: str, source: str, sources: list[str]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_fleet_distribution(2, **{"pv": {"capacity_kw": 4.0}, **sections})
+
+        assert str(refusal.value) == _source_refusal(path, source, sources)
+
+    def test_a_code_built_fleet_is_refused_as_a_parsed_one_is(self) -> None:
+        with pytest.raises(ConfigurationError) as parser_refusal:
+            _parsed_fleet_distribution(
+                2, pv={"capacity_kw": 4.0}, battery={"capacity_kwh": _proportional_to("pv.capacity")}
+            )
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(
+                n_homes=2,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                battery=ComponentDistribution({"capacity_kwh": ProportionalDistribution(source="pv.capacity")}),
+            )
+
+        assert str(construction_refusal.value) == str(parser_refusal.value)
+
+    @pytest.mark.parametrize(
+        ("sections", "read", "expected"),
+        [
+            pytest.param(
+                {"battery": {"capacity_kwh": _proportional_to("pv.capacity_kw", multiplier=2.0)}},
+                lambda home: home.battery_config.capacity_kwh,
+                8.0,
+                id="battery.capacity_kwh from pv.capacity_kw",
+            ),
+            pytest.param(
+                {"battery": {"capacity_kwh": 5.0, "max_charge_kw": _proportional_to("battery.capacity_kwh", multiplier=0.5)}},
+                lambda home: home.battery_config.max_charge_kw,
+                2.5,
+                id="battery.max_charge_kw from battery.capacity_kwh",
+            ),
+            pytest.param(
+                {
+                    "load": {"annual_consumption_kwh": 3600.0},
+                    "heat_pump": {
+                        "heat_pump_type": "ASHP",
+                        "thermal_capacity_kw": _proportional_to("load.annual_consumption_kwh", multiplier=0.002),
+                    },
+                },
+                lambda home: home.heat_pump_config.thermal_capacity_kw,
+                7.2,
+                id="heat_pump.thermal_capacity_kw from load.annual_consumption_kwh",
+            ),
+            pytest.param(
+                {"load": {"household_occupants": _proportional_to("pv.capacity_kw", multiplier=0.75)}},
+                lambda home: home.load_config.household_occupants,
+                3,
+                id="load.household_occupants from pv.capacity_kw",
+            ),
+            pytest.param(
+                {
+                    "load": {"annual_consumption_kwh": 3600.0},
+                    "ev": {"charger_type": "7kW", "arrival_hour": _proportional_to("load.annual_consumption_kwh", multiplier=0.005)},
+                },
+                lambda home: home.ev_config.arrival_hour,
+                18,
+                id="ev.arrival_hour from load.annual_consumption_kwh",
+            ),
+        ],
+    )
+    def test_a_source_drawn_earlier_for_every_home_that_draws_it_is_accepted(
+        self, sections: dict[str, Any], read: Callable[[HomeConfig], object], expected: object
+    ) -> None:
+        """Each home's value is the multiplier times the value it drew earlier for the source."""
+        fleet = _parsed_fleet_distribution(2, **{"pv": {"capacity_kw": 4.0}, **sections})
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [read(home) for home in homes] == [expected, expected]
 
 
 class TestANullSettingReadsAsAbsent:

@@ -417,6 +417,41 @@ home:
         assert f"ERROR {refusal}" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
+        ("document", "path", "source"),
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: {type: proportional_to, source: pv.capacity}}\n",
+                "fleet_distribution.battery.capacity_kwh",
+                "pv.capacity",
+                id="a path no field has",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0, tilt: {type: proportional_to, source: battery.capacity_kwh}}\n"
+                "  battery: {capacity_kwh: 5.0}\n",
+                "fleet_distribution.pv.tilt",
+                "battery.capacity_kwh",
+                id="a field of a later component",
+            ),
+        ],
+    )
+    def test_a_fleet_whose_proportional_to_source_is_not_drawn_earlier_is_refused_at_read_naming_the_path_and_sources(
+        self, tmp_path: Path, document: str, path: str, source: str
+    ) -> None:
+        """The refusal names the dependent's path, its source and the sources it may name, and no home."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        assert (
+            f"ERROR Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
+            "for every home that draws it, one of ['pv.capacity_kw']"
+        ) in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
         "document",
         [
             pytest.param("pv: {capacity_kw: 4.0}\n", id="flat-home"),
@@ -426,6 +461,11 @@ home:
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
                 id="fleet-distribution",
+            ),
+            pytest.param(
+                "fleet_distribution: {n_homes: 2, pv: {capacity_kw: 4.0, "
+                "tilt: {type: proportional_to, source: pv.capacity_kw, multiplier: 5}}}\n",
+                id="fleet-distribution-proportional-to-an-earlier-field",
             ),
             pytest.param(_SWEEP_FLEET, id="fleet-sweep"),
             pytest.param(
