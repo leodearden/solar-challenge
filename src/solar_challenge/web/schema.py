@@ -54,6 +54,7 @@ from solar_challenge.web.stored_runs import (
     RUN_DOCUMENT_STEPS,
     RUN_FORMAT_VERSION,
     DroppedValue,
+    PartlyBroughtForwardRun,
     RewrittenValue,
     RunDocumentStep,
     UnmigratedRun,
@@ -176,36 +177,49 @@ class MigrationReport:
 class RunFilesBroughtForward:
     """The run files a refused part of a migration, a step or the catch-up after the steps, brought forward before its fault, which stay so.
 
-    runs are the id of each run whose files it brought forward, in order of id, dropped_values
-    each value that is not null it dropped from them, and rewritten_values each value it
-    rewrote in them. A migration run again leaves those files as they are, as they are in that
-    format already, so this is the one report of those values.
+    runs are the id of each run whose files it brought forward, in order of id, and
+    partly_brought_forward_runs each run whose files it brought forward only in part when the
+    fault stopped it, naming the documents it wrote. dropped_values are each value that is not
+    null it dropped from those files, and rewritten_values each value it rewrote in them. A
+    migration run again leaves the files of runs as they are, as they are in that format
+    already; it brings a run brought forward in part forward again, but the steps change nothing
+    in the documents already written. So this is the one report of those values.
 
     Raises:
-        ValueError: A value is of a run *runs* does not name; the message names that run and
-            *runs*.
+        ValueError: A value is of a run *runs* does not name, and not in a document a run
+            brought forward in part names; the message names its run and document, *runs*, and
+            the documents of each run brought forward in part.
     """
 
     runs: tuple[str, ...] = ()
     dropped_values: tuple[DroppedValue, ...] = ()
     rewritten_values: tuple[RewrittenValue, ...] = ()
+    partly_brought_forward_runs: tuple[PartlyBroughtForwardRun, ...] = ()
 
     def __post_init__(self) -> None:
+        written_in_part = {(run.run_id, document) for run in self.partly_brought_forward_runs for document in run.documents}
         values: tuple[DroppedValue | RewrittenValue, ...] = (*self.dropped_values, *self.rewritten_values)
         for value in values:
-            if value.run_id not in self.runs:
+            if value.run_id not in self.runs and (value.run_id, value.document) not in written_in_part:
+                in_part = {run.run_id: list(run.documents) for run in self.partly_brought_forward_runs}
                 raise ValueError(
                     f"A report of the run files brought forward before a fault names the runs {list(self.runs)}, "
-                    f"so it cannot hold a value of run {value.run_id!r}"
+                    f"and the documents of the runs brought forward in part {in_part}, "
+                    f"so it cannot hold a value of run {value.run_id!r} in {value.document}"
                 )
 
     def __str__(self) -> str:
-        """The report as `solar-challenge web migrate` prints it: each run, then each value dropped and each value rewritten; nothing at all when it names no run."""
+        """The report as `solar-challenge web migrate` prints it: each run, each run brought forward in part, then each value dropped and each value rewritten; nothing at all when it names no run."""
         return "\n".join(
             [
                 *_listed(
                     "Before the fault, brought forward the files of each run below, which stay so:",
                     [f"run {run_id!r}" for run_id in self.runs],
+                ),
+                *_listed(
+                    "Before the fault, brought forward only the documents named of each run below, which stay so; "
+                    "its format.json still names its older format, so a migration run again brings the rest of it forward:",
+                    self.partly_brought_forward_runs,
                 ),
                 *_values_listed(self.dropped_values, self.rewritten_values),
             ]
@@ -221,7 +235,12 @@ def _values_listed(dropped: Sequence[DroppedValue], rewritten: Sequence[Rewritte
 
 
 def _listed(
-    heading: str, items: Sequence[DroppedValue] | Sequence[RewrittenValue] | Sequence[UnmigratedRun] | Sequence[str]
+    heading: str,
+    items: Sequence[DroppedValue]
+    | Sequence[RewrittenValue]
+    | Sequence[UnmigratedRun]
+    | Sequence[PartlyBroughtForwardRun]
+    | Sequence[str],
 ) -> list[str]:
     """*heading*, then each of *items* on a line of its own; no line at all when there is no item."""
     return [heading, *(f"  {item}" for item in items)] if items else []

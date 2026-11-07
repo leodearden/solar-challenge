@@ -716,6 +716,32 @@ class UnmigratedRun:
 
 
 @dataclass(frozen=True)
+class PartlyBroughtForwardRun:
+    """A stored run whose files a run-document step brought forward only in part, before a fault stopped it.
+
+    documents names each of its documents written in the new format, in the order written, while
+    its format.json still names the format it was in.
+
+    Raises:
+        ValueError: documents names no document; the message names the run.
+    """
+
+    run_id: str
+    documents: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.documents:
+            raise ValueError(
+                f"A run brought forward in part names each document of it that was written, so run {self.run_id!r} "
+                "cannot name none"
+            )
+
+    def __str__(self) -> str:
+        """The run as `solar-challenge web migrate` reports it: the run, then each document written, in order."""
+        return f"run {self.run_id!r}: {', '.join(self.documents)}"
+
+
+@dataclass(frozen=True)
 class StepResult:
     """What run-document steps made of a run's documents: the documents, brought forward, each value they dropped that is not null, and each value they rewrote."""
 
