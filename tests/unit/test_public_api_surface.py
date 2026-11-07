@@ -349,7 +349,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "peak_rate": "cached_property (self) -> float",
         "mean_period_rate": "cached_property (self) -> float",
         "cheap_minutes_of_day": "cached_property (self) -> frozenset[int]",
-        "get_rate": "(self, timestamp: Timestamp) -> float",
+        "get_rate": "(self, timestamp: datetime) -> float",
         "is_cheap_at": "(self, timestamp: datetime) -> bool",
         "flat_rate": "classmethod (cls, rate_per_kwh: float, name: str = '') -> TariffConfig",
         "economy_7": "classmethod (cls, off_peak_rate: float = 0.09, peak_rate: float = 0.25, off_peak_start: str = '00:30', off_peak_end: str = '07:30') -> TariffConfig",
@@ -358,7 +358,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "TariffPeriod": {
         "get_start_time": "(self) -> time",
         "get_end_time": "(self) -> time",
-        "matches_time": "(self, timestamp: Timestamp) -> bool",
+        "matches_time": "(self, timestamp: datetime) -> bool",
     },
     # --- gridservices (gridservices.py) ---
     "GridServicesRateBands": {

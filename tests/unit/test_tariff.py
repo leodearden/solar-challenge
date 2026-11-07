@@ -247,6 +247,12 @@ class TestTariffPeriodTimeMatching:
         timestamp = pd.Timestamp("2024-01-15 17:01:00")
         assert period.matches_time(timestamp) is False
 
+    def test_matches_time_reads_a_plain_datetimes_wall_clock_minute(self) -> None:
+        period = TariffPeriod("09:00", "17:00", 0.25, "Day")
+
+        assert period.matches_time(datetime(2024, 1, 15, 12, 30)) is True
+        assert period.matches_time(datetime(2024, 1, 15, 17, 0)) is False
+
 
 class TestTariffPeriodMidnightCrossing:
     """Test periods that cross midnight."""
@@ -370,6 +376,15 @@ class TestTariffConfigValidation:
             TariffConfig(periods=(period,))
 
 
+NIGHT_DAY_EVENING_TARIFF = TariffConfig(
+    periods=(
+        TariffPeriod("00:00", "07:00", 0.09, "Night"),
+        TariffPeriod("07:00", "23:00", 0.25, "Day"),
+        TariffPeriod("23:00", "00:00", 0.15, "Evening"),
+    )
+)
+
+
 class TestTariffConfigGetRate:
     """Test getting rates for timestamps."""
 
@@ -384,12 +399,7 @@ class TestTariffConfigGetRate:
 
     def test_get_rate_multiple_periods(self):
         """get_rate returns correct rate from multiple periods."""
-        periods = (
-            TariffPeriod("00:00", "07:00", 0.09, "Night"),
-            TariffPeriod("07:00", "23:00", 0.25, "Day"),
-            TariffPeriod("23:00", "00:00", 0.15, "Evening"),
-        )
-        tariff = TariffConfig(periods=periods)
+        tariff = NIGHT_DAY_EVENING_TARIFF
 
         # Night rate
         assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.09
@@ -397,6 +407,22 @@ class TestTariffConfigGetRate:
         assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == 0.25
         # Evening rate
         assert tariff.get_rate(pd.Timestamp("2024-01-15 23:30:00")) == 0.15
+
+    @pytest.mark.parametrize(
+        ("timestamp", "rate"),
+        [
+            pytest.param(pd.Timestamp("2024-01-15 03:00"), 0.09, id="naive-pd-timestamp"),
+            pytest.param(datetime(2024, 1, 15, 3, 0), 0.09, id="naive-datetime"),
+            # 07:30 BST on 2024-06-21 is 06:30 UTC, a Night minute.
+            pytest.param(
+                pd.Timestamp("2024-06-21 07:30", tz="Europe/London"), 0.25, id="london-bst-07:30"
+            ),
+        ],
+    )
+    def test_get_rate_reads_any_datetimes_wall_clock_minute(
+        self, timestamp: datetime, rate: float
+    ) -> None:
+        assert NIGHT_DAY_EVENING_TARIFF.get_rate(timestamp) == rate
 
     def test_a_tariff_with_a_gap_is_refused_at_construction(self):
         """No constructed tariff has a minute without a rate: a 09:00-17:00 period alone is refused."""

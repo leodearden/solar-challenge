@@ -128,7 +128,7 @@ class TariffPeriod:
         """Get end time as time object."""
         return self._parsed_end
 
-    def matches_time(self, timestamp: pd.Timestamp) -> bool:
+    def matches_time(self, timestamp: datetime) -> bool:
         """Whether the timestamp's wall-clock minute is one this period covers."""
         return _minute_of_day(timestamp) in self._minutes_covered
 
@@ -228,11 +228,11 @@ class TariffConfig:
             if rate < self.peak_rate and rate <= weighted_mean_rate
         )
 
-    def get_rate(self, timestamp: pd.Timestamp) -> float:
+    def get_rate(self, timestamp: datetime) -> float:
         """Get the electricity rate at the timestamp's wall-clock minute, from the minute table built at construction.
 
         Args:
-            timestamp: Timestamp to get rate for
+            timestamp: Any datetime, a pd.Timestamp included, whose wall-clock minute is priced
 
         Returns:
             Rate in £/kWh
