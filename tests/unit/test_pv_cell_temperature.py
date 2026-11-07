@@ -164,6 +164,11 @@ def _one_refusal_at_construction_and_at_use(config: PVConfig) -> str:
     return message
 
 
+def _default_area_in_a_refusal() -> str:
+    """How a refusal names the A_c that DEFAULT_CEC_MODULE gives a module with none."""
+    return f"A_c={default_module()['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
+
+
 class TestAModuleWhoseCellsCannotHeatIsRefused:
     """NOCT-SAM heats a sunlit cell above the air only for a T_NOCT above NOCT's 20 °C test air and an efficiency below its 0.9 transmittance-absorptance."""
 
@@ -195,17 +200,25 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         module["pdc0"] = 4000.0
 
         message = _one_refusal_at_construction_and_at_use(config)
-        default_area = f"A_c={default_module()['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
-        assert default_area in message, message
+        assert _default_area_in_a_refusal() in message, message
         assert "Give the module its own A_c" in message, message
 
-    def test_a_set_module_efficiency_gives_such_a_module_its_area(self) -> None:
-        """A module_efficiency of 0.2 spreads the same 4000 W over 20 m², so the module is in NOCT-SAM's domain at construction as at use."""
+
+class TestASetModuleEfficiencyGivesTheCheckedArea:
+    """Construction checks the module at the area A_c over which a set module_efficiency spreads its rating, rating / (efficiency × 1000 W/m²), the area its arrays are wired with."""
+
+    def test_instead_of_the_default_modules_to_a_module_with_no_area(self) -> None:
+        """A 4000 W module with no A_c would take DEFAULT_CEC_MODULE's 1.99 m², an efficiency of 2.0 that construction refuses; a module_efficiency of 0.2 spreads its 4000 W over 20 m², so construction accepts it and its cells run at 0.2."""
         config = PVConfig(
             capacity_kw=4.0,
             custom_module_params={"pdc0": 4000.0, "gamma_pdc": -0.004},
             module_efficiency=0.2,
         )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            dataclasses.replace(config, module_efficiency=None)
+        message = str(refusal.value)
+        assert _default_area_in_a_refusal() in message, message
 
         for array in create_pv_system(config).arrays:
             assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(0.2)
