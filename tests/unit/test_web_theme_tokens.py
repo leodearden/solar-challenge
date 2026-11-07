@@ -15,7 +15,6 @@ them into COLOUR_PALETTE when it is imported, through theme_tokens.chart_colour_
 * A hue edit reaches every role that names it, and the figures that draw those roles.
 """
 
-import dataclasses
 import json
 import re
 from collections.abc import Callable
@@ -28,6 +27,7 @@ pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.home import calculate_summary
 from solar_challenge.web import charts
+from solar_challenge.web.storage import run_headline
 from solar_challenge.web.theme_tokens import chart_colour_palette
 from tests._dashboard_sources import (
     FAVICON_BUILDER_KEY,
@@ -259,8 +259,8 @@ def test_a_hue_edit_recolours_exactly_the_roles_that_name_the_hue(amber_recolour
     assert _SHIPPED_AMBER not in amber_recoloured.values()
 
 
-def _a_days_summary() -> dict[str, Any]:
-    return dataclasses.asdict(calculate_summary(make_sim_results(days=1)))
+def _a_days_compared_run() -> charts.ComparedRun:
+    return charts.ComparedRun("Run A", run_headline(calculate_summary(make_sim_results(days=1))))
 
 
 @pytest.mark.parametrize(
@@ -271,7 +271,7 @@ def _a_days_summary() -> dict[str, Any]:
             lambda: charts.seasonal_comparison(make_sim_results()).content, "Summer (Jun-Aug)", "marker", id="summer"
         ),
         pytest.param(
-            lambda: charts.comparison_bar_chart([_a_days_summary()], ["Run A"]).content,
+            lambda: charts.comparison_bar_chart([_a_days_compared_run()]).content,
             "Run A",
             "marker",
             id="comparison_run_1",
