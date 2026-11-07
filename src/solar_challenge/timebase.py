@@ -90,7 +90,7 @@ class SimulationWindow:
     timezone: str | None = None
 
     def __post_init__(self) -> None:
-        """Refuse a first_day or last_day that is not exactly a date, and a cadence that is not exactly a timedelta, a pd.Timestamp, a datetime or a pd.Timedelta among them, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
+        """Refuse a first_day or last_day that is not exactly a date, such as a pd.Timestamp or a datetime, and a cadence that is not exactly a timedelta, such as a pd.Timedelta, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
         _require_exactly(date, "first_day", self.first_day)
         _require_exactly(date, "last_day", self.last_day)
         _require_exactly(timedelta, "cadence", self.cadence)
