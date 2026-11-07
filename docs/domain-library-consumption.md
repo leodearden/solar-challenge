@@ -185,9 +185,10 @@ import solar_challenge
 solar_challenge.set_weather_cache(my_test_cache)
 ```
 
-The fleet simulators in `solar_challenge.fleet` fetch each distinct home location's
-weather once, in the calling process, from `weather.default_weather()`, which reads the
-cache `set_weather_cache` installs, else `WeatherCache()`. Each worker job then carries a
+`fleet.FleetRunner` fetches each distinct home location's weather once per call, in the
+calling process, through its weather provider. `fleet.default_runner()`'s provider is
+`weather.default_weather()`, which reads the cache `set_weather_cache` installs, else
+`WeatherCache()`. Each worker job then carries a
 `PrefetchedWeather` holding its own home's location alone, so an injected cache serves a
 parallel fleet under any multiprocessing start method, and a worker reads no cache and
 no network.
