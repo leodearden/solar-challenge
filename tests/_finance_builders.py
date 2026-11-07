@@ -26,6 +26,8 @@ result on a default home unless ``homes=`` is given.
 
 The window a result covers is ``make_window(days=..., first_day=...)`` of the
 same arguments, which a hand-built ``SummaryStatistics`` names as its window.
+make_scenario's period is ``make_period()``, the default window's dates, so a
+builder scenario's ``simulate`` is asked for the window its default results cover.
 
 """
 from __future__ import annotations
@@ -94,6 +96,17 @@ def make_sized_home(
     )
 
 
+def make_window(*, days: int = 365, first_day: date = date(2021, 1, 1)) -> SimulationWindow:
+    """The hourly Europe/London window over *days* local dates from *first_day*, both counted."""
+    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), timedelta(hours=1), "Europe/London")
+
+
+def make_period() -> SimulationPeriod:
+    """The SimulationPeriod over make_window()'s local dates: the year make_sim_results covers by default."""
+    window = make_window()
+    return SimulationPeriod(start_date=window.first_day.isoformat(), end_date=window.last_day.isoformat())
+
+
 def make_scenario(
     *,
     n_homes: int = 1,
@@ -101,7 +114,7 @@ def make_scenario(
     battery_config: BatteryConfig | None = None,
     finance: FinanceConfig | None = None,
 ) -> ScenarioConfig:
-    """A 2020 scenario of *n_homes* make_home_config homes, each with *battery_config*.
+    """A scenario over make_period() of *n_homes* make_home_config homes, each with *battery_config*.
 
     The scenario-level SEG rate is *seg_tariff_pence_per_kwh*.  Its finance block
     is *finance*, which enumerate_configs copies into each config and run_sweep
@@ -110,7 +123,7 @@ def make_scenario(
     """
     return ScenarioConfig(
         name="test-scenario",
-        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        period=make_period(),
         description="Unit test scenario",
         homes=tuple(make_home_config(battery_config=battery_config) for _ in range(n_homes)),
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
@@ -140,11 +153,6 @@ def make_scenario_and_finance(
         loan_term_years=min(asset_life_years, 15),
     )
     return make_scenario(n_homes=n_homes, battery_config=battery_config), finance
-
-
-def make_window(*, days: int = 365, first_day: date = date(2021, 1, 1)) -> SimulationWindow:
-    """The hourly Europe/London window over *days* local dates from *first_day*, both counted."""
-    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), timedelta(hours=1), "Europe/London")
 
 
 def make_sim_results(
