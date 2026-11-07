@@ -19,6 +19,7 @@ import math
 import warnings
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -31,7 +32,9 @@ from solar_challenge.finance import (
     project_multi_year,
     spreadsheet_revenue_curve,
 )
+from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SummaryStatistics, calculate_summary
+from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import (
     make_fleet_results,
@@ -40,7 +43,6 @@ from tests._finance_builders import (
     make_sim_results,
     make_window,
 )
-from tests._repository_paths import SCENARIOS_DIR
 
 _IMPORT_RATE_GBP_PER_KWH = 0.30
 _STANDING_PENCE_PER_DAY = 60.0
@@ -282,12 +284,23 @@ class TestYearlyFiguresNameTheirWindow:
         assert curve.annualised_from is None
 
 
-def test_finance_run_bills_the_days_of_the_summaries_its_simulator_returns() -> None:
-    """`finance run`'s default dates count 2024's 366 days; the fleet's summaries cover 2021's 365, which it bills."""
+def _write_scenario(directory: Path, fleet_results: FleetResults) -> Path:
+    """Write a scenario of *fleet_results*' homes, billed at _STANDING_PENCE_PER_DAY of standing charge, to *directory*, and return its path."""
+    document = {
+        **fleet_scenario(fleet_results.home_configs, name="Finance window"),
+        "finance": {"standing_charge_pence_per_day": _STANDING_PENCE_PER_DAY},
+    }
+    path = directory / "scenario.yaml"
+    path.write_text(scenario_yaml(document), encoding="utf-8")
+    return path
+
+
+def test_finance_run_bills_the_days_of_the_summaries_its_simulator_returns(tmp_path: Path) -> None:
+    """`finance run`'s default dates count 2024's 366 days; the fleet's summaries cover 2021's 365, which it bills at the scenario's _STANDING_PENCE_PER_DAY."""
     fleet_results = make_fleet_results(n_homes=2)
     assert calculate_summary(fleet_results.per_home_results[0]).window == make_window(days=365)
 
-    result = invoke_finance_run([str(SCENARIOS_DIR / "bristol-phase1.yaml")], fleet_results)
+    result = invoke_finance_run([str(_write_scenario(tmp_path, fleet_results))], fleet_results)
 
     assert result.exit_code == 0, result.output
-    assert "| Standing Charge | £219.00 |" in result.stdout
+    assert f"| Standing Charge | £{365 * _STANDING_PENCE_PER_DAY / 100:.2f} |" in result.stdout
