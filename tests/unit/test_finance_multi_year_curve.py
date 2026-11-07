@@ -186,6 +186,7 @@ class TestMultiYearCurve:
             points=points,
             sampled_ages=(0, 12, 24),
             interp_error_estimate=0.5,
+            annualised_from=None,
         )
 
     def test_construction_valid(self) -> None:
@@ -218,6 +219,7 @@ class TestMultiYearCurve:
                 points=(),
                 sampled_ages=(0,),
                 interp_error_estimate=0.0,
+                annualised_from=None,
             )
 
     @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.1])
@@ -238,6 +240,7 @@ class TestMultiYearCurve:
                 points=points,
                 sampled_ages=(),
                 interp_error_estimate=0.0,
+                annualised_from=None,
             )
 
 

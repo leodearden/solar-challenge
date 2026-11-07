@@ -1,26 +1,42 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Unit tests for project_multi_year's short-window annualisation.
+"""Unit tests for project_multi_year's annualisation of a window shorter or longer than a year.
 
-A simulated window under 360 days projects as the 365-day year it samples,
-with or without the self-consumption override, and the projection warns once.
+A simulated window projects as the year it samples, each home's totals scaled
+by its window's annualisation_scale (year_days / days), with or without the
+self-consumption override, and the projection raises no warning about the window.
 """
 from __future__ import annotations
 
 import dataclasses
 import re
 import warnings
+from collections.abc import Sequence
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.finance import householder_bill, project_multi_year
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import calculate_summary
+from solar_challenge.home import HomeConfig, calculate_summary
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 
 _SHORT_WINDOW_DAYS = 3
+
+
+def _fleet_over(homes: Sequence[HomeConfig], window_days: int) -> FleetResults:
+    """*homes* over *window_days* days from 2021-01-01 at the daily rates of a 365-day year of 3,000 kWh self-consumed, 1,000 exported, 500 imported, 800 discharged and £150 of SEG income."""
+    share_of_year = window_days / 365
+    return make_fleet_results(
+        homes=homes,
+        self_kwh=3000.0 * share_of_year,
+        export_kwh=1000.0 * share_of_year,
+        import_kwh=500.0 * share_of_year,
+        discharge_kwh=800.0 * share_of_year,
+        export_revenue_gbp=150.0 * share_of_year,
+        days=window_days,
+    )
 
 
 def _make_full_year_and_short_window_fleets() -> tuple:
@@ -43,30 +59,24 @@ def _make_full_year_and_short_window_fleets() -> tuple:
         n_homes=2, asset_life_years=25, battery_config=battery_config
     )
     finance = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=10.0)
-
-    def fleet_over(window_days: int) -> FleetResults:
-        share_of_year = window_days / 365
-        return make_fleet_results(
-            homes=scenario.homes,
-            self_kwh=3000.0 * share_of_year,
-            export_kwh=1000.0 * share_of_year,
-            import_kwh=500.0 * share_of_year,
-            discharge_kwh=800.0 * share_of_year,
-            export_revenue_gbp=150.0 * share_of_year,
-            days=window_days,
-        )
-
-    return scenario, finance, battery_config, fleet_over(365), fleet_over(_SHORT_WINDOW_DAYS)
+    return (
+        scenario,
+        finance,
+        battery_config,
+        _fleet_over(scenario.homes, 365),
+        _fleet_over(scenario.homes, _SHORT_WINDOW_DAYS),
+    )
 
 
 class TestProjectMultiYearAnnualisesShortWindow:
-    """A window under 360 days projects as the 365-day year it samples.
+    """A window projects as the year it samples.
 
-    project_multi_year scales each home's window totals to a 365-day year, so a
-    short window at the same daily rates as a full year gives the same curve, with
-    or without the override, and under the override its own-use is the one
-    householder_bill charges for that year.  It warns once per projection that it
-    annualised.
+    project_multi_year scales each home's window totals by the window's
+    annualisation_scale, so a short window at the same daily rates as a full year
+    gives the same curve, with or without the override, and under the override its
+    own-use is the one householder_bill charges for that year.  A window that
+    crosses a new year scales to a mean year's 365.25 days.  No window, short or
+    long, raises a warning about its days.
     """
 
     @pytest.mark.parametrize(
@@ -141,20 +151,32 @@ class TestProjectMultiYearAnnualisesShortWindow:
         assert billed_own_use_kwh == pytest.approx(len(summaries) * annual_own_use_kwh)
         assert year_0.fleet_billed_own_use_kwh == pytest.approx(billed_own_use_kwh)
 
-    def test_short_window_warns_once_naming_the_window(self) -> None:
-        """Annualising a short window raises one UserWarning per projection, naming its days."""
+    def test_short_window_projects_without_a_window_warning(self) -> None:
+        """Every window is scaled by one rule, so a short one raises no UserWarning naming its days or its window."""
         scenario, finance, _, _, fleet_short = _make_full_year_and_short_window_fleets()
-        names_the_window = re.compile(rf"\b{_SHORT_WINDOW_DAYS} days\b")
+        names_the_window = re.compile(r"\bdays?\b|\bwindow\b")
 
-        with pytest.warns(UserWarning, match=names_the_window) as record:
-            curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short)
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_short)
 
-        # Premise: several ages are simulated, so a warning raised per node would repeat.
-        assert len(curve.sampled_ages) >= 3
         window_warnings = [
-            str(w.message) for w in record if names_the_window.search(str(w.message))
+            str(w.message)
+            for w in record
+            if issubclass(w.category, UserWarning) and names_the_window.search(str(w.message))
         ]
-        assert len(window_warnings) == 1, window_warnings
+        assert window_warnings == []
+
+    def test_a_window_across_two_years_projects_a_mean_years_share_of_its_totals(self) -> None:
+        """400 days from 2021-01-01 end in 2022, so year 0's own-use is the fleet's basis-C own-use × 365.25 / 400."""
+        scenario, finance, _, _, _ = _make_full_year_and_short_window_fleets()
+        fleet_400_days = _fleet_over(scenario.homes, 400)
+        summaries = [calculate_summary(r) for r in fleet_400_days.per_home_results]
+        basis_c_own_use_kwh = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
+
+        year_0 = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet_400_days).points[0]
+
+        assert year_0.fleet_billed_own_use_kwh == pytest.approx(basis_c_own_use_kwh * 365.25 / 400)
 
     def test_full_year_window_does_not_warn(self) -> None:
         """A full-year window is not annualised, so a board run stays warning-free."""

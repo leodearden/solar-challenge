@@ -130,6 +130,16 @@ conventions:
       times, the nominal capacity_kwh among them; reading only the Battery's answers keeps one
       definition of each limit and basis (docs/prds/dispatch-configuration-below-config.md §4).
 
+  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution refuse a simulation_days other than their summaries', and bill_distribution summaries over different windows, naming both (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn)"
+    why: >
+      householder_bill and bill_distribution used to take the day count as an argument nobody
+      checked against the summaries, and cli/finance.run computed it from tz-aware midnights,
+      which undercounted across the spring-forward, so a bill could annualise its summaries by a
+      day count they did not cover (fk-1cd332300623). Each summary now carries the window its
+      totals cover (SummaryStatistics.window, set by calculate_summary), and finance.py checks the
+      day count in _require_summary_days and the one window in _one_window, at every use (D27
+      invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8).
+
   - rule: "All config and domain objects are frozen dataclasses, validated in __post_init__, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are

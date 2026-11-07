@@ -47,7 +47,7 @@ from solar_challenge.gridservices import (
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance
+from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
@@ -581,6 +581,7 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
         seg_revenue_gbp=73.8,
+        window=make_window(days=365),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,

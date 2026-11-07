@@ -24,11 +24,15 @@ A fleet of homes whose results differ is
 ``make_fleet_results_of([make_sim_results(...), make_sim_results(...)])``, each
 result on a default home unless ``homes=`` is given.
 
+The window a result covers is ``make_window(days=..., first_day=...)`` of the
+same arguments, which a hand-built ``SummaryStatistics`` names as its window.
+
 """
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Sequence
+from datetime import date, timedelta
 
 import pandas as pd
 
@@ -40,6 +44,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.timebase import SimulationWindow
 
 
 def make_pv_config() -> PVConfig:
@@ -137,6 +142,11 @@ def make_scenario_and_finance(
     return make_scenario(n_homes=n_homes, battery_config=battery_config), finance
 
 
+def make_window(*, days: int = 365, first_day: date = date(2021, 1, 1)) -> SimulationWindow:
+    """The hourly Europe/London window over *days* local dates from *first_day*, both counted."""
+    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), timedelta(hours=1), "Europe/London")
+
+
 def make_sim_results(
     *,
     self_kwh: float = 24.0,
@@ -145,20 +155,24 @@ def make_sim_results(
     discharge_kwh: float = 0.0,
     export_revenue_gbp: float = 0.0,
     days: int = 365,
+    first_day: date = date(2021, 1, 1),
 ) -> SimulationResults:
-    """Constant-power SimulationResults for one home over *days* days, a full year by default.
+    """Constant-power SimulationResults for one home over *days* local dates from *first_day*.
 
     ``calculate_summary`` of the result totals exactly the arguments: the kWh of
     self-consumption, export, import and battery discharge, and the £ of export
     revenue, the physics SEG income.  Generation is self + export, demand is
-    self + import - discharge, and ``simulation_days`` is *days*.
+    self + import - discharge, ``simulation_days`` is *days*, and the window is
+    ``make_window(days=days, first_day=first_day)``.  2021 is not a leap year,
+    so the default 365 days are its whole calendar year: annualisation scale 1,
+    a 365-day standing charge.
 
     Hourly steps suffice because ``calculate_summary`` integrates each row over
-    the hour it lasts and takes ``simulation_days`` from the index span: each
-    total is spread over the 24 * *days* steps as kW = kWh / (24 * *days*).
+    the hour it lasts: the rows are the window's, 23 or 25 of them on a day the
+    clocks change, and each total is spread over them as kW = kWh / rows.
     """
-    n_steps = 24 * days
-    idx = pd.date_range("2020-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    idx = make_window(days=days, first_day=first_day).rows()
+    n_steps = len(idx)
     sc_kw = self_kwh / n_steps
     exp_kw = export_kwh / n_steps
     imp_kw = import_kwh / n_steps

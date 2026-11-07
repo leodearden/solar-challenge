@@ -58,6 +58,7 @@ def _make_curve(revenues: list[float]) -> MultiYearCurve:
         points=points,
         sampled_ages=(0,),
         interp_error_estimate=0.0,
+        annualised_from=None,
     )
 
 

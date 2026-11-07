@@ -28,6 +28,7 @@ from solar_challenge.finance import (
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_window
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,7 @@ def _make_summary(
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
         seg_revenue_gbp=seg_revenue_gbp,
+        window=make_window(days=simulation_days),
     )
 
 
@@ -368,35 +370,6 @@ class TestHouseholderBillOverrideAndAnnualisation:
         # The headline total_outlay must also differ
         assert bill_override.total_outlay_gbp != pytest.approx(bill_physics.total_outlay_gbp)
 
-    def test_short_period_triggers_warning(self) -> None:
-        """simulation_days=30 must emit a UserWarning."""
-        summary = _make_summary(
-            simulation_days=30,
-            # Scale down the financials to be consistent with 30-day period
-            total_import_cost_gbp=22.68,
-            total_export_revenue_gbp=6.07,
-            net_cost_gbp=16.61,
-            total_generation_kwh=328.77,
-            total_demand_kwh=279.45,
-            total_self_consumption_kwh=180.82,
-            total_grid_import_kwh=98.63,
-            total_grid_export_kwh=147.95,
-            seg_revenue_gbp=6.07,
-        )
-        finance = _make_finance()
-
-        with pytest.warns(UserWarning, match="30 days"):
-            breakdown = householder_bill(
-                summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=30,
-            )
-
-        # After annualisation to 365 days, standing charge must be the full annual value
-        expected_standing = finance.standing_charge_pence_per_day * 365 / 100
-        assert breakdown.standing_charge_gbp == pytest.approx(expected_standing)
-
     def test_full_year_no_warning(self) -> None:
         """simulation_days=365 must not emit any warning."""
         summary = _make_summary(simulation_days=365)
@@ -443,13 +416,12 @@ class TestHouseholderBillOverrideAndAnnualisation:
         summary_365 = _make_summary(simulation_days=365)
         finance = _make_finance()
 
-        with pytest.warns(UserWarning):
-            bill_30 = householder_bill(
-                summary=summary_30,
-                annual_self_consumption_kwh=summary_30.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=30,
-            )
+        bill_30 = householder_bill(
+            summary=summary_30,
+            annual_self_consumption_kwh=summary_30.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=30,
+        )
 
         bill_365 = householder_bill(
             summary=summary_365,
@@ -1045,11 +1017,11 @@ class TestHouseholderBillWrapperEquivalence:
         # Exact frozen-dataclass equality (every field); the literals are exact in binary floating point
         assert actual == expected
 
-    def test_wrapper_standing_still_annual_for_short_period(self) -> None:
-        """householder_bill for a short-period sim still annualises standing to 365 days.
+    def test_wrapper_bills_the_windows_year_of_standing_for_a_short_period(self) -> None:
+        """householder_bill for a short-period sim bills its window's year of standing charge.
 
-        The wrapper always calls bill(period_days=365, ...) regardless of simulation_days,
-        so the standing charge stays at the full annual value even for a 30-day sim.
+        The wrapper calls bill(period_days=window.year_days, ...), 365 for this
+        30-day 2021 window, so the standing charge is the window's whole year's.
         """
         finance = _make_finance(standing_charge_pence_per_day=60.0)
         summary = _make_summary(
@@ -1065,15 +1037,14 @@ class TestHouseholderBillWrapperEquivalence:
             seg_revenue_gbp=6.07,
         )
 
-        with pytest.warns(UserWarning, match="30 days"):
-            b = householder_bill(
-                summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
-                finance=finance,
-                simulation_days=30,
-            )
+        b = householder_bill(
+            summary=summary,
+            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            finance=finance,
+            simulation_days=30,
+        )
 
-        # Wrapper passes period_days=365 regardless of simulation_days → annual standing
+        # The 2021 window's year_days is 365
         expected_annual_standing = 60.0 * 365 / 100.0
         assert b.standing_charge_gbp == pytest.approx(expected_annual_standing)
 
