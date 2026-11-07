@@ -36,8 +36,10 @@ SCHEMA_VERSION, and, as a step's refusal does, the lagging runs whose files the 
 forward before its fault, in whole or in part, with each value it dropped or rewrote in them.
 """
 
+import errno
 import importlib.util
 import json
+import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -956,6 +958,61 @@ def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_th
         applied_steps=MIGRATIONS[1:],
         dropped_values=(DroppedValue(unwritable, "runs.summary_json", "retired_figure", 12.5),),
         rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+    )
+
+
+def _os_replace_failing_onto_a_file_named(name: str) -> Callable[[str | os.PathLike[str], str | os.PathLike[str]], None]:
+    """os.replace, but failing as on a full disk to move a file onto one named *name*."""
+    replace = os.replace
+
+    def replace_unless_onto_name(source: str | os.PathLike[str], destination: str | os.PathLike[str]) -> None:
+        if Path(destination).name == name:
+            raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC), os.fspath(destination))
+        replace(source, destination)
+
+    return replace_unless_onto_name
+
+
+def test_migrate_store_refused_by_a_run_s_summary_json_it_cannot_write_carries_only_the_values_dropped_from_the_config_json_it_wrote_before_it(
+    store_at_version_1: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """os.replace failing to move a run's new summary.json into place, as on a full disk, stops v2 once it has written that run's config.json.
+
+    v2 drops a figure no field has from the copy of pre_469_home's summary.json, and a setting no
+    field has from its config.json. The refusal carries the run with config.json and the setting
+    dropped from it, but not the figure: summary.json was not written, so the migration run again
+    reads it in the first format, drops the figure and reports it. No stand-in on disk fails a
+    document's write while the document still reads, so the move itself fails here.
+    """
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "unwritable-summary")
+    run_dir = _run_dir(store_at_version_1, run_id)
+    _edit_stored_document(run_dir / "config.json", _setting("retired_setting", 0.5))
+
+    with monkeypatch.context() as patched, pytest.raises(MigrationRefused) as refused:
+        patched.setattr(os, "replace", _os_replace_failing_onto_a_file_named("summary.json"))
+        migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert refused.value.step == MIGRATIONS[1]
+    assert isinstance(refused.value.__cause__, OSError)
+    assert str(run_dir / "summary.json") in str(refused.value), str(refused.value)
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        dropped_values=(DroppedValue(run_id, "config.json", "retired_setting", 0.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(run_id, ("config.json",)),),
+    )
+    assert "retired_setting" not in json.loads((run_dir / "config.json").read_text())
+    assert json.loads((run_dir / "summary.json").read_text())["retired_figure"] == 12.5
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert report == MigrationReport(
+        store_at_version_1,
+        from_version=1,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[1:],
+        dropped_values=(
+            DroppedValue(run_id, "summary.json", "retired_figure", 12.5),
+            DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+        ),
     )
 
 
