@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the two pricing blocks: the tariff: block for imported energy and the seg: block for exported energy."""
 
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import yaml
 
 from solar_challenge.config import (
     load_community_config,
+    load_home_config,
     load_scenarios,
     parse_seg_rate,
     parse_tariff_config,
@@ -16,6 +18,9 @@ from solar_challenge.config import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+
+_NIGHT_PERIOD = {"start_time": "00:00", "end_time": "07:00", "rate_per_kwh": 0.10}
+_DAY_PERIOD = {"start_time": "07:00", "end_time": "00:00", "rate_per_kwh": 0.30}
 
 
 class TestTariffConfigParsing:
@@ -61,6 +66,76 @@ class TestTariffConfigParsing:
             ),
             name="Two-rate",
         )
+
+
+class TestTariffNames:
+    """A tariff's name and each period's name are read as strings; an absent or null name reads as no name."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            pytest.param(5, id="number"),
+            pytest.param(True, id="boolean"),
+            pytest.param(["Night"], id="list"),
+            pytest.param({"x": 1}, id="mapping"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("named_block", "name_path"),
+        [
+            pytest.param(
+                lambda name: {"type": "flat_rate", "rate_per_kwh": 0.2, "name": name},
+                "tariff.name",
+                id="flat_rate",
+            ),
+            pytest.param(
+                lambda name: {"type": "custom", "name": name, "periods": [_NIGHT_PERIOD, _DAY_PERIOD]},
+                "tariff.name",
+                id="custom",
+            ),
+            pytest.param(
+                lambda name: {"type": "custom", "periods": [_NIGHT_PERIOD, {**_DAY_PERIOD, "name": name}]},
+                "tariff.periods[1].name",
+                id="custom-period",
+            ),
+        ],
+    )
+    def test_a_name_that_is_not_a_string_is_refused_naming_its_path(
+        self, named_block: Callable[[object], dict[str, object]], name_path: str, name: object
+    ) -> None:
+        """A tariff or period name that is not a string is refused, naming the key by its path and the value given."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"{name_path} must be a string, got {name!r}")
+        ):
+            parse_tariff_config(named_block(name))
+
+    @pytest.mark.parametrize(
+        "unnamed", [pytest.param({}, id="absent"), pytest.param({"name": None}, id="null")]
+    )
+    def test_an_absent_or_null_name_reads_as_no_name(self, unnamed: dict[str, None]) -> None:
+        """A tariff or period that sets no name, or a null one, reads as unnamed: a custom tariff's names are "", a flat rate keeps its preset's label."""
+        custom = {
+            "type": "custom",
+            **unnamed,
+            "periods": [{**_NIGHT_PERIOD, **unnamed}, {**_DAY_PERIOD, **unnamed}],
+        }
+        flat_rate = {"type": "flat_rate", "rate_per_kwh": 0.2, **unnamed}
+
+        assert parse_tariff_config(custom) == TariffConfig(
+            periods=(TariffPeriod("00:00", "07:00", 0.10), TariffPeriod("07:00", "00:00", 0.30))
+        )
+        assert parse_tariff_config(flat_rate) == TariffConfig.flat_rate(rate_per_kwh=0.2)
+
+    def test_the_refusal_names_the_path_where_the_block_sits(self, tmp_path: Path) -> None:
+        """A home file's tariff name that is not a string is refused by its path in the file."""
+        tariff = {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}
+        path = tmp_path / "home.yaml"
+        path.write_text(yaml.safe_dump({"home": {"pv": {"capacity_kw": 4.0}, "tariff": tariff}}))
+
+        with pytest.raises(
+            ConfigurationError, match=re.escape("home.tariff.name must be a string, got 5")
+        ):
+            load_home_config(path)
 
 
 class TestScenarioSegBlock:
