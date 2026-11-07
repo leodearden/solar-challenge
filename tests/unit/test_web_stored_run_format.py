@@ -26,7 +26,7 @@ pytest.importorskip("pyarrow")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
-from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
@@ -116,6 +116,13 @@ def _window_refusal(path: Path) -> ValueError:
     """The ValueError with which SimulationWindow.of_index refuses the index of the time series at *path*."""
     with pytest.raises(ValueError) as refused:
         SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow").index)
+    return refused.value
+
+
+def _results_refusal(path: Path) -> ValueError:
+    """The ValueError with which SimulationResults.from_dataframe refuses the time series at *path*."""
+    with pytest.raises(ValueError) as refused:
+        SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name="self_consumption")
     return refused.value
 
 
@@ -361,7 +368,7 @@ def test_a_time_series_whose_index_simulation_results_reads_no_window_from_is_re
 def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_its_column(
     storage: RunStorage, column: str, value: Any
 ) -> None:
-    """A series is read as a float field is, so it is of an integer or a float dtype, and never of a bool's.
+    """SimulationResults refuses the series when it is built, one of no integer's or float's dtype, and its refusal is the cause.
 
     The refusal's reason names the dtype the series is stored in. The run is saved without a heat
     pump load, so that optional series' column is added, as from_dataframe reads an optional
@@ -374,6 +381,7 @@ def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_it
     refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", column)
 
     assert _column_dtype(path, column) in refusal.reason
+    assert repr(refusal.__cause__) == repr(_results_refusal(path))
 
 
 @pytest.mark.parametrize(
