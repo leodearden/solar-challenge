@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The verify-suite tests the newest-releases check deselects, because its copy of the tree breaks them by design.
+"""The verify-suite tests the newest-releases check deselects, because its copy of the tree breaks or may break them.
 
 The newest-releases check, tests/newest_releases/test_verify_suite_on_newest_releases.py,
 runs the verify suite in a copy of the tree whose uv.lock is upgraded and whose
 pyproject.toml has a [tool.uv] table appended. A test of a property of the
-committed pyproject.toml and uv.lock pair fails there by construction, so the
-check deselects it. --deselect matches a node id by prefix.
+committed pyproject.toml and uv.lock pair fails there by construction, and a
+test of a property that pyproject.toml answers for uv.lock's pinned releases
+may fail there on a newer release, so the check deselects both. --deselect
+matches a node id by prefix.
 tests/unit/test_newest_releases_lane.py checks, in the per-task verify, that
 each entry matches exactly the cases of one collected test.
 
