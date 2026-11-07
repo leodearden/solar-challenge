@@ -8,6 +8,7 @@ from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
 import pandas as pd
+from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
@@ -152,6 +153,29 @@ def _level(column: str) -> dict[str, object]:
     return {_COLUMN: column}
 
 
+class SeriesRefused(ValueError):
+    """SimulationResults' refusal of one of its series; column is the column the series is written under, and reason says why."""
+
+    def __init__(self, column: str, reason: str) -> None:
+        super().__init__(f"SimulationResults' {column} series {reason}")
+        self.column = column
+        self.reason = reason
+
+    def __reduce__(self) -> tuple[type["SeriesRefused"], tuple[str, str], dict[str, object]]:
+        """Rebuild through the constructor from the column and the reason, then restore the instance's state, its notes included, so a refusal raised in a fleet's worker process unpickles in its parent as itself."""
+        return (type(self), (self.column, self.reason), self.__dict__)
+
+
+def _refuse_unless_numbers(column: str, series: pd.Series) -> None:
+    """Refuse *series*, written under *column*, unless its dtype is an integer's or a float's, which a bool's is not.
+
+    Raises:
+        SeriesRefused: Naming the column and the series' dtype.
+    """
+    if not (is_integer_dtype(series.dtype) or is_float_dtype(series.dtype)):
+        raise SeriesRefused(column, f"is of dtype {series.dtype}, not of an integer or a float dtype")
+
+
 @dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
@@ -160,7 +184,10 @@ class SimulationResults:
     calendar days it covers and how long each row lasts (one minute for
     simulate_home's results). Each series field's column metadata names the
     column to_dataframe writes it under and from_dataframe reads it from, and
-    each series is named that column, whatever it was named when built.
+    each series is named that column, whatever it was named when built. Each
+    series holds numbers: its dtype is an integer's or a float's, never a
+    bool's, and NaN and the infinities are floats. Construction refuses any
+    other series with SeriesRefused, naming its column and its dtype.
 
     Attributes:
         generation: PV generation in kW
@@ -199,10 +226,16 @@ class SimulationResults:
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
 
     def __post_init__(self) -> None:
-        """Name each set series after its column, without renaming the series it was built from."""
+        """Name each set series after its column, without renaming the series it was built from.
+
+        Raises:
+            SeriesRefused: The first set series, in declaration order, whose dtype is no
+                integer's or float's; it names the series' column and its dtype.
+        """
         for name, column in self._series_columns():
             series = getattr(self, name)
             if series is not None:
+                _refuse_unless_numbers(column, series)
                 object.__setattr__(self, name, series.rename(column))
 
     @classmethod
@@ -269,6 +302,8 @@ class SimulationResults:
 
         Raises:
             ValueError: If frame lacks any required series' column; the message names each one.
+            SeriesRefused: If a column is not numbers, as construction refuses its series; it
+                names the first such column and its dtype.
         """
         required_fields = {
             attribute.name

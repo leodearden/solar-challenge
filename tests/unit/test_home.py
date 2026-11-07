@@ -1,6 +1,7 @@
 """Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing and the weather it runs on."""
 
 import dataclasses
+import pickle
 import re
 import typing
 import warnings
@@ -12,6 +13,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import (
     HomeConfig,
+    SeriesRefused,
     SimulationResults,
     SummaryStatistics,
     calculate_summary,
@@ -283,6 +285,135 @@ class TestSimulationResults:
         assert "generation_kw" in message
         assert "tariff_rate_per_kwh" in message
         assert "grid_charge_cost_gbp" not in message
+
+
+class TestSimulationResultsHoldsNumbers:
+    """Test that each series SimulationResults holds is of numbers: construction refuses any other with SeriesRefused, naming its column and dtype."""
+
+    @pytest.mark.parametrize(
+        ("field", "column", "make"),
+        [
+            pytest.param("generation", "generation_kw", lambda index: pd.Series("x", index=index), id="strings"),
+            pytest.param(
+                "generation", "generation_kw", lambda index: pd.Series([None] * len(index), index=index), id="nones"
+            ),
+            pytest.param("generation", "generation_kw", lambda index: pd.Series(True, index=index), id="bools"),
+            pytest.param(
+                "generation",
+                "generation_kw",
+                lambda index: pd.Series(True, index=index, dtype="boolean"),
+                id="nullable-bools",
+            ),
+            pytest.param(
+                "generation",
+                "generation_kw",
+                lambda index: pd.Series(pd.Timestamp("2020-01-01"), index=index),
+                id="timestamps",
+            ),
+            pytest.param(
+                "generation",
+                "generation_kw",
+                lambda index: pd.Series(pd.Timedelta(minutes=1), index=index),
+                id="durations",
+            ),
+            pytest.param(
+                "generation",
+                "generation_kw",
+                lambda index: pd.Series(1.0, index=index, dtype=object),
+                id="floats-held-as-objects",
+            ),
+            pytest.param("generation", "generation_kw", lambda index: pd.Series(1j, index=index), id="complex-numbers"),
+            pytest.param(
+                "battery_soc", "battery_soc_kwh", lambda index: pd.Series("x", index=index), id="a-level-of-strings"
+            ),
+            pytest.param(
+                "heat_pump_load",
+                "heat_pump_load_kw",
+                lambda index: pd.Series("x", index=index),
+                id="an-optional-series-of-strings",
+            ),
+        ],
+    )
+    def test_a_series_whose_dtype_is_no_integer_s_or_float_s_is_refused_naming_its_column_and_dtype(
+        self, field, column, make
+    ):
+        """A series whose dtype is no integer's or float's is refused with a ValueError naming its column and its dtype."""
+        built = _results_with_every_series_set()
+        series = make(built.generation.index)
+
+        with pytest.raises(SeriesRefused) as refused:
+            dataclasses.replace(built, **{field: series})
+
+        assert isinstance(refused.value, ValueError)
+        assert refused.value.column == column
+        assert str(series.dtype) in refused.value.reason
+        assert column in str(refused.value)
+        assert str(series.dtype) in str(refused.value)
+
+    def test_of_two_series_that_are_not_numbers_the_first_in_declaration_order_is_named(self):
+        """Of demand and generation both holding strings, generation, declared first, is named, though demand is given first."""
+        built = _results_with_every_series_set()
+        strings = pd.Series("x", index=built.generation.index)
+
+        with pytest.raises(SeriesRefused) as refused:
+            dataclasses.replace(built, demand=strings, generation=strings)
+
+        assert refused.value.column == "generation_kw"
+
+    def test_from_dataframe_refuses_a_column_that_is_not_numbers_naming_it(self):
+        """from_dataframe builds the results, so a column that is not numbers is refused as construction refuses it."""
+        frame = _results_with_every_series_set().to_dataframe().assign(tariff_rate_per_kwh="x")
+
+        with pytest.raises(SeriesRefused) as refused:
+            SimulationResults.from_dataframe(frame, strategy_name="self_consumption")
+
+        assert refused.value.column == "tariff_rate_per_kwh"
+
+    def test_a_refusal_survives_pickling(self):
+        """A refusal unpickles as itself, its notes included, as one raised building a home's results in a fleet's worker process must."""
+        built = _results_with_every_series_set()
+        with pytest.raises(SeriesRefused) as refused:
+            dataclasses.replace(built, generation=pd.Series("x", index=built.generation.index))
+        refusal = refused.value
+        refusal.add_note("home 3")
+
+        restored = pickle.loads(pickle.dumps(refusal))
+
+        assert type(restored) is SeriesRefused
+        assert (restored.column, restored.reason, str(restored)) == (refusal.column, refusal.reason, str(refusal))
+        assert restored.__notes__ == ["home 3"]
+
+    @pytest.mark.parametrize(
+        ("field", "make"),
+        [
+            pytest.param("generation", lambda index: pd.Series(0, index=index), id="int64"),
+            pytest.param("generation", lambda index: pd.Series(1, index=index, dtype="uint8"), id="uint8"),
+            pytest.param("generation", lambda index: pd.Series(1.0, index=index, dtype="float32"), id="float32"),
+            pytest.param(
+                "generation",
+                lambda index: pd.Series([pd.NA] + [1] * (len(index) - 1), index=index, dtype="Int64"),
+                id="nullable-integers-holding-na",
+            ),
+            pytest.param(
+                "generation",
+                lambda index: pd.Series([pd.NA] + [1.5] * (len(index) - 1), index=index, dtype="Float64"),
+                id="nullable-floats-holding-na",
+            ),
+            pytest.param(
+                "battery_soc",
+                lambda index: pd.Series(np.r_[np.nan, np.inf, -np.inf, np.zeros(len(index) - 3)], index=index),
+                id="a-level-of-floats-holding-nan-and-infinities",
+            ),
+        ],
+    )
+    def test_a_series_of_integers_or_floats_is_admitted_as_given(self, field, make):
+        """A series of an integer or a float dtype is admitted as given, NA, NaN and the infinities included."""
+        built = _results_with_every_series_set()
+        series = make(built.generation.index)
+
+        results = dataclasses.replace(built, **{field: series})
+
+        pd.testing.assert_series_equal(getattr(results, field), series, check_names=False)
 
 
 class TestPerMinuteAmounts:
