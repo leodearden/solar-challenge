@@ -590,14 +590,14 @@ def _with_temperature_coefficient(
 
 
 def _require_adjust_reaches(template: Mapping[str, float], coefficient: float) -> None:
-    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient.
+    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient, which a NaN end never does.
 
     Construction and use both run it (_require_template_takes_temperature_coefficient).
     """
     low, high = _adjust_bracket(template, coefficient)
     at_low = _modelled_gamma({**template, "Adjust": low})
     at_high = _modelled_gamma({**template, "Adjust": high})
-    if (at_low - coefficient) * (at_high - coefficient) > 0:
+    if not (at_low - coefficient) * (at_high - coefficient) <= 0:
         steepest, shallowest = sorted((at_low, at_high))
         raise ConfigurationError(
             f"temperature_coefficient={coefficient} is beyond the module's reach: between "

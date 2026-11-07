@@ -45,6 +45,11 @@ def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     return {**default_module(), "EgRef": 3.0}
 
 
+def cec_module_with_a_nan_alpha_sc() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row with a NaN short-circuit current temperature coefficient: its bracket's ends, and the modelled coefficient at each, are NaN, which straddles no coefficient."""
+    return {**default_module(), "alpha_sc": math.nan}
+
+
 @pytest.fixture(scope="module")
 def default_clear_day_kwh() -> float:
     """The default 4 kW's energy on the clear day: 26.8194 kWh."""
@@ -321,6 +326,12 @@ _COEFFICIENTS_NO_ADJUST_REACHES = [
         -0.0005,
         "beyond the module's reach",
         id="cec_module_with_a_wide_band_gap--0.0005",
+    ),
+    pytest.param(
+        cec_module_with_a_nan_alpha_sc,
+        -0.004,
+        "beyond the module's reach",
+        id="cec_module_with_a_nan_alpha_sc--0.004",
     ),
 ]
 

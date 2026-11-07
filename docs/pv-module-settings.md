@@ -45,9 +45,9 @@
       in neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of
       each form; or CEC single-diode parameters whose `alpha_sc` is 0, since `Adjust`
       scales only `alpha_sc` and so cannot move the coefficient, or on which the
-      coefficient is beyond the reach of the bracket's ends, naming the bracket and the
-      reach (`_require_adjust_reaches`). Construction evaluates only the bracket's two
-      ends, not the solve;
+      coefficient is beyond the reach of the bracket's ends, a NaN reach included,
+      naming the bracket and the reach (`_require_adjust_reaches`). Construction
+      evaluates only the bracket's two ends, not the solve;
     - then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor `STC`),
       or outside NOCT-SAM's domain once a set efficiency's area is applied
       (`_template_with_set_efficiency`), through `_require_cells_noct_sam_can_heat`,
@@ -86,11 +86,12 @@
   domain. Its reach depends only on |alpha_sc|, so `alpha_sc` = 0 is the one degenerate
   case, refused by name rather than divided by.
 - **Why construction checks the reach, not the solve.** Whether the modelled
-  coefficients at the bracket's two ends straddle the set one is the refusal's whole
-  condition: `brentq` always succeeds once they do, so a solve at construction would
-  refuse nothing more. The check costs 2 of the solve's ~19 single-diode evaluations
-  (§3). `DEFAULT_CEC_MODULE`'s row reaches the whole domain (§3), so construction skips
-  it: only custom parameters, which no YAML key sets, pay for the check.
+  coefficients at the bracket's two ends straddle the set one, which a NaN end never
+  does, is the refusal's whole condition: `brentq` always succeeds once they do, so a
+  solve at construction would refuse nothing more. The check costs 2 of the solve's ~19
+  single-diode evaluations (§3). `DEFAULT_CEC_MODULE`'s row reaches the whole domain
+  (§3), so construction skips it: only custom parameters, which no YAML key sets, pay
+  for the check.
 - **The domains.** 0.9 is NOCT-SAM's transmittance–absorptance, read from the one
   constant the model reads. −0.01 per K (−1 %/K) is steeper than every catalogue row's
   modelled coefficient (−0.68 %/K), and the old (−1, 0) admitted values no model can
