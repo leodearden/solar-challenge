@@ -41,10 +41,11 @@ import pytest
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
+from solar_challenge.web.storage import run_headline
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
@@ -117,6 +118,17 @@ _FIVE_RUNS = ["Run A", "Run B", "Run C", "Run D", "Run E"]
 _TEN_KWH_BATTERY = BatteryConfig(capacity_kwh=10.0)
 
 
+def _five_home_runs() -> list[charts.ComparedRun]:
+    """A compared run of _SUMMARY's headline under each of _FIVE_RUNS, so the fifth takes the first run's colour again."""
+    return [charts.ComparedRun(label, run_headline(_SUMMARY)) for label in _FIVE_RUNS]
+
+
+def _four_home_runs_and_a_fleet_run() -> list[charts.ComparedRun]:
+    """_five_home_runs with the last a fleet run, which has no PV stored in battery, so the radar notes the axis it leaves out."""
+    *homes, last = _five_home_runs()
+    return [*homes, charts.ComparedRun(last.label, run_headline(calculate_fleet_summary(_fleet_year())))]
+
+
 def _panels_of(tabs: tuple[ChartTab, ...]) -> tuple[ChartPanel, ...]:
     """Every panel of *tabs*, tab by tab."""
     return tuple(panel for tab in tabs for panel in tab.panels)
@@ -151,11 +163,9 @@ _FIGURES: dict[str, _FigureCase] = {
     "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
     "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
-    "comparison_bar_chart": _FigureCase(
-        charts.comparison_bar_chart, lambda build: (build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS),)
-    ),
+    "comparison_bar_chart": _FigureCase(charts.comparison_bar_chart, lambda build: (build(_five_home_runs()),)),
     "comparison_radar": _FigureCase(
-        charts.comparison_radar, lambda build: (build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS),)
+        charts.comparison_radar, lambda build: (build(_four_home_runs_and_a_fleet_run()),)
     ),
     "fleet_aggregate_timeline": _FigureCase(charts.fleet_aggregate_timeline, lambda build: (build(_fleet_year()),)),
     "fleet_grid_impact": _FigureCase(charts.fleet_grid_impact, lambda build: (build(_fleet_year()),)),
@@ -178,10 +188,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "fleet_results_tabs": _FigureCase(
         charts.fleet_results_tabs, lambda build: _panels_of(build(_fleet_year(), [_SUMMARY] * 3))
     ),
-    "comparison_tabs": _FigureCase(
-        charts.comparison_tabs,
-        lambda build: _panels_of(build([dataclasses.asdict(_SUMMARY)] * 5, _FIVE_RUNS)),
-    ),
+    "comparison_tabs": _FigureCase(charts.comparison_tabs, lambda build: _panels_of(build(_five_home_runs()))),
 }
 
 

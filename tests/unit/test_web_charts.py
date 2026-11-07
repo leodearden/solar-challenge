@@ -7,19 +7,24 @@ tests/unit/test_web_chart_colours.py, tests/unit/test_web_chart_downsampling.py 
 
 import dataclasses
 import json
+from typing import TypeVar
 
 import pandas as pd
 import pytest
 
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.fleet import FleetSummary, calculate_fleet_summary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.charts import (
     ChartPanel,
     ChartTab,
+    ComparedRun,
     battery_soc_chart,
+    comparison_bar_chart,
+    comparison_radar,
     comparison_tabs,
     daily_energy_balance,
     financial_breakdown,
@@ -32,6 +37,7 @@ from solar_challenge.web.charts import (
     seasonal_comparison,
 )
 from solar_challenge.web.simulation_params import parse_home_config
+from solar_challenge.web.storage import run_headline
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
@@ -91,6 +97,19 @@ def _simulate_seg_rate_without_tariff(weather: pd.DataFrame) -> tuple[HomeConfig
         }
     )
     return config, simulate_home(config, start_date=start_date, end_date=end_date, weather=weather_for(config, weather))
+
+
+def _summary_of_the_arbitrage_home_on_a_clear_21_june() -> SummaryStatistics:
+    """The summary of the home of scenarios/bristol-arbitrage.yaml on a clear 21 June, when it charges its battery from PV and from the grid."""
+    home = bristol_arbitrage_home()
+    return calculate_summary(
+        simulate_home(
+            home,
+            start_date=pd.Timestamp("2024-06-21"),
+            end_date=pd.Timestamp("2024-06-21"),
+            weather=weather_for(home, synthetic_june_weather("2024-06-21")),
+        )
+    )
 
 
 def _drawn(panel: ChartPanel) -> bool:
@@ -336,15 +355,7 @@ class TestSankeyBatteryCharge:
     def test_a_simulated_sunny_grid_charging_day_draws_the_batterys_charge_from_each_source_as_the_summary_splits_it(
         self,
     ) -> None:
-        """The home of scenarios/bristol-arbitrage.yaml on a clear 21 June charges its battery from PV and from the grid."""
-        home = bristol_arbitrage_home()
-        results = simulate_home(
-            home,
-            start_date=pd.Timestamp("2024-06-21"),
-            end_date=pd.Timestamp("2024-06-21"),
-            weather=weather_for(home, synthetic_june_weather("2024-06-21")),
-        )
-        summary = calculate_summary(results)
+        summary = _summary_of_the_arbitrage_home_on_a_clear_21_june()
         assert summary.total_pv_charge_kwh > 0.01 and summary.total_grid_charge_kwh > 0.01
 
         links = sankey_link_values(sankey_diagram(summary).content)
@@ -521,6 +532,106 @@ class TestFinancialBreakdownNoTariffAnnotation:
         ]
 
 
+def _compared(label: str, summary: SummaryStatistics | FleetSummary) -> ComparedRun:
+    """The compared run labelled *label* of the run whose summary is *summary*."""
+    return ComparedRun(label, run_headline(summary))
+
+
+def _b11_fleet() -> FleetSummary:
+    """B11's fleet: each of two homes self-consumes 18 and exports 54 of the 72 kWh it generates, and imports 27 of the 45 it uses."""
+    return calculate_fleet_summary(make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1))
+
+
+def _a_day_of_a_plain_home() -> SummaryStatistics:
+    return calculate_summary(make_sim_results(days=1))
+
+
+_FIVE_FLOWS = ["Generation", "Demand", "Self-Consumption", "Grid Import", "Grid Export"]
+_THREE_RATIO_AXES = ["Self-Consumption %", "Grid Dependency %", "Export %"]
+_PV_STORED_AXIS = "PV stored in battery %"
+
+_Point = TypeVar("_Point")
+
+
+def _closed(polygon: list[_Point]) -> list[_Point]:
+    """*polygon*'s points closed on its first, as a radar trace draws them."""
+    return [*polygon, polygon[0]]
+
+
+class TestComparisonCharts:
+    """comparison_bar_chart and comparison_radar: each compared run drawn from its headline, under its label.
+
+    The radar draws only the axes every compared run has a figure for, and notes each axis it
+    leaves out, naming the runs without it: a fleet run has no PV stored in battery.
+    """
+
+    def test_a_compared_run_with_a_blank_label_is_refused_naming_its_label(self) -> None:
+        with pytest.raises(ValueError) as refusal:
+            _compared("  ", _a_day_of_a_plain_home())
+
+        assert "ComparedRun.label" in str(refusal.value)
+
+    def test_the_bar_chart_draws_each_run_s_five_energy_totals_in_flow_order_under_its_label(self) -> None:
+        home = _compared("Home A", _a_day_of_a_plain_home())
+
+        figure = comparison_bar_chart([home, _compared("Fleet B", _b11_fleet())]).content
+
+        totals = home.headline
+        home_kwh = (
+            totals.generation_kwh,
+            totals.demand_kwh,
+            totals.self_consumption_kwh,
+            totals.grid_import_kwh,
+            totals.grid_export_kwh,
+        )
+        assert [(bar["name"], bar["x"], bar["y"]) for bar in traces(figure)] == [
+            ("Home A", _FIVE_FLOWS, [round(kwh, 2) for kwh in home_kwh]),
+            ("Fleet B", _FIVE_FLOWS, [144.0, 90.0, 36.0, 54.0, 108.0]),
+        ]
+
+    def test_the_radar_of_a_home_run_and_a_fleet_run_draws_the_fleet_at_its_own_ratios_and_notes_the_axis_it_lacks(
+        self,
+    ) -> None:
+        """B11: the fleet was drawn at 0 % on every axis while the radar read a fleet summary by a home summary's names."""
+        home = _compared("Home A", _a_day_of_a_plain_home())
+
+        figure = comparison_radar([home, _compared("Fleet B", _b11_fleet())]).content
+
+        radar = traces_by_name(figure)
+        assert (radar["Fleet B"]["r"], radar["Fleet B"]["theta"]) == ([25.0, 60.0, 75.0, 25.0], _closed(_THREE_RATIO_AXES))
+        ratios = (home.headline.self_consumption_ratio, home.headline.grid_dependency_ratio, home.headline.export_ratio)
+        assert (radar["Home A"]["r"], radar["Home A"]["theta"]) == (
+            _closed([round(ratio * 100, 1) for ratio in ratios]),
+            _closed(_THREE_RATIO_AXES),
+        )
+        assert annotation_texts(figure) == ["PV stored in battery % is left out: no figure for Fleet B"]
+
+    def test_the_radar_of_two_home_runs_draws_all_four_axes_and_no_note(self) -> None:
+        runs = [
+            _compared("Home A", _a_day_of_a_plain_home()),
+            _compared("Home B", calculate_summary(make_sim_results(self_kwh=30.0, days=1))),
+        ]
+
+        figure = comparison_radar(runs).content
+
+        assert [trace["theta"] for trace in traces(figure)] == [_closed([*_THREE_RATIO_AXES, _PV_STORED_AXIS])] * 2
+        assert annotation_texts(figure) == []
+
+    def test_the_pv_stored_axis_of_a_grid_charging_home_counts_only_the_pv_its_battery_stored(self) -> None:
+        """B11: the axis once counted the battery's whole charge, grid charge included, as its share of the generation."""
+        summary = _summary_of_the_arbitrage_home_on_a_clear_21_june()
+        assert summary.total_grid_charge_kwh > 0.01
+        assert round(summary.total_pv_charge_kwh / summary.total_generation_kwh * 100, 1) != round(
+            summary.total_battery_charge_kwh / summary.total_generation_kwh * 100, 1
+        ), "the PV-stored share rounds to the battery's whole charge's share, so a radar drawing that passes"
+
+        figure = comparison_radar([_compared("Arbitrage", summary), _compared("Plain", _a_day_of_a_plain_home())]).content
+
+        assert traces_by_name(figure)["Arbitrage"]["r"][3] == round(
+            summary.total_pv_charge_kwh / summary.total_generation_kwh * 100, 1
+        )
+
+
 class TestResultsTabs:
     """Each page's assembler lists, tab by tab, the panels of the charts that apply to its run.
 
@@ -576,9 +687,9 @@ class TestResultsTabs:
         ]
 
     def test_a_comparison_lists_the_energy_totals_and_the_efficiency_ratios(self) -> None:
-        summary = dataclasses.asdict(calculate_summary(make_sim_results(days=1)))
+        headline = run_headline(_a_day_of_a_plain_home())
 
-        tabs = comparison_tabs([summary, summary], ["Run A", "Run B"])
+        tabs = comparison_tabs([ComparedRun("Run A", headline), ComparedRun("Run B", headline)])
 
         assert _tab_layout(tabs) == [
             ("bar", "Energy Totals", ["chart-comparison-bar"]),
