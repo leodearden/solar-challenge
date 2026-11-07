@@ -203,6 +203,18 @@ def _edit_runs_document(database_path: Path, run_id: str, column: str, edit: Edi
         conn.execute(f"UPDATE runs SET {column} = ? WHERE id = ?", (json.dumps(document), run_id))
 
 
+def _install_a_copy_holding_a_retired_figure(database_path: Path, run_id: str) -> str:
+    """Install a copy of pre_469_home as run *run_id* in the store whose database file is *database_path*, its run files in that file's directory, and return its id.
+
+    Its summary.json and its runs.summary_json hold 12.5 as retired_figure, a figure no field
+    has, which v2 drops.
+    """
+    installed = install_stored_run_fixture("pre_469_home", Database(database_path), database_path.parent, run_id=run_id)
+    _edit_stored_document(_run_dir(database_path, installed) / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(database_path, installed, "summary_json", _setting("retired_figure", 12.5))
+    return installed
+
+
 def _storage_of(database_path: Path) -> RunStorage:
     """The RunStorage of the store at SCHEMA_VERSION whose database file is *database_path*, its run files in that file's directory."""
     return run_storage_over(open_database(database_path))
@@ -620,12 +632,8 @@ def test_migrate_store_reports_each_value_it_drops_that_is_not_null_naming_the_r
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
     """A null value it drops, the retired setting's here and the other dispatch variants' keys of the pre-786 run, goes unreported."""
-    run_id = install_stored_run_fixture(
-        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-keys"
-    )
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-keys")
     run_dir = _run_dir(store_at_version_1, run_id)
-    _edit_stored_document(run_dir / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
     _edit_stored_document(run_dir / "config.json", _setting("retired_setting", None))
 
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
@@ -875,11 +883,10 @@ def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_
     those runs and that value. Run again once the fault is gone, the migration leaves those
     files as they are, so it reports only the value v2 drops from that copy's runs row.
     """
-    database = Database(store_at_version_1)
-    retired = install_stored_run_fixture("pre_469_home", database, store_at_version_1.parent, run_id="retired-figure")
-    _edit_stored_document(_run_dir(store_at_version_1, retired) / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(store_at_version_1, retired, "summary_json", _setting("retired_figure", 12.5))
-    unwritable = install_stored_run_fixture("pre_469_home", database, store_at_version_1.parent, run_id="unwritable")
+    retired = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
+    unwritable = install_stored_run_fixture(
+        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unwritable"
+    )
     unwritable_marker = _run_dir(store_at_version_1, unwritable) / "format.json"
     _put_a_directory_in_place_of(unwritable_marker)
 
@@ -910,22 +917,6 @@ def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_
     )
 
 
-def _install_a_copy_holding_a_retired_figure_whose_format_json_cannot_be_written(database_path: Path) -> str:
-    """Install a copy of pre_469_home as the run 'unwritable' in the store whose database file is *database_path*, and return its id.
-
-    Its summary.json and its runs.summary_json hold 12.5 as retired_figure, a figure no field
-    has, which v2 drops, and a directory is in the place of its format.json.
-    """
-    run_id = install_stored_run_fixture(
-        "pre_469_home", Database(database_path), database_path.parent, run_id="unwritable"
-    )
-    run_dir = _run_dir(database_path, run_id)
-    _edit_stored_document(run_dir / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(database_path, run_id, "summary_json", _setting("retired_figure", 12.5))
-    _put_a_directory_in_place_of(run_dir / "format.json")
-    return run_id
-
-
 def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_the_documents_of_that_run_it_wrote_and_the_values_it_dropped_from_them(
     store_at_version_1: Path, legacy_run_ids: dict[str, str]
 ) -> None:
@@ -938,8 +929,9 @@ def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_th
     run forward from the first format again, but v2 drops nothing from the summary.json it
     already brought forward, so it reports only the value it drops from the run's runs row.
     """
-    unwritable = _install_a_copy_holding_a_retired_figure_whose_format_json_cannot_be_written(store_at_version_1)
+    unwritable = _install_a_copy_holding_a_retired_figure(store_at_version_1, "unwritable")
     run_dir = _run_dir(store_at_version_1, unwritable)
+    _put_a_directory_in_place_of(run_dir / "format.json")
 
     with pytest.raises(MigrationRefused) as refused:
         migrate_store(store_at_version_1, store_at_version_1.parent)
@@ -1050,11 +1042,7 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
     Run again, the migration goes on from version 2, leaves those files as they are, and so
     reports v3's rewrites of the fleet's runs row alone.
     """
-    run_id = install_stored_run_fixture(
-        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="retired-figure"
-    )
-    _edit_stored_document(_run_dir(store_at_version_1, run_id) / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
+    run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
 
     with (
         the_step_to_version_3_refused(store_at_version_1, legacy_run_ids["pre_787_dispatch_fleet"]),
@@ -1157,11 +1145,8 @@ def test_migrate_store_refused_by_a_lagging_run_s_file_it_cannot_write_carries_t
     they are, so it reports only the value it drops from that run's runs row.
     """
     store = open_database(tmp_path / "store" / "solar-challenge.db").path
-    database = Database(store)
-    retired = install_stored_run_fixture("pre_469_home", database, store.parent, run_id="retired-figure")
-    _edit_stored_document(_run_dir(store, retired) / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(store, retired, "summary_json", _setting("retired_figure", 12.5))
-    unwritable = install_stored_run_fixture("pre_469_home", database, store.parent, run_id="unwritable")
+    retired = _install_a_copy_holding_a_retired_figure(store, "retired-figure")
+    unwritable = install_stored_run_fixture("pre_469_home", Database(store), store.parent, run_id="unwritable")
     unwritable_marker = _run_dir(store, unwritable) / "format.json"
     _put_a_directory_in_place_of(unwritable_marker)
 
@@ -1198,7 +1183,9 @@ def test_migrate_store_refused_by_a_lagging_run_s_format_json_it_cannot_write_ca
     run's runs row.
     """
     store = open_database(tmp_path / "store" / "solar-challenge.db").path
-    unwritable = _install_a_copy_holding_a_retired_figure_whose_format_json_cannot_be_written(store)
+    unwritable = _install_a_copy_holding_a_retired_figure(store, "unwritable")
+    marker = _run_dir(store, unwritable) / "format.json"
+    _put_a_directory_in_place_of(marker)
 
     with pytest.raises(LaggingRunsRefused) as refused:
         migrate_store(store, store.parent)
@@ -1208,7 +1195,7 @@ def test_migrate_store_refused_by_a_lagging_run_s_format_json_it_cannot_write_ca
         partly_brought_forward_runs=(PartlyBroughtForwardRun(unwritable, ("summary.json",)),),
     )
 
-    (_run_dir(store, unwritable) / "format.json").rmdir()
+    marker.rmdir()
     report = migrate_store(store, store.parent)
 
     assert report.caught_up_runs == (unwritable,)
@@ -1227,9 +1214,7 @@ def test_migrate_store_refused_at_the_catch_up_s_transaction_carries_the_lagging
     migration leaves those files as they are and reports only the value it drops from the row.
     """
     store = open_database(tmp_path / "store" / "solar-challenge.db").path
-    retired = install_stored_run_fixture("pre_469_home", Database(store), store.parent, run_id="retired-figure")
-    _edit_stored_document(_run_dir(store, retired) / "summary.json", _setting("retired_figure", 12.5))
-    _edit_runs_document(store, retired, "summary_json", _setting("retired_figure", 12.5))
+    retired = _install_a_copy_holding_a_retired_figure(store, "retired-figure")
     with Database(store).transaction() as conn:
         conn.execute(
             "CREATE TRIGGER refuse_run_updates BEFORE UPDATE ON runs BEGIN SELECT RAISE(ABORT, 'no run may be updated'); END"
