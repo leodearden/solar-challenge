@@ -91,8 +91,8 @@ class GridServicesBand(str, Enum):
         try:
             return cls(value)
         except ValueError:
-            raise ConfigurationError(
-                f"{what} must be one of {', '.join(band.value for band in cls)}, got {value!r}"
+            raise ConfigurationError.must_be(
+                what, f"one of {', '.join(band.value for band in cls)}", got=value
             ) from None
 
 

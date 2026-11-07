@@ -95,9 +95,11 @@ def parse_location(text: str) -> Location:
         return preset
     numbers = text.split(",")
     if len(numbers) not in (2, 3):
-        raise ConfigurationError(
-            f"location must be one of {', '.join(map(repr, LOCATION_PRESETS))}, "
-            f"or 'lat,lon' or 'lat,lon,alt' coordinates in decimal degrees and metres, got {text!r}"
+        raise ConfigurationError.must_be(
+            "location",
+            f"one of {', '.join(map(repr, LOCATION_PRESETS))}, "
+            "or 'lat,lon' or 'lat,lon,alt' coordinates in decimal degrees and metres",
+            got=text,
         )
     latitude = as_finite_float(numbers[0], "latitude")
     longitude = as_finite_float(numbers[1], "longitude")
