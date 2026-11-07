@@ -152,12 +152,19 @@ class TestCommunityConfig:
         with pytest.raises(ConfigurationError, match="community_battery"):
             CommunityConfig(sharing_mode="community_battery")
 
-    def test_unknown_sharing_mode_raises(self) -> None:
-        """Unknown sharing_mode → ConfigurationError naming the modes and the value."""
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("virtual_net_metering", id="unknown-word"),
+            pytest.param(None, id="none"),
+        ],
+    )
+    def test_unknown_sharing_mode_raises(self, value: object) -> None:
+        """Unknown sharing_mode → ConfigurationError naming the modes and the value's repr."""
         with pytest.raises(ConfigurationError) as exc_info:
-            CommunityConfig(sharing_mode="virtual_net_metering")  # type: ignore[arg-type]
+            CommunityConfig(sharing_mode=value)  # type: ignore[arg-type]
         assert str(exc_info.value) == (
-            "sharing_mode must be 'p2p' or 'community_battery', got 'virtual_net_metering'"
+            f"sharing_mode must be 'p2p' or 'community_battery', got {value!r}"
         )
 
     def test_frozen(self) -> None:
