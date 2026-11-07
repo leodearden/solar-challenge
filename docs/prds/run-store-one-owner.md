@@ -339,6 +339,14 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   `RunFilesMigrationStopped`, carrying the runs it brought forward before the fault. `web
   migrate` prints that report after the steps' report and before the refusal, as a migration run
   again leaves those files as they are and reports none of their values.
+- **Amendment (2026-11-07, task 1373):** `write_run_documents` stopped by an `OSError` raises
+  `RunDocumentsWriteStopped`, naming the documents it wrote, each whole, before the fault. That
+  run's files are then brought forward only in part, as its `format.json` still names its older
+  format, and a migration run again re-reads those documents already in the new format, so it
+  reports none of their values. So `RunFilesMigrationStopped`'s `brought_forward`, and hence
+  `files_brought_forward` (`RunFilesBroughtForward.partly_brought_forward_runs`, each a
+  `PartlyBroughtForwardRun`), carries that run with those documents and each value dropped or
+  rewritten in them. `web migrate` prints them with the rest.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;
