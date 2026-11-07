@@ -16,7 +16,7 @@ from solar_challenge.dispatch import (
     compute_grid_charge_power_kw,
 )
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import HOURS_PER_MINUTE
+from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
 
 
 def calculate_self_consumption(
@@ -294,7 +294,11 @@ def simulate_timestep(
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
+
+    Raises:
+        ValueError: If timestep_minutes is not positive and finite, naming it, before any battery moves energy.
     """
+    require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
     if battery is None:
         return _settle(step, _NO_EXCHANGE, 0.0)
@@ -365,7 +369,11 @@ def simulate_timestep_tou(
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
+
+    Raises:
+        ValueError: If timestep_minutes is not positive and finite, naming it, before any battery moves energy.
     """
+    require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
     is_cheap_period = tariff.is_cheap_at(timestamp)
     if battery is None:
