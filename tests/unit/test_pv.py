@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import pvlib
 import pytest
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     DEFAULT_CEC_MODULE,
@@ -31,6 +30,7 @@ from tests._pv_modules import (
     pvwatts_300_w_module,
     sapm_library_module,
 )
+from tests._pv_refusals import one_refusal_at_construction_and_at_use
 from tests._pv_runs import per_array
 
 
@@ -900,17 +900,8 @@ class TestWiredDcCapacity:
         )
         del module["STC"]
 
-        with pytest.raises(ConfigurationError) as constructing:
-            dataclasses.replace(config)
-        with pytest.raises(ConfigurationError) as building:
-            create_pv_system(config)
-        with pytest.raises(ConfigurationError) as wiring:
-            wired_dc_capacity_kw(config)
-
-        message = str(constructing.value)
+        message = one_refusal_at_construction_and_at_use(config)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
-        assert str(building.value) == message
-        assert str(wiring.value) == message
 
     @pytest.mark.parametrize(
         "module",
