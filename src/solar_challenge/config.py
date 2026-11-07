@@ -2087,6 +2087,33 @@ def _drawn_component_every_home_has(
     return built
 
 
+def _checked_component(built: Mapping[str, object], name: str, config_type: type[_Built]) -> _Built:
+    """The home's *name* component in *built*, checked to be a *config_type*.
+
+    Raises:
+        TypeError: If *built* holds another type under *name*, naming the component and both types.
+    """
+    component = built[name]
+    if not isinstance(component, config_type):
+        raise TypeError(
+            f"home component {name!r} was built as {type(component).__name__}, not {config_type.__name__}"
+        )
+    return component
+
+
+def _checked_component_or_none(
+    built: Mapping[str, object], name: str, config_type: type[_Built]
+) -> Optional[_Built]:
+    """The home's *name* component in *built* as _checked_component checks it; None when the home has none.
+
+    Raises:
+        TypeError: As _checked_component does.
+    """
+    if built[name] is None:
+        return None
+    return _checked_component(built, name, config_type)
+
+
 def _generated_home(
     config: FleetDistributionConfig,
     sampler: _DistributionSampler,
@@ -2098,23 +2125,24 @@ def _generated_home(
 
     A component in _EVERY_HOME_HAS is drawn as _drawn_component_every_home_has draws it, any
     other as _drawn_component does. Each load is given the fleet's seed plus the home's index,
-    when the fleet has a seed.
+    when the fleet has a seed. Each component goes into HomeConfig only after it is checked to
+    be its own field's type.
     """
     home_number = index + 1
     drawn: dict[str, SpecValue] = {}
     components = _fleet_components(config)
     given = {"load": _NOTHING_GIVEN if config.seed is None else {"seed": config.seed + index}}
-    built: dict[str, Any] = {}
+    built: dict[str, object] = {}
     for name in _HOME_DRAW_ORDER:
         block, component = components[name]
         draw = _drawn_component_every_home_has if name in _EVERY_HOME_HAS else _drawn_component
         built[name] = draw(name, block, component, sampler, drawn, home_number, given=given.get(name, _NOTHING_GIVEN))
     return HomeConfig(
-        pv_config=built["pv"],
-        battery_config=built["battery"],
-        load_config=built["load"],
-        heat_pump_config=built["heat_pump"],
-        ev_config=built["ev"],
+        pv_config=_checked_component(built, "pv", PVConfig),
+        battery_config=_checked_component_or_none(built, "battery", BatteryConfig),
+        load_config=_checked_component(built, "load", LoadConfig),
+        heat_pump_config=_checked_component_or_none(built, "heat_pump", HeatPumpConfig),
+        ev_config=_checked_component_or_none(built, "ev", EVConfig),
         location=location,
         name=f"Home {home_number}",
         tariff_config=fleet_tariff,
