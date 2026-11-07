@@ -43,4 +43,9 @@ NEWEST_RELEASES_DESELECTIONS: tuple[DeselectedTest, ...] = (
         PurePosixPath("tests/unit/test_required_environment_helper.py"),
         "test_the_declaration_is_valid_toml_in_this_projects_pyproject",
     ),
+    # The copy's newer release of a listed package may ship types; the locked release does not, so it stays listed.
+    DeselectedTest(
+        PurePosixPath("tests/unit/test_mypy_override_lists_only_untyped_packages.py"),
+        "test_each_listed_package_ships_no_types",
+    ),
 )
