@@ -78,15 +78,15 @@ def _require_template_takes_temperature_coefficient(
     PVWatts, whose gamma_pdc it sets), or a CEC template on which no Adjust in
     _adjust_bracket reaches it (_require_adjust_reaches).
     """
-    if not (_is_cec_single_diode_module(template) or _is_pvwatts_module(template)):
+    if _is_cec_single_diode_module(template):
+        _require_adjust_reaches(template, coefficient)
+    elif not _is_pvwatts_module(template):
         raise ConfigurationError(
             f"temperature_coefficient={coefficient} needs module parameters in CEC "
             f"single-diode form ({', '.join(sorted(_CEC_SINGLE_DIODE_MODULE_KEYS))}), whose "
             f"Adjust it solves, or in PVWatts form ({', '.join(sorted(_PVWATTS_MODULE_KEYS))}), "
             "whose gamma_pdc it sets; the module is in neither"
         )
-    if _is_cec_single_diode_module(template):
-        _require_adjust_reaches(template, coefficient)
 
 
 PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
