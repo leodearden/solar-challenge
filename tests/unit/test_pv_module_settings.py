@@ -21,9 +21,9 @@ from solar_challenge.pv import (
     create_pv_system,
     create_pvwatts_inverter_params,
     create_simple_module_params,
-    wired_dc_capacity_kw,
 )
 from tests._pv_modules import default_module, pvwatts_300_w_module, sapm_library_module
+from tests._pv_refusals import one_refusal_at_construction_and_at_use
 from tests._pv_runs import clear_day_kwh
 
 _CEC_SINGLE_DIODE_KEYS = ("alpha_sc", "a_ref", "I_L_ref", "I_o_ref", "R_sh_ref", "R_s", "Adjust")
@@ -43,6 +43,11 @@ def cec_module_without_alpha_sc() -> dict[str, float]:
 def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     """DEFAULT_CEC_MODULE's row at a 3.0 eV band gap: the Adjusts that keep its photocurrent positive from -40 to 85 °C reach a modelled coefficient only from -0.0908 to -3.1151 %/K (measured), so not -0.05 %/K."""
     return {**default_module(), "EgRef": 3.0}
+
+
+def cec_module_with_a_nan_alpha_sc() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row with a NaN short-circuit current temperature coefficient: its bracket's ends, and the modelled coefficient at each, are NaN, which straddles no coefficient."""
+    return {**default_module(), "alpha_sc": math.nan}
 
 
 @pytest.fixture(scope="module")
@@ -309,34 +314,61 @@ class TestASetTemperatureCoefficientActsOnAClearDay:
         )
 
 
-class TestACoefficientNoAdjustReachesIsRefusedAtUse:
+_COEFFICIENTS_NO_ADJUST_REACHES = [
+    pytest.param(
+        cec_module_without_alpha_sc,
+        -0.004,
+        "alpha_sc is 0",
+        id="cec_module_without_alpha_sc--0.004",
+    ),
+    pytest.param(
+        cec_module_with_a_wide_band_gap,
+        -0.0005,
+        "beyond the module's reach",
+        id="cec_module_with_a_wide_band_gap--0.0005",
+    ),
+    pytest.param(
+        cec_module_with_a_nan_alpha_sc,
+        -0.004,
+        "beyond the module's reach",
+        id="cec_module_with_a_nan_alpha_sc--0.004",
+    ),
+]
+
+
+class TestACoefficientNoAdjustReachesIsRefused:
+    """Adjust scales only alpha_sc's temperature term, so a CEC template whose alpha_sc is 0, or whose modelled coefficient at the bracket's ends does not straddle the set one, cannot take it; PVConfig refuses it when built and use refuses it again."""
+
     @pytest.mark.parametrize(
-        ("module", "coefficient"),
-        [
-            pytest.param(
-                cec_module_without_alpha_sc, -0.004, id="cec_module_without_alpha_sc--0.004"
-            ),
-            pytest.param(
-                cec_module_with_a_wide_band_gap,
-                -0.0005,
-                id="cec_module_with_a_wide_band_gap--0.0005",
-            ),
-        ],
+        ("unreachable", "coefficient", "reason"), _COEFFICIENTS_NO_ADJUST_REACHES
     )
-    def test_naming_the_field_and_its_value(
-        self, module: Callable[[], dict[str, float]], coefficient: float
+    def test_at_construction_naming_the_field_and_its_value(
+        self, unreachable: Callable[[], dict[str, float]], coefficient: float, reason: str
     ) -> None:
-        config = PVConfig(
-            capacity_kw=4.0,
-            temperature_coefficient=coefficient,
-            custom_module_params=module(),
-        )
+        with pytest.raises(ConfigurationError) as refusal:
+            PVConfig(
+                capacity_kw=4.0,
+                temperature_coefficient=coefficient,
+                custom_module_params=unreachable(),
+            )
 
-        with pytest.raises(ValueError) as building:
-            create_pv_system(config)
-        with pytest.raises(ValueError) as wiring:
-            wired_dc_capacity_kw(config)
-
-        message = str(building.value)
+        message = str(refusal.value)
         assert f"temperature_coefficient={coefficient}" in message, message
-        assert str(wiring.value) == message
+        assert reason in message, message
+
+    @pytest.mark.parametrize(
+        ("unreachable", "coefficient", "reason"), _COEFFICIENTS_NO_ADJUST_REACHES
+    )
+    def test_at_construction_and_at_use_with_one_message(
+        self, unreachable: Callable[[], dict[str, float]], coefficient: float, reason: str
+    ) -> None:
+        """A PVConfig keeps the caller's own module dict, so a module made unreachable after construction reaches use, which refuses it as construction does."""
+        module = default_module()
+        config = PVConfig(
+            capacity_kw=4.0, temperature_coefficient=coefficient, custom_module_params=module
+        )
+        module.update(unreachable())
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert f"temperature_coefficient={coefficient}" in message, message
+        assert reason in message, message

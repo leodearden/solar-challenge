@@ -1,7 +1,7 @@
 # PV Module Settings: Module Efficiency and Temperature Coefficient Derive the Module
 
-**Task:** #825, #1029
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`)
+**Task:** #825, #1029, #1372
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`, `_require_template_takes_temperature_coefficient`, `_require_adjust_reaches`)
 **Measurement:** [`tests/unit/test_pv_module_settings.py`](../tests/unit/test_pv_module_settings.py)
 
 ---
@@ -36,22 +36,27 @@
   PVWatts module, else `STC`. It acts on output through NOCT-SAM's cell temperature
   ([pv-cell-temperature.md](pv-cell-temperature.md)): a less efficient module turns
   more of its light into heat. It takes any module form that has a rating.
-- **Refusals**, each a `ValueError` naming what it refuses, and a `ConfigurationError`
-  at construction and at use for each rule construction also checks:
-  - At construction (`PVConfig.__post_init__`): an efficiency outside (0, 0.9), 0.9
-    being NOCT-SAM's transmittance–absorptance, at which a cell no longer heats; a
-    coefficient outside [−0.01, 0) per K; a set coefficient on custom parameters in
-    neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of each
-    form; then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor
-    `STC`), or outside NOCT-SAM's domain once a set efficiency's area is applied
-    (`_template_with_set_efficiency`), through `_require_cells_noct_sam_can_heat`,
-    which use runs too ([pv-cell-temperature.md](pv-cell-temperature.md)).
+- **Refusals**, each a `ConfigurationError` (a `ValueError`) naming what it refuses:
+  - At construction (`PVConfig.__post_init__`):
+    - an efficiency outside (0, 0.9), 0.9 being NOCT-SAM's transmittance–absorptance,
+      at which a cell no longer heats; a coefficient outside [−0.01, 0) per K;
+    - a set coefficient that custom parameters cannot take, through
+      `_require_template_takes_temperature_coefficient`, which use runs too: parameters
+      in neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of
+      each form; or CEC single-diode parameters whose `alpha_sc` is 0, since `Adjust`
+      scales only `alpha_sc` and so cannot move the coefficient, or on which the
+      coefficient is beyond the reach of the bracket's ends, a NaN reach included,
+      naming the bracket and the reach (`_require_adjust_reaches`). Construction
+      evaluates only the bracket's two ends, not the solve;
+    - then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor `STC`),
+      or outside NOCT-SAM's domain once a set efficiency's area is applied
+      (`_template_with_set_efficiency`), through `_require_cells_noct_sam_can_heat`,
+      which use runs too ([pv-cell-temperature.md](pv-cell-temperature.md)).
   - At use (`create_pv_system`, and so every chain builder and `wired_dc_capacity_kw`):
-    the same form rule, rating and NOCT-SAM checks, through the same functions, on the
-    module it wires; a CEC template whose `alpha_sc` is 0, since `Adjust` scales only
-    `alpha_sc` and so cannot move the coefficient; and a coefficient beyond the reach of
-    the bracket's ends, naming the bracket and the reach. The efficiency's use-time
-    check is NOCT-SAM's own (`_require_cells_noct_sam_can_heat`).
+    the same form, reach, rating and NOCT-SAM rules, through the same functions, on the
+    module it wires, `DEFAULT_CEC_MODULE`'s row included, which construction does not
+    check. The efficiency's use-time check is NOCT-SAM's own
+    (`_require_cells_noct_sam_can_heat`).
 - `scenario_writer` writes both keys, an unset one as null, and `_parse_pv_config` hands
   a null on as `None`, so a written home loads back equal. A fleet distribution that
   draws no `module_efficiency` gives every home `None`.
@@ -80,6 +85,13 @@
   each template, and lets every CECMod row with a non-zero `alpha_sc` reach the whole
   domain. Its reach depends only on |alpha_sc|, so `alpha_sc` = 0 is the one degenerate
   case, refused by name rather than divided by.
+- **Why construction checks the reach, not the solve.** Whether the modelled
+  coefficients at the bracket's two ends straddle the set one, which a NaN end never
+  does, is the refusal's whole condition: `brentq` always succeeds once they do, so a
+  solve at construction would refuse nothing more. The check costs 2 of the solve's ~19
+  single-diode evaluations (§3). `DEFAULT_CEC_MODULE`'s row reaches the whole domain
+  (§3), so construction skips it: only custom parameters, which no YAML key sets, pay
+  for the check.
 - **The domains.** 0.9 is NOCT-SAM's transmittance–absorptance, read from the one
   constant the model reads. −0.01 per K (−1 %/K) is steeper than every catalogue row's
   modelled coefficient (−0.68 %/K), and the old (−1, 0) admitted values no model can
@@ -92,7 +104,7 @@
 
 Measured on 2026-10-21 with pvlib 0.15.1 and scipy 1.17.1 by task 825's architect on
 main 49b70e1, through a prototype of this design. Figures marked † were re-measured on
-this branch at cae3d55 and reproduce exactly.
+this branch at 695d386 and reproduce exactly.
 
 - **The template.** `DEFAULT_CEC_MODULE`'s modelled coefficient is −0.34730 %/K (−0.0034730293
   per K; half-widths from 0.02 to 2 K agree within 1e-8/K), beside its catalogue
@@ -118,6 +130,14 @@ this branch at cae3d55 and reproduce exactly.
   ×0.9983, −0.004 ×1.0019 and −0.005 ×1.0055. Over the year the cells spend most of
   their hours below 25 °C, so a steeper coefficient gains: no test asserts an annual
   direction for the coefficient.
+- **The reach check's cost**, measured on 2026-11-07 by task 1372's architect on
+  3d92c71 (`pv.py` unchanged at 5f39756) with pvlib 0.15.1, on a host at a load average
+  of ~130 on 32 cores, so the ratios carry rather than the times: one `_modelled_gamma`
+  takes 5.9 ms at best; the reach check, two of them, 12.5 ms; the full solve 119 ms,
+  `brentq` taking 17 calls in 16 iterations for −0.004 per K; a `PVConfig` without the
+  check 0.02 ms. Re-measured the same day by its implementer on task 1372's branch at
+  dafc05d, its GREEN commit, at a load average of ~95: a `PVConfig` of the default row
+  as custom parameters took 12.3 ms with −0.004 per K and 0.019 ms without it.
 
 ## 4. When to Revisit
 
