@@ -90,6 +90,7 @@ def test_sim_results_default_to_one_whole_calendar_year() -> None:
 def test_period_covers_the_local_dates_of_make_window() -> None:
     period = make_period()
     window = make_window()
+    assert window.timezone is not None
 
     assert (
         period.get_start_timestamp(window.timezone).date(),
@@ -107,6 +108,7 @@ def test_a_projection_of_the_builders_scenario_and_default_results_is_annualised
 
     curve = project_multi_year(scenario, finance, simulate=simulate)
 
+    assert curve.annualised_from is not None
     assert set(simulated) == {(curve.annualised_from.first_day, curve.annualised_from.last_day)}
 
 
