@@ -43,10 +43,11 @@ from tests._uv_env import SharedUvEnvironments
 class LaneContract(Enum):
     """A contract a LANE_JOBS row may list for its job.
 
-    Every job also keeps a contract no row lists: the lane runs exactly one
-    enabled job of its name. A job whose suite lies directly under tests/ keeps
-    another, which its suite's path states: a default collection of tests/
-    with addopts cleared never reaches the suite.
+    Every job also keeps two contracts no row lists: the lane runs exactly one
+    enabled job of its name, and no node id the job collects holds whitespace.
+    A job whose suite lies directly under tests/ keeps another, which its
+    suite's path states: a default collection of tests/ with addopts cleared
+    never reaches the suite.
     """
 
     # Run as the lane runs it, the job collects at least one test, every one in its suite.
@@ -264,6 +265,24 @@ def test_the_job_collects_its_suite_and_nothing_else(
     assert not outside, (
         f"the {job.name!r} lane job {collection.command!r} collected tests outside {job.suite}, the one suite it "
         f"exists to run, so after every merge it runs them beside that suite: {outside}"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+@pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
+def test_no_node_id_the_job_collects_holds_whitespace(
+    job: LaneJob, project_root: Path, lane_job_collection: ComputedOnce[Collection]
+) -> None:
+    """Run as the lane runs it, the job collects no node id holding whitespace, so the lane can name each failing test."""
+    collection = lane_job_collection(project_root, job.name)
+
+    spaced = [node_id for node_id in collection.node_ids() if any(char.isspace() for char in node_id)]
+    assert not spaced, (
+        f"the {job.name!r} lane job {collection.command!r} collected node ids holding whitespace: {spaced}; the lane "
+        "reads a failing test's node id from pytest's FAILED or ERROR line only up to the first whitespace, so it gets "
+        "such an id cut short and files the red as unconfirmable instead of naming the test; give each one a "
+        "parametrize id without whitespace"
     )
 
 
