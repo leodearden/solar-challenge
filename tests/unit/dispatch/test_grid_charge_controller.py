@@ -333,7 +333,7 @@ class TestComputeGridChargePowerKw:
             post-PV SOC      = 2.0 + 1.0 × 1.0 × 0.8 = 2.8 kWh
             residual_battery = 4.0 kW (battery-side)
             gap_power        = (9.0 - 2.8)/0.8/1.0 = 7.75 kW (grid-side, non-binding)
-            result           = min(8.75, 4.0) = 4.0  (battery-side residual)
+            result           = min(7.75, 4.0) = 4.0  (battery-side residual)
         True grid draw for full headroom would be 4.0/0.8 = 5.0 kW — NOT returned.
         """
         ctx = GridChargeContext(
