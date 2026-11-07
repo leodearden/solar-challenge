@@ -5,16 +5,18 @@
 import dataclasses
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetResults
+from solar_challenge.finance import FinanceConfig, project_multi_year
+from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
+    make_period,
     make_pv_config,
     make_scenario,
     make_scenario_and_finance,
@@ -83,6 +85,29 @@ def test_sim_results_default_to_one_whole_calendar_year() -> None:
     assert (window.last_day.month, window.last_day.day) == (12, 31)
     assert not window.extrapolated
     assert window.annualisation_scale == 1.0
+
+
+def test_period_covers_the_local_dates_of_make_window() -> None:
+    period = make_period()
+    window = make_window()
+
+    assert (
+        period.get_start_timestamp(window.timezone).date(),
+        period.get_end_timestamp(window.timezone).date(),
+    ) == (window.first_day, window.last_day)
+
+
+def test_a_projection_of_the_builders_scenario_and_default_results_is_annualised_from_the_period_it_simulated() -> None:
+    scenario, finance = make_scenario_and_finance()
+    simulated: list[tuple[date, date]] = []
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        simulated.append((start.date(), end.date()))
+        return make_fleet_results(homes=fleet_config.homes)
+
+    curve = project_multi_year(scenario, finance, simulate=simulate)
+
+    assert set(simulated) == {(curve.annualised_from.first_day, curve.annualised_from.last_day)}
 
 
 def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> None:
