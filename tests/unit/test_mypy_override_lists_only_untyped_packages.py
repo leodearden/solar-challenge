@@ -14,6 +14,7 @@ directory counts even when its py.typed marks it partial, though mypy then reads
 
 from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -95,3 +96,32 @@ def test_a_listed_package_that_ships_no_types_passes(tmp_path: Path, files: tupl
     site = _site_packages(tmp_path / "site", files)
 
     _assert_names_an_untyped_package("pkg.*", [site])
+
+
+@pytest.mark.parametrize(
+    ("pyproject", "entries"),
+    [
+        pytest.param(
+            {
+                "tool": {
+                    "mypy": {
+                        "strict": True,
+                        "overrides": [
+                            {"module": ["a.*", "b"], "ignore_missing_imports": True},
+                            {"module": ["web.*"], "disallow_untyped_decorators": False},
+                            {"module": "c.*", "ignore_missing_imports": True},
+                            {"module": ["d"], "ignore_missing_imports": False},
+                        ],
+                    }
+                }
+            },
+            ["a.*", "b", "c.*"],
+            id="overrides",
+        ),
+        pytest.param({"tool": {"mypy": {"strict": True}}}, [], id="no-overrides"),
+    ],
+)
+def test_the_entries_read_are_those_of_the_override_tables_that_ignore_missing_imports(
+    pyproject: dict[str, Any], entries: list[str]
+) -> None:
+    assert _untyped_override_entries(pyproject) == entries
