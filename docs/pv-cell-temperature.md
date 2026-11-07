@@ -1,6 +1,6 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
-**Task:** #823, #1029
+**Task:** #823, #1029, #1374
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
@@ -15,6 +15,9 @@
   - `T_NOCT` (°C) and `A_c` (m²) are the module's own catalogue values. The rating is
     `_module_rating_w`'s: the module's `pdc0` if it has PVWatts parameters, else its
     `STC`, the same rating that counts the modules and gives the wired DC.
+    `_module_rating_w` refuses a rating that is not a finite number above 0 with a
+    `ConfigurationError` naming its key and value, at construction and at use, before
+    anything divides by it.
   - So `DEFAULT_CEC_MODULE` runs at a NOCT of 45.1 °C and an efficiency of
     400.428 / (1.99 × 1000) = 0.2012.
 - **A missing key takes the default module's value.** A module that lacks `T_NOCT` or
