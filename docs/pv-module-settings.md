@@ -134,9 +134,9 @@ this branch at cae3d55 and reproduce exactly.
   of ~130 on 32 cores, so the ratios carry rather than the times: one `_modelled_gamma`
   takes 5.9 ms at best; the reach check, two of them, 12.5 ms; the full solve 119 ms,
   `brentq` taking 17 calls in 16 iterations for −0.004 per K; a `PVConfig` without the
-  check 0.02 ms. On task 1372's branch at f136f86, at a load average of ~95, a
-  `PVConfig` of the default row as custom parameters took 12.3 ms with −0.004 per K and
-  0.019 ms without it.
+  check 0.02 ms. Re-measured the same day by its implementer on task 1372's branch at
+  f136f86, at a load average of ~95: a `PVConfig` of the default row as custom
+  parameters took 12.3 ms with −0.004 per K and 0.019 ms without it.
 
 ## 4. When to Revisit
 
