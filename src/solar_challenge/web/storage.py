@@ -566,20 +566,33 @@ def _row_brought_forward(
 
 @dataclass(frozen=True)
 class RunHeadline:
-    """The figures a run list shows for a run: the energy it generated and the share of that it self-consumed.
+    """The figures the web shows for a run of either kind: its five energy totals, its self-consumption, grid dependency and export ratios, and the share of its generation the battery stored from PV.
+
+    The run lists show its generation and self-consumption ratio, and the comparison every
+    figure. pv_stored_share is None for a fleet run, as FleetSummary carries no battery totals.
 
     Raises:
         ValueError: A figure is not a finite number a float can hold, e.g. None, a text, a bool,
             NaN, an infinity or an int too large for a float; the message names the figure and
-            its value.
+            its value. A pv_stored_share of None is not refused.
     """
 
     generation_kwh: float
+    demand_kwh: float
+    self_consumption_kwh: float
+    grid_import_kwh: float
+    grid_export_kwh: float
     self_consumption_ratio: float
+    grid_dependency_ratio: float
+    export_ratio: float
+    pv_stored_share: float | None
 
     def __post_init__(self) -> None:
-        _require_finite_number("generation_kwh", self.generation_kwh)
-        _require_finite_number("self_consumption_ratio", self.self_consumption_ratio)
+        for figure in fields(self):
+            value = getattr(self, figure.name)
+            if figure.name == "pv_stored_share" and value is None:
+                continue
+            _require_finite_number(figure.name, value)
 
 
 def _require_finite_number(figure: str, value: object) -> None:
@@ -596,25 +609,61 @@ def _is_finite_as_float(number: int | float) -> bool:
         return False
 
 
+def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
+    """*kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
+
+    Raises:
+        ValueError: *generation_kwh*, or *kwh*, the energy RunHeadline's *figure* is read from,
+            is not a finite number a float can hold, as _require_finite_number refuses it,
+            before anything is divided.
+    """
+    _require_finite_number("generation_kwh", generation_kwh)
+    _require_finite_number(figure, kwh)
+    return kwh / generation_kwh if generation_kwh > 0 else 0.0
+
+
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
     """The headline of the run whose summary is *summary*, a home run's or a fleet run's.
 
     It is the one place the web maps a fleet summary's names, such as fleet_self_consumption_ratio,
-    to a run list's (D-S19-8 in docs/prds/run-store-one-owner.md).
+    to a headline's (D-S19-8 in docs/prds/run-store-one-owner.md). It also derives the two figures
+    a summary does not hold, each a share of the generation: a fleet's export ratio, its grid
+    export's share, and a home's pv_stored_share, the share of the PV its battery stored, which
+    total_pv_charge_kwh counts without the grid charge. A fleet's pv_stored_share is None.
 
     Raises:
-        ValueError: The summary's figure for the generation or the ratio is not a finite number
-            a float can hold, e.g. None, a text, a bool, NaN, an infinity or an int too large for
-            a float, as RunHeadline refuses it.
+        ValueError: A figure of the summary that the headline holds, or that a share is derived
+            from, is not a finite number a float can hold, e.g. None, a text, a bool, NaN, an
+            infinity or an int too large for a float, as RunHeadline refuses it.
     """
     match summary:
         case SummaryStatistics():
             return RunHeadline(
-                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.self_consumption_ratio
+                generation_kwh=summary.total_generation_kwh,
+                demand_kwh=summary.total_demand_kwh,
+                self_consumption_kwh=summary.total_self_consumption_kwh,
+                grid_import_kwh=summary.total_grid_import_kwh,
+                grid_export_kwh=summary.total_grid_export_kwh,
+                self_consumption_ratio=summary.self_consumption_ratio,
+                grid_dependency_ratio=summary.grid_dependency_ratio,
+                export_ratio=summary.export_ratio,
+                pv_stored_share=_share_of_generation(
+                    "pv_stored_share", summary.total_pv_charge_kwh, summary.total_generation_kwh
+                ),
             )
         case FleetSummary():
             return RunHeadline(
-                generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
+                generation_kwh=summary.total_generation_kwh,
+                demand_kwh=summary.total_demand_kwh,
+                self_consumption_kwh=summary.total_self_consumption_kwh,
+                grid_import_kwh=summary.total_grid_import_kwh,
+                grid_export_kwh=summary.total_grid_export_kwh,
+                self_consumption_ratio=summary.fleet_self_consumption_ratio,
+                grid_dependency_ratio=summary.fleet_grid_dependency_ratio,
+                export_ratio=_share_of_generation(
+                    "grid_export_kwh", summary.total_grid_export_kwh, summary.total_generation_kwh
+                ),
+                pv_stored_share=None,
             )
         case _:
             assert_never(summary)
