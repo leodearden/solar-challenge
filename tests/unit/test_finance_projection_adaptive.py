@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, Callable
 
 import pytest
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
-from tests._finance_builders import make_fleet_results, make_home_config
+from tests._finance_builders import make_fleet_results, make_home_config, make_period
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -82,7 +82,7 @@ def _make_adaptive_scenario(asset_life: int = 10) -> tuple:
     )
     scenario = ScenarioConfig(
         name="adaptive-test",
-        period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+        period=make_period(),
         description="Adaptive refinement test",
         homes=homes,
     )

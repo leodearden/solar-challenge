@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -33,6 +33,7 @@ from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
+    make_period,
     make_scenario_and_finance,
     make_window,
 )
@@ -58,7 +59,7 @@ class TestProjectMultiYearRevenue:
         )
         scenario = ScenarioConfig(
             name="revenue-test",
-            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            period=make_period(),
             description="Revenue test",
             homes=homes,
             seg_tariff_pence_per_kwh=seg_tariff_pence,
