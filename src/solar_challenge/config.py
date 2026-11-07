@@ -325,7 +325,17 @@ class FleetDistributionConfig:
     dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Refuse a fleet no home of which could be drawn, as each check's helper states."""
+        """Refuse a fleet no home of which could be drawn, as each check's helper states.
+
+        Past n_homes, random_order and dispatch_strategy it refuses, in this order: a component
+        key outside its table's fleet rows, or held in the wrong one of its draws and settings
+        (F1); a required key a component does not draw (F5); a spec its key's kind does not
+        draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
+        source is not a number or count field drawn earlier for every home that draws it (F4);
+        a shuffled pool whose counts do not total n_homes (F6); a fixed presence value its
+        table's presence rule refuses; and a rounded count with no whole number from its min
+        to its max.
+        """
         if self.n_homes < 1:
             raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
         if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
@@ -340,6 +350,7 @@ class FleetDistributionConfig:
         _refuse_keys_held_where_no_row_puts_them(self)
         _refuse_required_keys_not_drawn(self)
         _refuse_specs_their_kinds_cannot_draw(self)
+        _refuse_proportional_sources_not_drawn_earlier(self)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
         _refuse_rounded_counts_with_no_whole_number(self)
@@ -347,8 +358,15 @@ class FleetDistributionConfig:
 
 #: The default shuffle order: every random order shuffles the pools it does not shuffle first
 #: component by component in this order, each component's keys in its table's fleet order. It
-#: is not the order in which a home draws them, which is _generated_home's.
+#: is not the order in which a home draws them, which is _HOME_DRAW_ORDER.
 _DEFAULT_SHUFFLE_ORDER: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
+
+#: The order in which each home draws its components (T3), each component's keys in its table's
+#: fleet order.
+_HOME_DRAW_ORDER: tuple[str, ...] = ("pv", "battery", "load", "heat_pump", "ev")
+
+#: The components every home has: HomeConfig's pv_config and load_config are not Optional.
+_EVERY_HOME_HAS: frozenset[str] = frozenset({"pv", "load"})
 
 
 @dataclass(frozen=True)
@@ -426,6 +444,38 @@ def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> No
     """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
     for path, row, spec in _component_draws(config):
         _refuse_a_spec_its_row_cannot_draw(row, spec, _child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
+
+
+def _refuse_proportional_sources_not_drawn_earlier(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a proportional_to's source is not a number or count field drawn earlier for every home that draws the dependent, naming the dependent's path, its source and those it may name, in draw order.
+
+    Those are the number and count fields the components every home has draw before the
+    dependent's component in _HOME_DRAW_ORDER, and those the dependent's own component draws
+    before it in its table's fleet order. A field of another component every home need not have
+    is never one, even when every home of this fleet has it, so whether a fleet is refused does
+    not depend on what it draws.
+    """
+    components = _fleet_components(config)
+    drawn_for_every_home: list[str] = []
+    for name in _HOME_DRAW_ORDER:
+        block, component = components[name]
+        if component is None:
+            continue
+        drawn_earlier = list(drawn_for_every_home)
+        for key, row in block.fleet.items():
+            if key not in component.draws:
+                continue
+            path, spec = f"{name}.{key}", component.draws[key]
+            if isinstance(spec, ProportionalDistribution) and spec.source not in drawn_earlier:
+                raise ConfigurationError(
+                    f"Invalid {_child_path(_FLEET_DISTRIBUTION_PATH, path)} source {spec.source!r}; "
+                    "valid sources: a number or count field drawn earlier for every home that draws it, "
+                    f"one of {drawn_earlier!r}"
+                )
+            if row.kind in _NUMBER_KINDS:
+                drawn_earlier.append(path)
+        if name in _EVERY_HOME_HAS:
+            drawn_for_every_home = drawn_earlier
 
 
 def _shuffled_pools(
@@ -728,6 +778,9 @@ class FieldKind(Enum):
 #: The kinds a fleet gives every home as one value, never drawn.
 _GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKind.FLAG})
 
+#: The kinds whose draws are numbers: a count is drawn as a number is, then converted.
+_NUMBER_KINDS: frozenset[FieldKind] = frozenset({FieldKind.NUMBER, FieldKind.COUNT})
+
 
 @dataclass(frozen=True)
 class FleetField:
@@ -786,8 +839,7 @@ _CHOICE_KIND_RULE = _DrawnKindRule(
 #: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
 #: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
 _DRAWN_KIND_RULES: Mapping[FieldKind, _DrawnKindRule] = MappingProxyType({
-    FieldKind.NUMBER: _NUMBER_KIND_RULE,
-    FieldKind.COUNT: _NUMBER_KIND_RULE,
+    **dict.fromkeys(_NUMBER_KINDS, _NUMBER_KIND_RULE),
     FieldKind.CHOICE: _CHOICE_KIND_RULE,
 })
 
@@ -1838,8 +1890,9 @@ def _proportional_value(
 ) -> Optional[float]:
     """The value *spec*, the spec of the field at *path*, gives: its multiplier times the value *drawn* holds for its source, plus its offset; a null source gives null.
 
-    A home draws no field of a component it has none of, past the presence field, so a source
-    there is refused for each home without that component, and not for the others.
+    FleetDistributionConfig refuses, as it is built, a source that is not a number or count
+    field drawn earlier for every home that draws *path*; these refusals check that rule again
+    where the source is used.
 
     Raises:
         ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
@@ -2013,16 +2066,14 @@ def _drawn_component(
 def _drawn_component_every_home_has(
     name: str,
     block: ComponentBlock[_Component],
-    component: ComponentDistribution,
+    component: Optional[ComponentDistribution],
     sampler: _DistributionSampler,
     drawn: dict[str, SpecValue],
     home_number: int,
     *,
     given: Mapping[str, object] = _NOTHING_GIVEN,
 ) -> _Component:
-    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component every home has.
-
-    Every home has a PV and a load: HomeConfig's pv_config and load_config are not Optional.
+    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component in _EVERY_HOME_HAS.
 
     Raises:
         ConfigurationError: As _drawn_component does; or if the home is given no *name*
@@ -2043,31 +2094,27 @@ def _generated_home(
     location: Location,
     fleet_tariff: Optional[TariffConfig],
 ) -> HomeConfig:
-    """The fleet's home at *index*: it draws its PV, battery, load, heat pump and EV in that order (T3), each by its table's fleet rows.
+    """The fleet's home at *index*: it draws its components in _HOME_DRAW_ORDER (T3), each by its table's fleet rows.
 
-    Each load is given the fleet's seed plus the home's index, when the fleet has a seed.
+    A component in _EVERY_HOME_HAS is drawn as _drawn_component_every_home_has draws it, any
+    other as _drawn_component does. Each load is given the fleet's seed plus the home's index,
+    when the fleet has a seed.
     """
     home_number = index + 1
     drawn: dict[str, SpecValue] = {}
-    pv = _drawn_component_every_home_has("pv", PV_BLOCK, config.pv, sampler, drawn, home_number)
-    battery = _drawn_component("battery", BATTERY_BLOCK, config.battery, sampler, drawn, home_number)
-    load = _drawn_component_every_home_has(
-        "load",
-        LOAD_BLOCK,
-        config.load,
-        sampler,
-        drawn,
-        home_number,
-        given={} if config.seed is None else {"seed": config.seed + index},
-    )
-    heat_pump = _drawn_component("heat_pump", HEAT_PUMP_BLOCK, config.heat_pump, sampler, drawn, home_number)
-    ev = _drawn_component("ev", EV_BLOCK, config.ev, sampler, drawn, home_number)
+    components = _fleet_components(config)
+    given = {"load": _NOTHING_GIVEN if config.seed is None else {"seed": config.seed + index}}
+    built: dict[str, Any] = {}
+    for name in _HOME_DRAW_ORDER:
+        block, component = components[name]
+        draw = _drawn_component_every_home_has if name in _EVERY_HOME_HAS else _drawn_component
+        built[name] = draw(name, block, component, sampler, drawn, home_number, given=given.get(name, _NOTHING_GIVEN))
     return HomeConfig(
-        pv_config=pv,
-        battery_config=battery,
-        load_config=load,
-        heat_pump_config=heat_pump,
-        ev_config=ev,
+        pv_config=built["pv"],
+        battery_config=built["battery"],
+        load_config=built["load"],
+        heat_pump_config=built["heat_pump"],
+        ev_config=built["ev"],
         location=location,
         name=f"Home {home_number}",
         tariff_config=fleet_tariff,
@@ -2083,8 +2130,8 @@ def generate_homes_from_distribution(
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
-    Each home draws its components in _generated_home's order, each component's keys in its
-    table's fleet order, through one sampler (_DistributionSampler).
+    Each home draws its components in _HOME_DRAW_ORDER, each component's keys in its table's
+    fleet order, through one sampler (_DistributionSampler).
 
     Args:
         config: Fleet distribution configuration
@@ -2097,18 +2144,18 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
-        ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
-            naming the pool; as the sampler refuses a draw, naming its setting (a
-            proportional_to whose source the home has not drawn, such as a field of a
-            component the home has none of, a normal or uniform draw that is not a
-            finite number, a count with no whole number from its spec's min to its max,
-            an EV hour or a proportional_to's count that is an infinity or a NaN); if a
-            required field is not drawn, naming its path, or draws null, naming its
-            path and the home; if a presence rule refuses a draw, as
-            battery.has_battery refuses a negative or non-finite battery capacity; if
-            the fleet gives a home no PV or no load, which every home needs, naming the
-            component and the home; or as a component's dataclass refuses what it is
-            built from, naming the component and the home.
+        ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
+            uniform draw that is not a finite number, a count with no whole number from its
+            spec's min to its max, an EV hour or a proportional_to's count that is an
+            infinity or a NaN); if a required field draws null, naming its path and the
+            home; if a presence rule refuses a draw, as battery.has_battery refuses a
+            negative or non-finite battery capacity; if the fleet gives a home no PV or no
+            load, which every home needs, naming the component and the home; or as a
+            component's dataclass refuses what it is built from, naming the component and
+            the home. Where it uses them, it checks again what FleetDistributionConfig
+            refuses as it is built: that each shuffled pool's counts total config.n_homes,
+            that each required field is drawn and that each proportional_to's source is a
+            number the home drew earlier.
     """
     _refuse_pools_not_sized_to_the_fleet(config)
     sampler = _DistributionSampler(config)
