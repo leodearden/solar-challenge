@@ -8,8 +8,10 @@ and height into the figure's layout, so each lives once. heat_pump_analysis retu
 and sweep_panels one per SweepMetric, each marking its best point by the metric's direction.
 Each page's assembler, home_results_tabs, fleet_results_tabs or comparison_tabs, groups the panels
 of the charts that apply to its run into ChartTabs; a chart whose subject the run lacks, a battery
-or a heat-pump load, is not listed. ChartPanel, ChartAbsence and ChartTab each refuse at
-construction, naming the field and the value, what no page can draw.
+or a heat-pump load, is not listed. The comparison charts draw each ComparedRun from its
+RunHeadline, the figures web/storage.py's run_headline reads from a run's summary of either
+kind. ChartPanel, ChartAbsence, ChartTab and ComparedRun each refuse at construction, naming the
+field and the value, what no page can draw.
 Charts share layout defaults. COLOUR_PALETTE maps each chart role to its colour, loaded when
 this module is imported from the chart section of the theme token file, static/src/theme-tokens.json.
 Every colour a chart draws is a COLOUR_PALETTE entry, or a translucent form of one made by
@@ -42,6 +44,7 @@ from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
+from solar_challenge.web.storage import RunHeadline
 from solar_challenge.web.theme_tokens import chart_colour_palette, is_rrggbb
 
 _THEME_TOKENS_FILE = Path(__file__).parent / "static" / "src" / "theme-tokens.json"
@@ -699,32 +702,40 @@ def _comparison_run_colour(run_index: int) -> str:
     return COLOUR_PALETTE[_COMPARISON_RUN_ROLES[run_index % len(_COMPARISON_RUN_ROLES)]]
 
 
-def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> ChartPanel:
-    """Grouped bar chart comparing energy totals across runs.
+@dataclass(frozen=True)
+class ComparedRun:
+    """One run of the comparison page: the label its charts draw it under, and its headline, whose figures they draw."""
 
-    One category per energy flow; one group per run, labelled.
+    label: str
+    headline: RunHeadline
 
-    Args:
-        summaries: List of summary dictionaries from different runs.
-        labels: Display labels for each run.
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            _refuse("ComparedRun.label", self.label, "a label, not blank")
 
-    Returns:
-        The chart's panel.
-    """
-    summary_keys = _in_flow_order({
-        _EnergyFlow.GENERATION: "total_generation_kwh",
-        _EnergyFlow.DEMAND: "total_demand_kwh",
-        _EnergyFlow.SELF_CONSUMPTION: "total_self_consumption_kwh",
-        _EnergyFlow.GRID_IMPORT: "total_grid_import_kwh",
-        _EnergyFlow.GRID_EXPORT: "total_grid_export_kwh",
-    })
-    categories = [flow.label for flow, _ in summary_keys]
 
-    traces: list[Any] = []
-    for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _comparison_run_colour(i)
-        values = [round(summary.get(key, 0), 2) for _, key in summary_keys]
-        traces.append(_bar(label, x=categories, y=values, colour=colour))
+_HEADLINE_KWH: Mapping[_EnergyFlow, Callable[[RunHeadline], float]] = MappingProxyType({
+    _EnergyFlow.GENERATION: lambda headline: headline.generation_kwh,
+    _EnergyFlow.DEMAND: lambda headline: headline.demand_kwh,
+    _EnergyFlow.SELF_CONSUMPTION: lambda headline: headline.self_consumption_kwh,
+    _EnergyFlow.GRID_IMPORT: lambda headline: headline.grid_import_kwh,
+    _EnergyFlow.GRID_EXPORT: lambda headline: headline.grid_export_kwh,
+})
+
+
+def comparison_bar_chart(runs: Sequence[ComparedRun]) -> ChartPanel:
+    """The panel of *runs*' energy totals as grouped bars: a category per energy flow, in flow order, and a bar per run, under its label, in its run colour."""
+    flows = _in_flow_order(_HEADLINE_KWH)
+    categories = [flow.label for flow, _ in flows]
+    traces = [
+        _bar(
+            run.label,
+            x=categories,
+            y=[round(kwh(run.headline), 2) for _, kwh in flows],
+            colour=_comparison_run_colour(index),
+        )
+        for index, run in enumerate(runs)
+    ]
 
     fig = go.Figure(data=traces)
     fig.update_layout(
@@ -736,50 +747,71 @@ def comparison_bar_chart(summaries: list[dict[str, Any]], labels: list[str]) -> 
     return _panel("chart-comparison-bar", "Energy Totals Comparison", 450, fig)
 
 
-def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> ChartPanel:
-    """Radar chart comparing efficiency ratios across runs.
+class _RadarAxis(NamedTuple):
+    """An axis of the comparison radar: its label, and the share of a run's headline it draws, None for a run with no figure for it."""
 
-    Axes: Self-Consumption %, Grid Dependency %, Export %,
-    Battery Utilization %.
+    label: str
+    share: Callable[[RunHeadline], float | None]
 
-    Args:
-        summaries: List of summary dictionaries from different runs.
-        labels: Display labels for each run.
 
-    Returns:
-        The chart's panel.
+_RADAR_AXES = (
+    _RadarAxis("Self-Consumption %", lambda headline: headline.self_consumption_ratio),
+    _RadarAxis("Grid Dependency %", lambda headline: headline.grid_dependency_ratio),
+    _RadarAxis("Export %", lambda headline: headline.export_ratio),
+    _RadarAxis("PV stored in battery %", lambda headline: headline.pv_stored_share),
+)
+
+
+def _shares_on_the_drawn_axes(runs: Sequence[ComparedRun]) -> dict[_RadarAxis, list[float]]:
+    """Each radar axis that every one of *runs* has a figure for, in axis order, with each run's share on it, in run order."""
+    drawn: dict[_RadarAxis, list[float]] = {}
+    for axis in _RADAR_AXES:
+        shares = [share for run in runs if (share := axis.share(run.headline)) is not None]
+        if len(shares) == len(runs):
+            drawn[axis] = shares
+    return drawn
+
+
+def _left_out_axis_note(axis: _RadarAxis, runs: Sequence[ComparedRun]) -> dict[str, Any]:
+    """The radar's annotation saying that it leaves out *axis*, naming each of *runs* with no figure for it.
+
+    It sits in the plot's lower right corner, which no axis label reaches while an axis is left
+    out. Its font sets a size and no colour, so it is drawn in the figure's font colour, which
+    chart-renderer.js sets to the page's text colour in either theme.
     """
-    theta = [
-        "Self-Consumption %",
-        "Grid Dependency %",
-        "Export %",
-        "Battery Utilization %",
-    ]
+    lacking = ", ".join(run.label for run in runs if axis.share(run.headline) is None)
+    return dict(
+        text=f"{axis.label} is left out: no figure for {lacking}",
+        xref="paper",
+        yref="paper",
+        x=1,
+        y=0,
+        xanchor="right",
+        yanchor="bottom",
+        showarrow=False,
+        font=dict(size=12),
+    )
+
+
+def comparison_radar(runs: Sequence[ComparedRun]) -> ChartPanel:
+    """The panel of *runs*' efficiency ratios on a radar: a closed polygon per run, under its label, in its run colour.
+
+    Its axes, each in %, are the self-consumption, grid dependency and export ratios and the PV
+    stored in battery, the share of the generation the battery stored from PV, its grid charge
+    not counted. It draws only the axes every run has a figure for: each axis it leaves out, such
+    as the PV stored in battery when a fleet run is compared, is noted, naming the runs without it.
+    """
+    drawn = _shares_on_the_drawn_axes(runs)
+    theta = [axis.label for axis in drawn]
 
     traces: list[Any] = []
-    for i, (summary, label) in enumerate(zip(summaries, labels)):
-        colour = _comparison_run_colour(i)
-
-        sc_ratio = summary.get("self_consumption_ratio", 0) * 100
-        grid_dep = summary.get("grid_dependency_ratio", 0) * 100
-        export_ratio = summary.get("export_ratio", 0) * 100
-
-        # Battery utilization: charge / generation (if available)
-        total_charge = summary.get("total_battery_charge_kwh", 0)
-        total_gen = summary.get("total_generation_kwh", 0)
-        battery_util = (total_charge / total_gen * 100) if total_gen > 0 else 0
-
-        r_values = [
-            round(sc_ratio, 1),
-            round(grid_dep, 1),
-            round(export_ratio, 1),
-            round(battery_util, 1),
-        ]
-
+    for index, run in enumerate(runs):
+        colour = _comparison_run_colour(index)
+        r = [round(shares[index] * 100, 1) for shares in drawn.values()]
         traces.append(go.Scatterpolar(
-            name=label,
-            r=r_values + [r_values[0]],  # close the polygon
-            theta=theta + [theta[0]],
+            name=run.label,
+            r=[*r, r[0]],
+            theta=[*theta, theta[0]],
             fill="toself",
             fillcolor=_with_alpha(colour, 0.1),
             line=dict(color=colour, width=2),
@@ -791,6 +823,7 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> Char
         polar=dict(
             radialaxis=dict(visible=True, range=[0, 100]),
         ),
+        annotations=[_left_out_axis_note(axis, runs) for axis in _RADAR_AXES if axis not in drawn],
     )
     return _panel("chart-comparison-radar", "Efficiency Ratios", 450, fig)
 
@@ -1150,9 +1183,9 @@ def fleet_results_tabs(fleet: FleetResults, home_summaries: Sequence[SummaryStat
     )
 
 
-def comparison_tabs(summaries: list[dict[str, Any]], labels: list[str]) -> tuple[ChartTab, ...]:
-    """The chart tabs of the run comparison page, from each compared run's summary and label."""
+def comparison_tabs(runs: Sequence[ComparedRun]) -> tuple[ChartTab, ...]:
+    """The chart tabs of the run comparison page, drawing each of *runs* from its headline, under its label."""
     return (
-        ChartTab("bar", "Energy Totals", (comparison_bar_chart(summaries, labels),)),
-        ChartTab("radar", "Efficiency Ratios", (comparison_radar(summaries, labels),)),
+        ChartTab("bar", "Energy Totals", (comparison_bar_chart(runs),)),
+        ChartTab("radar", "Efficiency Ratios", (comparison_radar(runs),)),
     )
