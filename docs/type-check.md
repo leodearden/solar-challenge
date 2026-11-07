@@ -2,7 +2,7 @@
 
 **Task:** #1043
 **Settings:** [`pyproject.toml`](../pyproject.toml), the `ignore_missing_imports` table of `[[tool.mypy.overrides]]`
-**Gate:** [`dark-factory-orchestrator.yaml`](../dark-factory-orchestrator.yaml) (`type_check_command`); [`tests/unit/test_helper_type_check.py`](../tests/unit/test_helper_type_check.py)
+**Gate:** [`dark-factory-orchestrator.yaml`](../dark-factory-orchestrator.yaml) (`type_check_command`); [`tests/unit/test_helper_type_check.py`](../tests/unit/test_helper_type_check.py); [`tests/unit/test_mypy_override_lists_only_untyped_packages.py`](../tests/unit/test_mypy_override_lists_only_untyped_packages.py)
 
 ---
 
@@ -18,6 +18,10 @@
 - Under strict, `warn_unused_ignores` reports such an ignore once it suppresses nothing.
 - The override changes nothing for a package that ships its own types, as numpy and flask
   do: mypy reads their annotations whether they are listed or not, so they are not listed.
+- `tests/unit/test_mypy_override_lists_only_untyped_packages.py` fails while a listed
+  package has a `py.typed` or an installed `NAME-stubs` directory in the verify's
+  environment, naming the marker. A package that is not installed passes, since mypy then
+  finds no module, which the override also silences.
 
 ## 2. Decision (task 1043, 2026-11-06): scipy Joins the Override, Not scipy-stubs
 
