@@ -135,7 +135,11 @@ def migrate() -> None:
     as a migration that finishes does, with each value they dropped or
     rewrote and each run they left. Those steps stay applied, and the
     command, run again once the fault is fixed, goes on from the version
-    they brought the store to.
+    they brought the store to. Before the refusal it also prints each run
+    whose files the refused step, or the catch-up after the steps, brought
+    forward before the fault, which stay so, with each value it dropped or
+    rewrote in them: the command run again leaves those files as they are,
+    so it does not report those values.
 
     Examples:
       solar-challenge web migrate
@@ -163,6 +167,8 @@ def migrate() -> None:
     except (MigrationRefused, LaggingRunsRefused) as refused:
         if refused.migrated.applied_steps:
             print_report(str(refused.migrated))
+        if refused.files_brought_forward.runs:
+            print_report(str(refused.files_brought_forward))
         print_error(str(refused))
         raise typer.Exit(1) from refused
     print_report(str(report))

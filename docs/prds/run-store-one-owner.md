@@ -331,6 +331,14 @@ the database file" policy is replaced by this one. `cli/web.py` gains `migrate`:
   applied, `MigrationRefused` and `LaggingRunsRefused`, carry the report of the steps it applied
   (`migrated`, a `MigrationReport`, of no step when the refusal comes before any), and `web
   migrate` prints that report, when it names a step, before the refusal. Those steps stay applied.
+- **Amendment (2026-11-06, task 1369):** both refusals also carry what the refused part's run-file
+  part did before its fault (`files_brought_forward`, a `RunFilesBroughtForward`): each run whose
+  files it brought forward, which stay so, and each value it dropped or rewrote in them. That
+  holds whether the part's transaction failed after its run-file part, or an `OSError` stopped
+  the run-file part itself: `migrate_stored_run_files` stopped part way raises
+  `RunFilesMigrationStopped`, carrying the runs it brought forward before the fault. `web
+  migrate` prints that report after the steps' report and before the refusal, as a migration run
+  again leaves those files as they are and reports none of their values.
 
 Every handler catches one type:
 - the results route flashes the message and redirects;

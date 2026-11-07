@@ -362,13 +362,27 @@ class RunDocumentsOutcome:
         )
 
 
+class RunFilesMigrationStopped(Exception):
+    """An OSError that stopped migrate_stored_run_files part way; the message is the OSError's.
+
+    brought_forward is what it did to the runs before the fault, whose files stay brought
+    forward, and fault the OSError, which is also its cause.
+    """
+
+    def __init__(self, brought_forward: RunDocumentsOutcome, fault: OSError) -> None:
+        super().__init__(str(fault))
+        self.brought_forward = brought_forward
+        self.fault = fault
+
+
 def migrate_stored_run_files(
     database: Database, data_dir: Path, to_version: int, earlier: RunDocumentsOutcome
 ) -> RunDocumentsOutcome:
     """Bring the files of each run the runs table of *database* records forward to format *to_version*, the run-file part of the schema step carrying the run-document step of that version.
 
-    *earlier* is what the earlier run-document steps of the same migration did. A run with no
-    directory under *data_dir* is skipped, and so is a directory no row records. So is a run
+    *earlier* is what the earlier run-document steps of the same migration did. Runs are brought
+    forward in order of id. A run with no directory under *data_dir* is skipped, and so is a
+    directory no row records. So is a run
     whose files *earlier* left unmigrated, as web/schema.py's migrate_store says. A run's files
     are in the format its format.json names, as stored_format_version reads it; files already
     in *to_version* or a later format are neither read, written nor reported. Each other run's
@@ -385,9 +399,10 @@ def migrate_stored_run_files(
 
     Raises:
         sqlite3.Error: The runs table cannot be read; nothing has been written.
-        OSError: A run's file cannot be written, e.g. on a full disk, or its directory cannot
-            be looked for; the runs before it have been brought forward, and so may some of its
-            documents have been, each whole.
+        RunFilesMigrationStopped: A run's file cannot be written, e.g. on a full disk, or its
+            directory cannot be looked for; its brought_forward is what was done to the runs
+            before it, which have been brought forward, and some of the faulty run's documents
+            may have been too, each whole.
     """
     with database.transaction() as conn:
         rows = conn.execute("SELECT id, type FROM runs ORDER BY id").fetchall()
@@ -396,9 +411,10 @@ def migrate_stored_run_files(
     for row in rows:
         if row["id"] in left_unmigrated:
             continue
-        run_dir = _existing_run_dir(data_dir, row["id"])
-        if run_dir is not None:
-            outcome += _migrate_run_files(run_dir, row["id"], row["type"], to_version)
+        try:
+            outcome += _migrate_run_files(data_dir, row["id"], row["type"], to_version)
+        except OSError as fault:
+            raise RunFilesMigrationStopped(outcome, fault) from fault
     return outcome
 
 
@@ -411,8 +427,15 @@ def _existing_run_dir(data_dir: Path, run_id: str) -> Path | None:
     return run_dir if run_dir.is_dir() else None
 
 
-def _migrate_run_files(run_dir: Path, run_id: str, run_type: RunType | None, to_version: int) -> RunDocumentsOutcome:
-    """Bring the files of run *run_id* of *run_type*, which *run_dir* holds, forward to format *to_version*, as migrate_stored_run_files does for each run."""
+def _migrate_run_files(data_dir: Path, run_id: str, run_type: RunType | None, to_version: int) -> RunDocumentsOutcome:
+    """Bring the files of run *run_id* of *run_type* under *data_dir* forward to format *to_version*, as migrate_stored_run_files does for each run; a run with no directory there is skipped.
+
+    Raises:
+        OSError: A file cannot be written, or the run's directory cannot be looked for.
+    """
+    run_dir = _existing_run_dir(data_dir, run_id)
+    if run_dir is None:
+        return RunDocumentsOutcome()
     try:
         from_version = stored_format_version(run_dir, run_id)
         if from_version >= to_version:
