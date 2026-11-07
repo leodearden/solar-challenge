@@ -161,9 +161,9 @@ class SeriesRefused(ValueError):
         self.column = column
         self.reason = reason
 
-    def __reduce__(self) -> tuple[type["SeriesRefused"], tuple[str, str]]:
-        """Rebuild through the constructor from the column and the reason, so a refusal raised in a fleet's worker process unpickles in its parent."""
-        return (type(self), (self.column, self.reason))
+    def __reduce__(self) -> tuple[type["SeriesRefused"], tuple[str, str], dict[str, object]]:
+        """Rebuild through the constructor from the column and the reason, then restore the instance's state, its notes included, so a refusal raised in a fleet's worker process unpickles in its parent as itself."""
+        return (type(self), (self.column, self.reason), self.__dict__)
 
 
 def _refuse_unless_numbers(column: str, series: pd.Series) -> None:

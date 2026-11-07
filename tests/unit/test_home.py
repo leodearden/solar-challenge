@@ -370,16 +370,18 @@ class TestSimulationResultsHoldsNumbers:
         assert refused.value.column == "tariff_rate_per_kwh"
 
     def test_a_refusal_survives_pickling(self):
-        """A refusal unpickles as itself, as one raised building a home's results in a fleet's worker process must."""
+        """A refusal unpickles as itself, its notes included, as one raised building a home's results in a fleet's worker process must."""
         built = _results_with_every_series_set()
         with pytest.raises(SeriesRefused) as refused:
             dataclasses.replace(built, generation=pd.Series("x", index=built.generation.index))
         refusal = refused.value
+        refusal.add_note("home 3")
 
         restored = pickle.loads(pickle.dumps(refusal))
 
         assert type(restored) is SeriesRefused
         assert (restored.column, restored.reason, str(restored)) == (refusal.column, refusal.reason, str(refusal))
+        assert restored.__notes__ == ["home 3"]
 
     @pytest.mark.parametrize(
         ("field", "make"),
