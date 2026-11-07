@@ -104,7 +104,7 @@
 
 Measured on 2026-10-21 with pvlib 0.15.1 and scipy 1.17.1 by task 825's architect on
 main 49b70e1, through a prototype of this design. Figures marked † were re-measured on
-this branch at cae3d55 and reproduce exactly.
+this branch at 695d386 and reproduce exactly.
 
 - **The template.** `DEFAULT_CEC_MODULE`'s modelled coefficient is −0.34730 %/K (−0.0034730293
   per K; half-widths from 0.02 to 2 K agree within 1e-8/K), beside its catalogue
@@ -136,8 +136,8 @@ this branch at cae3d55 and reproduce exactly.
   takes 5.9 ms at best; the reach check, two of them, 12.5 ms; the full solve 119 ms,
   `brentq` taking 17 calls in 16 iterations for −0.004 per K; a `PVConfig` without the
   check 0.02 ms. Re-measured the same day by its implementer on task 1372's branch at
-  f136f86, at a load average of ~95: a `PVConfig` of the default row as custom
-  parameters took 12.3 ms with −0.004 per K and 0.019 ms without it.
+  dafc05d, its GREEN commit, at a load average of ~95: a `PVConfig` of the default row
+  as custom parameters took 12.3 ms with −0.004 per K and 0.019 ms without it.
 
 ## 4. When to Revisit
 
