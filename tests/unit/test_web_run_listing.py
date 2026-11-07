@@ -13,7 +13,10 @@ a field with a default that the text lacks. run_headline maps a summary of
 either kind to the figures the web shows for its run: the five energy totals, the
 self-consumption, grid dependency and export ratios, and the share of the generation the
 battery stored from PV, which a fleet run has none of. It refuses a summary whose figure for
-any of them is not a finite number.
+any of them is not a finite number. RunRecord.headline() is run_headline of the summary
+RunRecord.summary() reads, None while the run has none; a summary run_headline refuses is
+refused as one RunRecord.summary() cannot read is, with a StoredRunUnreadable naming the run
+and runs.summary_json.
 
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
@@ -284,6 +287,58 @@ class TestRunRecordSummaryTree:
 
         assert (refusal.value.run_id, refusal.value.document) == ("garbled-run", "runs.summary_json")
         assert str(refusal.value) == str(summary_refusal.value)
+
+
+class TestRunRecordHeadline:
+    """RunRecord.headline(): run_headline of the run's summary, None while it has none, refusing a summary as StoredRunUnreadable."""
+
+    def test_a_saved_home_run_s_headline_is_the_headline_of_its_results_summary(self, storage: RunStorage) -> None:
+        results = make_sim_results(self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+        store_home_run(storage, "home-1", make_home_config(), results)
+
+        assert _record(storage, "home-1").headline() == run_headline(calculate_summary(results))
+
+    def test_a_saved_fleet_run_s_headline_is_the_headline_of_its_fleet_summary_with_no_pv_stored_share(
+        self, storage: RunStorage
+    ) -> None:
+        fleet = _two_unlike_homes()
+        store_fleet_run(storage, "fleet-1", fleet)
+
+        headline = _record(storage, "fleet-1").headline()
+
+        assert headline == run_headline(calculate_fleet_summary(fleet))
+        assert headline is not None and headline.pv_stored_share is None
+
+    def test_a_run_whose_job_is_still_running_has_no_headline_yet(self, storage: RunStorage) -> None:
+        storage.create_run("running-1", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00")
+
+        assert _record(storage, "running-1").headline() is None
+
+    def test_a_summary_that_cannot_be_read_is_refused_as_summary_refuses_it(self, storage: RunStorage) -> None:
+        garbled = dataclasses.replace(_store_a_home_run(storage, "garbled-run"), summary_json="{not json")
+        with pytest.raises(StoredRunUnreadable) as summary_refusal:
+            garbled.summary()
+
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            garbled.headline()
+
+        assert str(refusal.value) == str(summary_refusal.value)
+
+    def test_a_summary_that_reads_but_holds_nan_for_its_generation_is_refused_as_unreadable_naming_the_run_and_figure(
+        self, storage: RunStorage
+    ) -> None:
+        """NaN is a number, so the summary reads; run_headline refuses it, and that refusal is the cause."""
+        nan_run = dataclasses.replace(
+            _store_a_home_run(storage, "nan-run"), summary_json=summary_json(home_summary(total_generation_kwh=math.nan))
+        )
+
+        with pytest.raises(StoredRunUnreadable) as refusal:
+            nan_run.headline()
+
+        assert (refusal.value.run_id, refusal.value.document) == ("nan-run", "runs.summary_json")
+        assert "'nan-run'" in str(refusal.value)
+        assert "generation_kwh" in str(refusal.value)
+        assert isinstance(refusal.value.__cause__, ValueError)
 
 
 class TestRunHeadline:
