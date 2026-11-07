@@ -22,9 +22,9 @@ from solar_challenge.pv import (
     create_pv_system,
     create_simple_module_params,
     simulate_pv_output,
-    wired_dc_capacity_kw,
 )
 from tests._pv_modules import default_module, pvwatts_300_w_module
+from tests._pv_refusals import one_refusal_at_construction_and_at_use
 from tests._pv_runs import clear_day_kwh, clear_day_weather, per_array
 
 
@@ -149,21 +149,6 @@ class TestCellTemperatureIsNoctSamFromTheModule:
         assert (ac_kw[clear_day["ghi"] == 0] == 0).all(), ac_kw[clear_day["ghi"] == 0]
 
 
-def _one_refusal_at_construction_and_at_use(config: PVConfig) -> str:
-    """The message with which PVConfig refuses config built again, its custom module edited since, asserting that create_pv_system and wired_dc_capacity_kw refuse config with that same message."""
-    with pytest.raises(ConfigurationError) as constructing:
-        dataclasses.replace(config)
-    with pytest.raises(ConfigurationError) as building:
-        create_pv_system(config)
-    with pytest.raises(ConfigurationError) as wiring:
-        wired_dc_capacity_kw(config)
-
-    message = str(constructing.value)
-    assert str(building.value) == message
-    assert str(wiring.value) == message
-    return message
-
-
 def _default_area_in_a_refusal() -> str:
     """How a refusal names the A_c that DEFAULT_CEC_MODULE gives a module with none."""
     return f"A_c={default_module()['A_c']} (DEFAULT_CEC_MODULE's, since the module gives none)"
@@ -190,7 +175,7 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         config = PVConfig(capacity_kw=4.0, custom_module_params=module)
         module[key] = value
 
-        message = _one_refusal_at_construction_and_at_use(config)
+        message = one_refusal_at_construction_and_at_use(config)
         assert f"{key}={value}" in message, message
 
     def test_naming_a_value_it_lacks_as_the_default_modules(self) -> None:
@@ -199,7 +184,7 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         config = PVConfig(capacity_kw=4.0, custom_module_params=module)
         module["pdc0"] = 4000.0
 
-        message = _one_refusal_at_construction_and_at_use(config)
+        message = one_refusal_at_construction_and_at_use(config)
         assert _default_area_in_a_refusal() in message, message
         assert "Give the module its own A_c" in message, message
 
