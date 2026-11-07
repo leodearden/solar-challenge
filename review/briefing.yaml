@@ -157,12 +157,17 @@ conventions:
       run together. tests/unit/test_global_rng_calls.py pins that the hand-off is the only src code
       calling a module-level function of random or numpy.random.
 
-  - rule: "mypy --strict must pass; do not widen ignore_missing_imports or add Any-typed config fields."
+  - rule: >
+      mypy --strict must pass; list a package in pyproject.toml's ignore_missing_imports override
+      only if it ships no types mypy can read; never set ignore_missing_imports globally or add
+      Any-typed config fields.
     why: >
       Strict typing is the safety net for a numerics-heavy codebase that is now a typed library
       (ships py.typed) consumed by a downstream repo under its own mypy --strict. The only
-      sanctioned untyped imports are stub-less third-party libs (pvlib/pandas/numpy/yaml/flask/
-      plotly/richardsonpy/scipy/anthropic). Eroding this leaks Any into a consumer's type checks.
+      sanctioned untyped imports are the third-party packages that pyproject.toml's
+      ignore_missing_imports override lists; docs/type-check.md says what listing one does, and
+      tests/unit/test_mypy_override_lists_only_untyped_packages.py pins that no listed package
+      ships its own types. Eroding this leaks Any into a consumer's type checks.
 
   - rule: >
       No solar_challenge module imports another solar_challenge module inside a function,
