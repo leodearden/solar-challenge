@@ -681,6 +681,114 @@ class TestAComponentBlockGivesItsRequiredKeys:
         assert [home.battery_config for home in generate_homes_from_distribution(config, Location.bristol())] == [None, None]
 
 
+class TestAComponentDistributionHoldsOnlyItsRowsKeysEachInItsPlace:
+    """A ComponentDistribution built in code holds only its component's fleet keys, a drawn one in its draws and a SETTING or FLAG in its settings; the fleet is refused as it is built otherwise."""
+
+    @pytest.mark.parametrize(
+        ("component", "distribution", "block", "key"),
+        [
+            pytest.param(
+                "pv",
+                ComponentDistribution({"capacity_kw": 4.0, "tilts": 10.0}),
+                {"capacity_kw": 4.0, "tilts": 10.0},
+                "tilts",
+                id="a key no row has, in pv's draws",
+            ),
+            pytest.param(
+                "pv",
+                ComponentDistribution({"capacity_kw": 4.0}, settings={"name": "x"}),
+                {"capacity_kw": 4.0, "name": "x"},
+                "name",
+                id="a key the fleet grammar leaves out, in pv's settings",
+            ),
+            pytest.param(
+                "battery",
+                ComponentDistribution({"capacity_kwh": 5.0, "colour": 1.0}),
+                {"capacity_kwh": 5.0, "colour": 1.0},
+                "colour",
+                id="a key no row has, in battery's draws",
+            ),
+        ],
+    )
+    def test_a_key_outside_the_components_fleet_rows_is_refused_as_the_parser_refuses_it(
+        self, component: str, distribution: ComponentDistribution, block: dict[str, Any], key: str
+    ) -> None:
+        """The fleet built in code is refused in the words reading *block* as the component's fleet_distribution: block gives."""
+        with pytest.raises(ConfigurationError) as parser_refusal:
+            _parsed_fleet_distribution(**{"pv": {"capacity_kw": 4.0}, component: block})
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(
+                n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), component: distribution}
+            )
+
+        assert str(parser_refusal.value).startswith(f"Unrecognised keys in fleet_distribution.{component}: {key!r};")
+        assert str(construction_refusal.value) == str(parser_refusal.value)
+
+    @pytest.mark.parametrize(
+        ("components", "refusal"),
+        [
+            pytest.param(
+                {"load": ComponentDistribution({"use_stochastic": False})},
+                "fleet_distribution.load.use_stochastic is a flag key, "
+                "which a ComponentDistribution holds in its settings, not its draws",
+                id="a flag in the draws",
+            ),
+            pytest.param(
+                {"battery": ComponentDistribution({"capacity_kwh": 5.0, "grid_charging": None})},
+                "fleet_distribution.battery.grid_charging is a setting key, "
+                "which a ComponentDistribution holds in its settings, not its draws",
+                id="a setting in the draws",
+            ),
+            pytest.param(
+                {"pv": ComponentDistribution({"capacity_kw": 4.0}, settings={"tilt": 30.0})},
+                "fleet_distribution.pv.tilt is a number key, "
+                "which a ComponentDistribution holds in its draws, not its settings",
+                id="a number in the settings",
+            ),
+            pytest.param(
+                {"pv": ComponentDistribution({"capacity_kw": 4.0, "tilt": 30.0}, settings={"tilt": 30.0})},
+                "fleet_distribution.pv.tilt is a number key, "
+                "which a ComponentDistribution holds in its draws, not its settings",
+                id="a number in both",
+            ),
+        ],
+    )
+    def test_a_key_in_the_wrong_one_of_draws_and_settings_is_refused_naming_its_path_and_kind(
+        self, components: dict[str, ComponentDistribution], refusal: str
+    ) -> None:
+        """The fleet is refused as it is built, so no home is drawn with a flag skipped or a key given twice."""
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), **components})
+
+        assert str(construction_refusal.value) == refusal
+
+
+class TestAComponentDistributionDrawsItsRequiredKeys:
+    """A ComponentDistribution built in code draws its component's required key, null or not, as a component block gives it."""
+
+    @pytest.mark.parametrize(
+        ("component", "draws", "path"),
+        [
+            pytest.param("pv", {"tilt": 30.0}, "fleet_distribution.pv.capacity_kw", id="pv"),
+            pytest.param("battery", {"max_charge_kw": 3.0}, "fleet_distribution.battery.capacity_kwh", id="battery"),
+            pytest.param("ev", {"arrival_hour": 18.0}, "fleet_distribution.ev.charger_type", id="ev"),
+        ],
+    )
+    def test_a_required_key_left_out_of_a_code_built_component_is_refused_as_the_parser_refuses_it(
+        self, component: str, draws: dict[str, float], path: str
+    ) -> None:
+        """The fleet is refused as it is built, naming the key's path, where a battery or EV that drew no presence key was no such component for any home."""
+        with pytest.raises(ConfigurationError) as parser_refusal:
+            _parsed_fleet_distribution(**{"pv": {"capacity_kw": 4.0}, component: draws})
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            FleetDistributionConfig(
+                n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), component: ComponentDistribution(draws)}
+            )
+
+        assert str(parser_refusal.value) == f"Missing required keys in fleet_distribution.{component}: {path}"
+        assert str(construction_refusal.value) == str(parser_refusal.value)
+
+
 class TestANullSettingReadsAsAbsent:
     """A setting given null in a fleet's component block reads as the block without it."""
 
