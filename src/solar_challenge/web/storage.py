@@ -44,7 +44,9 @@ from solar_challenge.web.stored_runs import (
     RUN_KINDS,
     RUN_TYPES,
     DroppedValue,
+    PartlyBroughtForwardRun,
     RewrittenValue,
+    RunDocumentsWriteStopped,
     RunKind,
     RunType,
     StepResult,
@@ -330,7 +332,9 @@ class RunDocumentsOutcome:
     Each run is recorded by its source, its files or its runs row: unmigrated_files holds each
     run whose files a step left as they were, and unmigrated_rows each run whose runs row it
     left so; brought_forward_files holds the id of each run whose files a step wrote, and
-    brought_forward_rows the id of each run whose runs row it wrote.
+    brought_forward_rows the id of each run whose runs row it wrote. partly_brought_forward_files
+    holds each run whose files a step brought forward only in part before a fault stopped it,
+    with the documents it wrote; only the outcome of a run-file part a fault stopped holds one.
     """
 
     dropped: tuple[DroppedValue, ...] = ()
@@ -339,6 +343,7 @@ class RunDocumentsOutcome:
     rewritten: tuple[RewrittenValue, ...] = ()
     brought_forward_files: tuple[str, ...] = ()
     brought_forward_rows: tuple[str, ...] = ()
+    partly_brought_forward_files: tuple[PartlyBroughtForwardRun, ...] = ()
 
     @property
     def unmigrated(self) -> tuple[UnmigratedRun, ...]:
@@ -359,14 +364,15 @@ class RunDocumentsOutcome:
             rewritten=self.rewritten + later.rewritten,
             brought_forward_files=self.brought_forward_files + later.brought_forward_files,
             brought_forward_rows=self.brought_forward_rows + later.brought_forward_rows,
+            partly_brought_forward_files=self.partly_brought_forward_files + later.partly_brought_forward_files,
         )
 
 
 class RunFilesMigrationStopped(Exception):
     """An OSError that stopped migrate_stored_run_files part way; the message is the OSError's.
 
-    brought_forward is what it did to the runs before the fault, whose files stay brought
-    forward, and fault the OSError, which is also its cause.
+    brought_forward is what was done before the fault, which stays done, and fault the OSError,
+    which is also its cause.
     """
 
     def __init__(self, brought_forward: RunDocumentsOutcome, fault: OSError) -> None:
@@ -396,13 +402,17 @@ def migrate_stored_run_files(
     migration stopped part way through runs again from the start: the files it brought forward
     name *to_version* and are left as they are, and the steps change nothing in a document they
     already brought forward in a run stopped part way through, whose format.json is as it was.
+    So the migration run again reports none of the values the steps dropped or rewrote in those
+    files and documents: the RunFilesMigrationStopped carries them.
 
     Raises:
         sqlite3.Error: The runs table cannot be read; nothing has been written.
         RunFilesMigrationStopped: A run's file cannot be written, e.g. on a full disk, or its
-            directory cannot be looked for; its brought_forward is what was done to the runs
-            before it, which have been brought forward, and some of the faulty run's documents
-            may have been too, each whole.
+            directory cannot be looked for. Its brought_forward is what was done before the
+            fault: what was done to the runs before it, whose files have been brought forward,
+            then, when some of the faulty run's documents were written, each whole, that run in
+            partly_brought_forward_files, naming them, with each value the steps dropped or
+            rewrote in them.
     """
     with database.transaction() as conn:
         rows = conn.execute("SELECT id, type FROM runs ORDER BY id").fetchall()
@@ -413,6 +423,8 @@ def migrate_stored_run_files(
             continue
         try:
             outcome += _migrate_run_files(data_dir, row["id"], row["type"], to_version)
+        except RunFilesMigrationStopped as stopped:
+            raise RunFilesMigrationStopped(outcome + stopped.brought_forward, stopped.fault) from stopped.fault
         except OSError as fault:
             raise RunFilesMigrationStopped(outcome, fault) from fault
     return outcome
@@ -431,7 +443,10 @@ def _migrate_run_files(data_dir: Path, run_id: str, run_type: RunType | None, to
     """Bring the files of run *run_id* of *run_type* under *data_dir* forward to format *to_version*, as migrate_stored_run_files does for each run; a run with no directory there is skipped.
 
     Raises:
-        OSError: A file cannot be written, or the run's directory cannot be looked for.
+        RunFilesMigrationStopped: A file cannot be written, e.g. on a full disk, the OSError
+            being its fault and its cause; its brought_forward is what _written_before_the_fault
+            says was done to the run before it.
+        OSError: The run's directory cannot be looked for.
     """
     run_dir = _existing_run_dir(data_dir, run_id)
     if run_dir is None:
@@ -445,8 +460,30 @@ def _migrate_run_files(data_dir: Path, run_id: str, run_type: RunType | None, to
         result = bring_run_documents_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:
         return RunDocumentsOutcome(unmigrated_files=(UnmigratedRun.of(refusal),))
-    write_run_documents(run_dir, result.documents.changed_from(documents), to_version)
+    try:
+        write_run_documents(run_dir, result.documents.changed_from(documents), to_version)
+    except RunDocumentsWriteStopped as stopped:
+        raise RunFilesMigrationStopped(
+            _written_before_the_fault(run_id, result, stopped.written), stopped.fault
+        ) from stopped.fault
     return RunDocumentsOutcome(dropped=result.dropped, rewritten=result.rewritten, brought_forward_files=(run_id,))
+
+
+def _written_before_the_fault(run_id: str, result: StepResult, written: tuple[str, ...]) -> RunDocumentsOutcome:
+    """What was done to the files of run *run_id*, which the steps brought forward as *result*, when a fault stopped their write once *written*, each whole, were written.
+
+    Nothing when no document was written, as the run's files are as they were. Otherwise the run,
+    brought forward in part, naming *written*, with each value the steps dropped or rewrote in
+    those documents; a value in a document not written is left out, as a migration run again
+    brings that document forward and reports it.
+    """
+    if not written:
+        return RunDocumentsOutcome()
+    return RunDocumentsOutcome(
+        dropped=tuple(value for value in result.dropped if value.document in written),
+        rewritten=tuple(value for value in result.rewritten if value.document in written),
+        partly_brought_forward_files=(PartlyBroughtForwardRun(run_id, written),),
+    )
 
 
 _DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
