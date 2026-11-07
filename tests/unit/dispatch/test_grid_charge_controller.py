@@ -123,6 +123,17 @@ class TestComputeGridChargePowerKw:
         charge_efficiency=0.9,
     )
 
+    _CTX_E10_AFTERNOON = GridChargeContext(
+        current_rate=0.08,
+        peak_rate=0.27,
+        is_cheap_period=True,
+        target_soc_kwh=6.0,
+        max_charge_kw=2.5,
+        round_trip_efficiency=0.975 * 0.975,
+        charge_efficiency=0.975,
+    )
+    """docs/prds/one-dispatch-engine.md §2.2's one-step context: a 10 kWh battery grid-charging to 0.6 of it, with the default 2.5 kW limit and 0.975 efficiencies, at 14:00 on Economy 10."""
+
     def test_not_cheap_returns_zero(self):
         """When is_cheap_period=False, returns 0.0 regardless of other fields."""
         ctx = GridChargeContext(
@@ -341,6 +352,27 @@ class TestComputeGridChargePowerKw:
         # Returns battery-side residual (4.0), not grid-side equivalent (4.0/0.8=5.0)
         assert result == pytest.approx(4.0)
         assert result != pytest.approx(4.0 / 0.8)  # not 5.0
+
+    def test_a_step_whose_pv_charge_reaches_the_target_asks_for_no_grid_power(self):
+        """The step's PV charge takes the SOC to 5.98 + 1.5 / 60 × 0.975 = 6.004375 kWh, past the 6.0 kWh target."""
+        result = compute_grid_charge_power_kw(
+            self._CTX_E10_AFTERNOON,
+            battery_soc_kwh=5.98,
+            pv_charge_power_kw=1.5,
+            timestep_minutes=1.0,
+        )
+        assert result == 0.0
+
+    def test_the_grid_power_stores_the_gap_the_steps_pv_charge_leaves(self):
+        """The step's PV charge takes the SOC to 5.99 kWh, so the grid power stores the 0.01 kWh left to the target, within the 1.0 kW headroom."""
+        soc_after_pv_kwh = 5.965625 + 1.5 / 60 * 0.975
+        result = compute_grid_charge_power_kw(
+            self._CTX_E10_AFTERNOON,
+            battery_soc_kwh=5.965625,
+            pv_charge_power_kw=1.5,
+            timestep_minutes=1.0,
+        )
+        assert result == pytest.approx((6.0 - soc_after_pv_kwh) / 0.975 * 60)
 
 
 class TestDecideActionAcceptsGridChargeCtx:
