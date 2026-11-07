@@ -4,6 +4,7 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable
+from numbers import Real
 
 import numpy as np
 import pandas as pd
@@ -939,6 +940,22 @@ class TestWiredDcCapacity:
         message = one_refusal_at_construction_and_at_use(config)
         assert key in re.findall(r"\w+", message), message
         assert repr(value) in message, message
+
+    @pytest.mark.parametrize(
+        "rating",
+        [
+            pytest.param(300, id="int"),
+            pytest.param(np.int64(300), id="numpy-int64"),
+            pytest.param(np.float32(300.0), id="numpy-float32"),
+        ],
+    )
+    def test_a_python_or_numpy_number_rating_is_read_as_its_number(self, rating: Real) -> None:
+        """A rating read from a numpy or pandas source is a numpy scalar, so any real number, Python's or numpy's, rates the module, not only a Python float."""
+        config = PVConfig(
+            capacity_kw=4.0, custom_module_params={**pvwatts_300_w_module(), "pdc0": rating}
+        )
+
+        assert wired_dc_capacity_kw(config) == pytest.approx(3.9)
 
     @pytest.mark.parametrize(
         "module",
