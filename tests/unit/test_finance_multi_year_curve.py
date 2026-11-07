@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
-from scipy.interpolate import CubicSpline, PchipInterpolator  # type: ignore[import-untyped]
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from solar_challenge.finance import MultiYearCurve, YearPoint, project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance

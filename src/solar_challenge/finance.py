@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, NamedT
 
 import numpy as np
 import pandas as pd
-from scipy.interpolate import PchipInterpolator  # type: ignore[import-untyped]
+from scipy.interpolate import PchipInterpolator
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.gridservices import (
