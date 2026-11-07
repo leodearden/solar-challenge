@@ -522,7 +522,7 @@ def grid_charge_battery() -> Battery:
 
 
 class _RecordingStrategy(DispatchStrategy):
-    """Test double: records the grid_charge_ctx passed in and returns a fixed decision."""
+    """Test double: records the timestep of each call and the last grid_charge_ctx passed in, checks none of its inputs, and returns a fixed decision."""
 
     def __init__(
         self,
@@ -536,6 +536,7 @@ class _RecordingStrategy(DispatchStrategy):
             grid_charge_kw=grid_charge_kw,
         )
         self.received_ctx: Optional[GridChargeContext] = None
+        self.received_timesteps: list[float] = []
 
     @property
     def name(self) -> str:
@@ -553,7 +554,8 @@ class _RecordingStrategy(DispatchStrategy):
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
-        """Record grid_charge_ctx and return the pre-configured decision."""
+        """Record timestep_minutes and grid_charge_ctx, and return the pre-configured decision."""
+        self.received_timesteps.append(timestep_minutes)
         self.received_ctx = grid_charge_ctx
         return self._decision
 
@@ -1583,6 +1585,26 @@ class TestStepWithATimestepThatIsNotPositiveAndFinite:
                 battery=battery,
                 timestep_minutes=timestep_minutes,
             )
+        assert battery.soc_kwh == soc_kwh
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    def test_simulate_timestep_refuses_the_timestep_naming_it_before_calling_a_strategy_of_the_consumer_s_own(
+        self, timestep_minutes: float
+    ) -> None:
+        """Unlike the built-in strategies, _RecordingStrategy checks none of its inputs, so the step's own check is all that refuses the timestep."""
+        strategy = _RecordingStrategy()
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            simulate_timestep(
+                generation_kw=2.0,
+                demand_kw=1.0,
+                battery=battery,
+                timestep_minutes=timestep_minutes,
+                strategy=strategy,
+            )
+        assert strategy.received_timesteps == []
         assert battery.soc_kwh == soc_kwh
 
 
