@@ -12,10 +12,35 @@ The check looks for the markers through which mypy reads a package's own types; 
 directory counts even when its py.typed marks it partial, though mypy then reads the modules it omits as untyped.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import pytest
+
+
+def _typing_markers(package: str, search_dirs: Iterable[Path]) -> list[Path]:
+    """Return each <dir>/*package*/py.typed and <dir>/*package*-stubs that exists, taking *search_dirs* in order.
+
+    These are the PEP 561 markers through which mypy reads a package's own types. The stubs are looked up as a
+    NAME-stubs directory, whatever the distribution that installs it is called: types-PyYAML installs yaml-stubs.
+    """
+    return [
+        marker
+        for directory in search_dirs
+        for marker in (directory / package / "py.typed", directory / f"{package}-stubs")
+        if marker.exists()
+    ]
+
+
+def _assert_names_an_untyped_package(entry: str, search_dirs: Sequence[Path]) -> None:
+    """Fail, naming each marker found, if the top-level package of override *entry* ships types in *search_dirs*."""
+    package = entry.split(".", 1)[0]
+    markers = _typing_markers(package, search_dirs)
+    assert not markers, (
+        f"pyproject.toml's mypy ignore_missing_imports override lists {entry!r}, but {package} ships its own types in "
+        f"this environment: {', '.join(map(str, markers))}. mypy reads them whether it is listed or not "
+        f"(docs/type-check.md §1), so the entry changes nothing: drop {entry!r} from that override's module list."
+    )
 
 
 def _site_packages(directory: Path, files: Iterable[str]) -> Path:
