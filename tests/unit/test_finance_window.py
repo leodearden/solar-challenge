@@ -97,6 +97,18 @@ class TestDayCountIsTheSummariesOwn:
         assert isinstance(_householder_bill(summary, 2), BillBreakdown)
         assert isinstance(bill_distribution([summary] * 2, _finance(), 2), BillDistribution)
 
+    def test_the_day_count_checked_is_the_one_the_window_covers(self) -> None:
+        """A bill scales by its window's days, so those are the days it checks, even when simulation_days was assigned out of step with the window after construction."""
+        summary = _summary(days=2, first_day=date(2024, 1, 1))
+        summary.simulation_days = 1
+
+        with pytest.raises(ValueError, match=r"simulation_days=1 .*2 days, 2024-01-01 to 2024-01-02"):
+            _householder_bill(summary, 1)
+        with pytest.raises(ValueError, match=r"simulation_days=1 .*2 days, 2024-01-01 to 2024-01-02"):
+            bill_distribution([summary] * 2, _finance(), 1)
+        assert isinstance(_householder_bill(summary, 2), BillBreakdown)
+        assert isinstance(bill_distribution([summary] * 2, _finance(), 2), BillDistribution)
+
 
 class TestOneWindowPerDistribution:
     """A bill distribution is over one window: its summaries cover the same dates."""

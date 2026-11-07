@@ -506,17 +506,17 @@ def _summary_window(summary: "SummaryStatistics") -> SimulationWindow:
 
 
 def _require_summary_days(simulation_days: int, summary: "SummaryStatistics") -> None:
-    """Refuse a *simulation_days* other than *summary*'s own day count (INV-8).
+    """Refuse a *simulation_days* other than the days *summary*'s window covers, the days its bill scales by (INV-8).
 
     Raises:
         ValueError: Naming both day counts and the first and last day of the
             summary's window; or as :func:`_summary_window` does.
     """
     window = _summary_window(summary)
-    if simulation_days != summary.simulation_days:
+    if simulation_days != window.days:
         raise ValueError(
             "a bill is computed over its summary's own days (INV-8): "
-            f"got simulation_days={simulation_days!r} for a summary of {summary.simulation_days} days, "
+            f"got simulation_days={simulation_days!r} for a summary whose window covers {window.days} days, "
             f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
         )
 
