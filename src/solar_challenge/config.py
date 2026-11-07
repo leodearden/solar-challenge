@@ -286,6 +286,10 @@ class ComponentDistribution:
         return (type(self), (dict(self.draws), dict(self.settings)))
 
 
+#: The path of a fleet's block in its file, under which every refusal of a fleet names its keys.
+_FLEET_DISTRIBUTION_PATH = "fleet_distribution"
+
+
 @dataclass(frozen=True)
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
@@ -333,6 +337,8 @@ class FleetDistributionConfig:
             refuse_unknown_home_dispatch_strategy(
                 self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
+        _refuse_keys_held_where_no_row_puts_them(self)
+        _refuse_required_keys_not_drawn(self)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
         _refuse_rounded_counts_with_no_whole_number(self)
@@ -389,6 +395,30 @@ def _component_draws(config: FleetDistributionConfig) -> Iterator[tuple[str, "Fl
         for key, row in block.fleet.items():
             if key in component.draws:
                 yield f"{name}.{key}", row, component.draws[key]
+
+
+def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a component holds a key outside its table's fleet rows, as the parser refuses one, or holds a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings, naming the key's path and kind."""
+    for name, (block, component) in _fleet_components(config).items():
+        if component is None:
+            continue
+        block_path = _child_path(_FLEET_DISTRIBUTION_PATH, name)
+        _refuse_unrecognised_keys(block_path, {**component.draws, **component.settings}, block.fleet)
+        for key, row in block.fleet.items():
+            given_every_home = row.kind in _GIVEN_EVERY_HOME
+            if key in (component.draws if given_every_home else component.settings):
+                held_in, not_in = ("settings", "draws") if given_every_home else ("draws", "settings")
+                raise ConfigurationError(
+                    f"{_child_path(block_path, key)} is a {row.kind.value} key, "
+                    f"which a ComponentDistribution holds in its {held_in}, not its {not_in}"
+                )
+
+
+def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a component does not draw a key its table's fleet rows require, as the parser refuses a block leaving it out; a null draw is drawn."""
+    for name, (block, component) in _fleet_components(config).items():
+        if component is not None:
+            _refuse_required_fleet_keys_left_out(block, component.draws, _child_path(_FLEET_DISTRIBUTION_PATH, name))
 
 
 def _shuffled_pools(
@@ -775,6 +805,11 @@ def _refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None
     if missing_keys:
         missing = ", ".join(_child_path(block_path, key) for key in missing_keys)
         raise ConfigurationError(f"Missing required keys in {_block_label(block_path)}: {missing}")
+
+
+def _refuse_required_fleet_keys_left_out(block: ComponentBlock[Any], given: Collection[str], block_path: str) -> None:
+    """Refuse the fleet's component block at *block_path* if *given*, the keys it gives, leaves out a key *block*'s fleet rows require, naming each by its path."""
+    _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in given])
 
 
 def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
@@ -1595,7 +1630,7 @@ def _parse_component_distribution(
     _parse_distribution_spec does.
     """
     mapping = _refuse_unrecognised_keys(block_path, data, block.fleet)
-    _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in mapping])
+    _refuse_required_fleet_keys_left_out(block, mapping, block_path)
     draws: dict[str, DistributionSpec] = {}
     settings: dict[str, SettingValue] = {}
     for key, row in block.fleet.items():
@@ -1625,7 +1660,7 @@ _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 
 
 def parse_fleet_distribution_config(
-    data: dict[str, Any], *, block_path: str = "fleet_distribution"
+    data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
 ) -> FleetDistributionConfig:
     """Parse a fleet_distribution: block, each component block read by its table's fleet rows."""
     _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
@@ -1906,11 +1941,13 @@ def _drawn_component(
             values[key] = value
         elif row.required:
             got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
-            raise ConfigurationError(f"fleet_distribution.{path} is required, but {got}")
+            raise ConfigurationError(f"{_child_path(_FLEET_DISTRIBUTION_PATH, path)} is required, but {got}")
     try:
         return block.config_type(**values, **component.settings, **given)
     except (ValueError, TypeError) as refusal:
-        raise ConfigurationError(f"fleet_distribution.{name}, home {home_number}: {refusal}") from refusal
+        raise ConfigurationError(
+            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)}, home {home_number}: {refusal}"
+        ) from refusal
 
 
 def _drawn_component_every_home_has(
@@ -1933,7 +1970,9 @@ def _drawn_component_every_home_has(
     """
     built = _drawn_component(name, block, component, sampler, drawn, home_number, given=given)
     if built is None:
-        raise ConfigurationError(f"fleet_distribution.{name} gave home {home_number} no {name}, which every home needs")
+        raise ConfigurationError(
+            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)} gave home {home_number} no {name}, which every home needs"
+        )
     return built
 
 
