@@ -17,7 +17,8 @@ forward before the fault, which stay so, with each value it dropped or rewrote i
 migration run again leaves those files as they are. A step a run's file stops part way carries
 that run too, with each of its documents the step wrote before the fault and each value it
 dropped or rewrote in them, as the migration run again reads those documents already brought
-forward and reports none of their values. A step refused after an earlier step of
+forward and reports none of their values; a value in a document it did not write is left for
+the migration run again to report. A step refused after an earlier step of
 the migration committed
 leaves the store at the version that step brought it to, and the refusal carries the report of
 the steps the migration applied; the migration run again goes on from that version and reports
