@@ -17,7 +17,7 @@
   `# type: ignore[import-untyped]`.
 - Under strict, `warn_unused_ignores` reports such an ignore once it suppresses nothing.
 - The override changes nothing for a package that ships its own types, as numpy and flask
-  do: mypy reads their annotations whether they are listed or not.
+  do: mypy reads their annotations whether they are listed or not, so they are not listed.
 
 ## 2. Decision (task 1043, 2026-11-06): scipy Joins the Override, Not scipy-stubs
 
