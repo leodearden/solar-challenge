@@ -83,7 +83,7 @@ class TestProjectMultiYearRevenue:
         # No grid services: the homes have no battery
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
         seg_revenue = sum(
-            _seg_export_income_gbp(_annualise_physics(s, s.simulation_days), finance)
+            _seg_export_income_gbp(_annualise_physics(s), finance)
             for s in summaries
         )
         expected_revenue = own_use_revenue + seg_revenue
@@ -247,9 +247,10 @@ def _make_grid_charging_sim_results(
     total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.
 
     Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
-    each row over the hour it lasts, returns the kWh totals and simulation_days is 365.
+    each row over the hour it lasts, returns the kWh totals and simulation_days is 365:
+    the whole of 2021, which is not a leap year, so its totals are its year's.
     """
-    idx = pd.date_range("2024-01-01", periods=n_steps, freq="1h", tz="Europe/London")
+    idx = pd.date_range("2021-01-01", periods=n_steps, freq="1h", tz="Europe/London")
 
     def constant_kw(kwh: float) -> pd.Series:
         return pd.Series(kwh / n_steps, index=idx)
@@ -434,7 +435,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
+        result = _seg_export_income_gbp(_annualise_physics(summary), finance)
 
         assert result == pytest.approx(24.0, rel=1e-9)
 
@@ -453,7 +454,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(_annualise_physics(summary_no_export, 365), finance)
+        result = _seg_export_income_gbp(_annualise_physics(summary_no_export), finance)
 
         # effective_export_rate_pence = 0.0 (fallback), so result = override_export * 0 = 0
         assert result == pytest.approx(0.0, abs=1e-9)
@@ -481,7 +482,7 @@ class TestSegExportIncomeGbp:
         # Override: 60% self-consumption → 40% export → 1600 kWh
         finance = self._make_finance_seg(self_consumption_override=0.60)
 
-        result = _seg_export_income_gbp(_annualise_physics(summary, 365), finance)
+        result = _seg_export_income_gbp(_annualise_physics(summary), finance)
 
         # hand-checked: 1600 * 3 / 100 = 48.0
         assert result == pytest.approx(48.0, rel=1e-9)
@@ -510,7 +511,7 @@ class TestSegExportIncomeGbp:
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 
-        result = _seg_export_income_gbp(_annualise_physics(summary_182, 182), finance)
+        result = _seg_export_income_gbp(_annualise_physics(summary_182), finance)
 
         expected = 12.0 * (365 / 182)
         assert result == pytest.approx(expected, rel=1e-6)
