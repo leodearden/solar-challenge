@@ -709,16 +709,18 @@ def _arrays(
 
 
 def _module_rating_w(module_params: Mapping[str, float]) -> float:
-    """Each module's rated DC power in watts: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC."""
+    """Each module's rated DC power in watts, a finite number above 0: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC."""
     if _is_pvwatts_module(module_params):
-        return module_params["pdc0"]
-    if "STC" in module_params:
-        return module_params["STC"]
-    raise ConfigurationError(
-        "Module parameters have neither pdc0 and gamma_pdc, whose pdc0 rates a PVWatts "
-        "module, nor an STC rating, so the modules cannot be counted; add STC, the "
-        "module's DC power in W at standard test conditions"
-    )
+        key = "pdc0"
+    elif "STC" in module_params:
+        key = "STC"
+    else:
+        raise ConfigurationError(
+            "Module parameters have neither pdc0 and gamma_pdc, whose pdc0 rates a PVWatts "
+            "module, nor an STC rating, so the modules cannot be counted; add STC, the "
+            "module's DC power in W at standard test conditions"
+        )
+    return as_finite_float(module_params[key], f"Module parameter {key}", POSITIVE)
 
 
 _NOCT_TEST_AIR_C = 20.0
