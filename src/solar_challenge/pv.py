@@ -6,6 +6,7 @@ import math
 import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from numbers import Real
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -122,8 +123,9 @@ class PVConfig:
             temperature from the module's T_NOCT and its rating / (A_c × 1000), with
             DEFAULT_CEC_MODULE's value for either key the module lacks
             (docs/pv-cell-temperature.md). Construction and use refuse custom
-            parameters with no rating, or whose cells NOCT-SAM cannot heat, reading
-            the area a set module_efficiency gives
+            parameters with no rating or a rating (pdc0 or STC) that is not a finite
+            number above 0, or whose cells NOCT-SAM cannot heat, reading the area a
+            set module_efficiency gives
 
         # Inverter parameters (PV-005)
         inverter_efficiency: Inverter efficiency at rated output (default 0.96 = 96%), as the
@@ -166,7 +168,7 @@ class PVConfig:
     system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient (_require_template_takes_temperature_coefficient), or that have no rating or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat); use runs both rules too."""
+        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient (_require_template_takes_temperature_coefficient), or that have no rating, or one that is not a finite number above 0, or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat); use runs both rules too."""
         read_field(self, "capacity_kw", as_finite_float, POSITIVE)
         read_field(self, "azimuth", as_finite_float, Interval(0, 360))
         read_field(self, "tilt", as_finite_float, Interval(0, 90))
@@ -709,16 +711,25 @@ def _arrays(
 
 
 def _module_rating_w(module_params: Mapping[str, float]) -> float:
-    """Each module's rated DC power in watts: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC."""
+    """Each module's rated DC power in watts, a finite number above 0: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC.
+
+    The rating must already be a number: text that float() reads as one would pass
+    as_finite_float, but pvlib reads the module's own pdc0.
+    """
     if _is_pvwatts_module(module_params):
-        return module_params["pdc0"]
-    if "STC" in module_params:
-        return module_params["STC"]
-    raise ConfigurationError(
-        "Module parameters have neither pdc0 and gamma_pdc, whose pdc0 rates a PVWatts "
-        "module, nor an STC rating, so the modules cannot be counted; add STC, the "
-        "module's DC power in W at standard test conditions"
-    )
+        key = "pdc0"
+    elif "STC" in module_params:
+        key = "STC"
+    else:
+        raise ConfigurationError(
+            "Module parameters have neither pdc0 and gamma_pdc, whose pdc0 rates a PVWatts "
+            "module, nor an STC rating, so the modules cannot be counted; add STC, the "
+            "module's DC power in W at standard test conditions"
+        )
+    field, rating = f"Module parameter {key}", module_params[key]
+    if not isinstance(rating, Real):
+        raise ConfigurationError.must_be(field, "a finite number", got=rating)
+    return as_finite_float(rating, field, POSITIVE)
 
 
 _NOCT_TEST_AIR_C = 20.0
@@ -757,7 +768,7 @@ class _NoctSamInput:
 
 
 def _require_cells_noct_sam_can_heat(module_params: Mapping[str, float]) -> None:
-    """Refuse a module with no rating (_module_rating_w), or a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
+    """Refuse a module with no rating, or one that is not a finite number above 0 (_module_rating_w), or a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
 
     That takes a finite T_NOCT above NOCT's test air, and a finite area A_c over
     which the module's rating is an efficiency, rating / (A_c × 1000), below
@@ -786,8 +797,8 @@ def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[st
 
     A module that lacks T_NOCT or A_c takes DEFAULT_CEC_MODULE's value of that
     key (_NoctSamInput; docs/pv-cell-temperature.md). A module with no rating, or
-    whose cells NOCT-SAM cannot heat above the air, is refused
-    (_require_cells_noct_sam_can_heat).
+    one that is not a finite number above 0 (_module_rating_w), or whose cells
+    NOCT-SAM cannot heat above the air, is refused (_require_cells_noct_sam_can_heat).
     """
     _require_cells_noct_sam_can_heat(module_params)
     t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
@@ -844,10 +855,11 @@ def create_pv_system(config: PVConfig) -> PVSystem:
 
     Raises:
         ValueError: If the module parameters rate the module by neither a
-            PVWatts module's pdc0 nor an STC, if they have neither PVWatts
-            parameters nor a V_mp_ref and no custom inverter parameters are
-            given, if no CEC inverter's MPPT window admits a string of the
-            module's voltage, if NOCT-SAM cannot heat the module's cells
+            PVWatts module's pdc0 nor an STC, or by one that is not a finite
+            number above 0, if they have neither PVWatts parameters nor a
+            V_mp_ref and no custom inverter parameters are given, if no CEC
+            inverter's MPPT window admits a string of the module's voltage,
+            if NOCT-SAM cannot heat the module's cells
             above the air with its T_NOCT and A_c
             (_require_cells_noct_sam_can_heat), or if a set
             temperature_coefficient cannot derive the module: no Adjust in
@@ -962,9 +974,10 @@ def create_model_chain_picking_from(
 
     Raises:
         ValueError: If the module parameters rate the module by neither a
-            PVWatts module's pdc0 nor an STC, if they have neither PVWatts
-            parameters nor a V_mp_ref and no custom inverter parameters are
-            given, if no candidate's MPPT window admits the strings, if
+            PVWatts module's pdc0 nor an STC, or by one that is not a finite
+            number above 0, if they have neither PVWatts parameters nor a
+            V_mp_ref and no custom inverter parameters are given, if no
+            candidate's MPPT window admits the strings, if
             NOCT-SAM cannot heat the module's cells above the air with its
             T_NOCT and A_c (_require_cells_noct_sam_can_heat), if a set
             temperature_coefficient cannot derive the module

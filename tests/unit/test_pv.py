@@ -1,6 +1,7 @@
 """Tests for the pvlib system and model chain built from a PVConfig, from the module, inverter and wiring create_pv_system picks to the AC power simulate_pv_output returns."""
 
 import dataclasses
+import math
 import re
 from collections.abc import Callable
 
@@ -26,6 +27,7 @@ from solar_challenge.pv import (
     wired_dc_capacity_kw,
 )
 from tests._pv_modules import (
+    default_module,
     default_module_beyond_every_mppt_window,
     pvwatts_300_w_module,
     sapm_library_module,
@@ -98,7 +100,7 @@ class TestCECLibraryReuse:
         _assert_wires_the_default_cec_row(later)
 
     @pytest.mark.parametrize(
-        "default_module",
+        "get_default_module",
         [
             pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
             pytest.param(
@@ -108,9 +110,9 @@ class TestCECLibraryReuse:
         ],
     )
     def test_an_edited_default_module_leaves_later_default_systems_unchanged(
-        self, default_module: Callable[[], dict[str, float]]
+        self, get_default_module: Callable[[], dict[str, float]]
     ) -> None:
-        default_module()["A_c"] = 99.0
+        get_default_module()["A_c"] = 99.0
 
         later = create_pv_system(PVConfig(capacity_kw=4.0))
 
@@ -902,6 +904,41 @@ class TestWiredDcCapacity:
 
         message = one_refusal_at_construction_and_at_use(config)
         assert {"pdc0", "STC"} <= set(re.findall(r"\w+", message)), message
+
+    @pytest.mark.parametrize(
+        "module_efficiency", [None, 0.2], ids=["own-area", "set-module_efficiency"]
+    )
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            pytest.param(pvwatts_300_w_module, "pdc0", 0.0, id="pdc0-0"),
+            pytest.param(pvwatts_300_w_module, "pdc0", -250.0, id="pdc0-negative"),
+            pytest.param(pvwatts_300_w_module, "pdc0", math.nan, id="pdc0-nan"),
+            pytest.param(pvwatts_300_w_module, "pdc0", math.inf, id="pdc0-inf"),
+            pytest.param(pvwatts_300_w_module, "pdc0", "300", id="pdc0-text"),
+            pytest.param(default_module, "STC", 0.0, id="STC-0"),
+            pytest.param(default_module, "STC", -400.0, id="STC-negative"),
+            pytest.param(default_module, "STC", math.nan, id="STC-nan"),
+            pytest.param(default_module, "STC", "400.428", id="STC-text"),
+        ],
+    )
+    def test_a_rating_that_is_not_a_finite_number_above_0_is_refused_at_construction_and_at_use(
+        self,
+        build: Callable[[], dict[str, float]],
+        key: str,
+        value: float | str,
+        module_efficiency: float | None,
+    ) -> None:
+        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as the module's own rating, since pvlib reads the module's own pdc0."""
+        module = build()
+        config = PVConfig(
+            capacity_kw=4.0, custom_module_params=module, module_efficiency=module_efficiency
+        )
+        module[key] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert key in re.findall(r"\w+", message), message
+        assert repr(value) in message, message
 
     @pytest.mark.parametrize(
         "module",

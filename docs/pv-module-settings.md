@@ -1,6 +1,6 @@
 # PV Module Settings: Module Efficiency and Temperature Coefficient Derive the Module
 
-**Task:** #825, #1029, #1372
+**Task:** #825, #1029, #1372, #1374
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`, `_require_template_takes_temperature_coefficient`, `_require_adjust_reaches`)
 **Measurement:** [`tests/unit/test_pv_module_settings.py`](../tests/unit/test_pv_module_settings.py)
 
@@ -35,7 +35,8 @@
   (`_with_module_efficiency`), the rating being `_module_rating_w`'s: `pdc0` for a
   PVWatts module, else `STC`. It acts on output through NOCT-SAM's cell temperature
   ([pv-cell-temperature.md](pv-cell-temperature.md)): a less efficient module turns
-  more of its light into heat. It takes any module form that has a rating.
+  more of its light into heat. It takes any module form whose rating is a finite number
+  above 0.
 - **Refusals**, each a `ConfigurationError` (a `ValueError`) naming what it refuses:
   - At construction (`PVConfig.__post_init__`):
     - an efficiency outside (0, 0.9), 0.9 being NOCT-SAM's transmittance–absorptance,
@@ -49,9 +50,11 @@
       naming the bracket and the reach (`_require_adjust_reaches`). Construction
       evaluates only the bracket's two ends, not the solve;
     - then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor `STC`),
-      or outside NOCT-SAM's domain once a set efficiency's area is applied
-      (`_template_with_set_efficiency`), through `_require_cells_noct_sam_can_heat`,
-      which use runs too ([pv-cell-temperature.md](pv-cell-temperature.md)).
+      or whose rating is not a finite number above 0, text that reads as one included,
+      naming its key and value (`_module_rating_w`), or outside NOCT-SAM's domain once
+      a set efficiency's area is applied (`_template_with_set_efficiency`), through
+      `_require_cells_noct_sam_can_heat`, which use runs too
+      ([pv-cell-temperature.md](pv-cell-temperature.md)).
   - At use (`create_pv_system`, and so every chain builder and `wired_dc_capacity_kw`):
     the same form, reach, rating and NOCT-SAM rules, through the same functions, on the
     module it wires, `DEFAULT_CEC_MODULE`'s row included, which construction does not
