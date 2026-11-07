@@ -69,17 +69,24 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
     return _CEC_SINGLE_DIODE_MODULE_KEYS <= module_params.keys()
 
 
-def _require_module_form_taking_temperature_coefficient(
-    module_params: Mapping[str, float], coefficient: float
+def _require_template_takes_temperature_coefficient(
+    template: Mapping[str, float], coefficient: float
 ) -> None:
-    """Refuse a module in neither form a temperature coefficient derives: CEC single-diode, whose Adjust it solves, or PVWatts, whose gamma_pdc it sets."""
-    if not (_is_cec_single_diode_module(module_params) or _is_pvwatts_module(module_params)):
+    """Refuse a template from which coefficient cannot derive the module.
+
+    That is one in neither form (CEC single-diode, whose Adjust coefficient solves, or
+    PVWatts, whose gamma_pdc it sets), or a CEC template on which no Adjust in
+    _adjust_bracket reaches it (_require_adjust_reaches).
+    """
+    if not (_is_cec_single_diode_module(template) or _is_pvwatts_module(template)):
         raise ConfigurationError(
             f"temperature_coefficient={coefficient} needs module parameters in CEC "
             f"single-diode form ({', '.join(sorted(_CEC_SINGLE_DIODE_MODULE_KEYS))}), whose "
             f"Adjust it solves, or in PVWatts form ({', '.join(sorted(_PVWATTS_MODULE_KEYS))}), "
             "whose gamma_pdc it sets; the module is in neither"
         )
+    if _is_cec_single_diode_module(template):
+        _require_adjust_reaches(template, coefficient)
 
 
 PVWATTS_DEFAULT_SYSTEM_LOSSES = float(pvlib.pvsystem.pvwatts_losses()) / 100
@@ -107,7 +114,8 @@ class PVConfig:
             STC, per K. None keeps the template module's own modelled one; a set value,
             from -0.01 to below 0, solves a CEC single-diode template's Adjust, keeping its
             STC point, and sets its gamma_r, or sets a PVWatts template's gamma_pdc. A
-            template in neither form is refused
+            template in neither form is refused, and so is a custom CEC template whose
+            alpha_sc is 0 or on which no Adjust reaches the value, at construction and at use
         custom_module_params: Optional custom pvlib module parameters dict, the template
             the two fields above derive from; None takes DEFAULT_CEC_MODULE's row
             (cec_module_params reads any other CEC row). The cells take NOCT-SAM's
@@ -158,7 +166,7 @@ class PVConfig:
     system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient, or that have no rating or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat, which use runs too)."""
+        """Read each number setting, then refuse custom module parameters that cannot take a set temperature coefficient (_require_template_takes_temperature_coefficient), or that have no rating or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat); use runs both rules too."""
         read_field(self, "capacity_kw", as_finite_float, POSITIVE)
         read_field(self, "azimuth", as_finite_float, Interval(0, 360))
         read_field(self, "tilt", as_finite_float, Interval(0, 90))
@@ -176,7 +184,7 @@ class PVConfig:
         read_field(self, "degradation_rate_per_year", as_finite_float, _DEGRADATION_RATE_PER_YEAR)
         read_field(self, "system_losses", as_finite_float, Interval(0, 1, high_open=True))
         if self.temperature_coefficient is not None and self.custom_module_params is not None:
-            _require_module_form_taking_temperature_coefficient(
+            _require_template_takes_temperature_coefficient(
                 self.custom_module_params, self.temperature_coefficient
             )
         if self.custom_module_params is not None:
@@ -567,10 +575,11 @@ def _with_temperature_coefficient(
     A CEC single-diode template gets the Adjust at which its modelled coefficient is
     coefficient (_adjust_giving), which keeps its STC point, and gamma_r = 100 ×
     coefficient; a PVWatts template gets gamma_pdc = coefficient; a template in both
-    forms gets both, so whichever DC model pvlib infers reads it. A template in neither
-    form is refused (_require_module_form_taking_temperature_coefficient).
+    forms gets both, so whichever DC model pvlib infers reads it. A template from which
+    coefficient cannot derive the module is refused first
+    (_require_template_takes_temperature_coefficient).
     """
-    _require_module_form_taking_temperature_coefficient(template, coefficient)
+    _require_template_takes_temperature_coefficient(template, coefficient)
     module_params = dict(template)
     if _is_cec_single_diode_module(template):
         module_params["Adjust"] = _adjust_giving(template, coefficient)
@@ -580,25 +589,36 @@ def _with_temperature_coefficient(
     return module_params
 
 
-def _adjust_giving(template: Mapping[str, float], coefficient: float) -> float:
-    """The Adjust in _adjust_bracket at which the template's modelled temperature coefficient is coefficient, refusing one beyond the bracket's reach."""
+def _require_adjust_reaches(template: Mapping[str, float], coefficient: float) -> None:
+    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient.
+
+    Construction and use both run it (_require_template_takes_temperature_coefficient).
+    """
     low, high = _adjust_bracket(template, coefficient)
-
-    def excess_per_k(adjust: float) -> float:
-        return _modelled_gamma({**template, "Adjust": adjust}) - coefficient
-
-    excess_at_low, excess_at_high = excess_per_k(low), excess_per_k(high)
-    if excess_at_low * excess_at_high > 0:
-        shallowest, steepest = sorted(
-            (excess_at_low + coefficient, excess_at_high + coefficient), reverse=True
-        )
-        raise ValueError(
+    at_low = _modelled_gamma({**template, "Adjust": low})
+    at_high = _modelled_gamma({**template, "Adjust": high})
+    if (at_low - coefficient) * (at_high - coefficient) > 0:
+        steepest, shallowest = sorted((at_low, at_high))
+        raise ConfigurationError(
             f"temperature_coefficient={coefficient} is beyond the module's reach: between "
             f"Adjust {low:.6g} and {high:.6g}, which keep its photocurrent positive from "
             f"{_SERVICE_CELL_TEMPERATURES_C[0]:g} to {_SERVICE_CELL_TEMPERATURES_C[1]:g} °C, "
             f"its modelled temperature coefficient runs only from {steepest:.6g} to "
             f"{shallowest:.6g} per K"
         )
+
+
+def _adjust_giving(template: Mapping[str, float], coefficient: float) -> float:
+    """The Adjust in _adjust_bracket at which the template's modelled temperature coefficient is coefficient.
+
+    The template must reach coefficient: _with_temperature_coefficient checks that first
+    (_require_template_takes_temperature_coefficient).
+    """
+    low, high = _adjust_bracket(template, coefficient)
+
+    def excess_per_k(adjust: float) -> float:
+        return _modelled_gamma({**template, "Adjust": adjust}) - coefficient
+
     return float(brentq(excess_per_k, low, high))
 
 
@@ -612,7 +632,7 @@ def _adjust_bracket(template: Mapping[str, float], coefficient: float) -> tuple[
     """
     alpha_sc = template["alpha_sc"]
     if alpha_sc == 0:
-        raise ValueError(
+        raise ConfigurationError(
             f"temperature_coefficient={coefficient} cannot be set on a CEC module whose "
             "alpha_sc is 0: Adjust scales only alpha_sc, so no Adjust moves its modelled "
             "temperature coefficient"
@@ -833,8 +853,8 @@ def create_pv_system(config: PVConfig) -> PVSystem:
             temperature_coefficient cannot derive the module: no Adjust in
             _adjust_bracket reaches it for a custom CEC module, or the
             module's alpha_sc is 0 (_with_temperature_coefficient). The
-            rating and NOCT-SAM refusals are ConfigurationError, as at
-            PVConfig's construction.
+            rating, NOCT-SAM and temperature-coefficient refusals are
+            ConfigurationError, as at PVConfig's construction.
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0)
@@ -951,8 +971,8 @@ def create_model_chain_picking_from(
             (_with_temperature_coefficient, as for create_pv_system), or if
             pvlib infers an inverter model that can not read its DC model's
             output, e.g. custom Sandia inverter parameters with PVWatts module
-            parameters. The rating and NOCT-SAM refusals are
-            ConfigurationError, as for create_pv_system.
+            parameters. The rating, NOCT-SAM and temperature-coefficient
+            refusals are ConfigurationError, as for create_pv_system.
     """
     pv_system = _pv_system(config, candidates)
 
