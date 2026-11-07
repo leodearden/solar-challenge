@@ -3,6 +3,7 @@
 """Unit tests for tests/_finance_builders.py, the finance tests' synthetic homes, scenarios and constant-power simulation results."""
 
 import dataclasses
+from datetime import date
 
 import pytest
 
@@ -20,10 +21,18 @@ from tests._finance_builders import (
     make_scenario_of,
     make_sim_results,
     make_sized_home,
+    make_window,
 )
 
 
-@pytest.mark.parametrize("days", [pytest.param(365, id="full-year"), pytest.param(3, id="short-window")])
+@pytest.mark.parametrize(
+    "days",
+    [
+        pytest.param(365, id="full-year"),
+        pytest.param(3, id="short-window"),
+        pytest.param(182, id="ending-in-bst"),
+    ],
+)
 def test_sim_results_summary_totals_are_the_arguments(days: int) -> None:
     summary = calculate_summary(
         make_sim_results(
@@ -46,8 +55,34 @@ def test_sim_results_summary_totals_are_the_arguments(days: int) -> None:
     assert summary.total_export_revenue_gbp == pytest.approx(150.0)
 
 
-def test_sim_results_default_to_a_full_year() -> None:
-    assert calculate_summary(make_sim_results()).simulation_days == 365
+@pytest.mark.parametrize(
+    ("first_day", "days"),
+    [
+        pytest.param(date(2021, 1, 1), 1, id="one-day"),
+        pytest.param(date(2021, 1, 1), 182, id="ending-in-bst"),
+        pytest.param(date(2021, 1, 1), 365, id="calendar-year-2021"),
+        pytest.param(date(2024, 3, 31), 2, id="across-the-spring-forward"),
+        pytest.param(date(2024, 1, 1), 366, id="leap-year-2024"),
+        pytest.param(date(2024, 1, 1), 400, id="across-two-years"),
+    ],
+)
+def test_sim_results_summary_covers_make_window_of_the_same_days(first_day: date, days: int) -> None:
+    summary = calculate_summary(make_sim_results(days=days, first_day=first_day))
+
+    assert summary.window == make_window(days=days, first_day=first_day)
+    assert summary.simulation_days == days
+
+
+def test_sim_results_default_to_one_whole_calendar_year() -> None:
+    summary = calculate_summary(make_sim_results())
+    window = summary.window
+
+    assert summary.simulation_days == 365
+    assert window is not None
+    assert (window.first_day.month, window.first_day.day) == (1, 1)
+    assert (window.last_day.month, window.last_day.day) == (12, 31)
+    assert not window.extrapolated
+    assert window.annualisation_scale == 1.0
 
 
 def test_fleet_results_pair_each_default_home_with_the_given_annual_totals() -> None:
