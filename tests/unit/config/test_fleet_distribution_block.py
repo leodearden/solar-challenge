@@ -2,6 +2,7 @@
 """Tests for a fleet_distribution: block and the distribution specs that vary each home's parameters."""
 
 import copy
+import dataclasses
 import pickle
 from collections.abc import Callable
 from typing import Any
@@ -369,6 +370,29 @@ class TestFleetDistributionConfig:
         )
 
         assert fleet.dispatch_strategy == dispatch_strategy
+
+
+class TestAFleetDistributionIsFrozen:
+    """A FleetDistributionConfig is frozen: a changed fleet is a new one, made with dataclasses.replace, which checks it as construction does."""
+
+    @pytest.mark.parametrize("name", [each.name for each in dataclasses.fields(FleetDistributionConfig)])
+    def test_assigning_any_field_raises_frozen_instance_error(self, name: str) -> None:
+        fleet = FleetDistributionConfig(n_homes=1, pv=ComponentDistribution({"capacity_kw": 4.0}))
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(fleet, name, getattr(fleet, name))
+
+    def test_a_fleet_changed_through_replace_is_refused_as_construction_refuses_it(self) -> None:
+        """A 3-home fleet whose pool holds 3 values, grown to 4 homes, is refused in the words building a 4-home fleet with that pool gives."""
+        fleet = FleetDistributionConfig(
+            n_homes=3,
+            pv=ComponentDistribution({"capacity_kw": ShuffledPoolDistribution(values=(4.0,), counts=(3,))}),
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            dataclasses.replace(fleet, n_homes=4)
+
+        assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", 4, 3)
 
 
 class TestShuffledPoolHoldsOneValuePerHome:

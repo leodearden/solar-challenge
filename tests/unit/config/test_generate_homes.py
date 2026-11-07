@@ -325,16 +325,14 @@ class TestGenerateHomesFromDistribution:
         ]
 
 
-class TestGenerationRefusesAPoolNotSizedToTheFleet:
-    """generate_homes_from_distribution refuses a fleet whose shuffled pool does not hold one value per home."""
+class TestAResizedFleetIsRefusedAsConstructionRefusesIt:
+    """A fleet resized with dataclasses.replace is refused when its shuffled pool no longer holds one value per home."""
 
     @pytest.mark.parametrize(
         "resized_n_homes",
         [pytest.param(4, id="grown past its pool"), pytest.param(2, id="shrunk below its pool")],
     )
-    def test_a_fleet_resized_after_construction_is_refused_as_construction_refuses_it(
-        self, resized_n_homes: int
-    ) -> None:
+    def test_a_resized_fleet_is_refused_as_construction_refuses_it(self, resized_n_homes: int) -> None:
         """A fleet built with 3 pool values for 3 homes, then given another n_homes, is refused in the words construction uses for that size."""
 
         def fleet_of(n_homes: int) -> FleetDistributionConfig:
@@ -347,13 +345,11 @@ class TestGenerationRefusesAPoolNotSizedToTheFleet:
 
         with pytest.raises(ConfigurationError) as construction_refusal:
             fleet_of(resized_n_homes)
-        config = fleet_of(3)
-        config.n_homes = resized_n_homes
 
-        with pytest.raises(ConfigurationError) as use_refusal:
-            generate_homes_from_distribution(config, Location.bristol())
+        with pytest.raises(ConfigurationError) as resize_refusal:
+            dataclasses.replace(fleet_of(3), n_homes=resized_n_homes)
 
-        assert str(use_refusal.value) == str(construction_refusal.value)
+        assert str(resize_refusal.value) == str(construction_refusal.value)
 
 
 class TestGenerateHomesRefusesADrawThatIsNotFinite:
@@ -962,16 +958,19 @@ class TestGenerateHomesHouseholdOccupants:
     def test_a_spec_with_no_whole_number_given_to_a_configured_fleet_is_refused_as_configuring_it_refuses_it(
         self, household_occupants: Union[NormalDistribution, UniformDistribution]
     ) -> None:
-        """A fleet built with 3 household occupants, then given a spec with no whole number from its min to its max, is refused in the words construction uses for that spec."""
+        """A fleet built with 3 household occupants, then given a spec with no whole number from its min to its max through dataclasses.replace, is refused in the words construction uses for that spec."""
         with pytest.raises(ConfigurationError) as configuration_refusal:
             self._fleet(household_occupants)
-        fleet = self._fleet(3)
-        fleet.load = ComponentDistribution({"household_occupants": household_occupants})
 
-        with pytest.raises(ConfigurationError) as generation_refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
+        with pytest.raises(ConfigurationError) as replacement_refusal:
+            dataclasses.replace(
+                self._fleet(3),
+                load=ComponentDistribution(
+                    {"household_occupants": household_occupants}, settings={"use_stochastic": False}
+                ),
+            )
 
-        assert str(generation_refusal.value) == str(configuration_refusal.value)
+        assert str(replacement_refusal.value) == str(configuration_refusal.value)
 
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
