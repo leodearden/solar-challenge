@@ -12,7 +12,7 @@ pins there only a release that ships a wheel for it; tests/_required_environment
 says why. The suite's command is unchanged: only the copy's pyproject.toml
 gains that [tool.uv] table, which every uv command in the copy reads. The run
 deselects each test tests/_newest_releases_deselections.py names, which the
-copy breaks by design. An upstream release that breaks this code then files a
+copy breaks, or may break, by design. An upstream release that breaks this code then files a
 fix task before a consumer meets it.
 
 The orchestrator's offline lane runs this module after each merge to main, as

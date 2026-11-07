@@ -52,7 +52,7 @@ def test_each_node_id_the_lane_deselects_matches_exactly_the_cases_of_a_collecte
     assert cases, (
         f"the newest-releases lane deselects {deselected.node_id}, but {deselected.module} collects no case of it; "
         f"the node-id prefix matched {deselected_by_the_lane or 'nothing'} instead. A renamed test would run in the "
-        "lane's upgraded copy and fail there by construction, only after a merge, so its entry in "
+        "lane's upgraded copy, where it fails or may fail, only after a merge, so its entry in "
         "tests/_newest_releases_deselections.py must be renamed with it"
     )
     assert deselected_by_the_lane == cases, (
