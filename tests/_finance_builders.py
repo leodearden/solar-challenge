@@ -96,7 +96,16 @@ def make_sized_home(
     )
 
 
-def make_window(*, days: int = 365, first_day: date = date(2021, 1, 1)) -> SimulationWindow:
+# 2021 is not a leap year, so the default window's 365 days are its whole calendar year.
+_DEFAULT_WINDOW_FIRST_DAY = date(2021, 1, 1)
+_DEFAULT_WINDOW_DAYS = 365
+
+
+def make_window(
+    *,
+    days: int = _DEFAULT_WINDOW_DAYS,
+    first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
+) -> SimulationWindow:
     """The hourly Europe/London window over *days* local dates from *first_day*, both counted."""
     return SimulationWindow(first_day, first_day + timedelta(days=days - 1), timedelta(hours=1), "Europe/London")
 
@@ -162,8 +171,8 @@ def make_sim_results(
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
     export_revenue_gbp: float = 0.0,
-    days: int = 365,
-    first_day: date = date(2021, 1, 1),
+    days: int = _DEFAULT_WINDOW_DAYS,
+    first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
 ) -> SimulationResults:
     """Constant-power SimulationResults for one home over *days* local dates from *first_day*.
 
@@ -171,9 +180,9 @@ def make_sim_results(
     self-consumption, export, import and battery discharge, and the £ of export
     revenue, the physics SEG income.  Generation is self + export, demand is
     self + import - discharge, ``simulation_days`` is *days*, and the window is
-    ``make_window(days=days, first_day=first_day)``.  2021 is not a leap year,
-    so the default 365 days are its whole calendar year: annualisation scale 1,
-    a 365-day standing charge.
+    ``make_window(days=days, first_day=first_day)``.  By default that is
+    make_window()'s window, one whole calendar year: annualisation scale 1, a
+    whole year's standing charge.
 
     Hourly steps suffice because ``calculate_summary`` integrates each row over
     the hour it lasts: the rows are the window's, 23 or 25 of them on a day the
@@ -228,7 +237,7 @@ def make_fleet_results(
     import_kwh: float = 12.0,
     discharge_kwh: float = 0.0,
     export_revenue_gbp: float = 0.0,
-    days: int = 365,
+    days: int = _DEFAULT_WINDOW_DAYS,
 ) -> FleetResults:
     """Each home of a fleet paired with make_sim_results of the given totals over *days* days.
 
