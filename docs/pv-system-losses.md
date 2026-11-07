@@ -160,12 +160,12 @@ PVGIS-14% 0.793–0.815.
   `scenario_writer` writes, and task 610 makes it a web home-form input and
   `home run --system-losses` (§1). A fleet's `pv:` distribution draws it after task 919
   (S7 δ). The fleet page has no input for it, and `home quick` takes no PV setting but
-  capacity. Parameter sweeps go with S5, which deletes the sweep.
+  capacity.
 - **Task 284:** ageing is applied to the AC after clipping, not to the DC.
 
 ## 8. When to Revisit
 
-- pvlib changes `pvwatts_losses`' defaults. `FROZEN_SURFACE` pins the default's repr, so
+- pvlib changes `pvwatts_losses`' defaults. `FROZEN_SURFACE` pins the default's spelling, so
   the frozen-surface test fails, and the newest-releases lane with it.
 - MCS or PVGIS changes its methodology.
 - The model gains an explicit soiling, shading or availability term: take that category
