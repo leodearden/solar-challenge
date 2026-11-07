@@ -202,10 +202,13 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the sandbox. Another project's `playwright install` deletes that browser once
   the environment that installed it is gone, because playwright keeps only the
   browsers a still-present install has registered under
-  `~/.cache/ms-playwright/.links`, and task worktrees' environments are
-  temporary. Every e2e test that needs the browser then ERRORs at setup with
+  `~/.cache/ms-playwright/.links`. Every e2e test that needs the browser then
+  ERRORs at setup with
   `Executable doesn't exist at ~/.cache/ms-playwright/chromium_headless_shell-<revision>/...`,
-  and that install is the whole fix: no code change.
+  and that install is the whole fix: no code change. Run it in the main
+  checkout, whose `.venv` lasts. A task worktree's goes when the worktree is
+  reaped, and the lane's, in `.worktrees/_offline-deep`, goes before every
+  pass, when the lane's reset deletes it.
 - The lane's `pvgis` job runs `tests/integration/test_pvgis.py`, the PVGIS
   contract tests, after every merge. They check PVGIS's live response, never a
   cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
