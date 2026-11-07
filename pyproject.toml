@@ -95,7 +95,7 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 # Read as Any when mypy finds no types for them; docs/type-check.md says why scipy is here, not scipy-stubs.
-module = ["pvlib.*", "pandas.*", "numpy.*", "yaml", "richardsonpy.*", "flask.*", "plotly.*", "scipy.*"]
+module = ["pvlib.*", "pandas.*", "yaml", "richardsonpy.*", "plotly.*", "scipy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
