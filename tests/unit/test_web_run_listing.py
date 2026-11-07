@@ -10,8 +10,10 @@ each document of a record with no type, naming runs.type. RunRecord.summary_tree
 the field tree of the summary RunRecord.summary() reads, {} while the run has none, and
 refuses a summary as RunRecord.summary() refuses it; unlike the stored text, that tree holds
 a field with a default that the text lacks. run_headline maps a summary of
-either kind to the generation and self-consumption ratio a run list shows, and refuses a
-summary whose figure for either is not a finite number.
+either kind to the figures the web shows for its run: the five energy totals, the
+self-consumption, grid dependency and export ratios, and the share of the generation the
+battery stored from PV, which a fleet run has none of. It refuses a summary whose figure for
+any of them is not a finite number.
 
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
@@ -285,25 +287,73 @@ class TestRunRecordSummaryTree:
 
 
 class TestRunHeadline:
-    """run_headline: the generation and self-consumption ratio a run list shows for a run's summary.
+    """run_headline: the figures the web shows for a run's summary, its energy totals and ratios and the share of its generation the battery stored from PV.
 
-    Each summary's marker figures, its generation and its ratio, are figures no other field of
-    it holds, so a headline read from the wrong field shows.
+    Each figure a headline reads from a summary is one no other field of that summary holds,
+    so a headline read from the wrong field shows.
     """
 
-    def test_a_home_run_s_headline_is_its_generation_and_its_self_consumption_ratio(self) -> None:
-        summary = home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37)
+    def test_a_home_run_s_headline_is_its_totals_its_ratios_and_the_share_of_its_generation_it_stored_from_pv(
+        self,
+    ) -> None:
+        """The battery stored 4 of its 10 kWh from the grid, so a share read from its whole charge shows."""
+        summary = home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37, total_grid_charge_kwh=4.0)
 
         assert run_headline(summary) == RunHeadline(
-            generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.self_consumption_ratio
+            generation_kwh=summary.total_generation_kwh,
+            demand_kwh=summary.total_demand_kwh,
+            self_consumption_kwh=summary.total_self_consumption_kwh,
+            grid_import_kwh=summary.total_grid_import_kwh,
+            grid_export_kwh=summary.total_grid_export_kwh,
+            self_consumption_ratio=summary.self_consumption_ratio,
+            grid_dependency_ratio=summary.grid_dependency_ratio,
+            export_ratio=summary.export_ratio,
+            pv_stored_share=summary.total_pv_charge_kwh / summary.total_generation_kwh,
         )
 
-    def test_a_fleet_run_s_headline_is_its_total_generation_and_its_fleet_self_consumption_ratio(self) -> None:
-        summary = fleet_summary(total_generation_kwh=1975.3, fleet_self_consumption_ratio=0.43)
+    def test_a_fleet_run_s_headline_is_its_totals_its_fleet_ratios_and_its_export_over_its_generation_and_no_pv_share(
+        self,
+    ) -> None:
+        """A fleet summary holds no export ratio and no battery totals."""
+        summary = fleet_summary(total_generation_kwh=1975.3, fleet_self_consumption_ratio=0.43, total_grid_export_kwh=70.0)
 
         assert run_headline(summary) == RunHeadline(
-            generation_kwh=summary.total_generation_kwh, self_consumption_ratio=summary.fleet_self_consumption_ratio
+            generation_kwh=summary.total_generation_kwh,
+            demand_kwh=summary.total_demand_kwh,
+            self_consumption_kwh=summary.total_self_consumption_kwh,
+            grid_import_kwh=summary.total_grid_import_kwh,
+            grid_export_kwh=summary.total_grid_export_kwh,
+            self_consumption_ratio=summary.fleet_self_consumption_ratio,
+            grid_dependency_ratio=summary.fleet_grid_dependency_ratio,
+            export_ratio=summary.total_grid_export_kwh / summary.total_generation_kwh,
+            pv_stored_share=None,
         )
+
+    def test_a_simulated_fleet_s_headline_holds_its_own_ratios_and_no_pv_stored_share(self) -> None:
+        """B11: each of two homes self-consumes 18 and exports 54 of the 72 kWh it generates, and imports 27 of the 45 it uses."""
+        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
+
+        headline = run_headline(calculate_fleet_summary(fleet))
+
+        assert (headline.self_consumption_ratio, headline.grid_dependency_ratio, headline.export_ratio) == pytest.approx(
+            (0.25, 0.6, 0.75)
+        )
+        assert headline.pv_stored_share is None
+
+    def test_a_share_of_a_generation_of_nothing_is_nothing_as_calculate_summary_s_export_ratio_is(self) -> None:
+        assert run_headline(home_summary(total_generation_kwh=0.0)).pv_stored_share == 0.0
+        assert run_headline(fleet_summary(total_generation_kwh=0.0)).export_ratio == 0.0
+
+    def test_a_headline_with_no_pv_stored_share_is_a_headline(self) -> None:
+        headline = dataclasses.replace(run_headline(home_summary()), pv_stored_share=None)
+
+        assert headline.pv_stored_share is None
+
+    def test_a_headline_whose_pv_stored_share_is_not_a_finite_number_is_refused_naming_it_and_its_value(self) -> None:
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(run_headline(home_summary()), pv_stored_share=math.nan)
+
+        assert "pv_stored_share is nan" in str(refusal.value)
 
     @pytest.mark.parametrize(
         ("summary", "figure", "value"),
@@ -327,6 +377,26 @@ class TestRunHeadline:
                 -(10**400),
                 id="fleet-ratio-below-every-float",
             ),
+            pytest.param(home_summary(total_demand_kwh=math.nan), "demand_kwh", math.nan, id="home-demand-nan"),
+            pytest.param(home_summary(export_ratio=math.inf), "export_ratio", math.inf, id="home-export-ratio-inf"),
+            pytest.param(
+                fleet_summary(fleet_grid_dependency_ratio="0.25"),
+                "grid_dependency_ratio",
+                "0.25",
+                id="fleet-grid-dependency-ratio-text",
+            ),
+            pytest.param(
+                fleet_summary(total_grid_export_kwh=None),
+                "grid_export_kwh",
+                None,
+                id="fleet-export-null-the-dividend-of-its-export-ratio",
+            ),
+            pytest.param(
+                home_summary(total_battery_charge_kwh=math.inf),
+                "pv_stored_share",
+                math.inf,
+                id="home-battery-charge-inf-so-its-pv-stored-share",
+            ),
         ],
     )
     def test_a_summary_whose_headline_figure_is_not_a_finite_number_is_refused_naming_the_figure_and_its_value(
@@ -339,9 +409,30 @@ class TestRunHeadline:
 
     def test_a_figure_a_summary_holds_as_a_whole_number_is_a_headline_figure(self) -> None:
         """A stored summary's JSON may hold a figure as a whole number, 100 rather than 100.0, which decodes as an int."""
-        summary = home_summary(total_generation_kwh=100, self_consumption_ratio=0)
+        summary = home_summary(
+            total_generation_kwh=100,
+            total_demand_kwh=80,
+            total_self_consumption_kwh=60,
+            total_grid_import_kwh=20,
+            total_grid_export_kwh=40,
+            total_battery_charge_kwh=10,
+            total_grid_charge_kwh=0,
+            self_consumption_ratio=0,
+            grid_dependency_ratio=0,
+            export_ratio=1,
+        )
 
-        assert run_headline(summary) == RunHeadline(generation_kwh=100, self_consumption_ratio=0)
+        assert run_headline(summary) == RunHeadline(
+            generation_kwh=100,
+            demand_kwh=80,
+            self_consumption_kwh=60,
+            grid_import_kwh=20,
+            grid_export_kwh=40,
+            self_consumption_ratio=0,
+            grid_dependency_ratio=0,
+            export_ratio=1,
+            pv_stored_share=0.1,
+        )
 
 
 def _ids(page: RunPage) -> list[str]:
@@ -620,12 +711,23 @@ class TestHeadlineFigures:
         warnings = _storage_warnings(caplog)
         assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
 
+    @pytest.mark.parametrize(
+        "damaged_summary_json",
+        [
+            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), id="generation-nan"),
+            pytest.param(summary_json(home_summary(export_ratio=math.nan)), id="export-ratio-nan-a-figure-no-run-list-shows"),
+        ],
+    )
     def test_a_run_whose_headline_figure_is_not_a_finite_number_has_neither_figure_and_a_warning_names_it_though_it_reads(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture
+        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
     ) -> None:
-        """NaN is a number, so the summary reads; run_headline refuses it, and no document is unreadable."""
+        """NaN is a number, so the summary reads; run_headline refuses it, and no document is unreadable.
+
+        The export ratio is a headline figure that no run list shows, and a summary holding it
+        NaN is damaged all the same.
+        """
         _store_a_home_run(storage, "nan-run")
-        _damage_summary(storage, "nan-run", summary_json(home_summary(total_generation_kwh=math.nan)))
+        _damage_summary(storage, "nan-run", damaged_summary_json)
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         figures = headline_figures(_record(storage, "nan-run"))
