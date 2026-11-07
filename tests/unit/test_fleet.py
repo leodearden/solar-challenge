@@ -1,8 +1,9 @@
 """Tests for fleet simulation."""
 
 import multiprocessing
+import os
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
@@ -17,6 +18,7 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetRunner,
     FleetSummary,
+    HomesDone,
     MultiSweepResults,
     aggregate_home_summaries,
     calculate_fleet_summary,
@@ -33,6 +35,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
+from tests._fleet_runner import HomeStart, MarkingHomeSimulator, started
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -640,6 +643,187 @@ class TestFleetRunnerPolicy:
         pd.testing.assert_frame_equal(runner.weather.get(Location.bristol()), default_weather().get(Location.bristol()))
 
 
+_BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
+_LOAD = LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
+
+
+def _home(name: str, pv_kw: float, location: Location = Location.bristol()) -> HomeConfig:
+    """A home named *name* with *pv_kw* of PV at *location*, whose MarkingHomeSimulator results total *pv_kw* of self-consumption."""
+    return HomeConfig(pv_config=PVConfig(capacity_kw=pv_kw), load_config=_LOAD, location=location, name=name)
+
+
+def _assert_marked_results_of(results: FleetResults, fleet: FleetConfig) -> None:
+    """Assert *results* pairs *fleet*'s homes, in order, each with the results MarkingHomeSimulator gives it."""
+    assert results.home_configs == fleet.homes
+    assert [
+        calculate_summary(home_results).total_self_consumption_kwh for home_results in results.per_home_results
+    ] == pytest.approx([home.pv_config.capacity_kw for home in fleet.homes])
+
+
+@dataclass
+class _CountingWeather:
+    """Serves a clear 21 June at Bristol and that day at half its irradiance at Bath, recording each location it is asked for, in the process that asks."""
+
+    asked: list[Location] = field(default_factory=list)
+
+    def get(self, location: Location) -> pd.DataFrame:
+        self.asked.append(location)
+        irradiance_scale = {Location.bristol(): 1.0, _BATH: 0.5}[location]
+        return synthetic_june_weather(_JUNE_DAYS.first_day, irradiance_scale_per_day=(irradiance_scale,))
+
+
+class TestFleetRunnerSimulates:
+    """A FleetRunner runs each home of each fleet once through its home simulator, on weather it fetched here for the home's location, and pairs each fleet's results with its homes in order."""
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    @pytest.mark.parametrize("parallel", [False, True])
+    def test_a_fleets_results_pair_its_homes_in_order_and_progress_counts_each_home_here(
+        self, tmp_path: Path, parallel: bool, worker_start_method: str
+    ) -> None:
+        fleet = FleetConfig(homes=[_home("Home 1", 2.0), _home("Home 2", 3.0), _home("Home 3", 4.0)], name="Three")
+        runner = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=parallel, max_workers=2
+        )
+        told: list[tuple[int, int, int]] = []
+
+        results = runner.simulate(
+            fleet, *_JUNE_DAYS.window(), progress=lambda done, total: told.append((done, total, os.getpid()))
+        )
+
+        _assert_marked_results_of(results, fleet)
+        assert told == [(1, 3, os.getpid()), (2, 3, os.getpid()), (3, 3, os.getpid())]
+        ran_here = [start.pid == os.getpid() for start in started(tmp_path).values()]
+        assert ran_here == [not parallel] * 3
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    @pytest.mark.parametrize("parallel", [False, True])
+    def test_each_fleet_comes_once_with_its_homes_results_in_order_and_progress_counts_every_home(
+        self, tmp_path: Path, parallel: bool, worker_start_method: str
+    ) -> None:
+        fleets = [
+            FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
+            FleetConfig(homes=[_home("B 1", 3.0)], name="B"),
+            FleetConfig(homes=[_home("C 1", 4.0), _home("C 2", 5.0), _home("C 3", 6.0)], name="C"),
+        ]
+        runner = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=parallel, max_workers=2
+        )
+        told: list[tuple[int, int]] = []
+
+        each = list(
+            runner.simulate_each(fleets, *_JUNE_DAYS.window(), progress=lambda done, total: told.append((done, total)))
+        )
+
+        assert sorted(index for index, _ in each) == [0, 1, 2]
+        for index, results in each:
+            _assert_marked_results_of(results, fleets[index])
+        assert told[-1] == (6, 6)
+
+    def test_no_fleets_yield_nothing_and_fetch_no_weather(self, tmp_path: Path) -> None:
+        weather = _CountingWeather()
+        runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path))
+
+        assert list(runner.simulate_each([], *_JUNE_DAYS.window())) == []
+        assert weather.asked == []
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_a_call_asks_for_each_locations_weather_once_here_and_each_job_carries_its_homes_alone(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        first = FleetConfig(
+            homes=[_home("Bristol 1", 2.0), _home("Bath 1", 3.0, _BATH), _home("Bristol 2", 4.0)], name="First"
+        )
+        second = FleetConfig(homes=[_home("Bath 2", 5.0, _BATH)], name="Second")
+        one_fleet, each_fleet = tmp_path / "simulate", tmp_path / "simulate_each"
+        one_fleet.mkdir()
+        each_fleet.mkdir()
+
+        asked_by_one = _CountingWeather()
+        FleetRunner(weather=asked_by_one, home_simulator=MarkingHomeSimulator(one_fleet), max_workers=2).simulate(
+            first, *_JUNE_DAYS.window()
+        )
+        asked_by_each = _CountingWeather()
+        list(
+            FleetRunner(
+                weather=asked_by_each, home_simulator=MarkingHomeSimulator(each_fleet), max_workers=2
+            ).simulate_each([first, second], *_JUNE_DAYS.window())
+        )
+
+        assert asked_by_one.asked == [Location.bristol(), _BATH]
+        assert asked_by_each.asked == [Location.bristol(), _BATH]
+        bristol, bath = ("Bristol, UK",), ("Bath, UK",)
+        assert {name: start.locations for name, start in started(one_fleet).items()} == {
+            "Bristol 1": bristol, "Bath 1": bath, "Bristol 2": bristol,
+        }
+        assert {name: start.locations for name, start in started(each_fleet).items()} == {
+            "Bristol 1": bristol, "Bath 1": bath, "Bristol 2": bristol, "Bath 2": bath,
+        }
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_a_call_of_one_home_runs_it_here_even_in_parallel(self, tmp_path: Path, worker_start_method: str) -> None:
+        fleet = FleetConfig(homes=[_home("Alone", 2.0)], name="One")
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=True)
+
+        results = runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        _assert_marked_results_of(results, fleet)
+        assert started(tmp_path)["Alone"].pid == os.getpid()
+
+    def test_a_home_runs_here_on_weather_holding_its_location_alone(self, tmp_path: Path) -> None:
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path))
+
+        results = runner.simulate_home(_home("Alone", 2.0, _BATH), *_JUNE_DAYS.window())
+
+        assert calculate_summary(results).total_self_consumption_kwh == pytest.approx(2.0)
+        assert started(tmp_path) == {"Alone": HomeStart(pid=os.getpid(), locations=("Bath, UK",))}
+
+
+@pytest.mark.usefixtures("bristol_june_tmy")
+class TestFleetRunnerParallelMatchesSequential:
+    """A FleetRunner's parallel run of a seeded stochastic fleet gives each home exactly its sequential run's results, in home order, whichever worker draws its demand."""
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_seeded_stochastic_homes_get_their_sequential_results_from_parallel_workers(
+        self, worker_start_method: str
+    ) -> None:
+        start, end = _JUNE_DAYS.window(1)
+        workers = 2
+        fleet = parse_fleet_config(
+            {
+                "fleet_distribution": {
+                    "n_homes": 4,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3400.0, "use_stochastic": True},
+                }
+            }
+        )
+        assert len(fleet.homes) > workers, (
+            f"premise: {len(fleet.homes)} homes over {workers} workers, so some worker draws "
+            "one home's demand after another's"
+        )
+        runner = FleetRunner(weather=default_weather(), home_simulator=simulate_home)
+
+        in_sequence = replace(runner, parallel=False).simulate(fleet, start, end)
+        distinct_demands = {tuple(results.demand) for results in in_sequence.per_home_results}
+        assert len(distinct_demands) == len(fleet.homes), (
+            f"premise: the {len(fleet.homes)} homes, differing only in their seed, drew "
+            f"{len(distinct_demands)} distinct demand profiles; profiles drawn from their own seeds differ, "
+            "the deterministic Elexon fallback's do not"
+        )
+
+        in_parallel = replace(runner, parallel=True, max_workers=workers).simulate(fleet, start, end)
+        for home, from_workers, from_sequence in zip(
+            fleet.homes, in_parallel.per_home_results, in_sequence.per_home_results, strict=True
+        ):
+            pd.testing.assert_frame_equal(
+                from_workers.to_dataframe(),
+                from_sequence.to_dataframe(),
+                check_exact=True,
+                obj=f"{home.name}'s results from {worker_start_method} workers",
+            )
+
+
 @pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
@@ -978,11 +1162,18 @@ def _emptying_the_cache_after_the_first(results: Iterator[_Result], cache: Weath
     yield from results
 
 
+def _emptying_after_the_first_home(cache: WeatherCache) -> HomesDone:
+    """A progress sink that empties *cache* once the first home of the call has finished, before any other home runs in a sequential call."""
+
+    def homes_done(done: int, total: int) -> None:
+        if done == 1:
+            cache.clear()
+
+    return homes_done
+
+
 class TestParallelFleetWeather:
     """A fleet run fetches its homes' TMYs from the test's weather_cache in this process before any home runs, and each home's job carries its location's: so each home gets exactly what simulate_home gives it here, whether the run is sequential or its workers start by forkserver (Linux's default from Python 3.14) or spawn (macOS's)."""
-
-    _BATH = Location(latitude=51.38, longitude=-2.36, name="Bath, UK")
-    _LOAD =LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False)
 
     @pytest.fixture(autouse=True)
     def bristol_and_bath_tmys(
@@ -995,7 +1186,7 @@ class TestParallelFleetWeather:
         """
         monkeypatch.chdir(tmp_path)
         _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
-        weather_cache.put(synthetic_june_weather(_JUNE_DAYS.first_day, irradiance_scale_per_day=(0.5,)), "tmy", self._BATH)
+        weather_cache.put(synthetic_june_weather(_JUNE_DAYS.first_day, irradiance_scale_per_day=(0.5,)), "tmy", _BATH)
 
     @pytest.fixture
     def bristol_and_bath_fleet(self) -> FleetConfig:
@@ -1004,11 +1195,11 @@ class TestParallelFleetWeather:
             homes=[
                 HomeConfig(
                     pv_config=PVConfig(capacity_kw=4.0),
-                    load_config=self._LOAD,
+                    load_config=_LOAD,
                     location=location,
                     name=location.name,
                 )
-                for location in (Location.bristol(), self._BATH)
+                for location in (Location.bristol(), _BATH)
             ]
         )
 
@@ -1021,7 +1212,7 @@ class TestParallelFleetWeather:
                 FleetConfig.create_uniform(
                     n_homes=2,
                     pv_config=PVConfig(capacity_kw=2.0),
-                    load_config=self._LOAD,
+                    load_config=_LOAD,
                     location=Location.bristol(),
                 ),
             ),
@@ -1030,8 +1221,8 @@ class TestParallelFleetWeather:
                 FleetConfig.create_uniform(
                     n_homes=2,
                     pv_config=PVConfig(capacity_kw=4.0),
-                    load_config=self._LOAD,
-                    location=self._BATH,
+                    load_config=_LOAD,
+                    location=_BATH,
                 ),
             ),
         ]
@@ -1125,4 +1316,98 @@ class TestParallelFleetWeather:
                         simulate_home(home, start, end, weather=default_weather()).to_dataframe(),
                         check_exact=True,
                         obj=f"{home.name} of the {pv_kw} kW sweep with parallel={parallel}",
+                    )
+
+    def test_a_runners_jobs_carry_the_weather_it_fetched_before_its_first_home_ran(
+        self, bristol_and_bath_fleet: FleetConfig, weather_cache: WeatherCache
+    ) -> None:
+        """A sequential FleetRunner.simulate whose cache is emptied once its first home has finished gives each home exactly what simulate_home gives it here: a job that read the default weather itself would find the cache empty and be refused at PVGIS."""
+        start, end = _JUNE_DAYS.window(1)
+        alone = [
+            simulate_home(home, start, end, weather=default_weather()) for home in bristol_and_bath_fleet.homes
+        ]
+        runner = FleetRunner(weather=default_weather(), home_simulator=simulate_home, parallel=False)
+
+        in_fleet = runner.simulate(
+            bristol_and_bath_fleet, start, end, progress=_emptying_after_the_first_home(weather_cache)
+        )
+
+        for home, from_fleet, expected in zip(bristol_and_bath_fleet.homes, in_fleet.per_home_results, alone, strict=True):
+            pd.testing.assert_frame_equal(
+                from_fleet.to_dataframe(), expected.to_dataframe(), check_exact=True, obj=f"{home.name}'s results"
+            )
+
+    def test_each_fleets_jobs_carry_the_weather_the_runner_fetched_before_its_first_home_ran(
+        self, bristol_and_bath_sweeps: list[tuple[float, FleetConfig]], weather_cache: WeatherCache
+    ) -> None:
+        """A sequential FleetRunner.simulate_each over two fleets whose cache is emptied once the first home has finished gives each home exactly what simulate_home gives it here: a job that read the default weather itself would find the cache empty and be refused at PVGIS."""
+        start, end = _JUNE_DAYS.window(1)
+        fleets = [fleet for _, fleet in bristol_and_bath_sweeps]
+        alone = [[simulate_home(home, start, end, weather=default_weather()) for home in fleet.homes] for fleet in fleets]
+        runner = FleetRunner(weather=default_weather(), home_simulator=simulate_home, parallel=False)
+
+        by_index = dict(
+            runner.simulate_each(fleets, start, end, progress=_emptying_after_the_first_home(weather_cache))
+        )
+
+        assert sorted(by_index) == [0, 1]
+        for fleet_index, expected_homes in enumerate(alone):
+            for home_index, (from_fleet, expected) in enumerate(
+                zip(by_index[fleet_index].per_home_results, expected_homes, strict=True)
+            ):
+                pd.testing.assert_frame_equal(
+                    from_fleet.to_dataframe(),
+                    expected.to_dataframe(),
+                    check_exact=True,
+                    obj=f"home {home_index} of fleet {fleet_index}",
+                )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_a_runner_gives_each_home_of_a_fleet_the_results_simulate_home_gives_it_here(
+        self, bristol_and_bath_fleet: FleetConfig, worker_start_method: str
+    ) -> None:
+        """FleetRunner.simulate, sequential or parallel, gives a Bristol home and a Bath home exactly what simulate_home gives each in this process."""
+        start, end = _JUNE_DAYS.window(1)
+        alone = [
+            simulate_home(home, start, end, weather=default_weather()) for home in bristol_and_bath_fleet.homes
+        ]
+        assert alone[1].total_amounts()["generation_kwh"] < alone[0].total_amounts()["generation_kwh"], (
+            "premise: Bath's TMY is less sunny than Bristol's, so a home simulated from the other location's TMY is caught"
+        )
+
+        for parallel in (False, True):
+            runner = FleetRunner(
+                weather=default_weather(), home_simulator=simulate_home, parallel=parallel, max_workers=2
+            )
+            fleet_results = runner.simulate(bristol_and_bath_fleet, start, end)
+            for home, in_fleet, expected in zip(
+                bristol_and_bath_fleet.homes, fleet_results.per_home_results, alone, strict=True
+            ):
+                pd.testing.assert_frame_equal(
+                    in_fleet.to_dataframe(),
+                    expected.to_dataframe(),
+                    check_exact=True,
+                    obj=f"{home.name}'s results with parallel={parallel}",
+                )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver", "spawn"], indirect=True)
+    def test_a_runner_gives_each_home_of_each_fleet_the_results_simulate_home_gives_it_here(
+        self, bristol_and_bath_sweeps: list[tuple[float, FleetConfig]], worker_start_method: str
+    ) -> None:
+        """FleetRunner.simulate_each, sequential or parallel, gives each home of a Bristol fleet and a Bath fleet exactly what simulate_home gives it in this process."""
+        start, end = _JUNE_DAYS.window(1)
+        fleets = [fleet for _, fleet in bristol_and_bath_sweeps]
+        for parallel in (False, True):
+            runner = FleetRunner(
+                weather=default_weather(), home_simulator=simulate_home, parallel=parallel, max_workers=2
+            )
+            by_index = dict(runner.simulate_each(fleets, start, end))
+            assert sorted(by_index) == [0, 1]
+            for fleet_index, (pv_kw, fleet) in enumerate(bristol_and_bath_sweeps):
+                for home, in_fleet in zip(fleet.homes, by_index[fleet_index].per_home_results, strict=True):
+                    pd.testing.assert_frame_equal(
+                        in_fleet.to_dataframe(),
+                        simulate_home(home, start, end, weather=default_weather()).to_dataframe(),
+                        check_exact=True,
+                        obj=f"{home.name} of the {pv_kw} kW fleet with parallel={parallel}",
                     )
