@@ -130,6 +130,16 @@ class TestCellTemperatureIsNoctSamFromTheModule:
                 efficiency
             )
 
+    def test_a_module_in_both_forms_runs_at_its_pdc0s_efficiency(self) -> None:
+        """A DEFAULT_CEC_MODULE row given a 300 W pdc0 is rated by it, so runs at 300 / 1990 = 0.151, not at its 400.428 W STC's 0.201."""
+        row = default_module()
+        module = {**row, "pdc0": 300.0, "gamma_pdc": -0.004}
+
+        for array in create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module)).arrays:
+            assert array.temperature_model_parameters["module_efficiency"] == pytest.approx(
+                300 / (row["A_c"] * 1000)
+            )
+
     @pytest.mark.parametrize(
         "config",
         [
@@ -187,6 +197,17 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
         message = one_refusal_at_construction_and_at_use(config)
         assert _default_area_in_a_refusal() in message, message
         assert "Give the module its own A_c" in message, message
+
+    def test_a_module_in_both_forms_is_refused_at_its_pdc0s_efficiency(self) -> None:
+        """A DEFAULT_CEC_MODULE row given an 1800 W pdc0 has an efficiency of 0.905 over its 1.99 m², which construction refuses, though its 400.428 W STC's 0.201 is inside NOCT-SAM's domain."""
+        module = {**default_module(), "pdc0": 1800.0, "gamma_pdc": -0.004}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PVConfig(capacity_kw=4.0, custom_module_params=module)
+
+        message = str(refusal.value)
+        assert f"A_c={module['A_c']}" in message, message
+        assert "1800.0 W rating" in message, message
 
 
 class TestASetModuleEfficiencyGivesTheCheckedArea:
