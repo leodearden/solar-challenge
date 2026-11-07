@@ -240,7 +240,8 @@ class TestComputeGridChargePowerKw:
         """When max_charge_kw is tight, min picks residual.
 
         Same as above but max_charge_kw=5.0, pv_charge_kw=1.0.
-        residual = 5.0 - 1.0 = 4.0 kW < gap_power ≈ 7.78 kW
+        post-PV SOC = 2.0 + 1.0 × 1.0 × 0.9 = 2.9 kWh
+        residual = 5.0 - 1.0 = 4.0 kW < gap_power = (9.0 - 2.9)/0.9 ≈ 6.78 kW
         result = 4.0 kW
         """
         ctx = GridChargeContext(
@@ -329,8 +330,9 @@ class TestComputeGridChargePowerKw:
         capacity in raw kW terms, avoiding over-committing grid import.
 
         Setup: charge_efficiency=0.8, max_charge_kw=5, pv_charge=1 →
+            post-PV SOC      = 2.0 + 1.0 × 1.0 × 0.8 = 2.8 kWh
             residual_battery = 4.0 kW (battery-side)
-            gap_power        = 7.0/0.8/1.0 = 8.75 kW (grid-side, non-binding)
+            gap_power        = (9.0 - 2.8)/0.8/1.0 = 7.75 kW (grid-side, non-binding)
             result           = min(8.75, 4.0) = 4.0  (battery-side residual)
         True grid draw for full headroom would be 4.0/0.8 = 5.0 kW — NOT returned.
         """

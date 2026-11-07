@@ -347,7 +347,7 @@ def simulate_timestep_tou(
        - Remaining excess exports to grid
        - When ``battery.grid_charge_target_kwh`` is not None, the battery tops up
          from the grid toward it by the power :func:`compute_grid_charge_power_kw`
-         returns
+         returns for the SOC before the PV charge and that PV charge
     4. During expensive periods (peak):
        - Discharge battery to meet demand before importing from grid, asking it
          for the shortfall power demand_kw - generation_kw whenever that is above
@@ -376,6 +376,7 @@ def simulate_timestep_tou(
     discharge_kwh = 0.0
     if is_cheap_period:
         # Off-peak: charge from excess PV, then optionally top-up from grid
+        soc_before_pv_kwh = battery.soc_kwh
         if step.excess_kwh > 0:
             excess_power_kw = step.excess_kwh / step.duration_hours
             pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
@@ -389,7 +390,7 @@ def simulate_timestep_tou(
             ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
             grid_power = compute_grid_charge_power_kw(
                 ctx,
-                battery_soc_kwh=battery.soc_kwh,  # post-PV-charge SOC
+                battery_soc_kwh=soc_before_pv_kwh,
                 pv_charge_power_kw=pv_charge_power_kw,
                 timestep_minutes=timestep_minutes,
             )
