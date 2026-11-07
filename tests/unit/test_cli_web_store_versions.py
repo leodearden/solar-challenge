@@ -18,9 +18,10 @@ format version (B5). It refuses a step that cannot write a run's file, exiting 1
 refusal naming the step and the fault, and so it does a run an earlier migration left lagging
 whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused,
 it prints on stdout the report of the steps it applied, which stay applied, then the run files
-the refused step or catch-up brought forward before its fault, which stay so, with each value
-dropped or rewritten in them, then the refusal on stderr; it prints no report of steps when it
-applied none, and no run files when the refused part brought none forward.
+the refused step or catch-up brought forward before its fault, which stay so, among them the
+documents it already wrote of the run it stopped at, with each value dropped or rewritten in
+them, then the refusal on stderr; it prints no report of steps when it applied none, and no run
+files when the refused part brought none forward.
 """
 
 import json
@@ -343,6 +344,35 @@ def test_web_migrate_refuses_a_step_that_cannot_write_a_run_s_file_naming_the_st
     assert result.stdout.startswith("Before the fault, brought forward the files of each run below"), result.stdout
     assert f"  run {legacy_run_ids['pre_469_home']!r}" in result.stdout.splitlines(), result.stdout
     assert legacy_run_ids["legacy_fleet"] not in result.stdout
+
+
+def test_web_migrate_refused_by_a_run_s_file_it_cannot_write_prints_the_documents_of_that_run_it_wrote_and_the_values_it_dropped_from_them(
+    tmp_path: Path,
+) -> None:
+    """A directory in the place of the format.json of the store's only run, a copy of pre_469_home holding a figure no field has, stands in for a file the step cannot write.
+
+    v2 writes the run's summary.json, the figure dropped, before the fault, so the refusal prints
+    that document and that value: the command run again reads that summary.json as v2 left it,
+    so it does not report the value.
+    """
+    write_database_at_schema_version(_store_database(tmp_path), 1)
+    run_id = _install_a_copy_editing_its_summary(
+        tmp_path, "retired-figure", lambda summary: summary.update(retired_figure=12.5)
+    )
+    marker = stored_run_dir(run_storage_over(Database(_store_database(tmp_path))), run_id) / "format.json"
+    marker.mkdir()
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), "the refusal is reported, not raised"
+    assert "Traceback" not in result.output
+    assert str(marker) in result.stderr, result.stderr
+    assert result.stdout.startswith(
+        "Before the fault, brought forward only the documents named of each run below"
+    ), result.stdout
+    assert f"  run {run_id!r}: summary.json" in result.stdout.splitlines(), result.stdout
+    assert _a_line_naming(result.stdout, run_id, "summary.json", "retired_figure", "12.5"), result.stdout
 
 
 def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of_the_steps_it_applied_then_the_refusal(
