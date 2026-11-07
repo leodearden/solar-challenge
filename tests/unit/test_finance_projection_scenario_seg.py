@@ -15,7 +15,7 @@ from typing import Callable
 import pandas as pd
 import pytest
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     FinanceConfig,
     project_multi_year,
@@ -23,7 +23,7 @@ from solar_challenge.finance import (
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.seg import SEGTariff
-from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_period, make_sim_results
 
 
 def _seg_aware_fleet_results_factory(
@@ -84,7 +84,7 @@ class TestProjectHonoursScenarioLevelSeg:
             dataclasses.replace(h, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=self._SEG_RATE))
             for h in homes_no_seg
         ]
-        period = SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31")
+        period = make_period()
         finance = FinanceConfig(
             standing_charge_pence_per_day=28.0,
             asset_life_years=25,
@@ -148,7 +148,7 @@ class TestProjectHonoursScenarioLevelSeg:
         """A single-home scenario's rate earns the year-0 revenue its home's own tariff at that rate earns (non-vacuous)."""
         *_, finance = self._make_three_scenarios()
         home = make_home_config()
-        period = SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31")
+        period = make_period()
         scenario_seg = ScenarioConfig(
             name="single-seg", period=period, home=home, seg_tariff_pence_per_kwh=self._SEG_RATE
         )

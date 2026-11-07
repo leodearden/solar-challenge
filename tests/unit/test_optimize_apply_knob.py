@@ -7,11 +7,11 @@ import dataclasses
 
 import pytest
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.optimize import apply_knob
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
-from tests._finance_builders import make_home_config, make_scenario_and_finance
+from tests._finance_builders import make_home_config, make_period, make_scenario_and_finance
 
 
 def _fleet_scenario(n_homes: int = 2) -> ScenarioConfig:
@@ -122,7 +122,7 @@ class TestApplyKnob:
         _, finance = make_scenario_and_finance()
         scenario = ScenarioConfig(
             name="single-home",
-            period=SimulationPeriod(start_date="2020-01-01", end_date="2020-12-31"),
+            period=make_period(),
             home=make_home_config(),
             finance=finance,
         )
