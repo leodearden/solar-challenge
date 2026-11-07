@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation for multiple homes."""
 
+import math
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
 
@@ -21,8 +22,9 @@ from solar_challenge.home import (
 )
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
+from solar_challenge.number_fields import Interval, as_whole_number, read_field
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import PrefetchedWeather, default_weather
+from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_weather
 
 
 @dataclass
@@ -259,6 +261,71 @@ class FleetSummary:
     total_net_cost_gbp: Optional[float] = None
     total_import_cost_gbp: Optional[float] = None
     total_export_revenue_gbp: Optional[float] = None
+
+
+FleetSimulate: TypeAlias = Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]
+"""Simulates a fleet over a window: what finance and optimize take, a FleetSimulator's simulate."""
+
+HomesDone: TypeAlias = Callable[[int, int], None]
+"""Told in the calling process after each home finishes: (homes finished, homes in the call)."""
+
+
+class HomeSimulator(Protocol):
+    """Simulates one home over a window on the weather it is given, as home.simulate_home does."""
+
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults: ...
+
+
+class FleetSimulator(Protocol):
+    """How a composition root simulates homes and fleets."""
+
+    def simulate(
+        self, fleet: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, progress: HomesDone | None = None
+    ) -> FleetResults: ...
+
+    def simulate_each(
+        self,
+        fleets: Sequence[FleetConfig],
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        *,
+        progress: HomesDone | None = None,
+    ) -> Iterator[tuple[int, FleetResults]]:
+        """Each fleet's index once, with its FleetResults, as its last home finishes."""
+        ...
+
+    def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults: ...
+
+
+_WORKER_COUNTS = Interval(1, math.inf)
+
+
+@dataclass(frozen=True)
+class FleetRunner:
+    """A FleetSimulator that runs each home through home_simulator on the weather it prefetches from weather.
+
+    Attributes:
+        weather: Asked once per call for each distinct location of the call's homes, in the calling process
+        home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it is a top-level function
+        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process
+        max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
+    """
+
+    weather: WeatherProvider
+    home_simulator: HomeSimulator
+    parallel: bool = True
+    max_workers: int | None = None
+
+    def __post_init__(self) -> None:
+        """Read a set max_workers as a whole number of at least 1, holding the int read, else a ConfigurationError (a ValueError) naming it and its value; None stays None."""
+        read_field(self, "max_workers", as_whole_number, _WORKER_COUNTS, optional=True)
+
+
+def default_runner() -> FleetRunner:
+    """FleetRunner(weather=default_weather(), home_simulator=simulate_home): the runner a root uses when given none."""
+    return FleetRunner(weather=default_weather(), home_simulator=simulate_home)
 
 
 def _simulate_home_worker(
