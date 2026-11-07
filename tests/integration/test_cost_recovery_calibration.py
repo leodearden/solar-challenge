@@ -1106,7 +1106,7 @@ bristol_june_tmy = PHYSICS_COLUMN_DAYS.bristol_tmy_fixture()
 class TestPhysicsReconciliationColumn:
     """Physics column — REPORTED, not asserted == spreadsheet.
 
-    Runs a 2-home, 3-day fleet simulation via real simulate_fleet to show that the
+    Runs a 2-home, 3-day fleet simulation via a real FleetRunner.simulate to show that the
     real-physics path returns a structurally valid CostRecoverySolution.  The days
     are PHYSICS_COLUMN_DAYS, which bristol_june_tmy seeds as Bristol's TMY.  Its
     numbers are not comparable with the no-flex anchor (TestNoFlexAnchorReconciliation);

@@ -8,7 +8,7 @@ Usage::
     june_days = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=3)
     june_days.seed_as_bristol_tmy(weather_cache)
     start, end = june_days.window(2)  # the first two days; window() spans all three
-    results = simulate_fleet(config, start, end)
+    results = replace(default_runner(), parallel=False).simulate(config, start, end)
 
 A module whose tests run on its days binds a fixture of them once, under the name its tests apply::
 

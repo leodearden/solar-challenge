@@ -106,7 +106,7 @@ def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
 
 
 def _paired_const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
-    """_CONST_FLEET_RESULTS' energy, paired with the config's own homes, as simulate_fleet pairs them.
+    """_CONST_FLEET_RESULTS' energy, paired with the config's own homes, as FleetRunner.simulate pairs them.
 
     Grid-services income is priced from the simulated fleet's homes, so each
     config's batteries earn it while every config simulates the same energy.

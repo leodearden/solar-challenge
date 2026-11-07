@@ -24,9 +24,10 @@ Usage::
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
 from tests._computed_once import ComputedOnce
 from tests._seeded_tmy import ClearJuneDays
 
@@ -37,6 +38,6 @@ def june_fleet_runs(june_days: ClearJuneDays) -> ComputedOnce[FleetResults]:
 
 
 def _simulate_over_first_days(june_days: ClearJuneDays, config: FleetConfig, days: int) -> FleetResults:
-    """*config*'s fleet simulated in this process over the first *days* of *june_days*, with every minute's energy balance validated."""
+    """*config*'s fleet simulated in this process over the first *days* of *june_days*, with every minute's energy balance validated, by the default runner run in turn."""
     start, end = june_days.window(days)
-    return simulate_fleet(config, start, end, validate_balance=True, parallel=False)
+    return replace(default_runner(), parallel=False).simulate(config, start, end)

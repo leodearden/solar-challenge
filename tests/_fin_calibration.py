@@ -51,7 +51,7 @@ import pandas as pd
 
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
-from solar_challenge.fleet import FleetConfig, FleetResults, simulate_fleet
+from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
 from solar_challenge.load import LoadConfig
 from tests._finance_builders import make_sized_home
 from tests._seeded_tmy import ClearJuneDays
@@ -166,9 +166,9 @@ def make_physics_column_scenario() -> ScenarioConfig:
 def simulate_physics_column(
     config: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
 ) -> FleetResults:
-    """*config*'s fleet simulated by the real simulate_fleet in this process, which a physics column gives its finance call as simulate.
+    """*config*'s fleet simulated in this process by the default runner run in turn, which a physics column gives its finance call as simulate.
 
     It starts no worker pool, because a pool would fork the test process, which
     tests/conftest.py's offline guard makes multi-threaded.
     """
-    return simulate_fleet(config, start_date, end_date, parallel=False)
+    return dataclasses.replace(default_runner(), parallel=False).simulate(config, start_date, end_date)
