@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation for multiple homes."""
 
+import contextlib
 import math
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional, Protocol, Sequence, TypeAlias
+from typing import Any, Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
 
@@ -322,6 +323,35 @@ class FleetRunner:
         """Read a set max_workers as a whole number of at least 1, holding the int read, else a ConfigurationError (a ValueError) naming it and its value; None stays None."""
         read_field(self, "max_workers", as_whole_number, _WORKER_COUNTS, optional=True)
 
+    def simulate(
+        self, fleet: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, progress: HomesDone | None = None
+    ) -> FleetResults:
+        """fleet simulated from start_date to end_date: simulate_each of fleet alone."""
+        ((_, results),) = self.simulate_each([fleet], start_date, end_date, progress=progress)
+        return results
+
+    def simulate_each(
+        self,
+        fleets: Sequence[FleetConfig],
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        *,
+        progress: HomesDone | None = None,
+    ) -> Iterator[tuple[int, FleetResults]]:
+        """Each fleet's index once, with its FleetResults, as its last home finishes; the homes of all the fleets share one pool.
+
+        Each distinct location's weather is fetched once, in this process, before any home runs, and
+        each home's job carries its own location's alone. progress, when given, is told in this process
+        after each home finishes: (homes finished, homes in the call).
+        """
+        return _simulate_fleets(self, fleets, start_date, end_date, progress)
+
+    def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        """home simulated in this process from start_date to end_date, on weather holding its location's alone."""
+        return self.home_simulator(
+            home, start_date, end_date, weather=PrefetchedWeather.fetch(self.weather, [home.location])
+        )
+
 
 def default_runner() -> FleetRunner:
     """FleetRunner(weather=default_weather(), home_simulator=simulate_home): the runner a root uses when given none."""
@@ -373,6 +403,72 @@ def _simulate_home_worker_tagged(
 def _job_weather(weather: PrefetchedWeather, home: HomeConfig) -> PrefetchedWeather:
     """The weather home's job carries: its location's alone, so a job pickles one frame."""
     return PrefetchedWeather.fetch(weather, [home.location])
+
+
+@dataclass(frozen=True)
+class _HomeJob:
+    """One home of a runner's call: the home, and the fleet and the place in it its results go to."""
+
+    fleet_index: int
+    home_index: int
+    fleet: FleetConfig
+    home: HomeConfig
+
+
+def _finished_homes(
+    runner: FleetRunner,
+    jobs: Sequence[_HomeJob],
+    weather: PrefetchedWeather,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> Generator[tuple[_HomeJob, SimulationResults], None, None]:
+    """Each job with its home's results as the home finishes: in turn in this process, or in one process pool when runner is parallel and there are two jobs or more.
+
+    A pool's job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and
+    its weather provider are never pickled.
+    """
+    if not runner.parallel or len(jobs) < 2:
+        for job in jobs:
+            yield job, runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
+        return
+    workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
+            ): job
+            for job in jobs
+        }
+        for future in as_completed(futures):
+            yield futures[future], future.result()
+
+
+def _simulate_fleets(
+    runner: FleetRunner,
+    fleets: Sequence[FleetConfig],
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    progress: HomesDone | None,
+) -> Iterator[tuple[int, FleetResults]]:
+    """FleetRunner.simulate_each's fan-out: every home of fleets run through _finished_homes on weather fetched once per distinct location, each fleet's results yielded in home order as its last home finishes."""
+    jobs = [
+        _HomeJob(fleet_index, home_index, fleet, home)
+        for fleet_index, fleet in enumerate(fleets)
+        for home_index, home in enumerate(fleet.homes)
+    ]
+    weather = PrefetchedWeather.fetch(runner.weather, (job.home.location for job in jobs))
+    finished: dict[int, dict[int, SimulationResults]] = {fleet_index: {} for fleet_index in range(len(fleets))}
+    with contextlib.closing(_finished_homes(runner, jobs, weather, start_date, end_date)) as homes:
+        for done, (job, results) in enumerate(homes, start=1):
+            if progress is not None:
+                progress(done, len(jobs))
+            fleet_finished = finished[job.fleet_index]
+            fleet_finished[job.home_index] = results
+            if len(fleet_finished) == len(job.fleet.homes):
+                yield job.fleet_index, FleetResults(
+                    per_home_results=[fleet_finished[home_index] for home_index in range(len(job.fleet.homes))],
+                    home_configs=job.fleet.homes,
+                )
 
 
 def simulate_fleet_iter(
