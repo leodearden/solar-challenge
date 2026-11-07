@@ -438,7 +438,7 @@ class TestSimulateFleetAPI:
 
 
 class TestParseHomeConfigErrorPaths:
-    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, a location they cannot resolve, and a name holding a lone surrogate."""
+    """Endpoint 400 error-path tests for home-config fields the simulate endpoints cannot use: an unknown tariff, an incomplete dispatch_strategy, a nested block that is not an object, an unusable number, a window set by both days and start/end, a location they cannot resolve, a name holding a lone surrogate, and a tariff name that is not a string."""
 
     def test_invalid_tariff_returns_400(
         self, client: FlaskClient
@@ -710,6 +710,60 @@ class TestParseHomeConfigErrorPaths:
 
         assert resp.status_code == 400
         assert str(refusal.value) in resp.get_json()["error"]
+        mock_job_manager.submit_home_job.assert_not_called()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("url", "body", "message"),
+        [
+            pytest.param(
+                "/api/simulate/home",
+                {**VALID_HOME_PAYLOAD, "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}},
+                "tariff.name must be a string, got 5",
+                id="home-tariff-name",
+            ),
+            pytest.param(
+                "/api/simulate/home",
+                {
+                    **VALID_HOME_PAYLOAD,
+                    "tariff": {
+                        "type": "custom",
+                        "periods": [
+                            {"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": 0.2, "name": 7}
+                        ],
+                    },
+                },
+                "tariff.periods[0].name must be a string, got 7",
+                id="home-tariff-period-name",
+            ),
+            pytest.param(
+                "/api/simulate/fleet",
+                {
+                    "homes": [
+                        VALID_HOME_PAYLOAD,
+                        {
+                            **VALID_HOME_PAYLOAD,
+                            "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5},
+                        },
+                    ]
+                },
+                "tariff.name must be a string, got 5",
+                id="fleet-later-home-tariff-name",
+            ),
+        ],
+    )
+    def test_tariff_name_that_is_not_a_string_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        url: str,
+        body: dict[str, object],
+        message: str,
+    ) -> None:
+        """A tariff or tariff-period name that is not a string is a 400 naming it by its path, never a run the stored-run reader cannot open; nothing is submitted."""
+        resp = client.post(url, json=body)
+        assert resp.status_code == 400
+        assert message in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 

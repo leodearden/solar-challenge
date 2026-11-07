@@ -623,6 +623,16 @@ def _refuse_unrecognised_keys(
     return mapping
 
 
+def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
+    """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
+    name = block.get("name")
+    if name is None:
+        return ""
+    if not isinstance(name, str):
+        raise ConfigurationError.must_be(_child_path(block_path, "name"), "a string", got=name)
+    return name
+
+
 _Built = TypeVar("_Built")
 
 
@@ -1141,7 +1151,7 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
         raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
     return TariffConfig.flat_rate(
         rate_per_kwh=float(rate),
-        name=data.get("name", "")
+        name=_read_name(data, block_path=block_path)
     )
 
 
@@ -1177,7 +1187,7 @@ def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
         start_time=period["start_time"],
         end_time=period["end_time"],
         rate_per_kwh=float(period["rate_per_kwh"]),
-        name=period.get("name", "")
+        name=_read_name(period, block_path=block_path)
     )
 
 
@@ -1195,7 +1205,7 @@ def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
             _parse_tariff_period(period, block_path=_child_path(block_path, f"periods[{index}]"))
             for index, period in enumerate(periods_data)
         ),
-        name=data.get("name", "")
+        name=_read_name(data, block_path=block_path)
     )
 
 
