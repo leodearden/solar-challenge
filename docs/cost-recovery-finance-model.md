@@ -615,10 +615,10 @@ The correct statement is:
 ### 7.2 [FIN] Synthetic No-Flex Calibration
 
 The calibration test uses a 100-home synthetic fleet (5.5 kWp + 5 kWh, Bristol
-period 2020-01-01 to 2020-12-31) with injected energy aggregates and no PVGIS
-(fast, deterministic, no-network).  The injected `simulate` ignores the period: its
-aggregates cover the non-leap 2021 calendar year (`tests/_finance_builders.py::make_window`),
-so they are billed and projected at `k = 1` with 365 days of standing charge (§3, §4):
+period 2021-01-01 to 2021-12-31, the non-leap calendar year of
+`tests/_finance_builders.py::make_period`) with injected energy aggregates over that
+year and no PVGIS (fast, deterministic, no-network), so they are billed and projected
+at `k = 1` with 365 days of standing charge (§3, §4):
 
 ```
 Synthetic energy inputs (per home, annual):
