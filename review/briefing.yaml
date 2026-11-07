@@ -161,8 +161,9 @@ conventions:
     why: >
       Strict typing is the safety net for a numerics-heavy codebase that is now a typed library
       (ships py.typed) consumed by a downstream repo under its own mypy --strict. The only
-      sanctioned untyped imports are stub-less third-party libs (pvlib/pandas/numpy/yaml/flask/
-      plotly/richardsonpy/scipy/anthropic). Eroding this leaks Any into a consumer's type checks.
+      sanctioned untyped imports are the third-party packages that pyproject.toml's
+      ignore_missing_imports override lists; docs/type-check.md says what listing one does.
+      Eroding this leaks Any into a consumer's type checks.
 
   - rule: >
       No solar_challenge module imports another solar_challenge module inside a function,
