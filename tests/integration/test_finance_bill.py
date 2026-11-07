@@ -28,6 +28,7 @@ from solar_challenge.finance import (
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._factories import make_bill_breakdown, make_bill_distribution
+from tests._finance_builders import make_window
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +70,7 @@ def _make_summary(
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
         seg_revenue_gbp=seg_revenue_gbp,
+        window=make_window(days=simulation_days),
     )
 
 

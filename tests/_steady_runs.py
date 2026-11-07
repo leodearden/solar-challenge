@@ -6,7 +6,7 @@ clock change.
 The run covers whole Europe/London days, from the first day's midnight to the last day's 23:59.
 Demand, the heat-pump load, the import cost and the export revenue are steady at the levels the
 caller gives, and every other series is zero; there is no heat pump unless its load is given. A
-test that chooses a run's totals over days from 1 January 2020 builds it with
+test that chooses a run's totals over days from 1 January 2021 builds it with
 tests._finance_builders.make_sim_results instead, and one that needs flows varying through each
 day from 1 June 2024 with tests._sinusoidal_sim_results.make_sinusoidal_sim_results.
 

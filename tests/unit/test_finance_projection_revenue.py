@@ -34,6 +34,7 @@ from tests._finance_builders import (
     make_fleet_results_of,
     make_home_config,
     make_scenario_and_finance,
+    make_window,
 )
 
 
@@ -399,6 +400,7 @@ def _make_seg_summary(
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=276.0 - total_export_revenue_gbp,
+        window=make_window(days=365),
     )
 
 
@@ -504,6 +506,7 @@ class TestSegExportIncomeGbp:
             total_import_cost_gbp=230.0,
             total_export_revenue_gbp=12.0,  # half-year figure
             net_cost_gbp=218.0,
+            window=make_window(days=182),
         )
         finance = self._make_finance_seg(self_consumption_override=None)
 

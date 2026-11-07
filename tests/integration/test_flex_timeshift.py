@@ -24,6 +24,7 @@ from solar_challenge.finance import FinanceConfig, bill_distribution, householde
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
+from tests._finance_builders import make_window
 from tests._synthetic_weather import sunless_weather, weather_for
 from tests.integration._helpers import SCENARIO
 
@@ -202,6 +203,7 @@ def test_finance_report_renders_flex_value_block() -> None:
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
         seg_revenue_gbp=73.8,
+        window=make_window(days=365),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,
