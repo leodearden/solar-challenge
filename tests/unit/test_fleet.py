@@ -824,6 +824,106 @@ class TestFleetRunnerParallelMatchesSequential:
             )
 
 
+def _uniform_fleet(n_homes: int, name: str) -> FleetConfig:
+    """A fleet named *name* of *n_homes* homes named Home 1 onwards, each with 4 kW of PV."""
+    return FleetConfig.create_uniform(n_homes=n_homes, pv_config=PVConfig(capacity_kw=4.0), load_config=_LOAD, name=name)
+
+
+def _raising_at_the_second_home(raised: BaseException) -> HomesDone:
+    """A progress sink that raises *raised* when told the second home has finished."""
+
+    def homes_done(done: int, total: int) -> None:
+        if done == 2:
+            raise raised
+
+    return homes_done
+
+
+class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
+    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start."""
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_a_failed_home_is_named_on_its_own_exception_and_the_homes_still_pending_are_cancelled(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = _uniform_fleet(5, "Five")
+        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"}), seconds=0.2)
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=1)
+
+        with pytest.raises(ValueError) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert type(caught.value) is ValueError
+        assert str(caught.value) == "Home 1 cannot be simulated"
+        assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Five')"]
+        assert len(started(tmp_path)) < len(fleet.homes), (
+            "when Home 1 failed, the one worker had started at most it, the home it took next and the two "
+            "queued behind that one, so the fifth home was cancelled"
+        )
+
+    def test_in_turn_a_failed_home_is_named_on_its_own_exception_and_no_later_home_starts(self, tmp_path: Path) -> None:
+        fleet = _uniform_fleet(5, "Five")
+        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 3"}))
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=False)
+
+        with pytest.raises(ValueError) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert caught.value.__notes__ == ["simulating home 2 ('Home 3') of fleet 0 ('Five')"]
+        assert set(started(tmp_path)) == {"Home 1", "Home 2", "Home 3"}
+
+    def test_a_failed_home_of_a_later_fleet_is_named_with_its_place_in_that_fleet(self, tmp_path: Path) -> None:
+        fleets = [
+            FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
+            FleetConfig(homes=[_home("B 1", 3.0), _home("B 2", 4.0)], name="B"),
+        ]
+        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"B 2"}))
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=False)
+
+        with pytest.raises(ValueError) as caught:
+            list(runner.simulate_each(fleets, *_JUNE_DAYS.window()))
+
+        assert caught.value.__notes__ == ["simulating home 1 ('B 2') of fleet 1 ('B')"]
+
+    def test_in_turn_a_progress_sinks_exception_propagates_as_raised_and_no_later_home_starts(
+        self, tmp_path: Path
+    ) -> None:
+        raised = RuntimeError("the progress display failed")
+        runner = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path, seconds=0.2), parallel=False
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            runner.simulate(_uniform_fleet(5, "Five"), *_JUNE_DAYS.window(), progress=_raising_at_the_second_home(raised))
+
+        assert caught.value is raised
+        assert getattr(caught.value, "__notes__", []) == []
+        assert set(started(tmp_path)) == {"Home 1", "Home 2"}
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_a_progress_sinks_exception_propagates_as_raised_and_the_homes_still_pending_are_cancelled(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = _uniform_fleet(6, "Six")
+        raised = RuntimeError("the progress display failed")
+        runner = FleetRunner(
+            weather=_CountingWeather(),
+            home_simulator=MarkingHomeSimulator(tmp_path, seconds=0.2),
+            parallel=True,
+            max_workers=1,
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window(), progress=_raising_at_the_second_home(raised))
+
+        assert caught.value is raised
+        assert getattr(caught.value, "__notes__", []) == []
+        assert len(started(tmp_path)) < len(fleet.homes), (
+            "when the second home finished, the one worker had started at most the two finished homes, the home "
+            "it took next and the two queued behind that one, so the sixth home was cancelled"
+        )
+
+
 @pytest.mark.usefixtures("bristol_june_tmy")
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
