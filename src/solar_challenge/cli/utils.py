@@ -85,8 +85,10 @@ def handle_errors(func: F) -> F:
 
 
 def _print_error_verbatim(label: str, error: Exception) -> None:
-    """Print label in red, then error's text exactly as it is."""
+    """Print label in red, then error's text exactly as it is, then each of its notes exactly as it is, on a line of its own."""
     _print_verbatim(error_console, (f"{label}:", "red"), " ", str(error))
+    for note in getattr(error, "__notes__", ()):
+        _print_verbatim(error_console, note)
 
 
 def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
