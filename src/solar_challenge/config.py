@@ -286,9 +286,12 @@ class ComponentDistribution:
         return (type(self), (dict(self.draws), dict(self.settings)))
 
 
-@dataclass
+@dataclass(frozen=True)
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
+
+    It is frozen: a changed fleet is a new one, made with dataclasses.replace, which checks it
+    as construction does.
 
     Attributes:
         n_homes: Number of homes to generate
