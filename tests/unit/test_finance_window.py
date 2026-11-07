@@ -8,7 +8,9 @@ windows, and householder_bill refuses own-use outside 0 to the window's demand.
 
 A bill is the window's year, by one rule with no threshold and no warning: the
 window's totals × its annualisation_scale (year_days / days), and year_days of
-standing charge.
+standing charge.  A bill distribution and a projection name the window their
+yearly figures were annualised from, and a projection refuses a fleet whose
+homes cover different windows.
 """
 from __future__ import annotations
 
@@ -26,10 +28,18 @@ from solar_challenge.finance import (
     FinanceConfig,
     bill_distribution,
     householder_bill,
+    project_multi_year,
+    spreadsheet_revenue_curve,
 )
 from solar_challenge.home import SummaryStatistics, calculate_summary
 from tests._cli_fleet_simulator import invoke_finance_run
-from tests._finance_builders import make_fleet_results, make_sim_results, make_window
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_scenario_and_finance,
+    make_sim_results,
+    make_window,
+)
 from tests._repository_paths import SCENARIOS_DIR
 
 _IMPORT_RATE_GBP_PER_KWH = 0.30
@@ -215,6 +225,49 @@ class TestOneAnnualisationRule:
             warnings.simplefilter("error", UserWarning)
             _householder_bill(summary, 30)
             bill_distribution([summary], _finance(), 30)
+
+
+class TestYearlyFiguresNameTheirWindow:
+    """A bill distribution and a projection carry the window their yearly figures were annualised from."""
+
+    def test_a_bill_distribution_names_its_summaries_window(self) -> None:
+        distribution = bill_distribution([_summary(days=30)] * 2, _finance(), 30)
+
+        assert distribution.annualised_from == make_window(days=30)
+
+    def test_a_projection_names_its_fleets_window(self) -> None:
+        scenario, finance = make_scenario_and_finance()
+        fleet = make_fleet_results(days=3)
+
+        curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
+
+        assert curve.annualised_from == make_window(days=3)
+
+    def test_a_projection_refuses_a_fleet_whose_homes_cover_different_windows(self) -> None:
+        scenario, finance = make_scenario_and_finance(n_homes=2)
+        january_2021 = make_sim_results(days=3)
+        january_2024 = make_sim_results(days=3, first_day=date(2024, 1, 1))
+        fleet = make_fleet_results_of([january_2021, january_2024])
+
+        with pytest.raises(ValueError, match="position 1") as refusal:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: fleet)
+
+        assert repr(january_2021.window) in str(refusal.value)
+        assert repr(january_2024.window) in str(refusal.value)
+
+    def test_a_spreadsheet_curve_is_annualised_from_no_window(self) -> None:
+        """Its yearly figures are the spreadsheet's yearly assumptions, not a simulated window's totals."""
+        curve = spreadsheet_revenue_curve(
+            n_homes=2,
+            pv_kwp=4.0,
+            kwh_per_kwp=950.0,
+            self_consumption_fraction=0.7,
+            own_use_rate_pence_per_kwh=15.0,
+            export_rate_pence_per_kwh=4.1,
+            asset_life_years=5,
+        )
+
+        assert curve.annualised_from is None
 
 
 def test_finance_run_bills_the_days_of_the_summaries_its_simulator_returns() -> None:
