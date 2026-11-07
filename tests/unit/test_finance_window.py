@@ -5,11 +5,16 @@ householder_bill and bill_distribution bill over their summaries' own day count 
 refuse any other, refuse a summary with no window and summaries over different
 windows, and householder_bill refuses own-use outside 0 to the window's demand.
 `finance run` bills the day count of the summaries its fleet simulator returns.
+
+A bill is the window's year, by one rule with no threshold and no warning: the
+window's totals × its annualisation_scale (year_days / days), and year_days of
+standing charge.
 """
 from __future__ import annotations
 
 import dataclasses
 import math
+import warnings
 from collections.abc import Callable
 from datetime import date
 
@@ -28,6 +33,8 @@ from tests._finance_builders import make_fleet_results, make_sim_results, make_w
 from tests._repository_paths import SCENARIOS_DIR
 
 _IMPORT_RATE_GBP_PER_KWH = 0.30
+_STANDING_PENCE_PER_DAY = 60.0
+_OWN_USE_PENCE_PER_KWH = 15.0
 
 
 def _summary(*, days: int, first_day: date = date(2021, 1, 1)) -> SummaryStatistics:
@@ -48,8 +55,8 @@ def _summary(*, days: int, first_day: date = date(2021, 1, 1)) -> SummaryStatist
 def _finance(*, self_consumption_override: float | None = None) -> FinanceConfig:
     """A FinanceConfig at 60 p/day standing and 15 p/kWh own-use, with *self_consumption_override*."""
     return FinanceConfig(
-        standing_charge_pence_per_day=60.0,
-        own_use_rate_pence_per_kwh=15.0,
+        standing_charge_pence_per_day=_STANDING_PENCE_PER_DAY,
+        own_use_rate_pence_per_kwh=_OWN_USE_PENCE_PER_KWH,
         self_consumption_override=self_consumption_override,
     )
 
@@ -144,7 +151,70 @@ class TestOwnUseWithinTheWindowsDemand:
 
         breakdown = householder_bill(summary, summary.total_demand_kwh, _finance(), summary.simulation_days)
 
-        assert breakdown.own_use_payment_gbp == pytest.approx(15.0 * summary.total_demand_kwh / 100)
+        assert breakdown.own_use_payment_gbp == pytest.approx(_OWN_USE_PENCE_PER_KWH * summary.total_demand_kwh / 100)
+
+
+def _representative_bill(summary: SummaryStatistics) -> BillBreakdown:
+    """bill_distribution's representative bill of a fleet of *summary* alone, over its own days."""
+    return bill_distribution([summary], _finance(), summary.simulation_days).representative
+
+
+_BILLERS = [
+    pytest.param(lambda summary: _householder_bill(summary, summary.simulation_days), id="householder_bill"),
+    pytest.param(_representative_bill, id="bill_distribution"),
+]
+
+
+class TestOneAnnualisationRule:
+    """A bill is the window's year: its totals × annualisation_scale (year_days / days) and year_days of standing charge, with no threshold."""
+
+    @pytest.mark.parametrize("bill_of", _BILLERS)
+    def test_a_window_across_two_years_bills_a_mean_years_share_of_its_totals(
+        self, bill_of: Callable[[SummaryStatistics], BillBreakdown]
+    ) -> None:
+        """2024-01-01 to 2025-02-03 crosses a new year, so its 400 days scale to a mean year's 365.25."""
+        summary = _summary(days=400, first_day=date(2024, 1, 1))
+        scale = 365.25 / 400
+
+        breakdown = bill_of(summary)
+
+        assert breakdown.own_use_payment_gbp == pytest.approx(
+            _OWN_USE_PENCE_PER_KWH * summary.total_self_consumption_kwh * scale / 100
+        )
+        assert breakdown.import_cost_gbp == pytest.approx(summary.total_import_cost_gbp * scale)
+        assert breakdown.standing_charge_gbp == pytest.approx(365.25 * _STANDING_PENCE_PER_DAY / 100)
+
+    @pytest.mark.parametrize("bill_of", _BILLERS)
+    def test_a_leap_calendar_year_bills_366_days_of_standing_charge_and_its_own_totals(
+        self, bill_of: Callable[[SummaryStatistics], BillBreakdown]
+    ) -> None:
+        summary = _summary(days=366, first_day=date(2024, 1, 1))
+
+        breakdown = bill_of(summary)
+
+        assert breakdown.standing_charge_gbp == pytest.approx(366 * _STANDING_PENCE_PER_DAY / 100)
+        assert breakdown.own_use_payment_gbp == pytest.approx(
+            _OWN_USE_PENCE_PER_KWH * summary.total_self_consumption_kwh / 100
+        )
+
+    @pytest.mark.parametrize("bill_of", _BILLERS)
+    def test_a_360_day_window_is_scaled_to_its_year(self, bill_of: Callable[[SummaryStatistics], BillBreakdown]) -> None:
+        """No threshold leaves a window of 360 days or more unscaled."""
+        summary = _summary(days=360)
+
+        breakdown = bill_of(summary)
+
+        assert breakdown.own_use_payment_gbp == pytest.approx(
+            _OWN_USE_PENCE_PER_KWH * summary.total_self_consumption_kwh * (365 / 360) / 100
+        )
+
+    def test_a_30_day_window_bills_without_a_warning(self) -> None:
+        summary = _summary(days=30)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            _householder_bill(summary, 30)
+            bill_distribution([summary], _finance(), 30)
 
 
 def test_finance_run_bills_the_days_of_the_summaries_its_simulator_returns() -> None:
