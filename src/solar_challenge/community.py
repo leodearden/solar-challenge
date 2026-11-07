@@ -231,7 +231,7 @@ def simulate_community(
     Parameters
     ----------
     fleet_results:
-        Aggregate results from :func:`~solar_challenge.fleet.simulate_fleet`.
+        Aggregate results from :meth:`~solar_challenge.fleet.FleetRunner.simulate`.
     config:
         Community configuration specifying ``sharing_mode`` and, for
         ``"community_battery"`` mode, the shared battery's

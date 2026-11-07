@@ -23,7 +23,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetConfig, simulate_fleet
+from solar_challenge.fleet import FleetConfig, default_runner
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
@@ -999,7 +999,7 @@ def run_sweep(
             config's finance block; the caller is responsible for ensuring a
             homogeneous fleet when that field is used for reporting.
         simulate: Optional injected fleet simulator for offline testing.
-            Defaults to :func:`~solar_challenge.fleet.simulate_fleet`.
+            Defaults to ``default_runner().simulate`` (:func:`~solar_challenge.fleet.default_runner`).
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
@@ -1015,7 +1015,7 @@ def run_sweep(
         internally calls :func:`~solar_challenge.finance.project_multi_year` at
         the solved rate), one explicit :func:`~solar_challenge.finance.project_multi_year`
         call at the baseline rate (15 p/kWh), and one age-0 baseline outlay
-        simulation.  With the real ``simulate_fleet`` (ProcessPoolExecutor over
+        simulation.  With the real :meth:`~solar_challenge.fleet.FleetRunner.simulate` (a process pool over
         a 100-home fleet) this is substantial: size grids conservatively or use
         an injected *simulate* for offline sweeps.
     """
@@ -1025,7 +1025,7 @@ def run_sweep(
         )
 
     if simulate is None:
-        simulate = simulate_fleet
+        simulate = default_runner().simulate
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
