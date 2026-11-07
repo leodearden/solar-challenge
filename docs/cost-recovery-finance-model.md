@@ -110,11 +110,24 @@ All monetary values in GBP (£).  VAT is applied to (import + standing + own-use
 as a block; the householder receives **no SEG deduction**.
 
 The equations below are `bill()`'s identities on the inputs `householder_bill()` gives
-it: a 365-day period (`period_days = 365`), the home's totals scaled to that year when
-its window is under 360 days (§4, *Annual basis*), and a baseline that prices all demand
-at the retail rate (`baseline_import_cost_gbp = demand_kwh × retail_rate / 100`).  That
+it: the window's year as the period (`period_days = window.year_days`: 365 or 366 for
+a window within one calendar year, 365.25 for one that crosses a new year), the home's
+window totals scaled to that year by the window's `annualisation_scale`,
+`year_days / days`, whatever the window's length (§4, *Annual basis*), and a baseline
+that prices all demand at the retail rate
+(`baseline_import_cost_gbp = demand_kwh × retail_rate / 100`).  That
 baseline makes `bill()`'s effective rate, `baseline_import_cost_gbp / demand_kwh × 100`,
 the retail rate, which is why `self_consumption_saving_gbp` below is priced at retail.
+
+The window is the summary's own (`SummaryStatistics.window`, which `calculate_summary`
+sets).  `householder_bill` raises `ValueError` for a summary with no window, naming
+`calculate_summary`; for a `simulation_days` other than the summary's own (INV-8); and
+for an `annual_self_consumption_kwh`, the home's own-use over the window, below 0 or
+above the window's `total_demand_kwh`; the last two each name both values.
+`bill_distribution` also refuses
+summaries over different windows, naming the first position that differs and both
+windows, and names their one window in `BillDistribution.annualised_from`
+(`tests/unit/test_finance_window.py`).
 
 `own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
 With `self_consumption_override` set it comes from the override instead (*Override
@@ -124,7 +137,7 @@ With `self_consumption_override` set it comes from the override instead (*Overri
 own_use_payment_gbp      = own_use_rate_pence_per_kwh × own_use_kwh / 100
                            (own_use_kwh = demand − import = CBS-supplied energy; basis C)
 
-standing_charge_gbp      = standing_charge_pence_per_day × 365 / 100
+standing_charge_gbp      = standing_charge_pence_per_day × year_days / 100
 
 vat_gbp                  = vat_rate × (import_cost_gbp
                                         + standing_charge_gbp
@@ -140,7 +153,7 @@ cbs_amount_due_gbp       = own_use_payment_gbp + own_use_vat_gbp
                            (float sum — not own_use_payment × (1 + vat_rate))
 
 baseline_bill_gbp        = (demand_kwh × retail_rate / 100
-                            + standing_charge_pence_per_day × 365 / 100) × (1 + vat_rate)
+                            + standing_charge_pence_per_day × year_days / 100) × (1 + vat_rate)
 
 saving_vs_baseline_gbp   = baseline_bill_gbp − total_outlay_gbp
 
@@ -174,7 +187,8 @@ saving_vs_baseline ≈ own_use_kwh × (retail_rate − own_use_rate) × (1 + vat
 ```
 
 **[FIN] example** (100 homes × 5.5 kWp + 5 kWh, no grid-charging, synthetic scf ≈ 0.346,
-r ≈ 12.22 p/kWh — see §7 for the full worked reconciliation):
+r ≈ 12.22 p/kWh, billed over a non-leap calendar-year window, `year_days` = 365 — see §7
+for the full worked reconciliation):
 
 ```
 own_use_kwh         = 2,000 kWh/home/yr   (no grid-charging: basis C == B-style; see §2)
@@ -219,7 +233,7 @@ bills charge (§5).
 
 **[FIN] override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
 3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail and effective import
-rate 23 p/kWh):
+rate 23 p/kWh, over a non-leap calendar-year window, `year_days` = 365):
 
 ```
 generation_kwh       = 5.5 × 1,050 = 5,775 kWh/yr
@@ -244,7 +258,8 @@ Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
 
 **Untariffed override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 4,000 kWh generation,
 3,400 kWh demand, 1,200 kWh physics import at £0 with no tariff configured,
-override 0.70, own-use 15 p/kWh, retail 23 p/kWh):
+override 0.70, own-use 15 p/kWh, retail 23 p/kWh, over a non-leap calendar-year
+window, `year_days` = 365):
 
 ```
 own_use_kwh          = min(0.70 × 4,000, 3,400) = 2,800 kWh/yr   (cap not binding)
@@ -287,9 +302,8 @@ own_use_revenue   = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh / 100
                                                 with no override (basis C)
                                               = Σ_homes min(override × k_h × generation, k_h × demand)
                                                 with self_consumption_override set)
-                    (a_h = _annualise_physics(s_h, sim_days_h), home h's window totals × k_h;
-                     k_h = _annualisation_scale(sim_days_h)
-                         = 365 / sim_days_h if sim_days_h < 360, else 1)
+                    (a_h = _annualise_physics(s_h), home h's window totals × k_h;
+                     k_h = s_h.window.annualisation_scale = year_days_h / days_h)
 
 seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
                     (= Σ k_h × home.total_export_revenue_gbp on the physics path;
@@ -351,18 +365,32 @@ the §3 override bills charge.  `YearPoint.fleet_export_kwh`, `fleet_import_kwh`
 the battery throughput behind ageing stay the simulated flows
 (`tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue`).
 
-**Annual basis.** Every projection year is a 365-day year.  When a home's
-simulated window is under 360 days, `project_multi_year` scales that home's
-own-use, export, import and battery-discharge kWh, and its SEG income, by
-`k_h = 365 / sim_days_h`, and emits one `UserWarning` per projection.  Each home
-is annualised once (`a_h`) before the override splits it, as `householder_bill`
-annualises before it bills (§3;
-`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`).  The
-annualised discharge is the yearly throughput that battery cycle ageing
-integrates.  The grid-services term is annual by construction, so `k_h` never
-multiplies it.  Full-year windows are
-unchanged (`k_h = 1`).  A short window is still one season's sample, so board
-figures want `scenario.period` to cover about one full year.
+**Annual basis.** Every projection year is the window's year.  `project_multi_year`
+scales each home's own-use, export, import and battery-discharge kWh, and its SEG
+income, by its window's annualisation scale, `k_h = year_days_h / days_h`, always:
+`year_days` is 365 or 366 for a window within one calendar year, 365.25 for one
+that crosses a new year.  There is no length threshold and no warning: three June
+days of 2024 scale by `366 / 3` (§7.6), 360 days of 2021 by `365 / 360`, and 400 days from
+2024-01-01 by `365.25 / 400`, and a window that is one whole calendar year is
+unchanged (`k_h = 1`)
+(`tests/unit/test_finance_projection_short_window.py::TestProjectMultiYearAnnualisesShortWindow`,
+`tests/unit/test_finance_window.py::TestOneAnnualisationRule`).  Each home is
+annualised once (`a_h`) before the override splits it, as `householder_bill`
+annualises before it bills (§3).  The annualised discharge is the yearly
+throughput that battery cycle ageing integrates.  The grid-services term is
+annual by construction, so `k_h` never multiplies it.
+
+A projection's homes cover one window: `project_multi_year` raises `ValueError`
+for a fleet whose homes cover different windows, naming the first position that
+differs and both windows, and names the one window in
+`MultiYearCurve.annualised_from`
+(`tests/unit/test_finance_window.py::TestYearlyFiguresNameTheirWindow`).  A window
+that runs other than from 1 January to 31 December is extrapolated
+(`SimulationWindow.extrapolated`).  `annualised_from` carries the window for the
+board reports' extrapolated notice that replaces the short-period warnings, which
+task 783 adds (`docs/prds/simulation-window-and-cadence.md`, *Resolved design
+decisions* 7).  A short window is still one season's sample, so board figures want
+`scenario.period` to cover whole calendar years.
 
 **Battery ageing.** `project_multi_year` simulates each sampled age `t` with
 every home's battery at `battery.compute_soh(t, T_h(t), U_h)`, where `T_h(t)` is
@@ -588,7 +616,9 @@ The correct statement is:
 
 The calibration test uses a 100-home synthetic fleet (5.5 kWp + 5 kWh, Bristol
 period 2020-01-01 to 2020-12-31) with injected energy aggregates and no PVGIS
-(fast, deterministic, no-network):
+(fast, deterministic, no-network).  The injected `simulate` ignores the period: its
+aggregates cover the non-leap 2021 calendar year (`tests/_finance_builders.py::make_window`),
+so they are billed and projected at `k = 1` with 365 days of standing charge (§3, §4):
 
 ```
 Synthetic energy inputs (per home, annual):
@@ -741,9 +771,9 @@ the physics path returns a structurally valid `CostRecoverySolution`; the rate, 
 and surplus it prints are reported, not pinned.  Its rate cannot be set against the
 anchor's (§7.3), for three reasons:
 
-- **Three days stand in for a year.**  The window is under 360 days, so
-  `project_multi_year` scales each home's window totals to a 365-day year by
-  `k = 365 / 3 ≈ 121.67` (§4, *Annual basis*).  The rate therefore extrapolates three
+- **Three days stand in for a year.**  `project_multi_year` scales each home's
+  window totals to the window's year, 2024's 366 days, by `k = 366 / 3 = 122`
+  (§4, *Annual basis*).  The rate therefore extrapolates three
   synthetic clear June days to a whole year: one season's sample, and not Bristol's
   weather, where the anchor's injected aggregates are already annual (`k = 1`).
 - **The fleet carries no debt.**  Its capex,
@@ -872,7 +902,7 @@ fleet median — the board's single-home summary figure.
 | Concept | Equation | Code location |
 |---------|----------|---------------|
 | Basis-C own-use energy | `own_use_kwh = demand − import` (≥ 0; see §2) | `_cbs_own_use_kwh()` |
-| Annual bill | `bill()` over a 365-day period, on the annualised totals, with the baseline at retail (§3) | `householder_bill()` |
+| Annual bill | `bill()` over the window's year (`period_days = window.year_days`), on the annualised totals (window totals × `annualisation_scale`), with the baseline at retail (§3) | `householder_bill()` |
 | Own-use payment | `own_use_rate × own_use_kwh / 100` (basis C) | `bill()` |
 | Override own-use | `min(override × generation, demand)`; surplus generation → export (§3, §4, §5) | `householder_bill()`, `_seg_export_income_gbp()`, `_billed_energy()` |
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `bill()` |
