@@ -286,9 +286,16 @@ class ComponentDistribution:
         return (type(self), (dict(self.draws), dict(self.settings)))
 
 
-@dataclass
+#: The path of a fleet's block in its file, under which every refusal of a fleet names its keys.
+_FLEET_DISTRIBUTION_PATH = "fleet_distribution"
+
+
+@dataclass(frozen=True)
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
+
+    It is frozen: a changed fleet is a new one, made with dataclasses.replace, which checks it
+    as construction does.
 
     Attributes:
         n_homes: Number of homes to generate
@@ -318,7 +325,17 @@ class FleetDistributionConfig:
     dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Refuse a fleet no home of which could be drawn, as each check's helper states."""
+        """Refuse a fleet no home of which could be drawn, as each check's helper states.
+
+        Past n_homes, random_order and dispatch_strategy it refuses, in this order: a component
+        key outside its table's fleet rows, or held in the wrong one of its draws and settings
+        (F1); a required key a component does not draw (F5); a spec its key's kind does not
+        draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
+        source is not a number or count field drawn earlier for every home that draws it (F4);
+        a shuffled pool whose counts do not total n_homes (F6); a fixed presence value its
+        table's presence rule refuses; and a rounded count with no whole number from its min
+        to its max.
+        """
         if self.n_homes < 1:
             raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
         if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
@@ -330,6 +347,10 @@ class FleetDistributionConfig:
             refuse_unknown_home_dispatch_strategy(
                 self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
+        _refuse_keys_held_where_no_row_puts_them(self)
+        _refuse_required_keys_not_drawn(self)
+        _refuse_specs_their_kinds_cannot_draw(self)
+        _refuse_proportional_sources_not_drawn_earlier(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
         _refuse_rounded_counts_with_no_whole_number(self)
@@ -337,8 +358,15 @@ class FleetDistributionConfig:
 
 #: The default shuffle order: every random order shuffles the pools it does not shuffle first
 #: component by component in this order, each component's keys in its table's fleet order. It
-#: is not the order in which a home draws them, which is _generated_home's.
+#: is not the order in which a home draws them, which is _HOME_DRAW_ORDER.
 _DEFAULT_SHUFFLE_ORDER: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
+
+#: The order in which each home draws its components (T3), each component's keys in its table's
+#: fleet order.
+_HOME_DRAW_ORDER: tuple[str, ...] = ("pv", "battery", "load", "heat_pump", "ev")
+
+#: The components every home has: HomeConfig's pv_config and load_config are not Optional.
+_EVERY_HOME_HAS: frozenset[str] = frozenset({"pv", "load"})
 
 
 @dataclass(frozen=True)
@@ -386,6 +414,64 @@ def _component_draws(config: FleetDistributionConfig) -> Iterator[tuple[str, "Fl
         for key, row in block.fleet.items():
             if key in component.draws:
                 yield f"{name}.{key}", row, component.draws[key]
+
+
+def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a component holds a key outside its table's fleet rows, as the parser refuses one, or holds a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings, naming the key's path and kind."""
+    for name, (block, component) in _fleet_components(config).items():
+        if component is None:
+            continue
+        block_path = _child_path(_FLEET_DISTRIBUTION_PATH, name)
+        _refuse_unrecognised_keys(block_path, {**component.draws, **component.settings}, block.fleet)
+        for key, row in block.fleet.items():
+            if key in (component.draws if row.kind in _GIVEN_EVERY_HOME else component.settings):
+                raise _held_in_the_wrong_place(_child_path(block_path, key), row)
+
+
+def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a component does not draw a key its table's fleet rows require, as the parser refuses a block leaving it out; a null draw is drawn."""
+    for name, (block, component) in _fleet_components(config).items():
+        if component is not None:
+            _refuse_required_fleet_keys_left_out(block, component.draws, _child_path(_FLEET_DISTRIBUTION_PATH, name))
+
+
+def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
+    for path, row, spec in _component_draws(config):
+        _refuse_a_spec_its_row_cannot_draw(row, spec, _child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
+
+
+def _refuse_proportional_sources_not_drawn_earlier(
+    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]], block_path: str
+) -> None:
+    """Refuse the fleet at *block_path* whose *components*, by name, hold a proportional_to whose source is not a number or count field drawn earlier for every home that draws the dependent, naming the dependent's path under *block_path*, its source and those it may name, in draw order.
+
+    Those are the number and count fields the components every home has draw before the
+    dependent's component in _HOME_DRAW_ORDER, and those the dependent's own component draws
+    before it in its table's fleet order. A field of another component every home need not have
+    is never one, even when every home of this fleet has it, so whether a fleet is refused does
+    not depend on what it draws.
+    """
+    drawn_for_every_home: list[str] = []
+    for name in _HOME_DRAW_ORDER:
+        block, component = components[name]
+        if component is None:
+            continue
+        drawn_earlier = list(drawn_for_every_home)
+        for key, row in block.fleet.items():
+            if key not in component.draws:
+                continue
+            path, spec = f"{name}.{key}", component.draws[key]
+            if isinstance(spec, ProportionalDistribution) and spec.source not in drawn_earlier:
+                raise ConfigurationError(
+                    f"Invalid {_child_path(block_path, path)} source {spec.source!r}; "
+                    "valid sources: a number or count field drawn earlier for every home that draws it, "
+                    f"one of {drawn_earlier!r}"
+                )
+            if row.kind in _NUMBER_KINDS:
+                drawn_earlier.append(path)
+        if name in _EVERY_HOME_HAS:
+            drawn_for_every_home = drawn_earlier
 
 
 def _shuffled_pools(
@@ -688,6 +774,9 @@ class FieldKind(Enum):
 #: The kinds a fleet gives every home as one value, never drawn.
 _GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKind.FLAG})
 
+#: The kinds whose draws are numbers: a count is drawn as a number is, then converted.
+_NUMBER_KINDS: frozenset[FieldKind] = frozenset({FieldKind.NUMBER, FieldKind.COUNT})
+
 
 @dataclass(frozen=True)
 class FleetField:
@@ -707,6 +796,91 @@ class FleetField:
         if (self.kind is FieldKind.CHOICE) != bool(self.choices):
             needs = "must list its choices" if self.kind is FieldKind.CHOICE else "takes no choices"
             raise ConfigurationError(f"FleetField: a {self.kind.name} field {needs}, got {self.choices!r}")
+
+
+@dataclass(frozen=True)
+class _DrawnKindRule:
+    """What a fleet may give a key of one drawn kind: the specs the kind draws, and the values a spec of it may list.
+
+    *spec_types* are the types of the specs the kind draws, beside null. *admits* says whether a
+    value a spec lists, or a bare spec, is one the kind admits for a key of the row given; null
+    always is. *describe_specs* and *describe_values* return the prose a refusal naming a key of
+    the row uses for the specs the kind draws and the values it admits, e.g. 'null or a number'.
+    """
+
+    spec_types: tuple[type[DistributionSpec], ...]
+    admits: Callable[[SpecValue, FleetField], bool]
+    describe_specs: Callable[[FleetField], str]
+    describe_values: Callable[[FleetField], str]
+
+
+#: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
+_NUMBER_KIND_RULE = _DrawnKindRule(
+    spec_types=(
+        int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
+        ShuffledPoolDistribution, ProportionalDistribution,
+    ),
+    admits=lambda value, row: not isinstance(value, str),
+    describe_specs=lambda row: (
+        "null, a number, or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers"
+    ),
+    describe_values=lambda row: "null or a number",
+)
+
+_CHOICE_KIND_RULE = _DrawnKindRule(
+    spec_types=(str, WeightedDiscreteDistribution, ShuffledPoolDistribution),
+    admits=lambda value, row: value in row.choices,
+    describe_specs=lambda row: (
+        f"null, one of {list(row.choices)}, or a weighted_discrete or shuffled_pool of them and nulls"
+    ),
+    describe_values=lambda row: f"null or one of {list(row.choices)}",
+)
+
+#: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
+#: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
+_DRAWN_KIND_RULES: Mapping[FieldKind, _DrawnKindRule] = MappingProxyType({
+    **dict.fromkeys(_NUMBER_KINDS, _NUMBER_KIND_RULE),
+    FieldKind.CHOICE: _CHOICE_KIND_RULE,
+})
+
+
+def _listed_values(spec: DistributionSpec) -> tuple[SpecValue, ...]:
+    """The values *spec* lists: a weighted_discrete's or shuffled_pool's values; a normal, uniform or proportional_to lists none, and any other spec lists itself."""
+    if isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
+        return spec.values
+    if isinstance(spec, (NormalDistribution, UniformDistribution, ProportionalDistribution)):
+        return ()
+    return (spec,)
+
+
+def _held_in_the_wrong_place(path: str, row: FleetField) -> ConfigurationError:
+    """The refusal of the key at *path*, whose fleet row is *row*, held in the wrong one of a ComponentDistribution's draws and settings: a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings."""
+    held_in, not_in = ("settings", "draws") if row.kind in _GIVEN_EVERY_HOME else ("draws", "settings")
+    return ConfigurationError(
+        f"{path} is a {row.kind.value} key, which a ComponentDistribution holds in its {held_in}, not its {not_in}"
+    )
+
+
+def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str, written: object) -> DistributionSpec:
+    """Return *spec*, the spec of the key at *path* whose fleet row is *row*, refusing it unless the row's kind is drawn and *spec* is null or a spec the kind draws, every value it lists one the kind admits.
+
+    A key of a kind no home draws, a SETTING or FLAG, is refused whatever its spec, as
+    _held_in_the_wrong_place states. A spec of a type the kind does not draw is refused naming
+    *path* and *written*, the spec as its block gives it. A value it lists, or a bare spec, that
+    the kind does not admit is refused naming *path* and the value, even one no home would draw.
+    _DRAWN_KIND_RULES holds each drawn kind's rule.
+    """
+    rule = _DRAWN_KIND_RULES.get(row.kind)
+    if rule is None:
+        raise _held_in_the_wrong_place(path, row)
+    if spec is None:
+        return None
+    if not isinstance(spec, rule.spec_types):
+        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.describe_specs(row)}")
+    for value in _listed_values(spec):
+        if value is not None and not rule.admits(value, row):
+            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.describe_values(row)}")
+    return spec
 
 
 def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
@@ -772,6 +946,11 @@ def _refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None
     if missing_keys:
         missing = ", ".join(_child_path(block_path, key) for key in missing_keys)
         raise ConfigurationError(f"Missing required keys in {_block_label(block_path)}: {missing}")
+
+
+def _refuse_required_fleet_keys_left_out(block: ComponentBlock[Any], given: Collection[str], block_path: str) -> None:
+    """Refuse the fleet's component block at *block_path* if *given*, the keys it gives, leaves out a key *block*'s fleet rows require, naming each by its path."""
+    _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in given])
 
 
 def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
@@ -1126,17 +1305,31 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
 )
 
 
+def _components_by_name(
+    *,
+    pv: ComponentDistribution,
+    battery: Optional[ComponentDistribution],
+    load: ComponentDistribution,
+    heat_pump: Optional[ComponentDistribution],
+    ev: Optional[ComponentDistribution],
+) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
+    """Each of a fleet's components by name, with its table and its distribution, None for a component the fleet gives no home."""
+    return {
+        "pv": (PV_BLOCK, pv),
+        "battery": (BATTERY_BLOCK, battery),
+        "load": (LOAD_BLOCK, load),
+        "heat_pump": (HEAT_PUMP_BLOCK, heat_pump),
+        "ev": (EV_BLOCK, ev),
+    }
+
+
 def _fleet_components(
     config: FleetDistributionConfig,
 ) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
-    """Each component of *config* by name, with its table and its distribution, None for a component the fleet gives no home."""
-    return {
-        "pv": (PV_BLOCK, config.pv),
-        "battery": (BATTERY_BLOCK, config.battery),
-        "load": (LOAD_BLOCK, config.load),
-        "heat_pump": (HEAT_PUMP_BLOCK, config.heat_pump),
-        "ev": (EV_BLOCK, config.ev),
-    }
+    """Each component of *config* by name, with its table and its distribution, as _components_by_name pairs them."""
+    return _components_by_name(
+        pv=config.pv, battery=config.battery, load=config.load, heat_pump=config.heat_pump, ev=config.ev
+    )
 
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
@@ -1542,30 +1735,15 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     return block_type.build(data, param_name)
 
 
-def _parse_choice_spec(data: object, choices: tuple[str, ...], key_path: str) -> DistributionSpec:
-    """Read a CHOICE key's spec: null, one of *choices* given bare, or a weighted_discrete or shuffled_pool of them and nulls.
+def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
+    """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
 
-    Any other spec is refused naming *key_path*, the spec as written and *choices*; so is a
-    value, bare or listed, that is not one of *choices*, even one no home would draw.
+    A CHOICE's value that is not a mapping is the spec as written; any other value is read as
+    _parse_distribution_spec reads it. A spec the row's kind does not draw is refused naming
+    *key_path* and the spec as written.
     """
-    spec = _parse_distribution_spec(data, key_path) if isinstance(data, dict) else data
-    if spec is None:
-        return None
-    if isinstance(spec, str):
-        listed: tuple[SpecValue, ...] = (spec,)
-    elif isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
-        listed = spec.values
-    else:
-        raise ConfigurationError(
-            f"Invalid {key_path} {data!r}; valid specs: null, one of {list(choices)}, "
-            "or a weighted_discrete or shuffled_pool of them and nulls"
-        )
-    for value in listed:
-        if value is not None and value not in choices:
-            raise ConfigurationError(
-                f"Invalid {key_path} value {value!r}; valid values: null or one of {list(choices)}"
-            )
-    return spec
+    spec = data if row.kind is FieldKind.CHOICE and not isinstance(data, dict) else _parse_distribution_spec(data, key_path)
+    return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
 
 
 def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
@@ -1588,21 +1766,18 @@ def _parse_component_distribution(
     A key outside the rows is refused, and so is a required key left out, naming its path. A
     SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
     false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
-    even when null: a CHOICE's as _parse_choice_spec reads it, any other's as
-    _parse_distribution_spec does.
+    even when null, as _parse_drawn_spec reads it.
     """
     mapping = _refuse_unrecognised_keys(block_path, data, block.fleet)
-    _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in mapping])
+    _refuse_required_fleet_keys_left_out(block, mapping, block_path)
     draws: dict[str, DistributionSpec] = {}
     settings: dict[str, SettingValue] = {}
     for key, row in block.fleet.items():
         if key not in mapping:
             continue
         value, key_path = mapping[key], _child_path(block_path, key)
-        if row.kind is FieldKind.CHOICE:
-            draws[key] = _parse_choice_spec(value, row.choices, key_path)
-        elif row.kind not in _GIVEN_EVERY_HOME:
-            draws[key] = _parse_distribution_spec(value, key_path)
+        if row.kind not in _GIVEN_EVERY_HOME:
+            draws[key] = _parse_drawn_spec(row, value, key_path)
         elif value is not None:
             settings[key] = _read_setting(block, key, value, key_path)
     return ComponentDistribution(draws, settings)
@@ -1622,30 +1797,39 @@ _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 
 
 def parse_fleet_distribution_config(
-    data: dict[str, Any], *, block_path: str = "fleet_distribution"
+    data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
 ) -> FleetDistributionConfig:
-    """Parse a fleet_distribution: block, each component block read by its table's fleet rows."""
+    """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
+
+    The refusals of a key outside its component's rows, a required key left out, a spec its
+    key's kind does not draw and a proportional_to source not drawn earlier for every home that
+    draws the dependent name the key under *block_path*.
+    """
     _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
     if "pv" not in data:
         raise ConfigurationError("Fleet distribution config requires 'pv' section")
 
+    pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=_child_path(block_path, "pv"))
+    load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=_child_path(block_path, "load"))
+    battery = _parse_optional_component_distribution(
+        BATTERY_BLOCK, data.get("battery"), block_path=_child_path(block_path, "battery")
+    )
+    heat_pump = _parse_optional_component_distribution(
+        HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+    )
+    ev = _parse_optional_component_distribution(EV_BLOCK, data.get("ev"), block_path=_child_path(block_path, "ev"))
+    _refuse_proportional_sources_not_drawn_earlier(
+        _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
+    )
     return FleetDistributionConfig(
         n_homes=int(data["n_homes"]),
-        pv=_parse_component_distribution(PV_BLOCK, data["pv"], block_path=_child_path(block_path, "pv")),
-        load=_parse_component_distribution(
-            LOAD_BLOCK, data.get("load", {}), block_path=_child_path(block_path, "load")
-        ),
-        battery=_parse_optional_component_distribution(
-            BATTERY_BLOCK, data.get("battery"), block_path=_child_path(block_path, "battery")
-        ),
-        heat_pump=_parse_optional_component_distribution(
-            HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
-        ),
-        ev=_parse_optional_component_distribution(
-            EV_BLOCK, data.get("ev"), block_path=_child_path(block_path, "ev")
-        ),
+        pv=pv,
+        load=load,
+        battery=battery,
+        heat_pump=heat_pump,
+        ev=ev,
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
         dispatch_strategy=_read_dispatch_strategy_key(data, block_path=block_path),
@@ -1740,8 +1924,9 @@ def _proportional_value(
 ) -> Optional[float]:
     """The value *spec*, the spec of the field at *path*, gives: its multiplier times the value *drawn* holds for its source, plus its offset; a null source gives null.
 
-    A home draws no field of a component it has none of, past the presence field, so a source
-    there is refused for each home without that component, and not for the others.
+    FleetDistributionConfig refuses, as it is built, a source that is not a number or count
+    field drawn earlier for every home that draws *path*; these refusals check that rule again
+    where the source is used.
 
     Raises:
         ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
@@ -1903,26 +2088,26 @@ def _drawn_component(
             values[key] = value
         elif row.required:
             got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
-            raise ConfigurationError(f"fleet_distribution.{path} is required, but {got}")
+            raise ConfigurationError(f"{_child_path(_FLEET_DISTRIBUTION_PATH, path)} is required, but {got}")
     try:
         return block.config_type(**values, **component.settings, **given)
     except (ValueError, TypeError) as refusal:
-        raise ConfigurationError(f"fleet_distribution.{name}, home {home_number}: {refusal}") from refusal
+        raise ConfigurationError(
+            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)}, home {home_number}: {refusal}"
+        ) from refusal
 
 
 def _drawn_component_every_home_has(
     name: str,
     block: ComponentBlock[_Component],
-    component: ComponentDistribution,
+    component: Optional[ComponentDistribution],
     sampler: _DistributionSampler,
     drawn: dict[str, SpecValue],
     home_number: int,
     *,
     given: Mapping[str, object] = _NOTHING_GIVEN,
 ) -> _Component:
-    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component every home has.
-
-    Every home has a PV and a load: HomeConfig's pv_config and load_config are not Optional.
+    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component in _EVERY_HOME_HAS.
 
     Raises:
         ConfigurationError: As _drawn_component does; or if the home is given no *name*
@@ -1930,8 +2115,37 @@ def _drawn_component_every_home_has(
     """
     built = _drawn_component(name, block, component, sampler, drawn, home_number, given=given)
     if built is None:
-        raise ConfigurationError(f"fleet_distribution.{name} gave home {home_number} no {name}, which every home needs")
+        raise ConfigurationError(
+            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)} gave home {home_number} no {name}, which every home needs"
+        )
     return built
+
+
+def _checked_component(built: Mapping[str, object], name: str, config_type: type[_Built]) -> _Built:
+    """The home's *name* component in *built*, checked to be a *config_type*.
+
+    Raises:
+        TypeError: If *built* holds another type under *name*, naming the component and both types.
+    """
+    component = built[name]
+    if not isinstance(component, config_type):
+        raise TypeError(
+            f"home component {name!r} was built as {type(component).__name__}, not {config_type.__name__}"
+        )
+    return component
+
+
+def _checked_component_or_none(
+    built: Mapping[str, object], name: str, config_type: type[_Built]
+) -> Optional[_Built]:
+    """The home's *name* component in *built* as _checked_component checks it; None when the home has none.
+
+    Raises:
+        TypeError: As _checked_component does.
+    """
+    if built[name] is None:
+        return None
+    return _checked_component(built, name, config_type)
 
 
 def _generated_home(
@@ -1941,31 +2155,28 @@ def _generated_home(
     location: Location,
     fleet_tariff: Optional[TariffConfig],
 ) -> HomeConfig:
-    """The fleet's home at *index*: it draws its PV, battery, load, heat pump and EV in that order (T3), each by its table's fleet rows.
+    """The fleet's home at *index*: it draws its components in _HOME_DRAW_ORDER (T3), each by its table's fleet rows.
 
-    Each load is given the fleet's seed plus the home's index, when the fleet has a seed.
+    A component in _EVERY_HOME_HAS is drawn as _drawn_component_every_home_has draws it, any
+    other as _drawn_component does. Each load is given the fleet's seed plus the home's index,
+    when the fleet has a seed. Each component goes into HomeConfig only after it is checked to
+    be its own field's type.
     """
     home_number = index + 1
     drawn: dict[str, SpecValue] = {}
-    pv = _drawn_component_every_home_has("pv", PV_BLOCK, config.pv, sampler, drawn, home_number)
-    battery = _drawn_component("battery", BATTERY_BLOCK, config.battery, sampler, drawn, home_number)
-    load = _drawn_component_every_home_has(
-        "load",
-        LOAD_BLOCK,
-        config.load,
-        sampler,
-        drawn,
-        home_number,
-        given={} if config.seed is None else {"seed": config.seed + index},
-    )
-    heat_pump = _drawn_component("heat_pump", HEAT_PUMP_BLOCK, config.heat_pump, sampler, drawn, home_number)
-    ev = _drawn_component("ev", EV_BLOCK, config.ev, sampler, drawn, home_number)
+    components = _fleet_components(config)
+    given = {"load": _NOTHING_GIVEN if config.seed is None else {"seed": config.seed + index}}
+    built: dict[str, object] = {}
+    for name in _HOME_DRAW_ORDER:
+        block, component = components[name]
+        draw = _drawn_component_every_home_has if name in _EVERY_HOME_HAS else _drawn_component
+        built[name] = draw(name, block, component, sampler, drawn, home_number, given=given.get(name, _NOTHING_GIVEN))
     return HomeConfig(
-        pv_config=pv,
-        battery_config=battery,
-        load_config=load,
-        heat_pump_config=heat_pump,
-        ev_config=ev,
+        pv_config=_checked_component(built, "pv", PVConfig),
+        battery_config=_checked_component_or_none(built, "battery", BatteryConfig),
+        load_config=_checked_component(built, "load", LoadConfig),
+        heat_pump_config=_checked_component_or_none(built, "heat_pump", HeatPumpConfig),
+        ev_config=_checked_component_or_none(built, "ev", EVConfig),
         location=location,
         name=f"Home {home_number}",
         tariff_config=fleet_tariff,
@@ -1981,8 +2192,8 @@ def generate_homes_from_distribution(
 ) -> list[HomeConfig]:
     """Generate a list of homes by sampling from distributions.
 
-    Each home draws its components in _generated_home's order, each component's keys in its
-    table's fleet order, through one sampler (_DistributionSampler).
+    Each home draws its components in _HOME_DRAW_ORDER, each component's keys in its table's
+    fleet order, through one sampler (_DistributionSampler).
 
     Args:
         config: Fleet distribution configuration
@@ -1995,18 +2206,18 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
-        ConfigurationError: If a shuffled pool's counts do not total config.n_homes,
-            naming the pool; as the sampler refuses a draw, naming its setting (a
-            proportional_to whose source the home has not drawn, such as a field of a
-            component the home has none of, a normal or uniform draw that is not a
-            finite number, a count with no whole number from its spec's min to its max,
-            an EV hour or a proportional_to's count that is an infinity or a NaN); if a
-            required field is not drawn, naming its path, or draws null, naming its
-            path and the home; if a presence rule refuses a draw, as
-            battery.has_battery refuses a negative or non-finite battery capacity; if
-            the fleet gives a home no PV or no load, which every home needs, naming the
-            component and the home; or as a component's dataclass refuses what it is
-            built from, naming the component and the home.
+        ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
+            uniform draw that is not a finite number, a count with no whole number from its
+            spec's min to its max, an EV hour or a proportional_to's count that is an
+            infinity or a NaN); if a required field draws null, naming its path and the
+            home; if a presence rule refuses a draw, as battery.has_battery refuses a
+            negative or non-finite battery capacity; if the fleet gives a home no PV or no
+            load, which every home needs, naming the component and the home; or as a
+            component's dataclass refuses what it is built from, naming the component and
+            the home. Where it uses them, it checks again what FleetDistributionConfig
+            refuses as it is built: that each shuffled pool's counts total config.n_homes,
+            that each required field is drawn and that each proportional_to's source is a
+            number the home drew earlier.
     """
     _refuse_pools_not_sized_to_the_fleet(config)
     sampler = _DistributionSampler(config)

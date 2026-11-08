@@ -372,6 +372,42 @@ class TestImportFleetYAML:
         assert "fleet_distribution.ev.charger_type" in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
+        ("component", "block", "named"),
+        [
+            pytest.param(
+                "battery",
+                {"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity"}},
+                ["fleet_distribution.battery.capacity_kwh", "'pv.capacity'"],
+                id="a proportional_to source no earlier field is",
+            ),
+            pytest.param(
+                "heat_pump",
+                {"heat_pump_type": "XSHP"},
+                ["fleet_distribution.heat_pump.heat_pump_type", "'XSHP'"],
+                id="a heat pump type outside its choices",
+            ),
+        ],
+    )
+    def test_a_fleet_the_grammar_cannot_draw_is_refused_with_the_loaders_refusal_naming_its_path_and_value(
+        self, client: FlaskClient, component: str, block: dict, named: list[str]
+    ) -> None:
+        """A scenario file whose fleet no home could be drawn from gets a 400 carrying the loaders' refusal, which names the key's path and the value as written."""
+        fleet = {"n_homes": 2, "pv": {"capacity_kw": 4.0}, component: block}
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+
+        resp = client.post(
+            "/api/fleet/import-yaml",
+            data=yaml.safe_dump({"fleet_distribution": fleet}),
+            content_type="text/yaml",
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(loader_refusal.value)}
+        for each in named:
+            assert each in resp.get_json()["error"], (each, resp.get_json())
+
+    @pytest.mark.parametrize(
         ("text", "reason"),
         [
             pytest.param("", "Empty request body", id="empty-body"),

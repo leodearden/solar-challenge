@@ -16,6 +16,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from tests._cli_table_text import table_text
 from tests._names_as_a_word import names_as_a_word
+from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
 
 runner = CliRunner()
@@ -381,6 +382,74 @@ home:
         assert f"ERROR {refusal}" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
+        ("document", "refusal"),
+        [
+            pytest.param(
+                "fleet_distribution: {n_homes: 2, pv: {capacity_kw: 4.0}, heat_pump: {heat_pump_type: XSHP}}\n",
+                "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; "
+                "valid values: null or one of ['ASHP', 'GSHP']",
+                id="a heat pump type outside its choices",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  heat_pump: {heat_pump_type: {type: normal, mean: 1, std: 0.1}}\n",
+                "Invalid fleet_distribution.heat_pump.heat_pump_type {'type': 'normal', 'mean': 1, 'std': 0.1}; "
+                "valid specs: null, one of ['ASHP', 'GSHP'], or a weighted_discrete or shuffled_pool of them and nulls",
+                id="a normal on a heat pump type",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0, tilt: {type: weighted_discrete, values: [30, '35'], weights: [1, 1]}}\n",
+                "Invalid fleet_distribution.pv.tilt value '35'; valid values: null or a number",
+                id="a string among a number's weighted values",
+            ),
+        ],
+    )
+    def test_a_fleet_whose_specs_its_fields_kinds_do_not_draw_is_refused_at_read_naming_the_path_and_rule(
+        self, tmp_path: Path, document: str, refusal: str
+    ) -> None:
+        """Each refusal names a key's path and no home: the fleet is refused as it is read, before any home is drawn."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        ("document", "path", "source"),
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: {type: proportional_to, source: pv.capacity}}\n",
+                "fleet_distribution.battery.capacity_kwh",
+                "pv.capacity",
+                id="a path no field has",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0, tilt: {type: proportional_to, source: battery.capacity_kwh}}\n"
+                "  battery: {capacity_kwh: 5.0}\n",
+                "fleet_distribution.pv.tilt",
+                "battery.capacity_kwh",
+                id="a field of a later component",
+            ),
+        ],
+    )
+    def test_a_fleet_whose_proportional_to_source_is_not_drawn_earlier_is_refused_at_read_naming_the_path_and_sources(
+        self, tmp_path: Path, document: str, path: str, source: str
+    ) -> None:
+        """The refusal names the dependent's path, its source and the sources it may name, and no home."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        assert f"ERROR {proportional_source_refusal(path, source, ['pv.capacity_kw'])}" in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
         "document",
         [
             pytest.param("pv: {capacity_kw: 4.0}\n", id="flat-home"),
@@ -390,6 +459,11 @@ home:
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0}\n",
                 id="fleet-distribution",
+            ),
+            pytest.param(
+                "fleet_distribution: {n_homes: 2, pv: {capacity_kw: 4.0, "
+                "tilt: {type: proportional_to, source: pv.capacity_kw, multiplier: 5}}}\n",
+                id="fleet-distribution-proportional-to-an-earlier-field",
             ),
             pytest.param(_SWEEP_FLEET, id="fleet-sweep"),
             pytest.param(

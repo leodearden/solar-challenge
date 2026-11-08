@@ -345,15 +345,13 @@ class TestASettingDrawnPastItsValuesIsRefused:
         assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
 
 
-def _fleet_with_tilt(tilt: dict[str, Any], **sections: Any) -> FleetDistributionConfig:
-    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*, beside *sections*."""
-    return parse_fleet_distribution_config(
-        {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}, **sections}
-    )
+def _fleet_with_tilt(tilt: dict[str, Any]) -> FleetDistributionConfig:
+    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*."""
+    return parse_fleet_distribution_config({"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}})
 
 
 class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
-    """A proportional_to scales the value its home drew earlier for its source, and is refused, naming its path and its source, when the home has drawn no number for it."""
+    """A proportional_to scales the value its home drew earlier for its source."""
 
     def test_a_source_drawn_earlier_in_the_same_component_is_scaled(self) -> None:
         """Each home draws its PV capacity before its tilt, so a tilt of 5 times the capacity is 20 degrees."""
@@ -362,72 +360,6 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
         assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
-
-    def test_a_source_drawn_by_a_later_component_is_refused(self) -> None:
-        """A home draws its battery after its PV, so its tilt cannot be proportional_to its battery capacity."""
-        fleet = _fleet_with_tilt(
-            {"type": "proportional_to", "source": "battery.capacity_kwh"}, battery={"capacity_kwh": 5.0}
-        )
-
-        with pytest.raises(ConfigurationError) as refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
-
-        assert str(refusal.value) == (
-            "pv.tilt is proportional_to battery.capacity_kwh, which no earlier field of the home drew"
-        )
-
-    def test_a_source_that_drew_a_choice_is_refused(self) -> None:
-        """A heat pump's type is a choice, not a number, so its thermal capacity cannot be proportional_to it."""
-        fleet = parse_fleet_distribution_config(
-            {
-                "n_homes": 1,
-                "pv": {"capacity_kw": 4.0},
-                "heat_pump": {
-                    "heat_pump_type": "ASHP",
-                    "thermal_capacity_kw": {"type": "proportional_to", "source": "heat_pump.heat_pump_type"},
-                },
-            }
-        )
-
-        with pytest.raises(ConfigurationError) as refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
-
-        assert str(refusal.value) == (
-            "heat_pump.thermal_capacity_kw is proportional_to heat_pump.heat_pump_type, which drew 'ASHP', not a number"
-        )
-
-    def test_a_field_of_a_component_every_home_has_is_scaled(self) -> None:
-        """Every home has a battery charging at 2 kW, so a heat pump of 3 times that charge rate is 6 kW."""
-        homes = generate_homes_from_distribution(_fleet_with_heat_pump_sized_by_battery(5.0), Location.bristol())
-
-        assert [home.heat_pump_config.thermal_capacity_kw for home in homes] == [6.0, 6.0]
-
-    def test_a_field_of_a_component_a_home_lacks_is_refused(self) -> None:
-        """One of the 2 homes draws no battery, so it draws no charge rate either: whether a fleet is refused depends on its draws."""
-        fleet = _fleet_with_heat_pump_sized_by_battery({"type": "shuffled_pool", "values": [5.0, None], "counts": [1, 1]})
-
-        with pytest.raises(ConfigurationError) as refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
-
-        assert str(refusal.value) == (
-            "heat_pump.thermal_capacity_kw is proportional_to battery.max_charge_kw, which no earlier field of the home drew"
-        )
-
-
-def _fleet_with_heat_pump_sized_by_battery(capacity_kwh: object) -> FleetDistributionConfig:
-    """Parse a fleet of 2 homes whose batteries of *capacity_kwh* charge at 2 kW, and whose heat pumps are 3 times that."""
-    return parse_fleet_distribution_config(
-        {
-            "n_homes": 2,
-            "seed": 1,
-            "pv": {"capacity_kw": 4.0},
-            "battery": {"capacity_kwh": capacity_kwh, "max_charge_kw": 2.0},
-            "heat_pump": {
-                "heat_pump_type": "ASHP",
-                "thermal_capacity_kw": {"type": "proportional_to", "source": "battery.max_charge_kw", "multiplier": 3},
-            },
-        }
-    )
 
 
 def _proportional_to_pv(**spec: float) -> dict[str, Any]:

@@ -325,16 +325,14 @@ class TestGenerateHomesFromDistribution:
         ]
 
 
-class TestGenerationRefusesAPoolNotSizedToTheFleet:
-    """generate_homes_from_distribution refuses a fleet whose shuffled pool does not hold one value per home."""
+class TestAResizedFleetIsRefusedAsConstructionRefusesIt:
+    """A fleet resized with dataclasses.replace is refused when its shuffled pool no longer holds one value per home."""
 
     @pytest.mark.parametrize(
         "resized_n_homes",
         [pytest.param(4, id="grown past its pool"), pytest.param(2, id="shrunk below its pool")],
     )
-    def test_a_fleet_resized_after_construction_is_refused_as_construction_refuses_it(
-        self, resized_n_homes: int
-    ) -> None:
+    def test_a_resized_fleet_is_refused_as_construction_refuses_it(self, resized_n_homes: int) -> None:
         """A fleet built with 3 pool values for 3 homes, then given another n_homes, is refused in the words construction uses for that size."""
 
         def fleet_of(n_homes: int) -> FleetDistributionConfig:
@@ -347,13 +345,11 @@ class TestGenerationRefusesAPoolNotSizedToTheFleet:
 
         with pytest.raises(ConfigurationError) as construction_refusal:
             fleet_of(resized_n_homes)
-        config = fleet_of(3)
-        config.n_homes = resized_n_homes
 
-        with pytest.raises(ConfigurationError) as use_refusal:
-            generate_homes_from_distribution(config, Location.bristol())
+        with pytest.raises(ConfigurationError) as resize_refusal:
+            dataclasses.replace(fleet_of(3), n_homes=resized_n_homes)
 
-        assert str(use_refusal.value) == str(construction_refusal.value)
+        assert str(resize_refusal.value) == str(construction_refusal.value)
 
 
 class TestGenerateHomesRefusesADrawThatIsNotFinite:
@@ -688,21 +684,19 @@ fleet_distribution:
             pytest.param(WeightedDiscreteDistribution(values=("XSHP",), weights=(1.0,)), id="weighted"),
         ],
     )
-    def test_a_sampled_type_outside_heat_pump_types_is_refused_naming_every_type(
+    def test_a_type_outside_heat_pump_types_is_refused_at_construction_naming_every_type(
         self, heat_pump_type: Union[str, WeightedDiscreteDistribution]
     ) -> None:
-        """A heat pump type outside heat_pump.HEAT_PUMP_TYPES, fixed or drawn, in a fleet built in code is refused as HeatPumpConfig refuses it, naming the component and the home."""
-        config = FleetDistributionConfig(
-            n_homes=1,
-            pv=ComponentDistribution({"capacity_kw": 4.0}),
-            heat_pump=ComponentDistribution({"heat_pump_type": heat_pump_type}),
-            seed=42,
-        )
-
+        """A heat pump type outside heat_pump.HEAT_PUMP_TYPES, fixed or listed, in a fleet built in code is refused as the fleet is built, naming its path and every type, as the parser refuses it; no home draws it."""
         with pytest.raises(ConfigurationError) as exc_info:
-            generate_homes_from_distribution(config, Location.bristol())
+            FleetDistributionConfig(
+                n_homes=1,
+                pv=ComponentDistribution({"capacity_kw": 4.0}),
+                heat_pump=ComponentDistribution({"heat_pump_type": heat_pump_type}),
+                seed=42,
+            )
         assert str(exc_info.value) == (
-            "fleet_distribution.heat_pump, home 1: Heat pump type must be one of ('ASHP', 'GSHP'), got 'XSHP'"
+            "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
         )
 
 
@@ -962,16 +956,19 @@ class TestGenerateHomesHouseholdOccupants:
     def test_a_spec_with_no_whole_number_given_to_a_configured_fleet_is_refused_as_configuring_it_refuses_it(
         self, household_occupants: Union[NormalDistribution, UniformDistribution]
     ) -> None:
-        """A fleet built with 3 household occupants, then given a spec with no whole number from its min to its max, is refused in the words construction uses for that spec."""
+        """A fleet built with 3 household occupants, then given a spec with no whole number from its min to its max through dataclasses.replace, is refused in the words construction uses for that spec."""
         with pytest.raises(ConfigurationError) as configuration_refusal:
             self._fleet(household_occupants)
-        fleet = self._fleet(3)
-        fleet.load = ComponentDistribution({"household_occupants": household_occupants})
 
-        with pytest.raises(ConfigurationError) as generation_refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
+        with pytest.raises(ConfigurationError) as replacement_refusal:
+            dataclasses.replace(
+                self._fleet(3),
+                load=ComponentDistribution(
+                    {"household_occupants": household_occupants}, settings={"use_stochastic": False}
+                ),
+            )
 
-        assert str(generation_refusal.value) == str(configuration_refusal.value)
+        assert str(replacement_refusal.value) == str(configuration_refusal.value)
 
     @pytest.mark.parametrize(
         ("household_occupants", "refusal"),
@@ -1265,13 +1262,11 @@ class TestAComponentsRefusalNamesItsHome:
         assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but home 1 drew null"
 
     def test_a_pv_capacity_the_fleet_does_not_draw_is_refused_naming_its_path(self) -> None:
-        """The parser refuses a pv block leaving out capacity_kw, but a fleet built in code may leave it out, and its first home is refused."""
-        fleet = FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({}))
-
+        """A fleet built in code that leaves out pv.capacity_kw is refused as it is built, as the parser refuses a pv block leaving it out, before any home is drawn."""
         with pytest.raises(ConfigurationError) as refusal:
-            generate_homes_from_distribution(fleet, Location.bristol())
+            FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({}))
 
-        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but the fleet does not draw it"
+        assert str(refusal.value) == "Missing required keys in fleet_distribution.pv: fleet_distribution.pv.capacity_kw"
 
 
 class TestEveryHomeHasAPVAndALoad:
