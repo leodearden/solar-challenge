@@ -744,6 +744,7 @@ class TestCommunityBillingSavings:
     """
 
     _COMPLETE_BILLING = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.1)
+    _BILLING_INPUTS = tuple(field.name for field in dataclasses.fields(CommunityBillingConfig))
 
     @pytest.fixture
     def billing_idx(self) -> pd.DatetimeIndex:
@@ -814,36 +815,18 @@ class TestCommunityBillingSavings:
         assert cr.community_savings_gbp is None
 
     @pytest.mark.parametrize(
-        ("billing", "unset", "set_"),
-        [
-            pytest.param(
-                CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
-                ["billing.seg_rate_pence_per_kwh"],
-                ["billing.tariff"],
-                id="tariff-only",
-            ),
-            pytest.param(
-                CommunityBillingConfig(seg_rate_pence_per_kwh=4.1),
-                ["billing.tariff"],
-                ["billing.seg_rate_pence_per_kwh"],
-                id="seg-rate-only",
-            ),
-            pytest.param(
-                CommunityBillingConfig(),
-                ["billing.tariff", "billing.seg_rate_pence_per_kwh"],
-                [],
-                id="neither",
-            ),
-        ],
+        "unset_fields",
+        [pytest.param((name,), id=f"{name}-unset") for name in _BILLING_INPUTS]
+        + [pytest.param(_BILLING_INPUTS, id="every-input-unset")],
     )
     def test_a_half_specified_billing_warns_once_naming_what_is_unset_and_the_fields_that_stay_none(
-        self,
-        billing_fleet: FleetResults,
-        billing: CommunityBillingConfig,
-        unset: list[str],
-        set_: list[str],
+        self, billing_fleet: FleetResults, unset_fields: tuple[str, ...]
     ) -> None:
-        """The warning names each unset input and no set one, and is attributed to simulate_community's caller."""
+        """Each CommunityBillingConfig field is a pricing input: leaving any unset warns once, naming each unset input and no set one, attributed to simulate_community's caller, and prices nothing."""
+        assert [name for name in self._BILLING_INPUTS if getattr(self._COMPLETE_BILLING, name) is None] == []
+        billing = dataclasses.replace(self._COMPLETE_BILLING, **{name: None for name in unset_fields})
+        unset = [f"billing.{name}" for name in unset_fields]
+        set_ = [f"billing.{name}" for name in self._BILLING_INPUTS if name not in unset_fields]
         cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
