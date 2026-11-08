@@ -345,23 +345,13 @@ class TestASettingDrawnPastItsValuesIsRefused:
         assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
 
 
-def _fleet_with_tilt(tilt: dict[str, Any], **sections: Any) -> FleetDistributionConfig:
-    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*, beside *sections*."""
-    return parse_fleet_distribution_config(
-        {"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}, **sections}
-    )
-
-
-def _source_refusal(path: str, source: str) -> str:
-    """The refusal of *source*, the source of the proportional_to at *path*, in a fleet whose only source drawn earlier for every home is pv.capacity_kw."""
-    return (
-        f"Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
-        "for every home that draws it, one of ['pv.capacity_kw']"
-    )
+def _fleet_with_tilt(tilt: dict[str, Any]) -> FleetDistributionConfig:
+    """Parse a seeded fleet of 2 homes with 4 kW of PV whose pv.tilt is *tilt*."""
+    return parse_fleet_distribution_config({"n_homes": 2, "seed": 1, "pv": {"capacity_kw": 4.0, "tilt": tilt}})
 
 
 class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
-    """A proportional_to scales the value its home drew earlier for its source; a fleet whose source is not a number or count field drawn earlier for every home that draws the dependent is refused as it is read, naming its path, its source and the valid sources, whatever the fleet draws."""
+    """A proportional_to scales the value its home drew earlier for its source."""
 
     def test_a_source_drawn_earlier_in_the_same_component_is_scaled(self) -> None:
         """Each home draws its PV capacity before its tilt, so a tilt of 5 times the capacity is 20 degrees."""
@@ -370,63 +360,6 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
         assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
-
-    def test_a_source_drawn_by_a_later_component_is_refused(self) -> None:
-        """A home draws its battery after its PV, so its tilt cannot be proportional_to its battery capacity."""
-        with pytest.raises(ConfigurationError) as refusal:
-            _fleet_with_tilt({"type": "proportional_to", "source": "battery.capacity_kwh"}, battery={"capacity_kwh": 5.0})
-
-        assert str(refusal.value) == _source_refusal("fleet_distribution.pv.tilt", "battery.capacity_kwh")
-
-    def test_a_source_that_drew_a_choice_is_refused(self) -> None:
-        """A heat pump's type is a choice, not a number, so its thermal capacity cannot be proportional_to it."""
-        with pytest.raises(ConfigurationError) as refusal:
-            parse_fleet_distribution_config(
-                {
-                    "n_homes": 1,
-                    "pv": {"capacity_kw": 4.0},
-                    "heat_pump": {
-                        "heat_pump_type": "ASHP",
-                        "thermal_capacity_kw": {"type": "proportional_to", "source": "heat_pump.heat_pump_type"},
-                    },
-                }
-            )
-
-        assert str(refusal.value) == _source_refusal(
-            "fleet_distribution.heat_pump.thermal_capacity_kw", "heat_pump.heat_pump_type"
-        )
-
-    @pytest.mark.parametrize(
-        "capacity_kwh",
-        [
-            pytest.param(5.0, id="every home has a battery"),
-            pytest.param({"type": "shuffled_pool", "values": [5.0, None], "counts": [1, 1]}, id="one home has none"),
-        ],
-    )
-    def test_a_field_of_another_optional_component_is_refused_whatever_the_fleet_draws(self, capacity_kwh: object) -> None:
-        """A battery's charge rate is drawn only for a home with a battery, so no heat pump is sized by it, even in a fleet whose every home has one: whether a fleet is refused does not depend on its draws."""
-        with pytest.raises(ConfigurationError) as refusal:
-            _fleet_with_heat_pump_sized_by_battery(capacity_kwh)
-
-        assert str(refusal.value) == _source_refusal(
-            "fleet_distribution.heat_pump.thermal_capacity_kw", "battery.max_charge_kw"
-        )
-
-
-def _fleet_with_heat_pump_sized_by_battery(capacity_kwh: object) -> FleetDistributionConfig:
-    """Parse a fleet of 2 homes whose batteries of *capacity_kwh* charge at 2 kW, and whose heat pumps are 3 times that."""
-    return parse_fleet_distribution_config(
-        {
-            "n_homes": 2,
-            "seed": 1,
-            "pv": {"capacity_kw": 4.0},
-            "battery": {"capacity_kwh": capacity_kwh, "max_charge_kw": 2.0},
-            "heat_pump": {
-                "heat_pump_type": "ASHP",
-                "thermal_capacity_kw": {"type": "proportional_to", "source": "battery.max_charge_kw", "multiplier": 3},
-            },
-        }
-    )
 
 
 def _proportional_to_pv(**spec: float) -> dict[str, Any]:

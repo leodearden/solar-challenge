@@ -16,6 +16,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from tests._cli_table_text import table_text
 from tests._names_as_a_word import names_as_a_word
+from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
 
 runner = CliRunner()
@@ -446,10 +447,7 @@ home:
         result = self._validate_config(tmp_path, document)
 
         assert result.exit_code == 1
-        assert (
-            f"ERROR Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
-            "for every home that draws it, one of ['pv.capacity_kw']"
-        ) in table_text(result.stdout)
+        assert f"ERROR {proportional_source_refusal(path, source, ['pv.capacity_kw'])}" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
         "document",

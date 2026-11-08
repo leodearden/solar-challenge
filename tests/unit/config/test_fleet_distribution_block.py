@@ -25,6 +25,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from tests._non_booleans import NON_BOOLEANS
+from tests._proportional_source_refusals import proportional_source_refusal
 
 
 def _parsed_fleet_distribution(n_homes: int = 1, **sections: Any) -> FleetDistributionConfig:
@@ -78,14 +79,6 @@ _XSHP_HEAT_PUMP_TYPE_REFUSAL = (
 def _proportional_to(source: str, **spec: float) -> dict[str, Any]:
     """A proportional_to spec scaling *source*, with *spec*'s multiplier or offset."""
     return {"type": "proportional_to", "source": source, **spec}
-
-
-def _source_refusal(path: str, source: str, sources: list[str]) -> str:
-    """The refusal of *source*, the source of the proportional_to at *path*, where *sources*, in draw order, are those it may name."""
-    return (
-        f"Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
-        f"for every home that draws it, one of {sources!r}"
-    )
 
 
 def _pickle_round_trip(fleet: FleetDistributionConfig) -> FleetDistributionConfig:
@@ -968,6 +961,19 @@ class TestAProportionalToSourceIsDrawnEarlierForEveryHomeThatDrawsIt:
                 id="another optional component, though every home has it",
             ),
             pytest.param(
+                {
+                    "battery": {
+                        "capacity_kwh": {"type": "shuffled_pool", "values": [5.0, None], "counts": [1, 1]},
+                        "max_charge_kw": 2.0,
+                    },
+                    "heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": _proportional_to("battery.max_charge_kw")},
+                },
+                "fleet_distribution.heat_pump.thermal_capacity_kw",
+                "battery.max_charge_kw",
+                ["pv.capacity_kw"],
+                id="another optional component, which one home lacks",
+            ),
+            pytest.param(
                 {"heat_pump": {"heat_pump_type": "ASHP", "thermal_capacity_kw": _proportional_to("heat_pump.heat_pump_type")}},
                 "fleet_distribution.heat_pump.thermal_capacity_kw",
                 "heat_pump.heat_pump_type",
@@ -1017,7 +1023,7 @@ class TestAProportionalToSourceIsDrawnEarlierForEveryHomeThatDrawsIt:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(2, **{"pv": {"capacity_kw": 4.0}, **sections})
 
-        assert str(refusal.value) == _source_refusal(path, source, sources)
+        assert str(refusal.value) == proportional_source_refusal(path, source, sources)
 
     def test_a_code_built_fleet_is_refused_as_a_parsed_one_is(self) -> None:
         with pytest.raises(ConfigurationError) as parser_refusal:
