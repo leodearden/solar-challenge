@@ -333,6 +333,29 @@ class TestFinanceFlexCLIBandEntryPoints:
 
 
 # ---------------------------------------------------------------------------
+# §D3 — The events block's delivery baseline refuses in its vocabulary's words
+# (docs/prds/grid-services-pricing-model.md §9 P7)
+# ---------------------------------------------------------------------------
+
+
+class TestFinanceRunEventsDeliveryBaseline:
+    """An events block's delivery_baseline refuses a value other than operational or capacity, naming both."""
+
+    def test_an_events_delivery_baseline_metered_is_refused(
+        self, tmp_path: Path, flex_fleet_results: FleetResults
+    ) -> None:
+        scenario_file = _write_scenario(tmp_path, grid_services_events={"delivery_baseline": "metered"})
+
+        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+
+        assert result.exit_code == 1, result.output
+        assert (
+            "Configuration error: GridServicesEventsConfig.delivery_baseline must be one of "
+            "operational, capacity, got 'metered'"
+        ) in _whitespace_normalised(result.output), result.output
+
+
+# ---------------------------------------------------------------------------
 # §E — Named user-observable signal test (step-5 RED driver)
 # ---------------------------------------------------------------------------
 
