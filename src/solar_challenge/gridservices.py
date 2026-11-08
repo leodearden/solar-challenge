@@ -49,7 +49,7 @@ Key public symbols:
 import warnings
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Optional, TypeAlias
+from typing import TYPE_CHECKING, Optional, TypeAlias, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -74,8 +74,28 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# GridServicesBand
+# GridServicesBand + DeliveryBaseline: the word-valued fields' vocabularies
 # ---------------------------------------------------------------------------
+
+
+_Word = TypeVar("_Word", bound=Enum)
+
+
+def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word:
+    """The member of *vocabulary* that *value* names: a member's value, exactly, or a member itself.
+
+    Every word-valued field's ``parse`` reads through this one refusal.
+
+    Raises:
+        ConfigurationError: If *value* is anything else; the message names
+            *what*, the members' values in order and *value*.
+    """
+    try:
+        return vocabulary(value)
+    except ValueError:
+        raise ConfigurationError.must_be(
+            what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+        ) from None
 
 
 class GridServicesBand(str, Enum):
@@ -87,23 +107,8 @@ class GridServicesBand(str, Enum):
 
     @classmethod
     def parse(cls, value: object, *, what: str) -> "GridServicesBand":
-        """Return the band *value* names: a band's value, exactly, or a band itself.
-
-        Raises:
-            ConfigurationError: If *value* is anything else; the message names
-                *what*, the bands in order and *value*.
-        """
-        try:
-            return cls(value)
-        except ValueError:
-            raise ConfigurationError.must_be(
-                what, f"one of {', '.join(band.value for band in cls)}", got=value
-            ) from None
-
-
-# ---------------------------------------------------------------------------
-# DeliveryBaseline
-# ---------------------------------------------------------------------------
+        """Return the band *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, what=what)
 
 
 class DeliveryBaseline(str, Enum):
@@ -114,18 +119,8 @@ class DeliveryBaseline(str, Enum):
 
     @classmethod
     def parse(cls, value: object, *, what: str) -> "DeliveryBaseline":
-        """Return the baseline *value* names: a baseline's value, exactly, or a baseline itself.
-
-        Raises:
-            ConfigurationError: If *value* is anything else; the message names
-                *what*, the baselines in order and *value*.
-        """
-        try:
-            return cls(value)
-        except ValueError:
-            raise ConfigurationError.must_be(
-                what, f"one of {', '.join(baseline.value for baseline in cls)}", got=value
-            ) from None
+        """Return the baseline *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, what=what)
 
 
 # ---------------------------------------------------------------------------
