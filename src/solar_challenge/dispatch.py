@@ -13,16 +13,17 @@ build_dispatch_strategy builds the strategy a variant configures.
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from types import MappingProxyType
-from typing import ClassVar, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
+from typing import ClassVar, Final, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
+    NON_NEGATIVE,
     POSITIVE,
     Interval,
     as_finite_float,
@@ -38,14 +39,18 @@ class DispatchDecision:
     """Decision from a dispatch strategy for a single timestep.
 
     Attributes:
-        charge_kw: Requested battery charging power in kW (non-negative).
+        charge_kw: Requested battery charging power in kW, finite and at least 0.
             Represents PV or other on-site charge power.
-        discharge_kw: Requested battery discharge power in kW (non-negative)
-        grid_charge_kw: Requested grid-to-battery charging power in kW
-            (non-negative, default 0.0). Represents deliberate charging from
+        discharge_kw: Requested battery discharge power in kW, finite and at least 0.
+        grid_charge_kw: Requested grid-to-battery charging power in kW, finite and
+            at least 0 (default 0.0). Represents deliberate charging from
             the grid (e.g. during cheap-rate periods). May co-exist with
             charge_kw > 0 (both are charging), but is mutually exclusive with
             discharge_kw > 0.
+
+    Raises:
+        ValueError: If a power is negative, NaN or infinite, naming it and its value; or if
+            discharge_kw > 0 alongside charge_kw > 0 or grid_charge_kw > 0.
     """
 
     charge_kw: float
@@ -53,19 +58,10 @@ class DispatchDecision:
     grid_charge_kw: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate dispatch decision parameters."""
-        if self.charge_kw < 0:
-            raise ValueError(
-                f"Charge power must be non-negative, got {self.charge_kw} kW"
-            )
-        if self.discharge_kw < 0:
-            raise ValueError(
-                f"Discharge power must be non-negative, got {self.discharge_kw} kW"
-            )
-        if self.grid_charge_kw < 0:
-            raise ValueError(
-                f"Grid-charge power must be non-negative, got {self.grid_charge_kw} kW"
-            )
+        """Refuse a power NON_NEGATIVE does not admit, then a discharge alongside either charge."""
+        for name in _DECISION_POWERS:
+            if not NON_NEGATIVE.admits(value := getattr(self, name)):
+                raise ValueError(f"{name} must be non-negative and finite, got {value!r} kW")
         if self.charge_kw > 0 and self.discharge_kw > 0:
             raise ValueError(
                 "Cannot charge and discharge simultaneously: "
@@ -76,6 +72,9 @@ class DispatchDecision:
                 "Cannot grid-charge and discharge simultaneously: "
                 f"grid_charge={self.grid_charge_kw} kW, discharge={self.discharge_kw} kW"
             )
+
+
+_DECISION_POWERS: Final = tuple(power.name for power in fields(DispatchDecision))
 
 
 @dataclass(frozen=True)
