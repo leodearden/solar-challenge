@@ -13,6 +13,7 @@ from solar_challenge.dispatch import (
     DispatchStrategy,
     GridChargeContext,
     SelfConsumptionStrategy,
+    StepLimits,
     compute_grid_charge_power_kw,
     require_valid_step_powers,
 )
@@ -303,8 +304,10 @@ def simulate_timestep(
 
     Raises:
         ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
-            or demand_kw is not finite and at least 0, naming it. Each check runs before any battery
-            moves energy.
+            or demand_kw is not finite and at least 0, naming it; then if the strategy's decision
+            asks for more than the step allows (StepLimits.require_admissible), naming the
+            strategy and each power above its limit. Each check runs before any battery moves
+            energy.
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
@@ -333,6 +336,11 @@ def simulate_timestep(
         timestep_minutes=timestep_minutes,
         grid_charge_ctx=grid_charge_ctx,
     )
+    StepLimits(
+        excess_kw=max(0.0, generation_kw - demand_kw),
+        shortfall_kw=max(0.0, demand_kw - generation_kw),
+        max_charge_kw=battery.max_charge_kw,
+    ).require_admissible(decision, strategy.name)
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)
@@ -451,8 +459,8 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # _settle derives the flows so that this balance closes whenever a step's PV charge is within
-    # its excess and its discharge within its shortfall.
+    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
+    # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
     storage_delta = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + storage_delta

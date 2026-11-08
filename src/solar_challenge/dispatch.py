@@ -220,6 +220,51 @@ def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
     return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
 
 
+@dataclass(frozen=True)
+class StepLimits:
+    """What one step's decision may ask of the battery, in kW.
+
+    Attributes:
+        excess_kw: PV beyond demand, the most charge_kw may take.
+        shortfall_kw: Demand beyond PV, the most discharge_kw may give.
+        max_charge_kw: The battery's charge limit, which PV and grid charging share.
+    """
+
+    excess_kw: float
+    shortfall_kw: float
+    max_charge_kw: float
+
+    def require_admissible(self, decision: DispatchDecision, strategy_name: str) -> None:
+        """Refuse *decision*, by the strategy named *strategy_name*, if a power is above its limit.
+
+        A charge_kw above max_charge_kw is admissible: it is a PV offer the battery clamps,
+        and the grid charge's limit is the headroom left after the clamped offer.
+
+        Raises:
+            ValueError: Naming the strategy and, for each power above its limit, the field,
+                its value and its limit.
+        """
+        bounds = (
+            ("charge_kw", decision.charge_kw, self.excess_kw, "the step's PV excess"),
+            ("discharge_kw", decision.discharge_kw, self.shortfall_kw, "the step's shortfall"),
+            (
+                "grid_charge_kw",
+                decision.grid_charge_kw,
+                _charge_headroom_kw(self.max_charge_kw, decision.charge_kw),
+                "the charge limit's headroom after charge_kw",
+            ),
+        )
+        breaches = [
+            f"{name}={value!r} kW is above {limit!r} kW, {what}"
+            for name, value, limit, what in bounds
+            if not value <= limit
+        ]
+        if breaches:
+            raise ValueError(
+                f"Dispatch strategy {strategy_name!r} decided more than the step allows: " + "; ".join(breaches)
+            )
+
+
 def _grid_power_to_target_kw(
     ctx: GridChargeContext,
     *,
@@ -429,7 +474,16 @@ class DispatchStrategy(ABC):
                 grid-charge ignores it.  ``None`` means no grid charging.
 
         Returns:
-            DispatchDecision specifying charge_kw or discharge_kw
+            DispatchDecision specifying charge_kw or discharge_kw, and any grid_charge_kw,
+            within the step's bounds:
+            - each power is finite and at least 0, as DispatchDecision requires;
+            - charge_kw is at most the step's PV excess, max(0, generation_kw - demand_kw); it
+              may exceed the battery's charge limit, Battery.max_charge_kw, which the battery
+              applies;
+            - discharge_kw is at most the step's shortfall, max(0, demand_kw - generation_kw);
+            - grid_charge_kw is at most the headroom the charge limit leaves after charge_kw.
+            simulate_timestep refuses a decision that breaks a bound with ValueError before the
+            battery moves; see StepLimits.
 
         Raises:
             ValueError: If inputs are invalid (negative, NaN or infinite values, etc.)
