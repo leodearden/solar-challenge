@@ -35,12 +35,13 @@ from solar_challenge.community import (
 from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.fleet import FleetResults, FleetRunner
-from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
 from solar_challenge.weather import PrefetchedWeather
+from tests._balanced_sim_results import make_balanced_fleet
 from tests._committed_weather_cache import committed_bristol_tmy
 from tests._fleet_runner import MarkingHomeSimulator, started
 from tests._repository_paths import SCENARIOS_DIR
@@ -53,54 +54,6 @@ SCENARIO = SCENARIOS_DIR / "bristol-community.yaml"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _make_home_result(
-    index: pd.DatetimeIndex,
-    gen: list[float],
-    dem: list[float],
-) -> SimulationResults:
-    """Build a minimal, individually-balanced SimulationResults (no battery).
-
-    Copied from tests/unit/test_community.py for fast report unit assertions.
-    """
-    n = len(index)
-    assert len(gen) == n
-    assert len(dem) == n
-    exp = [max(0.0, g - d) for g, d in zip(gen, dem)]
-    imp = [max(0.0, d - g) for g, d in zip(gen, dem)]
-    zeros = [0.0] * n
-    return SimulationResults(
-        generation=pd.Series(gen, index=index, dtype=float),
-        demand=pd.Series(dem, index=index, dtype=float),
-        self_consumption=pd.Series(
-            [min(g, d) for g, d in zip(gen, dem)], index=index, dtype=float
-        ),
-        battery_charge=pd.Series(zeros, index=index, dtype=float),
-        battery_discharge=pd.Series(zeros, index=index, dtype=float),
-        battery_soc=pd.Series(zeros, index=index, dtype=float),
-        grid_import=pd.Series(imp, index=index, dtype=float),
-        grid_export=pd.Series(exp, index=index, dtype=float),
-        import_cost=pd.Series(zeros, index=index, dtype=float),
-        export_revenue=pd.Series(zeros, index=index, dtype=float),
-        tariff_rate=pd.Series(zeros, index=index, dtype=float),
-    )
-
-
-def _make_fleet(
-    index: pd.DatetimeIndex,
-    homes: list[tuple[list[float], list[float]]],
-) -> FleetResults:
-    """Build a synthetic FleetResults from (gen, dem) pairs per home.
-
-    Copied from tests/unit/test_community.py for fast report unit assertions.
-    """
-    per_home = [_make_home_result(index, g, d) for g, d in homes]
-    configs = [
-        HomeConfig(pv_config=PVConfig(capacity_kw=1.0), load_config=LoadConfig())
-        for _ in homes
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=configs)
-
 
 def _build_injected_fleet(
     start: pd.Timestamp,
@@ -179,7 +132,7 @@ class TestGenerateCommunityReport:
         index = pd.date_range("2024-06-21 12:00", periods=4, freq="min", tz="Europe/London")
         # Exporter: large PV (gen > dem) → exports surplus
         # Importer: no PV (gen = 0) → imports everything
-        return _make_fleet(
+        return make_balanced_fleet(
             index,
             [
                 ([3.0, 5.0, 5.0, 1.0], [1.0, 1.0, 1.0, 1.0]),  # exporter
@@ -656,7 +609,7 @@ class TestCommunityBillingReport:
     @pytest.fixture
     def billing_fleet(self, billing_idx: pd.DatetimeIndex) -> FleetResults:
         """Exporter + importer fleet for deterministic billing values."""
-        return _make_fleet(
+        return make_balanced_fleet(
             billing_idx,
             [
                 ([4.0, 4.0], [1.0, 1.0]),  # exporter
@@ -941,7 +894,7 @@ class TestComputeCommunityMetricsSharingMode:
     def small_fleet(self) -> FleetResults:
         """Minimal 2-home fleet: exporter + importer."""
         index = pd.date_range("2024-06-21 12:00", periods=4, freq="min", tz="Europe/London")
-        return _make_fleet(
+        return make_balanced_fleet(
             index,
             [
                 ([3.0, 5.0, 5.0, 1.0], [1.0, 1.0, 1.0, 1.0]),  # exporter
