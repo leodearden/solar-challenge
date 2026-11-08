@@ -540,7 +540,8 @@ class TestCommunityBatteryDispatchOnTheScenarioFleet:
     """The last minute of Economy 7's off-peak period, 00:30 to 07:30."""
 
     @pytest.fixture(scope="class")
-    def fleet(self) -> FleetResults:
+    @classmethod
+    def fleet(cls) -> FleetResults:
         """The scenario's six homes simulated over 2024-01-15 in their timezone, each on the committed Bristol TMY, read once."""
         homes = load_fleet_config(SCENARIO).homes
         tmy = committed_bristol_tmy()
