@@ -506,7 +506,7 @@ class DispatchStrategy(ABC):
             - discharge_kw is at most the step's shortfall, max(0, demand_kw - generation_kw);
             - grid_charge_kw is at most the headroom the charge limit leaves after charge_kw.
             simulate_timestep refuses a decision that breaks a bound with ValueError before the
-            battery moves; see StepLimits.
+            battery moves; see StepLimits.for_step.
 
         Raises:
             ValueError: If inputs are invalid (negative, NaN or infinite values, etc.)
@@ -600,9 +600,8 @@ class SelfConsumptionStrategy(DispatchStrategy):
             generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
         )
 
-        # Calculate excess and shortfall
-        excess_kw = max(0.0, generation_kw - demand_kw)
-        shortfall_kw = max(0.0, demand_kw - generation_kw)
+        excess_kw = _step_excess_kw(generation_kw, demand_kw)
+        shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
 
         # Decide action based on excess/shortfall
         if excess_kw > 0:
@@ -730,9 +729,8 @@ class TOUOptimizedStrategy(DispatchStrategy):
         # Determine current tariff period
         tariff_period = self._get_tariff_period(timestamp)
 
-        # Calculate excess and shortfall
-        excess_kw = max(0.0, generation_kw - demand_kw)
-        shortfall_kw = max(0.0, demand_kw - generation_kw)
+        excess_kw = _step_excess_kw(generation_kw, demand_kw)
+        shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
 
         if tariff_period == TariffPeriod.OFF_PEAK:
             # Off-peak: charge from excess PV; preserve battery on shortfall
@@ -847,9 +845,8 @@ class PeakShavingStrategy(DispatchStrategy):
             generation_kw, demand_kw, battery_soc_kwh, battery_capacity_kwh, timestep_minutes
         )
 
-        # Calculate excess and shortfall
-        excess_kw = max(0.0, generation_kw - demand_kw)
-        shortfall_kw = max(0.0, demand_kw - generation_kw)
+        excess_kw = _step_excess_kw(generation_kw, demand_kw)
+        shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
 
         if excess_kw > 0:
             # Charge from excess PV
@@ -1017,8 +1014,8 @@ def _window_decision(
     offered a grid-charge context, the grid power that charges the battery to the target,
     whatever the rates.
     """
-    excess_kw = max(0.0, generation_kw - demand_kw)
-    shortfall_kw = max(0.0, demand_kw - generation_kw)
+    excess_kw = _step_excess_kw(generation_kw, demand_kw)
+    shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
     target_kwh = window.target_soc_fraction * battery_capacity_kwh
     if window.allow_discharge and shortfall_kw > 0.0 and battery_soc_kwh > target_kwh:
         down_to_target_kw = (battery_soc_kwh - target_kwh) / (timestep_minutes * HOURS_PER_MINUTE)
