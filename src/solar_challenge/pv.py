@@ -216,8 +216,9 @@ class PVConfig:
 def _shared_sam_library(name: str) -> pd.DataFrame:
     """pvlib's parsed SAM parameter library `name`, read once per process and shared by every reader.
 
-    No reader edits it: a row of it reaches a caller only as a dict of the
-    caller's own, through _cec_library_row.
+    No reader edits it, and none gives a caller a view of it: what leaves it is
+    values the caller owns, such as _cec_library_row's dict or the frozen
+    CecInverter values usable_cec_inverters builds.
     """
     return pvlib.pvsystem.retrieve_sam(name)
 
