@@ -3,6 +3,7 @@
 
 import calendar
 import hashlib
+import io
 import json
 import os
 import uuid
@@ -85,40 +86,84 @@ def _require_timezone_name(name: str) -> None:
         ) from e
 
 
+class _EntrySeal(TypedDict):
+    """The JSON object on the first line of a cache entry's file: the hex SHA-256 of the UTF-8 bytes of the file after that line."""
+
+    sha256: str
+
+
 class _EntryHeader(TypedDict):
-    """The JSON object on the first line of a cache entry's file: the strs of its frame's index's timezone and frequency, None for none."""
+    """The JSON object on the line after a cache entry file's seal: the strs of its frame's index's timezone and frequency, None for none."""
 
     timezone: str | None
     freq: str | None
 
 
+def _sha256(content: str) -> str:
+    """The hex SHA-256 of content's UTF-8 bytes, as an entry file's seal holds it for the content after the seal."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _json_object(line: str, keys: frozenset[str]) -> dict[str, object]:
+    """The JSON object line holds, which must have exactly keys; else ValueError naming keys and what line holds."""
+    value = json.loads(line)
+    if not (isinstance(value, dict) and value.keys() == keys):
+        raise ValueError(
+            f"expected a line of JSON holding an object with exactly the keys {sorted(keys)}, got {value!r}"
+        )
+    return value
+
+
 def _write_entry(file: TextIO, header: _EntryHeader, data: pd.DataFrame) -> None:
-    """Write a cache entry to file: header as a first line of JSON, then data as CSV."""
-    file.write(json.dumps(header) + "\n")
-    data.to_csv(file)
+    """Write a cache entry to file: a first line of JSON sealing the rest, then header as a line of JSON, then data as CSV."""
+    content = json.dumps(header) + "\n" + data.to_csv()
+    seal: _EntrySeal = {"sha256": _sha256(content)}
+    file.write(json.dumps(seal) + "\n" + content)
 
 
 def _read_entry(file: TextIO) -> pd.DataFrame:
     """The frame _write_entry wrote to file: its values exactly, on its index in the header's timezone and frequency, under its name.
 
     Raises:
-        ValueError: If file holds anything else: a first line that is no _EntryHeader, a timezone whose str names
+        ValueError: If file's first line does not seal the rest, or the rest is not in the form _write_entry writes
+    """
+    return _decode_sealed_content(io.StringIO(_sealed_content(file)))
+
+
+def _sealed_content(file: TextIO) -> str:
+    """The rest of file after its first line, which must be an _EntrySeal holding the rest's SHA-256.
+
+    Raises:
+        ValueError: If the first line is no _EntrySeal, or the rest's SHA-256 is not the one it holds: the file was
+            cut short or changed after it was written
+    """
+    seal = _json_object(file.readline(), _EntrySeal.__required_keys__)
+    content = file.read()
+    sha256 = _sha256(content)
+    if sha256 != seal["sha256"]:
+        raise ValueError(
+            f"the file after its first line is not what put sealed there: its SHA-256 is {sha256}, the seal holds "
+            f"{seal['sha256']!r}, so the file was cut short or changed after put wrote it"
+        )
+    return content
+
+
+def _decode_sealed_content(content: TextIO) -> pd.DataFrame:
+    """The frame in an entry file's sealed content, a line of JSON that is an _EntryHeader, then the frame's CSV.
+
+    Raises:
+        ValueError: If content holds anything else: a header that is no _EntryHeader, a timezone whose str names
             none, rows that are no CSV of instants, or rows that do not follow the header's frequency
     """
-    header = json.loads(file.readline())
-    if not (
-        isinstance(header, dict)
-        and header.keys() == _EntryHeader.__required_keys__
-        and all(value is None or isinstance(value, str) for value in header.values())
-    ):
-        raise ValueError(
-            f"its first line must be a JSON object holding a str or null at each of "
-            f"{sorted(_EntryHeader.__required_keys__)} and nothing else, got {header!r}"
-        )
+    header = _json_object(content.readline(), _EntryHeader.__required_keys__)
     timezone, freq = header["timezone"], header["freq"]
+    if not ((timezone is None or isinstance(timezone, str)) and (freq is None or isinstance(freq, str))):
+        raise ValueError(
+            f"the header must hold a str or null at each of {sorted(_EntryHeader.__required_keys__)}, got {header!r}"
+        )
     if timezone is not None:
         _require_timezone_name(timezone)
-    frame = pd.read_csv(file, index_col=0, float_precision="round_trip")
+    frame = pd.read_csv(content, index_col=0, float_precision="round_trip")
     if timezone is None:
         instants = pd.to_datetime(frame.index)
     else:
@@ -129,8 +174,9 @@ def _read_entry(file: TextIO) -> pd.DataFrame:
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
-    Stores each DataFrame as one file, which also records its index's timezone
-    and frequency, keyed by prefix, location and an optional date range.
+    Stores each DataFrame as one file, which records its index's timezone and
+    frequency and seals its content with its SHA-256, keyed by prefix, location
+    and an optional date range.
     """
 
     cache_dir: Path
@@ -139,7 +185,8 @@ class WeatherCache:
     """Part of every key: bump it whenever what an entry means changes, so that older entries are never read.
 
     2: PvgisTmy.get caches the TMY scaled to the 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md).
-    3: an entry is one file: a first line of JSON naming its index's timezone and frequency, then the frame as CSV.
+    3: an entry is one file: a line of JSON holding the SHA-256 of the rest, a line of JSON naming its index's
+       timezone and frequency, then the frame as CSV.
     """
 
     def __init__(self, cache_dir: Optional[Path] = None) -> None:
@@ -192,9 +239,11 @@ class WeatherCache:
             The cached DataFrame, or None if not found
 
         Raises:
-            ValueError: If the entry's file holds anything but a frame as put writes one, naming the file, so a
-                degraded frame is never returned; as for an entry recording its timezone as a str that names none,
-                which put refuses to record
+            ValueError: Naming the entry's file, if its first line does not seal the rest, as when the file was cut
+                short or changed after put wrote it, or if what it seals is not in the form put writes: a header
+                holding anything but a timezone and a frequency, each a str or null, a timezone str that names
+                none, which put refuses to record, rows that are no CSV of instants, or rows not on the header's
+                frequency
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:

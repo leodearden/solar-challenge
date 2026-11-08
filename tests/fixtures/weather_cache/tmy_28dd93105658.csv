@@ -1,3 +1,4 @@
+{"sha256": "0c810bee1233fccc0d73a0ae35ffd43817cca45a7da12808d6b2eda3d7949297"}
 {"timezone": "UTC", "freq": null}
 time(UTC),temp_air,relative_humidity,ghi,dni,dhi,IR(h),wind_speed,wind_direction,pressure
 1990-01-01 00:00:00+00:00,5.87,82.9,0.0,0.0,0.0,293.57,6.71,255.0,98430.0
