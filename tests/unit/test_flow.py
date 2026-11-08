@@ -1485,7 +1485,7 @@ class _BatteryReportingANegativeDischarge(Battery):
 
 
 class TestStepRefusesANegativeFlow:
-    """A step raises rather than return a flow below 0 or NaN, whether a battery reports it or a power brings it."""
+    """A step raises rather than return a flow below 0 or NaN that its battery reports."""
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
     def test_a_battery_reporting_a_negative_discharge_makes_the_step_raise(
@@ -1498,26 +1498,10 @@ class TestStepRefusesANegativeFlow:
         assert "self_consumption=-0.975" in message
         assert "battery_discharge=-0.975" in message
 
-    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
-    @pytest.mark.parametrize(
-        ("power", "quantity"), [("generation_kw", "Generation"), ("demand_kw", "Demand")]
-    )
-    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
-    def test_a_negative_or_nan_power_is_refused_by_the_step_naming_the_power(
-        self, step: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
-    ) -> None:
-        """With no battery no dispatch strategy runs, so the step's own check refuses the power."""
-        powers = {"generation_kw": 0.0, "demand_kw": 0.0, power: value}
-        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
-        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            step(**powers, battery=None, timestep_minutes=60)
-
 
 # ---------------------------------------------------------------------------
-# A timestep that is not positive and finite, or a power that is not finite
+# A timestep that is not positive and finite
 # ---------------------------------------------------------------------------
-
-NAN_OR_INFINITE = [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")]
 
 NOT_POSITIVE_AND_FINITE_MINUTES = [
     pytest.param(math.nan, id="nan"),
@@ -1606,23 +1590,4 @@ class TestStepWithATimestepThatIsNotPositiveAndFinite:
                 strategy=strategy,
             )
         assert strategy.received_timesteps == []
-        assert battery.soc_kwh == soc_kwh
-
-
-class TestStepWithAPowerThatIsNotFinite:
-    """With a battery, a step refuses a NaN or infinite generation or demand, naming it, before its battery moves any energy."""
-
-    @pytest.mark.parametrize("value", NAN_OR_INFINITE)
-    @pytest.mark.parametrize(
-        ("power", "quantity"), [("generation_kw", "Generation"), ("demand_kw", "Demand")]
-    )
-    def test_the_step_refuses_the_power_and_leaves_the_battery_s_soc_unchanged(
-        self, power: str, quantity: str, value: float
-    ) -> None:
-        battery = Battery(BatteryConfig.default_5kwh())
-        soc_kwh = battery.soc_kwh
-        powers = {"generation_kw": 1.0, "demand_kw": 1.0, power: value}
-        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
-        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            simulate_timestep(**powers, battery=battery, timestep_minutes=1.0)
         assert battery.soc_kwh == soc_kwh

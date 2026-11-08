@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""docs/prds/one-dispatch-engine.md §9 rows 8-12: a decision's powers are finite and at least 0, and simulate_timestep refuses one that asks for more than its step allows, before the battery moves."""
+"""docs/prds/one-dispatch-engine.md §9 rows 8-12: a decision's powers, and a step's generation and demand, are finite and at least 0, and simulate_timestep refuses a decision that asks for more than its step allows, before the battery moves."""
 
 import dataclasses
+import functools
 import math
 import re
+from collections.abc import Callable
 from datetime import datetime, time, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -22,7 +24,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
@@ -38,6 +40,17 @@ NOT_FINITE_AND_AT_LEAST_0 = [
 STEP_POWERS = [
     pytest.param("generation_kw", "Generation", id="generation_kw"),
     pytest.param("demand_kw", "Demand", id="demand_kw"),
+]
+
+# Both engines, simulate_timestep_tou at Economy 7's 18:00 peak rate.
+ENGINES = [
+    pytest.param(simulate_timestep, id="simulate_timestep"),
+    pytest.param(
+        functools.partial(
+            simulate_timestep_tou, timestamp=pd.Timestamp("2024-01-01 18:00"), tariff=TariffConfig.economy_7()
+        ),
+        id="simulate_timestep_tou",
+    ),
 ]
 
 
@@ -91,16 +104,37 @@ class TestADecisionRefusesAPowerThatIsNotFiniteAndAtLeast0:
 
 
 class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
-    """§9 row 11, the input half: simulate_timestep refuses a generation or demand that is not finite and at least 0, naming it, before any strategy or battery.
-
-    _ConsumerStrategy checks none of its inputs, so the step's own check is all that refuses the power.
-    """
+    """§9 row 11, the input half: both engines refuse a generation or demand that is not finite and at least 0, naming it, before any strategy decides or any battery moves."""
 
     @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
     @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
-    def test_a_step_with_a_battery_refuses_the_power_before_its_strategy_decides_and_its_battery_moves(
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_a_step_without_a_battery_refuses_the_power(
+        self, engine: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
+    ) -> None:
+        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            engine(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=None, timestep_minutes=1.0)
+
+    @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
+    @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_a_step_with_a_battery_refuses_the_power_and_leaves_its_soc_unchanged(
+        self, engine: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            engine(**{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=battery, timestep_minutes=1.0)
+        assert battery.soc_kwh == soc_kwh
+
+    @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
+    @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
+    def test_simulate_timestep_refuses_the_power_before_a_strategy_of_the_consumer_s_own_decides(
         self, power: str, quantity: str, value: float
     ) -> None:
+        """Unlike the built-in strategies, _ConsumerStrategy checks none of its inputs, so the step's own check is all that refuses the power."""
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
         strategy = _ConsumerStrategy(DispatchDecision(0.0, 0.0))
@@ -114,15 +148,6 @@ class TestTheStepRefusesAPowerThatIsNotFiniteAndAtLeast0:
             )
         assert strategy.calls == []
         assert battery.soc_kwh == soc_kwh
-
-    @pytest.mark.parametrize("value", NOT_FINITE_AND_AT_LEAST_0)
-    @pytest.mark.parametrize(("power", "quantity"), STEP_POWERS)
-    def test_a_step_without_a_battery_refuses_the_power(self, power: str, quantity: str, value: float) -> None:
-        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
-        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            simulate_timestep(
-                **{"generation_kw": 1.0, "demand_kw": 1.0, power: value}, battery=None, timestep_minutes=1.0
-            )
 
 
 def _refusal(*breaches: str) -> str:
