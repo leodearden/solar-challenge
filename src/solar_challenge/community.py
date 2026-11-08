@@ -37,10 +37,10 @@ if TYPE_CHECKING:
 class CommunityBillingConfig:
     """The community's import tariff and SEG export rate.
 
-    :func:`simulate_community` prices the community's grid flows only when both
-    are set; otherwise the result's ``baseline_net_cost_gbp``,
+    :func:`simulate_community` prices the community's grid flows only when every
+    billing input is set; otherwise the result's ``baseline_net_cost_gbp``,
     ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``, and
-    it warns, naming each one unset.
+    it warns, naming each billing input left unset.
 
     Attributes
     ----------
@@ -180,9 +180,7 @@ class CommunityResults:
     battery_soc: pd.Series
     fleet_results: "FleetResults"
     sharing_mode: Literal["p2p", "community_battery"]
-    # Billing fields populated by simulate_community when config.billing is
-    # fully specified (both tariff and seg_rate_pence_per_kwh present); None
-    # otherwise, and a config.billing missing either one warns.
+    # Set by simulate_community when _grid_flow_prices_or_warn prices config.billing; None otherwise.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
     community_savings_gbp: Optional[float] = None
@@ -319,10 +317,10 @@ def simulate_community(
     Warns
     -----
     UserWarning
-        If ``config.billing`` is set but its ``tariff`` or
-        ``seg_rate_pence_per_kwh`` is not, naming each one unset: no grid flow
-        is priced, and the result's ``baseline_net_cost_gbp``,
-        ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
+        If ``config.billing`` is set but leaves any billing input unset, naming
+        each billing input left unset: no grid flow is priced, and the result's
+        ``baseline_net_cost_gbp``, ``community_net_cost_gbp`` and
+        ``community_savings_gbp`` stay ``None``.
 
     Raises
     ------

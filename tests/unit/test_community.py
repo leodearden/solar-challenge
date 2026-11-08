@@ -739,8 +739,8 @@ class TestCommunityBillingSavings:
     savings = 0.954 - (-0.082) = 1.036 ✓
     Also: savings == 4kWh * (0.30 - 0.041) = 4 * 0.259 = 1.036 ✓
 
-    A billing block missing either input prices nothing and warns once, naming the
-    missing inputs and the three fields that stay None.
+    A billing block missing any input prices nothing and warns once, naming each
+    missing input and the three fields that stay None.
     """
 
     _COMPLETE_BILLING = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.1)
