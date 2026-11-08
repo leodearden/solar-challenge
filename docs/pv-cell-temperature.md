@@ -1,6 +1,6 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
-**Task:** #823, #1029, #1374
+**Task:** #823, #1029, #1374, #1376
 **Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
