@@ -694,19 +694,8 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
-    """Each row sums its figure over the windows, as the per-event available capacity row does, and a note says the income is gross of the displaced self-use."""
-    gse = GridServicesAtEvents(
-        annual_income_gbp=19.944,
-        per_window_avail_kw=(1.5, 0.5),
-        per_window_income_gbp=(14.958, 4.986),
-        per_window_avail_p50_kw=(2.0, 0.5),
-        per_window_avail_p90_kw=(1.0, 0.3),
-        per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
-        per_window_displaced_import_gbp_per_year=(8.1, 1.9),
-    )
-
-    report = generate_finance_report(
+def _events_report(gse: GridServicesAtEvents) -> str:
+    return generate_finance_report(
         _synthetic_bill_distribution(),
         scenario_name="Alpha-Prime-Events-Test",
         flex_band=resolve_flex_band("central"),
@@ -714,15 +703,60 @@ def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
         grid_services_at_events=gse,
     )
 
+
+_PER_WINDOW_NOTE = "is one event window's figure"
+
+
+def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
+    """One event window: its figures, and a note that the income is gross of the displaced self-use, which a home simulated without a tariff values at £0."""
+    report = _events_report(
+        GridServicesAtEvents(
+            annual_income_gbp=14.958,
+            per_window_avail_kw=(1.5,),
+            per_window_income_gbp=(14.958,),
+            per_window_avail_p50_kw=(2.0,),
+            per_window_avail_p90_kw=(1.0,),
+            per_window_displaced_self_use_kwh_per_event=(2.3,),
+            per_window_displaced_import_gbp_per_year=(8.1,),
+        )
+    )
+
     lines = report.splitlines()
     for row in (
-        "| Capacity on 50% of event days | 2.5 kW |",
-        "| Capacity on 90% of event days | 1.3 kW |",
-        "| Evening self-use displaced, per event | 3.0 kWh |",
-        "| Evening self-use displaced, value per year | £10 |",
+        "| Capacity on 50% of event days | 2.0 kW |",
+        "| Capacity on 90% of event days | 1.0 kW |",
+        "| Evening self-use displaced, per event | 2.3 kWh |",
+        "| Evening self-use displaced, value per year | £8 |",
     ):
         assert row in lines, report
     assert "gross of the evening self-use an event displaces" in report, report
+    assert "£0 for a home simulated without one" in report, report
+    assert _PER_WINDOW_NOTE not in report, report
+
+
+def test_several_event_windows_show_no_per_window_figure_summed() -> None:
+    """Two windows: the 50%, 90% and per-event rows show —, since summed over windows they describe no set of event days; the value per year is the windows' total."""
+    report = _events_report(
+        GridServicesAtEvents(
+            annual_income_gbp=19.944,
+            per_window_avail_kw=(1.5, 0.5),
+            per_window_income_gbp=(14.958, 4.986),
+            per_window_avail_p50_kw=(2.0, 0.5),
+            per_window_avail_p90_kw=(1.0, 0.3),
+            per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
+            per_window_displaced_import_gbp_per_year=(8.1, 1.9),
+        )
+    )
+
+    lines = report.splitlines()
+    for row in (
+        "| Capacity on 50% of event days | — |",
+        "| Capacity on 90% of event days | — |",
+        "| Evening self-use displaced, per event | — |",
+        "| Evening self-use displaced, value per year | £10 |",
+    ):
+        assert row in lines, report
+    assert _PER_WINDOW_NOTE in report, report
 
 
 def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement() -> None:

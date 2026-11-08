@@ -780,7 +780,8 @@ class GridServicesAtEvents:
         per_window_displaced_import_gbp_per_year: Per-window value of that
             displaced self-use (£/year), in window order: each home-day's
             displaced kWh at the mean tariff over its span, summed over homes,
-            averaged over event days and multiplied by ``events_per_year``.  The
+            averaged over event days and multiplied by ``events_per_year``.  A
+            home simulated without a tariff (``tariff_rate`` 0) adds £0.  The
             householders import it; neither income figure subtracts it.
 
     .. note::

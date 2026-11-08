@@ -432,6 +432,11 @@ def generate_community_report(
     return report
 
 
+def _one_window_figure(per_window: tuple[float, ...], unit: str) -> str:
+    """*per_window*'s figure with its *unit* when it holds one event window's, else "—": summed over windows, a reliability capacity or a per-event mean describes no set of event days."""
+    return f"{per_window[0]:.1f} {unit}" if len(per_window) == 1 else "—"
+
+
 def generate_finance_report(
     bill_physics: "BillDistribution",
     bill_spreadsheet: Optional["BillDistribution"] = None,
@@ -480,11 +485,13 @@ def generate_finance_report(
             when provided (and ``flex_band`` is also set), renders a
             "Grid services (capacity-at-events)" sub-section inside the
             flexibility-value block showing the event-derived annual fleet
-            income, the per-event available capacity, the capacity on 50% and
-            on 90% of event days, and the evening self-use an event displaces,
-            per event and its value per year, each summed over the event
-            windows, with a note that the income is gross of that displaced
-            self-use; ``None`` (default) omits it.
+            income and the per-event available capacity, each summed over the
+            event windows; the capacity on 50% and on 90% of event days and the
+            evening self-use an event displaces, one window's figures, shown
+            for a single window and as — for several; that self-use's value per
+            year, summed over the windows; and a note that the income is gross
+            of that self-use, valued at £0 for a home simulated without a
+            tariff.  ``None`` (default) omits it.
 
     Returns:
         A markdown-formatted finance report string.
@@ -645,6 +652,11 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
         # Optional capacity-at-events sub-section
         if grid_services_at_events is not None:
             events = grid_services_at_events
+            per_window_note = (
+                ""
+                if len(events.per_window_avail_kw) == 1
+                else "\n*— is one event window's figure, which does not sum over several windows.*\n"
+            )
             report += f"""
 **Grid services (capacity-at-events)**
 
@@ -652,13 +664,13 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
 |--------|-------|
 | Annual fleet income | £{events.annual_income_gbp:,.0f} |
 | Per-event available capacity | {sum(events.per_window_avail_kw):.1f} kW |
-| Capacity on 50% of event days | {sum(events.per_window_avail_p50_kw):.1f} kW |
-| Capacity on 90% of event days | {sum(events.per_window_avail_p90_kw):.1f} kW |
-| Evening self-use displaced, per event | {sum(events.per_window_displaced_self_use_kwh_per_event):.1f} kWh |
+| Capacity on 50% of event days | {_one_window_figure(events.per_window_avail_p50_kw, "kW")} |
+| Capacity on 90% of event days | {_one_window_figure(events.per_window_avail_p90_kw, "kW")} |
+| Evening self-use displaced, per event | {_one_window_figure(events.per_window_displaced_self_use_kwh_per_event, "kWh")} |
 | Evening self-use displaced, value per year | £{sum(events.per_window_displaced_import_gbp_per_year):,.0f} |
 
-*The income is gross of the evening self-use an event displaces, which householders then import; it is not netted off.*
-"""
+*The income is gross of the evening self-use an event displaces, which householders then import; it is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated without one.*
+{per_window_note}"""
 
     return report
 

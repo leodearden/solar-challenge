@@ -869,15 +869,20 @@ takes `min(avail(home, d) × h, the discharge after the window)`, the discharge
 counted until the next recharge, the next event day's window or the end of the
 simulated index, whichever comes first. It reports the fleet's mean over event
 days (kWh per event) and its value, each home-day's kWh at the mean tariff over
-its span, times `events_per_year` (£ a year). Both are reported beside the
-income and not netted from it: the displaced energy lands on the householder's
-bill, not on CBS revenue, and netting it needs a counterfactual run with an
-event-day dispatch (docs/prds/grid-services-pricing-model.md §6 decision 15,
-§11). The finance report's capacity-at-events table renders the two reliability
-rows and the two displaced-self-use rows, with a note that the income is gross
-of the displaced self-use
+its span, times `events_per_year` (£ a year). A home simulated without a tariff
+has a `tariff_rate` of 0, so its displaced self-use is valued at £0, where the
+bill prices that home's import at the retail baseline rate. Both are reported
+beside the income and not netted from it: the displaced energy lands on the
+householder's bill, not on CBS revenue, and netting it needs a counterfactual
+run with an event-day dispatch (docs/prds/grid-services-pricing-model.md §6
+decision 15, §11). The finance report's capacity-at-events table renders the
+two reliability rows and the per-event displaced row for a single event window,
+and — for several, since summed over windows they describe no set of event
+days; the value-per-year row sums the windows. A note says the income is gross
+of the displaced self-use, and that a home without a tariff values it at £0
 (`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
-`tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`).
+`tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`,
+`::test_several_event_windows_show_no_per_window_figure_summed`).
 
 The flat rates (£1.5, £12 and £48 per kW of installed discharge power per year
 in the low, central and high bands) and the events rates are
