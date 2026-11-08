@@ -534,7 +534,8 @@ class TestPeakShavingStrategyGridCharging:
 
         gen=3.0, demand=2.0 → excess=1.0 → charge_kw=1.0.
         residual = max_charge(3.0) - pv_charge(1.0) = 2.0 kW.
-        gap_power = (4.5-1.0)/0.95/1.0 ≈ 3.68 > residual → residual clamps to 2.0.
+        post-PV SOC = 1.0 + 1.0 × 1.0 × 0.95 = 1.95 kWh.
+        gap_power = (4.5-1.95)/0.95/1.0 ≈ 2.68 > residual → residual clamps to 2.0.
         charge_kw + grid_charge_kw = 1.0 + 2.0 = 3.0 = max_charge_kw (budget shared).
         """
         ctx = self._FAVOURABLE_CTX

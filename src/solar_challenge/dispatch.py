@@ -150,20 +150,28 @@ def compute_grid_charge_power_kw(
         ctx: Tariff and battery context for this timestep.
             ``ctx.round_trip_efficiency`` and ``ctx.charge_efficiency`` must
             be in (0, 1] (enforced by ``GridChargeContext.__post_init__``).
-        battery_soc_kwh: Current battery state of charge in kWh.
-        pv_charge_power_kw: PV charging power already being consumed by the
-            battery in this timestep (kW). Reduces the residual charging
-            headroom available for grid charging.
+        battery_soc_kwh: The battery's state of charge in kWh before this
+            step's PV charge.
+        pv_charge_power_kw: The PV charge power in kW the step offers the
+            battery ahead of grid charging. The controller predicts the SOC
+            after it as ``Battery.charge`` stores it, ``battery_soc_kwh +
+            min(pv_charge_power_kw, ctx.max_charge_kw) × dt_h ×
+            ctx.charge_efficiency``, and it shares ``ctx.max_charge_kw`` with
+            the grid power.
         timestep_minutes: Duration of the timestep in minutes. Must be
             positive and finite (raises ``ValueError`` if not).
 
     Returns:
         Recommended grid-to-battery charge power in kW: at least 0.0 and at
-        most ``max(0.0, ctx.max_charge_kw - pv_charge_power_kw)``.
-        Returns 0.0 when:
-        - it is not a cheap period (ctx.is_cheap_period is False), or
-        - the spread gate fails (peak saving does not cover round-trip losses),
-        - the battery is already at or above ``ctx.target_soc_kwh``.
+        most the headroom ``ctx.max_charge_kw - min(pv_charge_power_kw,
+        ctx.max_charge_kw)``. It is 0.0 when the period is not cheap
+        (ctx.is_cheap_period is False), when the spread gate fails (peak
+        saving does not cover round-trip losses), or when the predicted
+        post-PV SOC is at or above ``ctx.target_soc_kwh``. The engine's
+        target, ``Battery.grid_charge_target_kwh``, is at most
+        ``max_soc_kwh``, so a prediction past the battery's ceiling also
+        gives 0.0. A step that grid-charges therefore ends at or below the
+        target.
 
     Raises:
         ValueError: If ``timestep_minutes`` is not positive and finite.
@@ -180,11 +188,31 @@ def compute_grid_charge_power_kw(
     if ctx.peak_rate <= ctx.current_rate / ctx.round_trip_efficiency:
         return 0.0
 
-    # Gate 3: how much energy is still needed to reach the target SOC?
-    return _grid_power_for_gap_kw(
+    # Gate 3: how much the battery still needs after this step's PV charge
+    return _grid_power_to_target_kw(
         ctx,
-        gap_kwh=ctx.target_soc_kwh - battery_soc_kwh,
+        target_kwh=ctx.target_soc_kwh,
+        battery_soc_kwh=battery_soc_kwh,
         pv_charge_kw=pv_charge_power_kw,
+        timestep_minutes=timestep_minutes,
+    )
+
+
+def _grid_charge_kw(
+    ctx: GridChargeContext | None,
+    *,
+    battery_soc_kwh: float,
+    charge_kw: float,
+    discharge_kw: float,
+    timestep_minutes: float,
+) -> float:
+    """The grid-charge power a decision of charge_kw PV charge and discharge_kw discharge asks for: none without a context or while it discharges, which DispatchDecision forbids alongside grid charging; else compute_grid_charge_power_kw's, with charge_kw as the step's PV charge."""
+    if ctx is None or discharge_kw > 0.0:
+        return 0.0
+    return compute_grid_charge_power_kw(
+        ctx,
+        battery_soc_kwh=battery_soc_kwh,
+        pv_charge_power_kw=charge_kw,
         timestep_minutes=timestep_minutes,
     )
 
@@ -192,23 +220,6 @@ def compute_grid_charge_power_kw(
 def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
     """The max_charge_kw a step's charge_kw of PV charge leaves for grid charging."""
     return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
-
-
-def _grid_power_for_gap_kw(
-    ctx: GridChargeContext,
-    *,
-    gap_kwh: float,
-    pv_charge_kw: float,
-    timestep_minutes: float,
-) -> float:
-    """The grid power that stores gap_kwh this step, within the headroom the step's pv_charge_kw of PV charge leaves, and none unless the gap is positive.
-
-    Storing gap_kwh draws gap_kwh / charge_efficiency from the grid.
-    """
-    if not gap_kwh > 0.0:
-        return 0.0
-    dt_h = timestep_minutes * HOURS_PER_MINUTE
-    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
 
 
 def _grid_power_to_target_kw(
@@ -221,14 +232,16 @@ def _grid_power_to_target_kw(
 ) -> float:
     """The grid power that charges the battery to target_kwh this step, after its pv_charge_kw of PV charge, within the headroom that charge leaves.
 
-    It predicts the SOC after the PV charge as Battery.charge stores it, and asks for
+    It predicts the SOC after the PV charge as Battery.charge stores it, and draws the gap
+    from there to target_kwh, divided by charge_efficiency, from the grid; it asks for
     nothing once that SOC reaches target_kwh.
     """
     dt_h = timestep_minutes * HOURS_PER_MINUTE
     soc_after_pv_kwh = battery_soc_kwh + min(pv_charge_kw, ctx.max_charge_kw) * dt_h * ctx.charge_efficiency
-    return _grid_power_for_gap_kw(
-        ctx, gap_kwh=target_kwh - soc_after_pv_kwh, pv_charge_kw=pv_charge_kw, timestep_minutes=timestep_minutes
-    )
+    gap_kwh = target_kwh - soc_after_pv_kwh
+    if not gap_kwh > 0.0:
+        return 0.0
+    return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
 
 
 _TARGET_SOC_FRACTION = FRACTION
@@ -603,13 +616,15 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.  When
-                supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
-                the strategy will grid-charge the battery (via
-                ``compute_grid_charge_power_kw``) provided the battery is not
-                already being discharged, inside ``peak_hours`` too: whether
-                a period is cheap is the caller's classification, which both
-                dispatch paths share, never ``peak_hours``
-                (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
+                supplied, the strategy grid-charges in a cheap period by the
+                power ``compute_grid_charge_power_kw`` gives for
+                ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
+                stored first, so a step that grid-charges ends at or below
+                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
+                the decision discharges.  This holds inside ``peak_hours``
+                too: whether a period is cheap is the caller's
+                classification, which both dispatch paths share, never
+                ``peak_hours`` (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
                 ``None`` (default) means no grid charging: ``grid_charge_kw``
                 is always 0.
 
@@ -655,26 +670,16 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 charge_kw = 0.0
                 discharge_kw = 0.0
 
-        # Grid-charge only while not discharging: DispatchDecision forbids
-        # grid_charge_kw > 0 with discharge_kw > 0.  Passing charge_kw as
-        # pv_charge_power_kw shares max_charge_kw between PV and grid.
-        grid_charge_kw = 0.0
-        if (
-            grid_charge_ctx is not None
-            and grid_charge_ctx.is_cheap_period
-            and discharge_kw == 0.0
-        ):
-            grid_charge_kw = compute_grid_charge_power_kw(
-                grid_charge_ctx,
-                battery_soc_kwh=battery_soc_kwh,
-                pv_charge_power_kw=charge_kw,
-                timestep_minutes=timestep_minutes,
-            )
-
         return DispatchDecision(
             charge_kw=charge_kw,
             discharge_kw=discharge_kw,
-            grid_charge_kw=grid_charge_kw,
+            grid_charge_kw=_grid_charge_kw(
+                grid_charge_ctx,
+                battery_soc_kwh=battery_soc_kwh,
+                charge_kw=charge_kw,
+                discharge_kw=discharge_kw,
+                timestep_minutes=timestep_minutes,
+            ),
         )
 
 
@@ -732,11 +737,14 @@ class PeakShavingStrategy(DispatchStrategy):
                 Battery.effective_capacity_kwh
             timestep_minutes: Duration of timestep in minutes
             grid_charge_ctx: Optional rate-aware grid-charging context.  When
-                supplied and ``grid_charge_ctx.is_cheap_period`` is ``True``,
-                the strategy will grid-charge the battery (via
-                ``compute_grid_charge_power_kw``) provided the battery is not
-                already being discharged to shave a peak.  ``None`` (default)
-                means no grid charging: ``grid_charge_kw`` is always 0.
+                supplied, the strategy grid-charges in a cheap period by the
+                power ``compute_grid_charge_power_kw`` gives for
+                ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
+                stored first, so a step that grid-charges ends at or below
+                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
+                the decision discharges to shave a peak: shaving takes
+                precedence.  ``None`` (default) means no grid charging:
+                ``grid_charge_kw`` is always 0.
 
         Returns:
             DispatchDecision with:
@@ -778,27 +786,16 @@ class PeakShavingStrategy(DispatchStrategy):
             charge_kw = 0.0
             discharge_kw = 0.0
 
-        # Grid-charge only while not shaving a peak, which takes precedence:
-        # DispatchDecision forbids grid_charge_kw > 0 with discharge_kw > 0.
-        # Passing charge_kw as pv_charge_power_kw shares max_charge_kw
-        # between PV and grid.
-        grid_charge_kw = 0.0
-        if (
-            grid_charge_ctx is not None
-            and grid_charge_ctx.is_cheap_period
-            and discharge_kw == 0.0
-        ):
-            grid_charge_kw = compute_grid_charge_power_kw(
-                grid_charge_ctx,
-                battery_soc_kwh=battery_soc_kwh,
-                pv_charge_power_kw=charge_kw,
-                timestep_minutes=timestep_minutes,
-            )
-
         return DispatchDecision(
             charge_kw=charge_kw,
             discharge_kw=discharge_kw,
-            grid_charge_kw=grid_charge_kw,
+            grid_charge_kw=_grid_charge_kw(
+                grid_charge_ctx,
+                battery_soc_kwh=battery_soc_kwh,
+                charge_kw=charge_kw,
+                discharge_kw=discharge_kw,
+                timestep_minutes=timestep_minutes,
+            ),
         )
 
 

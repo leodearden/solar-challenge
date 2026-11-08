@@ -506,7 +506,8 @@ class TestTOUOptimizedStrategyGridCharging:
         """(2) Off-peak excess PV: grid fills remaining headroom after PV charge.
 
         Hand-computed literal: residual_kw = max_charge_kw(3.0) - pv(2.0) = 1.0 kW.
-        gate3 gap_power_kw = (4.5-1.0)/0.95/1.0 ≈ 3.68 kW > residual → residual clamps.
+        post-PV SOC = 1.0 + 2.0 × 1.0 × 0.95 = 2.9 kWh.
+        gate3 gap_power_kw = (4.5-2.9)/0.95/1.0 ≈ 1.68 kW > residual → residual clamps.
         """
         ctx = self._FAVOURABLE_CTX
         decision = standard_tou_strategy.decide_action(
