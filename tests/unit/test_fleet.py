@@ -646,6 +646,15 @@ def _home(name: str, pv_kw: float, location: Location = Location.bristol()) -> H
     return HomeConfig(pv_config=PVConfig(capacity_kw=pv_kw), load_config=_LOAD, location=location, name=name)
 
 
+def _fleets_a_b_c() -> list[FleetConfig]:
+    """Fleets A, B and C of two, one and three homes, named "A 1", "A 2"; "B 1"; "C 1", "C 2", "C 3", with 1 to 6 kW of PV in that order."""
+    return [
+        FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
+        FleetConfig(homes=[_home("B 1", 3.0)], name="B"),
+        FleetConfig(homes=[_home("C 1", 4.0), _home("C 2", 5.0), _home("C 3", 6.0)], name="C"),
+    ]
+
+
 def _assert_marked_results_of(results: FleetResults, fleet: FleetConfig) -> None:
     """Assert *results* pairs *fleet*'s homes, in order, each with the results MarkingHomeSimulator gives it."""
     assert results.home_configs == fleet.homes
@@ -694,11 +703,7 @@ class TestFleetRunnerSimulates:
     def test_each_fleet_comes_once_with_its_homes_results_in_order_and_progress_counts_every_home(
         self, tmp_path: Path, parallel: bool, worker_start_method: str
     ) -> None:
-        fleets = [
-            FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
-            FleetConfig(homes=[_home("B 1", 3.0)], name="B"),
-            FleetConfig(homes=[_home("C 1", 4.0), _home("C 2", 5.0), _home("C 3", 6.0)], name="C"),
-        ]
+        fleets = _fleets_a_b_c()
         runner = FleetRunner(
             weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=parallel, max_workers=2
         )
@@ -711,7 +716,7 @@ class TestFleetRunnerSimulates:
         assert sorted(index for index, _ in each) == [0, 1, 2]
         for index, results in each:
             _assert_marked_results_of(results, fleets[index])
-        assert told[-1] == (6, 6)
+        assert told == [(done, 6) for done in range(1, 7)]
 
     def test_no_fleets_yield_nothing_and_fetch_no_weather(self, tmp_path: Path) -> None:
         weather = _CountingWeather()
@@ -823,6 +828,11 @@ def _uniform_fleet(n_homes: int, name: str) -> FleetConfig:
     return FleetConfig.create_uniform(n_homes=n_homes, pv_config=PVConfig(capacity_kw=4.0), load_config=_LOAD, name=name)
 
 
+def _one_home_then_five() -> list[FleetConfig]:
+    """A fleet "One" of the home "Alone", then _uniform_fleet(5, "Five"): six homes in two fleets, each home named differently."""
+    return [FleetConfig(homes=[_home("Alone", 2.0)], name="One"), _uniform_fleet(5, "Five")]
+
+
 def _raising_at_the_second_home(raised: BaseException) -> HomesDone:
     """A progress sink that raises *raised* when told the second home has finished."""
 
@@ -915,6 +925,63 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         assert len(started(tmp_path)) < len(fleet.homes), (
             "when the second home finished, the one worker had started at most the two finished homes, the home "
             "it took next and the two queued behind that one, so the sixth home was cancelled"
+        )
+
+
+class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
+    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started."""
+
+    def test_in_turn_each_fleet_is_yielded_once_its_last_home_finishes_and_before_a_later_home_starts(
+        self, tmp_path: Path
+    ) -> None:
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False)
+        told: list[tuple[int, int]] = []
+        at_each_fleet: list[tuple[int, list[tuple[int, int]], set[str]]] = []
+
+        for index, _ in runner.simulate_each(
+            _fleets_a_b_c(), *_JUNE_DAYS.window(), progress=lambda done, total: told.append((done, total))
+        ):
+            at_each_fleet.append((index, list(told), set(started(tmp_path))))
+
+        assert at_each_fleet == [
+            (0, [(1, 6), (2, 6)], {"A 1", "A 2"}),
+            (1, [(1, 6), (2, 6), (3, 6)], {"A 1", "A 2", "B 1"}),
+            (2, [(done, 6) for done in range(1, 7)], {"A 1", "A 2", "B 1", "C 1", "C 2", "C 3"}),
+        ]
+
+    def test_in_turn_closing_the_iterator_after_the_first_fleet_does_not_run_the_homes_left(
+        self, tmp_path: Path
+    ) -> None:
+        fleets = _one_home_then_five()
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False)
+        each = runner.simulate_each(fleets, *_JUNE_DAYS.window())
+
+        index, results = next(each)
+        started_when_yielded = set(started(tmp_path))
+        each.close()
+
+        assert index == 0
+        _assert_marked_results_of(results, fleets[0])
+        assert started_when_yielded == {"Alone"}
+        assert set(started(tmp_path)) == started_when_yielded
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_closing_the_iterator_after_the_first_fleet_cancels_the_homes_still_pending(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleets = _one_home_then_five()
+        home_simulator = MarkingHomeSimulator(tmp_path, seconds=0.2)
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=1)
+        each = runner.simulate_each(fleets, *_JUNE_DAYS.window())
+
+        index, results = next(each)
+        each.close()
+
+        assert index == 0
+        _assert_marked_results_of(results, fleets[0])
+        assert len(started(tmp_path)) < sum(len(fleet.homes) for fleet in fleets), (
+            "when the first fleet was yielded, the one worker had started at most its home, the home it took next "
+            "and the two queued behind that one, so the fifth and sixth homes were cancelled"
         )
 
 
