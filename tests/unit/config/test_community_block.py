@@ -70,6 +70,58 @@ class TestCommunityBlockParsing:
             load_community_block({"sharing_mode": "bogus"})
 
     # ------------------------------------------------------------------
+    # community_battery: a grid_charging its dispatch would ignore
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "billing_entry",
+        [
+            pytest.param({}, id="no-billing"),
+            pytest.param({"billing": {"tariff": {"type": "economy_7"}}}, id="billing-tariff"),
+        ],
+    )
+    def test_a_self_consumption_community_battery_that_grid_charges_is_refused(
+        self, load_community_block: LoadCommunityBlock, billing_entry: dict[str, Any]
+    ) -> None:
+        """A community_battery block naming no dispatch_strategy dispatches by self-consumption, which never grid-charges."""
+        block = {
+            "sharing_mode": "community_battery",
+            "community_battery": {"capacity_kwh": 20.0, "grid_charging": {"target_soc_fraction": 0.9}},
+            **billing_entry,
+        }
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_community_block(block)
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "'self_consumption'" in message
+
+    @pytest.mark.parametrize(
+        "billing_entry",
+        [
+            pytest.param({}, id="no-billing"),
+            pytest.param({"billing": {"seg_rate_pence_per_kwh": 4.1}}, id="billing-seg-rate-only"),
+        ],
+    )
+    def test_a_grid_charging_community_battery_without_a_billing_tariff_is_refused(
+        self, load_community_block: LoadCommunityBlock, billing_entry: dict[str, Any]
+    ) -> None:
+        """A peak_shaving community battery grid-charges in a cheap period of the billing tariff, so it needs one."""
+        block = {
+            "sharing_mode": "community_battery",
+            "community_battery": {
+                "capacity_kwh": 20.0,
+                "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 3.0},
+                "grid_charging": {"target_soc_fraction": 0.9},
+            },
+            **billing_entry,
+        }
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_community_block(block)
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "no tariff" in message
+
+    # ------------------------------------------------------------------
     # billing: nested SEG forms
     # ------------------------------------------------------------------
 

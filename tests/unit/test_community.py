@@ -6,7 +6,7 @@ Test classes, in file order:
   - TestValidateCommunityBalance: validate_community_balance
   - TestSimulateCommunityBattery: the community_battery dispatch path
   - TestCommunityBillingTimeOfUse: time-of-use import billing via simulate_community
-  - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community
+  - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community, and the warning a half-specified billing gives
   - TestCommunityResultsSharingMode: sharing_mode carried onto CommunityResults
   - TestCommunityRowLength: the row length simulate_community and compute_community_metrics read from the index's window, and the indexes they refuse
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import pickle
+import warnings
 
 import pandas as pd
 import pytest
@@ -26,6 +27,7 @@ from solar_challenge.community import (
     simulate_community,
     validate_community_balance,
 )
+from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
@@ -121,12 +123,38 @@ def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResu
     return FleetResults(per_home_results=per_home, home_configs=configs)
 
 
+def _community_battery(
+    *,
+    dispatch_strategy: DispatchStrategyConfig | None = None,
+    grid_charging: GridChargeConfig | None = None,
+) -> BatteryConfig:
+    """A 20 kWh community battery with 10 kW power limits, dispatched by *dispatch_strategy*, self-consumption when None."""
+    return BatteryConfig(
+        capacity_kwh=20.0,
+        max_charge_kw=10.0,
+        max_discharge_kw=10.0,
+        dispatch_strategy=dispatch_strategy,
+        grid_charging=grid_charging,
+    )
+
+
+def _grid_charging_peak_shaving_battery() -> BatteryConfig:
+    """A community battery that peak-shaves the import above 3 kW and grid-charges to 0.9 in a cheap period."""
+    return _community_battery(
+        dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9)
+    )
+
+
 # ---------------------------------------------------------------------------
 # TestCommunityConfig
 # ---------------------------------------------------------------------------
 
 class TestCommunityConfig:
-    """CommunityConfig validates its fields, is frozen and survives pickling."""
+    """CommunityConfig validates its fields, refuses a community battery whose dispatch would ignore its grid_charging, is frozen and survives pickling.
+
+    No refused CommunityConfig is built at import: each test builds its own inside
+    pytest.raises, so a refusal fails its own cases and not the module's collection.
+    """
 
     def test_valid_p2p_config(self) -> None:
         """p2p config with no community_battery constructs OK."""
@@ -151,6 +179,58 @@ class TestCommunityConfig:
         """community_battery mode without a battery → ConfigurationError."""
         with pytest.raises(ConfigurationError, match="community_battery"):
             CommunityConfig(sharing_mode="community_battery")
+
+    @pytest.mark.parametrize(
+        "billing",
+        [
+            pytest.param(None, id="no-billing"),
+            pytest.param(CommunityBillingConfig(tariff=TariffConfig.economy_7()), id="billing-tariff"),
+        ],
+    )
+    def test_a_self_consumption_community_battery_that_grid_charges_is_refused(
+        self, billing: CommunityBillingConfig | None
+    ) -> None:
+        """Self-consumption, the dispatch of a battery that names none, never charges from the grid, whatever the billing tariff."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_community_battery(grid_charging=GridChargeConfig(0.9)),
+                billing=billing,
+            )
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "'self_consumption'" in message
+
+    @pytest.mark.parametrize(
+        "billing",
+        [
+            pytest.param(None, id="no-billing"),
+            pytest.param(CommunityBillingConfig(seg_rate_pence_per_kwh=4.1), id="billing-seg-rate-only"),
+        ],
+    )
+    def test_a_grid_charging_community_battery_without_a_billing_tariff_is_refused(
+        self, billing: CommunityBillingConfig | None
+    ) -> None:
+        """Peak shaving charges from the grid in a cheap period of the billing tariff, so with no tariff it never would."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_grid_charging_peak_shaving_battery(),
+                billing=billing,
+            )
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "'peak_shaving'" in message
+        assert "no tariff" in message
+
+    def test_a_grid_charging_peak_shaving_community_battery_with_a_billing_tariff_is_accepted(self) -> None:
+        battery = _grid_charging_peak_shaving_battery()
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=battery,
+            billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+        )
+        assert cfg.community_battery is battery
 
     @pytest.mark.parametrize(
         "value",
@@ -643,6 +723,61 @@ class TestSimulateCommunityBattery:
         assert len(result.battery_soc) == len(index5)
         pd.testing.assert_index_equal(result.grid_import.index, index5)
 
+    # --- the strategy the battery's dispatch_strategy names, at the billing tariff ---
+
+    def test_a_peak_shaving_community_battery_discharges_only_the_import_above_its_limit(self) -> None:
+        """The battery dispatches by the strategy it names; one naming none runs self-consumption, which covers the whole deficit."""
+        evening = pd.date_range("2024-01-15 18:00", periods=3, freq="1min", tz="Europe/London")
+        fleet = _make_fleet(evening, [([0.0] * 3, [5.0] * 3)])
+
+        peak_shaving = simulate_community(
+            fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_community_battery(dispatch_strategy=PeakShavingStrategyConfig(3.0)),
+            ),
+        )
+        default = simulate_community(
+            fleet, CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery())
+        )
+
+        assert peak_shaving.battery_discharge.tolist() == pytest.approx([2.0] * 3, abs=1e-9)
+        assert peak_shaving.grid_import.tolist() == pytest.approx([3.0] * 3, abs=1e-9)
+        assert default.battery_discharge.tolist() == pytest.approx([5.0] * 3, abs=1e-9)
+        assert default.grid_import.tolist() == pytest.approx([0.0] * 3, abs=1e-9)
+
+    def test_a_grid_charging_community_battery_charges_from_the_grid_in_the_billing_tariffs_cheap_period(
+        self,
+    ) -> None:
+        """01:00 is in Economy 7's off-peak period, so a battery that grid-charges draws on the grid beyond the 1 kW deficit.
+
+        A battery naming no strategy discharges into the deficit under the same billing instead. Each
+        simulate_community call validates the community balance, as validate_balance defaults to True.
+        """
+        night = pd.date_range("2024-01-15 01:00", periods=3, freq="1min", tz="Europe/London")
+        fleet = _make_fleet(night, [([0.0] * 3, [1.0] * 3)])
+        billing = CommunityBillingConfig(tariff=TariffConfig.economy_7(), seg_rate_pence_per_kwh=4.1)
+
+        grid_charging = simulate_community(
+            fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_grid_charging_peak_shaving_battery(),
+                billing=billing,
+            ),
+        )
+        default = simulate_community(
+            fleet,
+            CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery(), billing=billing),
+        )
+
+        assert (grid_charging.battery_charge > 0).all(), grid_charging.battery_charge.tolist()
+        assert (grid_charging.grid_import > 1.0).all(), grid_charging.grid_import.tolist()
+        soc = grid_charging.battery_soc
+        assert soc.iloc[0] < soc.iloc[1] < soc.iloc[2], soc.tolist()
+        assert (default.battery_discharge > 0).all(), default.battery_discharge.tolist()
+        assert default.grid_import.tolist() == pytest.approx([0.0] * 3, abs=1e-9)
+
 
 # ---------------------------------------------------------------------------
 # TestCommunityBillingTimeOfUse
@@ -693,7 +828,12 @@ class TestCommunityBillingSavings:
 
     savings = 0.954 - (-0.082) = 1.036 ✓
     Also: savings == 4kWh * (0.30 - 0.041) = 4 * 0.259 = 1.036 ✓
+
+    A billing block missing either input prices nothing and warns once, naming the
+    missing inputs and the three fields that stay None.
     """
+
+    _COMPLETE_BILLING = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.1)
 
     @pytest.fixture
     def billing_idx(self) -> pd.DatetimeIndex:
@@ -712,11 +852,7 @@ class TestCommunityBillingSavings:
 
     @pytest.fixture
     def billing_cfg(self) -> CommunityConfig:
-        billing = CommunityBillingConfig(
-            tariff=FlatRateTariff(0.30),
-            seg_rate_pence_per_kwh=4.1,
-        )
-        return CommunityConfig(sharing_mode="p2p", billing=billing)
+        return CommunityConfig(sharing_mode="p2p", billing=self._COMPLETE_BILLING)
 
     def test_baseline_net_cost(
         self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
@@ -767,27 +903,84 @@ class TestCommunityBillingSavings:
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
 
-    def test_partial_billing_tariff_only_fields_are_none(
-        self, billing_fleet: FleetResults
+    @pytest.mark.parametrize(
+        ("billing", "unset", "set_"),
+        [
+            pytest.param(
+                CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
+                ["billing.seg_rate_pence_per_kwh"],
+                ["billing.tariff"],
+                id="tariff-only",
+            ),
+            pytest.param(
+                CommunityBillingConfig(seg_rate_pence_per_kwh=4.1),
+                ["billing.tariff"],
+                ["billing.seg_rate_pence_per_kwh"],
+                id="seg-rate-only",
+            ),
+            pytest.param(
+                CommunityBillingConfig(),
+                ["billing.tariff", "billing.seg_rate_pence_per_kwh"],
+                [],
+                id="neither",
+            ),
+        ],
+    )
+    def test_a_half_specified_billing_warns_once_naming_what_is_unset_and_the_fields_that_stay_none(
+        self,
+        billing_fleet: FleetResults,
+        billing: CommunityBillingConfig,
+        unset: list[str],
+        set_: list[str],
     ) -> None:
-        """All three fields stay None when billing has tariff but no seg_rate."""
-        partial_billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30))
-        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
-        cr = simulate_community(billing_fleet, cfg)
+        """The warning names each unset input and no set one, and is attributed to simulate_community's caller."""
+        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cr = simulate_community(billing_fleet, cfg)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) == 1, [str(w.message) for w in caught]
+        (warning,) = user_warnings
+        message = str(warning.message)
+        assert all(name in message for name in unset), message
+        assert not any(name in message for name in set_), message
+        assert "baseline_net_cost_gbp" in message
+        assert "community_net_cost_gbp" in message
+        assert "community_savings_gbp" in message
+        assert warning.filename == __file__
         assert cr.baseline_net_cost_gbp is None
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
 
-    def test_partial_billing_seg_only_fields_are_none(
+    @pytest.mark.parametrize(
+        "billing", [pytest.param(_COMPLETE_BILLING, id="complete"), pytest.param(None, id="absent")]
+    )
+    def test_complete_or_absent_billing_does_not_warn(
+        self, billing_fleet: FleetResults, billing: CommunityBillingConfig | None
+    ) -> None:
+        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            simulate_community(billing_fleet, cfg)
+
+        assert [str(w.message) for w in caught if issubclass(w.category, UserWarning)] == []
+
+    def test_a_half_specified_billing_warns_once_and_the_community_battery_still_dispatches(
         self, billing_fleet: FleetResults
     ) -> None:
-        """All three fields stay None when billing has seg_rate but no tariff."""
-        partial_billing = CommunityBillingConfig(seg_rate_pence_per_kwh=4.1)
-        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
-        cr = simulate_community(billing_fleet, cfg)
-        assert cr.baseline_net_cost_gbp is None
-        assert cr.community_net_cost_gbp is None
-        assert cr.community_savings_gbp is None
+        """A tariff-only billing is a valid dispatch config: the battery stores the 1 kW the fleet nets to."""
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=_community_battery(),
+            billing=CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cr = simulate_community(billing_fleet, cfg)
+
+        assert len([w for w in caught if issubclass(w.category, UserWarning)]) == 1, [str(w.message) for w in caught]
+        assert (cr.battery_charge > 0).all(), cr.battery_charge.tolist()
 
 
 # ---------------------------------------------------------------------------

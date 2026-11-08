@@ -4,7 +4,11 @@ Tests the full stack:
   - output.generate_community_report (fast, unit-like)
   - scenarios/bristol-community.yaml contract
   - `fleet run` CLI wiring with community section + report
+  - `fleet run` refusing a community block before it simulates any home
   - End-to-end pipeline A/B (community on vs off) with injected weather
+  - The community battery's dispatch over the scenario's fleet, simulated on the
+    committed Bristol TMY: the strategy its dispatch_strategy names, at the
+    billing tariff
 """
 
 from __future__ import annotations
@@ -15,8 +19,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 from typer.testing import CliRunner, Result
 
+import solar_challenge.cli.fleet as _cli_fleet_module
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.community import (
@@ -27,12 +33,16 @@ from solar_challenge.community import (
     validate_community_balance,
 )
 from solar_challenge.config import load_community_config, load_fleet_config
-from solar_challenge.fleet import FleetResults
+from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
+from solar_challenge.fleet import FleetResults, FleetRunner
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import FlatRateTariff
+from solar_challenge.tariff import FlatRateTariff, TariffConfig
+from solar_challenge.weather import PrefetchedWeather
+from tests._committed_weather_cache import committed_bristol_tmy
+from tests._fleet_runner import MarkingHomeSimulator, started
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
@@ -561,6 +571,78 @@ class TestCommunityPipelineAB:
 
 
 # ---------------------------------------------------------------------------
+# TestCommunityBatteryDispatchOnTheScenarioFleet
+# ---------------------------------------------------------------------------
+
+class TestCommunityBatteryDispatchOnTheScenarioFleet:
+    """The community battery dispatches by the strategy its dispatch_strategy names, at the billing tariff, over bristol-community.yaml's six homes on 2024-01-15.
+
+    The homes are simulated on the committed Bristol TMY, so the run is offline. The bounds are
+    relative, never golden kWh, so a change to the PV model moves none of them: the grid-charge
+    target bounds the SOC the night's charge reaches, and each run is compared with the
+    scenario's own on the same fleet.
+    """
+
+    _END_OF_OFF_PEAK = pd.Timestamp("2024-01-15 07:29", tz="Europe/London")
+    """The last minute of Economy 7's off-peak period, 00:30 to 07:30."""
+
+    @pytest.fixture(scope="class")
+    def fleet(self) -> FleetResults:
+        """The scenario's six homes simulated over 2024-01-15 in their timezone, each on the committed Bristol TMY, read once."""
+        homes = load_fleet_config(SCENARIO).homes
+        tmy = committed_bristol_tmy()
+        day = pd.Timestamp("2024-01-15", tz=homes[0].location.timezone)
+        results = [simulate_home(home, day, day, weather=weather_for(home, tmy)) for home in homes]
+        return FleetResults(per_home_results=results, home_configs=list(homes))
+
+    @pytest.fixture
+    def scenario_config(self) -> CommunityConfig:
+        """The scenario's community block: a 20 kWh battery naming no strategy, billed on a flat tariff with a SEG rate."""
+        config = load_community_config(SCENARIO)
+        assert config is not None
+        return config
+
+    def test_a_grid_charging_peak_shaving_battery_charges_overnight_in_the_billing_tariffs_off_peak(
+        self, fleet: FleetResults, scenario_config: CommunityConfig
+    ) -> None:
+        battery = scenario_config.community_battery
+        billing = scenario_config.billing
+        assert battery is not None and billing is not None
+        grid_charging = dataclasses.replace(
+            scenario_config,
+            community_battery=dataclasses.replace(
+                battery, dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9)
+            ),
+            billing=dataclasses.replace(billing, tariff=TariffConfig.economy_7()),
+        )
+
+        cr = simulate_community(fleet, grid_charging)
+
+        assert cr.battery_soc.loc[self._END_OF_OFF_PEAK] >= 0.85 * battery.capacity_kwh
+        scenario_import_kwh = compute_community_metrics(simulate_community(fleet, scenario_config)).community_import_kwh
+        assert compute_community_metrics(cr).community_import_kwh > scenario_import_kwh
+        assert validate_community_balance(fleet, cr) is True
+
+    def test_the_billing_tariff_leaves_a_battery_naming_no_strategy_dispatching_as_without_billing(
+        self, fleet: FleetResults, scenario_config: CommunityConfig
+    ) -> None:
+        """A battery naming no strategy runs self-consumption, which reads no tariff.
+
+        Without billing the battery is dispatched by self-consumption with no tariff, as it was before
+        it dispatched through build_dispatch_strategy, so the two runs' flows match.
+        """
+        billed = simulate_community(fleet, scenario_config)
+        unbilled = simulate_community(fleet, dataclasses.replace(scenario_config, billing=None))
+
+        pd.testing.assert_series_equal(billed.grid_import, unbilled.grid_import)
+        pd.testing.assert_series_equal(billed.grid_export, unbilled.grid_export)
+        pd.testing.assert_series_equal(billed.battery_charge, unbilled.battery_charge)
+        pd.testing.assert_series_equal(billed.battery_discharge, unbilled.battery_discharge)
+        pd.testing.assert_series_equal(billed.battery_soc, unbilled.battery_soc)
+        assert billed.community_savings_gbp is not None
+
+
+# ---------------------------------------------------------------------------
 # TestCommunityBillingReport
 # ---------------------------------------------------------------------------
 
@@ -720,8 +802,21 @@ class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
     Covers the _print_community_section billing rows and the
-    --community-report billing section.
+    --community-report billing section, and the warning a billing block
+    missing its SEG rate gives.
     """
+
+    def test_a_billing_block_without_its_seg_rate_warns_naming_it(self, tmp_path: Path) -> None:
+        """fleet run on the scenario with no billing SEG rate warns, naming the setting, and still runs."""
+        scenario = yaml.safe_load(SCENARIO.read_text())
+        del scenario["community"]["billing"]["seg_rate_pence_per_kwh"]
+        without_seg_rate = tmp_path / "bristol-community-without-a-seg-rate.yaml"
+        without_seg_rate.write_text(yaml.safe_dump(scenario))
+
+        with pytest.warns(UserWarning, match=r"billing\.seg_rate_pence_per_kwh"):
+            result = _fleet_run_in_process(without_seg_rate, "--start", "2024-06-21", "--end", "2024-06-21")
+
+        assert result.exit_code == 0, result.output
 
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
         """Written --community-report contains 'Community Billing' and 'Savings'."""
@@ -773,6 +868,59 @@ class TestFleetRunCommunityBillingCLI:
         assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
             f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestFleetRunRefusesTheCommunityBlockBeforeSimulating
+# ---------------------------------------------------------------------------
+
+class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
+    """`fleet run` reads the community: block before it simulates, so a block it refuses costs no simulation.
+
+    The CLI's default_runner is replaced with a FleetRunner whose home simulator marks each
+    home it starts, on the committed Bristol TMY, so the runs are offline and need no seeded
+    weather cache. monkeypatch.setattr fails if the CLI no longer binds default_runner.
+    """
+
+    @pytest.fixture
+    def marker_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """The directory where the home simulator of each `fleet run` in the test marks each home it starts."""
+        marker_dir = tmp_path / "started"
+        marker_dir.mkdir()
+        weather = PrefetchedWeather({load_fleet_config(SCENARIO).homes[0].location: committed_bristol_tmy()})
+        monkeypatch.setattr(
+            _cli_fleet_module,
+            "default_runner",
+            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir), parallel=False),
+        )
+        return marker_dir
+
+    def test_a_refused_community_block_exits_before_any_home_is_simulated(
+        self, tmp_path: Path, marker_dir: Path
+    ) -> None:
+        """The scenario's community battery names no strategy, so self-consumption refuses the grid_charging added to it."""
+        scenario = yaml.safe_load(SCENARIO.read_text())
+        scenario["community"]["community_battery"]["grid_charging"] = {"target_soc_fraction": 0.9}
+        refused = tmp_path / "bristol-community-grid-charging-under-self-consumption.yaml"
+        refused.write_text(yaml.safe_dump(scenario))
+
+        result = _fleet_run_in_process(refused, "--start", "2024-01-15", "--end", "2024-01-15")
+
+        assert result.exit_code == 1, result.output
+        assert "Configuration error" in result.output
+        assert "grid_charging" in result.output
+        assert "self_consumption" in result.output
+        assert "Simulating fleet" not in result.output
+        assert started(marker_dir) == {}
+
+    def test_the_injected_simulator_is_the_one_fleet_run_runs(self, marker_dir: Path) -> None:
+        """The positive control, without which the test above could pass on a simulator `fleet run` never calls.
+
+        It asserts only on the marks: the simulator's stand-in results need not suit the rest of the run.
+        """
+        _fleet_run_in_process(SCENARIO, "--start", "2024-01-15", "--end", "2024-01-15")
+
+        assert set(started(marker_dir)) == {home.name for home in load_fleet_config(SCENARIO).homes}
 
 
 # ---------------------------------------------------------------------------

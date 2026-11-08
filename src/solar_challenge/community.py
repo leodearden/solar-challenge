@@ -10,13 +10,14 @@ COMMUNITY-BALANCE invariant that :func:`validate_community_balance` checks.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional
 
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import SelfConsumptionStrategy
+from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
@@ -38,12 +39,14 @@ class CommunityBillingConfig:
 
     :func:`simulate_community` prices the community's grid flows only when both
     are set; otherwise the result's ``baseline_net_cost_gbp``,
-    ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
+    ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``, and
+    it warns, naming each one unset.
 
     Attributes
     ----------
     tariff:
-        Community import tariff configuration.
+        Community import tariff configuration; the community battery also
+        dispatches by it.
     seg_rate_pence_per_kwh:
         Smart Export Guarantee rate in pence per kWh, a finite number of at
         least 0, or ``None``.
@@ -55,6 +58,32 @@ class CommunityBillingConfig:
     def __post_init__(self) -> None:
         """Read a set seg_rate_pence_per_kwh as a finite number of at least 0, holding the float read; None stays None."""
         read_field(self, "seg_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
+
+
+# ---------------------------------------------------------------------------
+# _billing_tariff, _battery_strategy
+# ---------------------------------------------------------------------------
+
+def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | None:
+    """The community's one tariff, billing's: the community battery dispatches by it, and it prices the grid flows."""
+    return None if billing is None else billing.tariff
+
+
+def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | None) -> DispatchStrategy:
+    """The strategy the community battery's dispatch_strategy names, self-consumption when it names none, built for its grid_charging at the billing tariff.
+
+    Raises
+    ------
+    ConfigurationError
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses the
+        battery's grid_charging, which the strategy would ignore; its refusal
+        propagates unchanged.
+    """
+    return build_dispatch_strategy(
+        battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+        grid_charging=battery.grid_charging,
+        tariff=_billing_tariff(billing),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +106,18 @@ class CommunityConfig:
     billing:
         The community's import tariff and SEG rate, for pricing its grid
         flows; ``None`` (default) skips billing.
+
+    Raises
+    ------
+    ConfigurationError
+        If sharing_mode is neither ``"p2p"`` nor ``"community_battery"``; if
+        a ``"p2p"`` config has a community_battery, or a
+        ``"community_battery"`` config has none; or if the community
+        battery's dispatch would ignore its grid_charging, as
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses it:
+        the strategy its dispatch_strategy names, self-consumption when it
+        names none, does not charge from the grid, or billing names no tariff
+        to find a cheap period in.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -84,7 +125,7 @@ class CommunityConfig:
     billing: Optional[CommunityBillingConfig] = None
 
     def __post_init__(self) -> None:
-        """Refuse an unknown sharing mode, or a community battery the mode does not take, raising ConfigurationError."""
+        """Refuse an unknown sharing mode, a community battery the mode does not take, or a community battery whose dispatch would ignore its grid_charging, raising ConfigurationError."""
         if self.sharing_mode not in ("p2p", "community_battery"):
             raise ConfigurationError.must_be("sharing_mode", "'p2p' or 'community_battery'", got=self.sharing_mode)
         if self.sharing_mode == "p2p" and self.community_battery is not None:
@@ -97,6 +138,8 @@ class CommunityConfig:
                 "sharing_mode='community_battery' requires a community_battery config; "
                 "provide a BatteryConfig or switch to sharing_mode='p2p'."
             )
+        if self.community_battery is not None:
+            _battery_strategy(self.community_battery, self.billing)
 
 
 # ---------------------------------------------------------------------------
@@ -138,10 +181,26 @@ class CommunityResults:
     fleet_results: "FleetResults"
     sharing_mode: Literal["p2p", "community_battery"]
     # Billing fields populated by simulate_community when config.billing is
-    # fully specified (both tariff and seg_rate_pence_per_kwh present).
+    # fully specified (both tariff and seg_rate_pence_per_kwh present); None
+    # otherwise, and a config.billing missing either one warns.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
     community_savings_gbp: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# _unset_billing_inputs
+# ---------------------------------------------------------------------------
+
+def _unset_billing_inputs(billing: CommunityBillingConfig | None) -> tuple[str, ...]:
+    """The dotted names of billing's unset pricing inputs, billing.tariff before billing.seg_rate_pence_per_kwh; none when billing is None or sets both."""
+    if billing is None:
+        return ()
+    inputs = (
+        ("billing.tariff", billing.tariff),
+        ("billing.seg_rate_pence_per_kwh", billing.seg_rate_pence_per_kwh),
+    )
+    return tuple(name for name, value in inputs if value is None)
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +281,10 @@ def simulate_community(
         A shared :class:`~solar_challenge.battery.Battery` is instantiated once
         and each net surplus/deficit step, the fleet window's ``step_minutes``
         long, is dispatched in order via
-        :func:`~solar_challenge.flow.simulate_timestep` with
-        :class:`~solar_challenge.dispatch.SelfConsumptionStrategy`.  The
+        :func:`~solar_challenge.flow.simulate_timestep` with the strategy the
+        battery's ``dispatch_strategy`` names, self-consumption when it names
+        none, built by :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
+        and with ``billing.tariff`` as the step's tariff.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
         dividing by the fleet window's ``step_hours``.
@@ -245,6 +306,14 @@ def simulate_community(
     Returns
     -------
     CommunityResults
+
+    Warns
+    -----
+    UserWarning
+        If ``config.billing`` is set but its ``tariff`` or
+        ``seg_rate_pence_per_kwh`` is not, naming each one unset: no grid flow
+        is priced, and the result's ``baseline_net_cost_gbp``,
+        ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
 
     Raises
     ------
@@ -283,7 +352,8 @@ def simulate_community(
         # Community battery dispatch — sequential because SOC is stateful.
         # Like each home's battery, it starts at the midpoint of its usable SOC window.
         battery = Battery(cb_config)
-        strategy = SelfConsumptionStrategy()
+        strategy = _battery_strategy(cb_config, config.billing)
+        tariff = _billing_tariff(config.billing)
 
         # Pre-extract arrays to avoid repeated label-based .loc[t] hash lookups
         # and redundant pd.Timestamp construction inside the hot loop
@@ -309,6 +379,7 @@ def simulate_community(
                 timestep_minutes=step_minutes,
                 timestamp=t.to_pydatetime(),
                 strategy=strategy,
+                tariff=tariff,
             )
             if validate_balance:
                 validate_energy_balance(r)
@@ -332,6 +403,17 @@ def simulate_community(
     # --- Virtual-net-metering billing: baseline vs community net cost ---
     # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
     # always receives non-None arguments (keeps it total / no None branches).
+    # A billing block missing either one prices nothing and warns, naming it.
+    unset_billing_inputs = _unset_billing_inputs(config.billing)
+    if unset_billing_inputs:
+        unset = " and ".join(unset_billing_inputs)
+        warnings.warn(
+            f"{unset} {'is' if len(unset_billing_inputs) == 1 else 'are'} not set, so simulate_community "
+            "prices no grid flow and baseline_net_cost_gbp, community_net_cost_gbp and community_savings_gbp "
+            f"stay None; set {unset} to price the grid flows",
+            UserWarning,
+            stacklevel=2,
+        )
     billing = config.billing
     if (
         billing is not None
