@@ -920,16 +920,18 @@ class TestWiredDcCapacity:
             pytest.param(default_module, "STC", -400.0, id="STC-negative"),
             pytest.param(default_module, "STC", math.nan, id="STC-nan"),
             pytest.param(default_module, "STC", "400.428", id="STC-text"),
+            pytest.param(pvwatts_300_w_module, "pdc0", True, id="pdc0-bool"),
+            pytest.param(pvwatts_300_w_module, "pdc0", np.True_, id="pdc0-numpy-bool"),
         ],
     )
     def test_a_rating_that_is_not_a_finite_number_above_0_is_refused_at_construction_and_at_use(
         self,
         build: Callable[[], dict[str, float]],
         key: str,
-        value: float | str,
+        value: float | str | np.bool_,
         module_efficiency: float | None,
     ) -> None:
-        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as the module's own rating, since pvlib reads the module's own pdc0."""
+        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as the module's own rating, since pvlib reads the module's own pdc0; so is a boolean, Python's or numpy's, though float() reads it as 1.0 or 0.0."""
         module = build()
         config = PVConfig(
             capacity_kw=4.0, custom_module_params=module, module_efficiency=module_efficiency
@@ -939,6 +941,24 @@ class TestWiredDcCapacity:
         message = one_refusal_at_construction_and_at_use(config)
         assert key in re.findall(r"\w+", message), message
         assert repr(value) in message, message
+
+    @pytest.mark.parametrize(
+        "rating",
+        [
+            pytest.param(300, id="int"),
+            pytest.param(np.int64(300), id="numpy-int64"),
+            pytest.param(np.float32(300.0), id="numpy-float32"),
+        ],
+    )
+    def test_a_python_or_numpy_number_rating_is_read_as_its_number(
+        self, rating: int | np.int64 | np.float32
+    ) -> None:
+        """A rating read from a numpy or pandas source is a numpy scalar, so any real number, Python's or numpy's, rates the module, not only a Python float."""
+        config = PVConfig(
+            capacity_kw=4.0, custom_module_params={**pvwatts_300_w_module(), "pdc0": rating}
+        )
+
+        assert wired_dc_capacity_kw(config) == pytest.approx(3.9)
 
     @pytest.mark.parametrize(
         "module",
