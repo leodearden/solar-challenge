@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Optional, TypeAlias
 
+import numpy as np
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
@@ -457,106 +458,182 @@ GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesE
 # ---------------------------------------------------------------------------
 
 
+def _home_event_days(
+    sim: "SimulationResults",
+    battery_config: BatteryConfig,
+    floor_kwh: float,
+    window: EventWindow,
+    baseline: DeliveryBaseline,
+) -> pd.DataFrame:
+    """One battery home's firm spare capacity on each of its event days in *window* under *baseline*: column avail_kw (kW), indexed by date in date order.
+
+    The formulas are :func:`compute_fleet_spare_capacity_kw`'s.  A home whose index
+    the window never enters has no event day: the frame is empty.
+    """
+    index = sim.battery_soc.index
+    rows = np.flatnonzero(window.mask(index).to_numpy())
+    above_floor = sim.battery_soc.to_numpy(dtype=float) - floor_kwh
+    days = (
+        pd.DataFrame(
+            {
+                "above_floor": above_floor[rows],
+                "discharge": sim.battery_discharge.to_numpy(dtype=float)[rows],
+                "row": rows,
+            }
+        )
+        .groupby(index[rows].date)
+        .agg(
+            min_above_floor=("above_floor", "min"),
+            max_discharge=("discharge", "max"),
+            first_row=("row", "min"),
+        )
+    )
+    match baseline:
+        case DeliveryBaseline.OPERATIONAL:
+            headroom_kw = battery_config.max_discharge_kw - days["max_discharge"].to_numpy()
+            energy_kwh = days["min_above_floor"].to_numpy()
+        case DeliveryBaseline.CAPACITY:
+            headroom_kw = np.full(len(days), battery_config.max_discharge_kw)
+            energy_kwh = above_floor[days["first_row"].to_numpy()]
+    avail_kw = np.maximum(0.0, np.minimum(headroom_kw, energy_kwh / window.event_hours))
+    return pd.DataFrame({"avail_kw": avail_kw}, index=days.index)
+
+
 @dataclass(frozen=True)
-class _WindowSpareCapacity:
-    """One event window's firm spare capacity over a fleet's battery homes.
+class _EventDayTotals:
+    """One event window's fleet totals on each of its event days, in date order.
+
+    The event days are the union of the battery homes' event dates in the window; a
+    home lacking a date adds 0 to it.
 
     Attributes:
         window: The event window.
-        observed: Whether some battery home's simulated index enters the window.
-        avail_kw: Firm spare dispatchable capacity (kW), summed over the battery
-            homes whose index enters the window; 0.0 when none does.
+        avail_kw: The fleet's firm spare capacity on each event day, A(d) (kW).
     """
 
     window: EventWindow
-    observed: bool
-    avail_kw: float
+    avail_kw: tuple[float, ...]
+
+    @classmethod
+    def of_homes(cls, window: EventWindow, home_days: list[pd.DataFrame]) -> "_EventDayTotals":
+        """Sum *home_days*, each one home's figures per event date, over the homes on the sorted union of their dates."""
+        if not home_days:
+            return cls(window=window, avail_kw=())
+        fleet_days = pd.concat(home_days).groupby(level=0).sum()
+        return cls(window=window, avail_kw=tuple(fleet_days["avail_kw"].tolist()))
+
+    @property
+    def observed(self) -> bool:
+        """Whether the window has an event day: some battery home's simulated index enters it."""
+        return bool(self.avail_kw)
+
+    @property
+    def mean_avail_kw(self) -> float:
+        """The mean of A(d) over the event days, the capacity the pricing books (kW); 0.0 with no event day."""
+        return sum(self.avail_kw) / len(self.avail_kw) if self.avail_kw else 0.0
+
+    def avail_on_share_of_days_kw(self, percent: int) -> float:
+        """The capacity available on at least *percent* % of the event days (kW): the ⌈percent·n / 100⌉-th largest of the n values of A(d); 0.0 with no event day.
+
+        The rank is computed in whole numbers, so no rounding of percent·n / 100 can
+        move it; an interpolated percentile is never taken.
+        """
+        if not self.avail_kw:
+            return 0.0
+        rank = -(-percent * len(self.avail_kw) // 100)
+        return sorted(self.avail_kw, reverse=True)[rank - 1]
 
 
-def _spare_capacity_per_window(
+def _event_day_totals(
     battery_homes: list[tuple["SimulationResults", BatteryConfig]],
     windows: tuple[EventWindow, ...],
-) -> tuple[_WindowSpareCapacity, ...]:
-    """Each of *windows*' firm spare capacity over *battery_homes*, in window order.
+    baseline: DeliveryBaseline,
+) -> tuple[_EventDayTotals, ...]:
+    """Each of *windows*' fleet totals per event day over *battery_homes* under *baseline*, in window order.
 
-    The formula is :func:`compute_fleet_spare_capacity_kw`'s.
+    The formulas are :func:`compute_fleet_spare_capacity_kw`'s.
     """
     # A battery's SOC floor depends on its configuration alone: computed once, not per window.
     floors = [
         (sim, battery_config, Battery(battery_config).min_soc_kwh)
         for sim, battery_config in battery_homes
     ]
-    capacities: list[_WindowSpareCapacity] = []
-    for window in windows:
-        total = 0.0
-        observed = False
-        for sim, battery_config, min_soc_kwh in floors:
-            mask = window.mask(sim.battery_soc.index)
-            # A home whose index the window never enters adds nothing; reducing its
-            # empty in-window Series would give NaN.
-            if not bool(mask.any()):
-                continue
-            observed = True
-            soc_w = sim.battery_soc[mask]
-            dis_w = sim.battery_discharge[mask]
-            p_spare = battery_config.max_discharge_kw - float(dis_w.max())
-            e_spare = float((soc_w - min_soc_kwh).min())
-            total += max(0.0, min(p_spare, e_spare / window.event_hours))
-        capacities.append(
-            _WindowSpareCapacity(window=window, observed=observed, avail_kw=float(total))
+    return tuple(
+        _EventDayTotals.of_homes(
+            window,
+            [
+                _home_event_days(sim, battery_config, floor_kwh, window, baseline)
+                for sim, battery_config, floor_kwh in floors
+            ],
         )
-    return tuple(capacities)
+        for window in windows
+    )
 
 
 def compute_fleet_spare_capacity_kw(
     fleet_results: "FleetResults",
     windows: tuple["EventWindow", ...],
+    delivery_baseline: str = "operational",
 ) -> tuple[float, ...]:
-    """Compute firm spare dispatchable battery capacity (kW) per event window.
+    """Compute firm spare dispatchable battery capacity (kW) per event window: the mean over its event days of the fleet's daily firm spare capacity.
 
-    For each event window, sums across the fleet the firm spare battery
-    capacity derived solely from observable per-timestep SOC and net discharge
-    series — no purpose-attribution of the underlying dispatch is required.
+    The capacity is derived solely from observable per-timestep SOC and net
+    discharge series — no purpose-attribution of the underlying dispatch is
+    required.  An event day of window *w* is a calendar date, in the home's index's
+    own timezone, holding at least one of *w*'s timesteps.
 
-    **Formula** (per battery home, per window *w*):
+    **Formula** (per battery home, per event day *d* of window *w*, with
+    ``P = max_discharge_kw``, ``floor = Battery(battery_config).min_soc_kwh`` and
+    ``h = w.event_hours``):
 
     .. code-block:: text
 
-        mask      = w.mask(sim.battery_soc.index)        # in-window bool Series
-        P_spare   = max_discharge_kw - max_{t in w}(battery_discharge)
-        E_spare   = min_{t in w}(battery_soc - min_soc_kwh)
-        avail(h)  = max(0.0, min(P_spare, E_spare / w.event_hours))
-        avail(w)  = Σ_h avail(h)
+        operational:  avail(home, d) = max(0, min(P − max_{t∈d∩w} discharge(t),
+                                                  min_{t∈d∩w}(soc(t) − floor) / h))
+        capacity:     avail(home, d) = max(0, min(P, (soc(t₀) − floor) / h)),
+                      t₀ the first timestep of d in w
+        A(d)        = Σ_home avail(home, d)
+        avail(w)    = mean over w's event days d of A(d)
 
-    The single ``max(0, min(P_spare, E_spare/event_hours))`` expression
-    satisfies:
+    *delivery_baseline* chooses the formula: ``"operational"`` counts the increment
+    above the battery's own discharge, as NESO's DFS measures delivery;
+    ``"capacity"`` counts the battery's whole window discharge, as NGED baselines
+    domestic storage (:class:`DeliveryBaseline`).
 
-    * **I1** — result is always ≥ 0 (the outer ``max(0,...)`` ensures this).
-    * **I2** — firmness: avail ≤ P_spare (inverter headroom throughout the
-      window) and ≤ E_spare / event_hours (energy deliverable throughout the
-      window without violating the SOC floor).
+    On every event day the ``max(0, min(...))`` expression satisfies:
 
-    **Skips** (handled transparently — contribute 0 to the sum):
+    * **I1** — the capacity is ≥ 0.
+    * **I2** — firmness: it is within that day's inverter headroom throughout the
+      window and within that day's energy above the floor over ``event_hours``.
+
+    **Skips** (contribute 0):
 
     * Homes with ``battery_config is None`` (PV-only homes in a heterogeneous
       fleet) — skipped entirely; they have no battery to dispatch.
-    * Windows absent from a home's index (``mask.any()`` is False) — skipped
-      to avoid reducing an empty Series (which would produce NaN).
+    * A date a home's index lacks — the home adds 0 to that date's A(d).  A window
+      no home's index enters has no event day and gives 0.0.
 
     Args:
         fleet_results: Simulation results for the fleet.  Accessed via
             ``fleet_results.per_home_results`` and ``fleet_results.home_configs``.
         windows: Tuple of :class:`EventWindow` objects; order is preserved in
             the output.
+        delivery_baseline: How an event's delivery is measured, a
+            :class:`DeliveryBaseline` value: ``"operational"`` (the default) or
+            ``"capacity"``.
 
     Returns:
         A :class:`tuple` of :class:`float` with one entry per window (in input
-        order).  Each value is the total firm spare dispatchable capacity in kW
-        across the fleet for that window.
+        order): the mean over the window's event days of the fleet's daily firm
+        spare capacity, in kW.
+
+    Raises:
+        ConfigurationError: If *delivery_baseline* is not a baseline (a ValueError).
     """
+    baseline = DeliveryBaseline.parse(delivery_baseline, what="delivery_baseline")
     return tuple(
-        capacity.avail_kw
-        for capacity in _spare_capacity_per_window(_battery_homes(fleet_results), windows)
+        totals.mean_avail_kw
+        for totals in _event_day_totals(_battery_homes(fleet_results), windows, baseline)
     )
 
 
@@ -576,13 +653,20 @@ class GridServicesAtEvents:
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event
             windows (£/year).  Equals ``sum(per_window_income_gbp)``.
-        per_window_avail_kw: Per-window firm spare dispatchable capacity (kW),
-            in the same order as the :attr:`GridServicesEventsConfig.event_windows`
-            tuple: the figures :func:`compute_fleet_spare_capacity_kw` gives
-            for the same fleet and windows.
+        per_window_avail_kw: Per-window firm spare dispatchable capacity (kW):
+            the mean over the window's event days of the fleet's daily total, in
+            the same order as the :attr:`GridServicesEventsConfig.event_windows`
+            tuple; the figures :func:`compute_fleet_spare_capacity_kw` gives for
+            the same fleet, windows and delivery baseline.
         per_window_income_gbp: Per-window net income (£), in window order.
             Each entry is the net (post-aggregator-share) availability +
             utilisation income for that window.
+        per_window_avail_p50_kw: Per-window capacity available on at least 50%
+            of event days (kW), in window order: the ⌈0.5·n⌉-th largest of the
+            window's n fleet daily totals; 0.0 for a window with no event day.
+        per_window_avail_p90_kw: Per-window capacity available on at least 90%
+            of event days (kW), in window order: the ⌈0.9·n⌉-th largest fleet
+            daily total; 0.0 for a window with no event day.
 
     .. note::
         ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
@@ -594,6 +678,8 @@ class GridServicesAtEvents:
     annual_income_gbp: float
     per_window_avail_kw: tuple[float, ...]
     per_window_income_gbp: tuple[float, ...]
+    per_window_avail_p50_kw: tuple[float, ...] = ()
+    per_window_avail_p90_kw: tuple[float, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -603,16 +689,16 @@ class GridServicesAtEvents:
 
 def _warn_unobserved_windows(
     battery_homes: list[tuple["SimulationResults", BatteryConfig]],
-    capacities: tuple[_WindowSpareCapacity, ...],
+    per_window: tuple[_EventDayTotals, ...],
 ) -> None:
-    """Issue one UserWarning for each window of *capacities* that no battery home's simulated index enters.
+    """Issue one UserWarning for each window of *per_window* that no battery home's simulated index enters.
 
     Such a window contributes £0.  A fleet without a battery home has nothing to
     observe and does not warn.  The warning is attributed to the caller of
     :func:`compute_grid_services_at_events`, and its text names only the window
     and the span of the battery homes' indices.
     """
-    unobserved = [capacity.window for capacity in capacities if not capacity.observed]
+    unobserved = [totals.window for totals in per_window if not totals.observed]
     if not battery_homes or not unobserved:
         return
     first = min(sim.battery_soc.index.min() for sim, _ in battery_homes)
@@ -634,8 +720,9 @@ def compute_grid_services_at_events(
     """Compute banded availability + utilisation income from grid-services events.
 
     Applies the capacity-at-events pricing formula per event window using the
-    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` and
-    the rates from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
+    firm spare capacity from :func:`compute_fleet_spare_capacity_kw` under
+    *cfg.delivery_baseline* (the mean over the window's event days) and the rates
+    from :data:`GRID_SERVICES_RATE_BANDS` (resolved via *cfg.band*).
 
     **Rate resolution** (override precedence):
 
@@ -677,10 +764,15 @@ def compute_grid_services_at_events(
         - ``per_window_avail_kw`` — firm spare capacity per window (from :func:`compute_fleet_spare_capacity_kw`).
         - ``per_window_income_gbp`` — net income per window (in window order).
         - ``annual_income_gbp`` — sum of per-window net income.
+        - ``per_window_avail_p50_kw`` and ``per_window_avail_p90_kw`` — the
+          capacity available on at least 50% and 90% of each window's event days.
     """
     battery_homes = _battery_homes(fleet_results)
-    capacities = _spare_capacity_per_window(battery_homes, cfg.event_windows)
-    _warn_unobserved_windows(battery_homes, capacities)
+    baseline = DeliveryBaseline.parse(
+        cfg.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline"
+    )
+    per_window = _event_day_totals(battery_homes, cfg.event_windows, baseline)
+    _warn_unobserved_windows(battery_homes, per_window)
     band = resolve_grid_services_rate_band(cfg.band)
 
     # Override precedence: use cfg field if explicitly set, else fall back to band.
@@ -696,8 +788,8 @@ def compute_grid_services_at_events(
     )
 
     per_window_net: list[float] = []
-    for capacity in capacities:
-        window, avail = capacity.window, capacity.avail_kw
+    for totals in per_window:
+        window, avail = totals.window, totals.mean_avail_kw
         avail_income = avail * avail_rate * window.events_per_year
         util_income = (
             avail
@@ -711,6 +803,8 @@ def compute_grid_services_at_events(
 
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
-        per_window_avail_kw=tuple(capacity.avail_kw for capacity in capacities),
+        per_window_avail_kw=tuple(totals.mean_avail_kw for totals in per_window),
         per_window_income_gbp=tuple(per_window_net),
+        per_window_avail_p50_kw=tuple(totals.avail_on_share_of_days_kw(50) for totals in per_window),
+        per_window_avail_p90_kw=tuple(totals.avail_on_share_of_days_kw(90) for totals in per_window),
     )
