@@ -1732,6 +1732,35 @@ class TestFirmCapacityPerEventDay:
         assert result.per_window_avail_p90_kw == pytest.approx((1.0,))
 
 
+class TestOnlyTheBreakdownReadsTheStepLength:
+    """The capacity and the income need no step length; the breakdown reads one to report the displaced self-use's energy.
+
+    One default 5 kWh home at 3.5 kWh discharging 0.5 kW, its index 16:00, 17:00,
+    17:30 and 19:00 on Monday 2 December 2024: its rows are not evenly spaced, so
+    SimulationResults.window refuses it.
+    """
+
+    @staticmethod
+    def _unevenly_spaced_fleet() -> FleetResults:
+        index = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 17:30", "2024-12-02 19:00"],
+            tz="Europe/London",
+        )
+        sim = _make_gs_sim_results([3.5] * len(index), [0.5] * len(index), index)
+        return _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+
+    def test_the_capacity_and_the_income_read_no_step_length(self) -> None:
+        """min(2.5 − 0.5, (3.5 − 0.5) / 3) = 1.0 kW on its one event day, priced at £9.972 per kW."""
+        fleet = self._unevenly_spaced_fleet()
+
+        assert compute_fleet_spare_capacity_kw(fleet, DEFAULT_EVENT_WINDOWS) == pytest.approx((1.0,))
+        assert GridServicesEventsConfig().annual_income_gbp(fleet) == pytest.approx(9.972)
+
+    def test_the_breakdown_refuses_an_index_with_no_step_length(self) -> None:
+        with pytest.raises(ValueError, match="evenly spaced"):
+            compute_grid_services_at_events(self._unevenly_spaced_fleet(), GridServicesEventsConfig())
+
+
 # ---------------------------------------------------------------------------
 # The displaced evening self-use is reported beside the income, never netted (PRD §9 P8; §5.9 C10)
 # ---------------------------------------------------------------------------
