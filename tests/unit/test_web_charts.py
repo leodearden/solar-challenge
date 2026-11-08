@@ -617,6 +617,14 @@ class TestComparisonCharts:
         assert [trace["theta"] for trace in traces(figure)] == [_closed([*_THREE_RATIO_AXES, _PV_STORED_AXIS])] * 2
         assert annotation_texts(figure) == []
 
+    def test_the_radar_of_two_fleet_runs_draws_their_three_ratios_and_one_note_naming_both(self) -> None:
+        runs = [_compared("Fleet A", _b11_fleet()), _compared("Fleet B", _b11_fleet())]
+
+        figure = comparison_radar(runs).content
+
+        assert [trace["theta"] for trace in traces(figure)] == [_closed(_THREE_RATIO_AXES)] * 2
+        assert annotation_texts(figure) == ["PV stored in battery % is left out: no figure for Fleet A, Fleet B"]
+
     def test_the_pv_stored_axis_of_a_grid_charging_home_counts_only_the_pv_its_battery_stored(self) -> None:
         """B11: the axis once counted the battery's whole charge, grid charge included, as its share of the generation."""
         summary = _summary_of_the_arbitrage_home_on_a_clear_21_june()
