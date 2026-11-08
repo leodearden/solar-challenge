@@ -371,6 +371,20 @@ class TestWeatherCache:
         with pytest.raises(ValueError, match=re.escape(str(entry))):
             cache.get("tmy", bristol)
 
+    def test_a_refusal_says_to_invalidate_the_entry_after_which_get_misses(self, cache, bristol):
+        """get's refusal of an entry file it cannot read names WeatherCache.invalidate as a way to remove the entry;
+        once invalidate has removed it, get finds no entry, so its caller fetches the entry afresh."""
+        cache.put(_SYNTHETIC_JUNE_DAY, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
+
+        with pytest.raises(ValueError) as refusal:
+            cache.get("tmy", bristol)
+
+        assert "WeatherCache.invalidate" in str(refusal.value)
+        assert cache.invalidate("tmy", bristol) is True
+        assert cache.get("tmy", bristol) is None
+
     @pytest.mark.parametrize(
         "tz",
         [

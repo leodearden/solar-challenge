@@ -239,11 +239,11 @@ class WeatherCache:
             The cached DataFrame, or None if not found
 
         Raises:
-            ValueError: Naming the entry's file, if its first line does not seal the rest, as when the file was cut
-                short or changed after put wrote it, or if what it seals is not in the form put writes: a header
-                holding anything but a timezone and a frequency, each a str or null, a timezone str that names
-                none, which put refuses to record, rows that are no CSV of instants, or rows not on the header's
-                frequency
+            ValueError: Naming the entry's file and how to remove it, if its first line does not seal the rest, as
+                when the file was cut short or changed after put wrote it, or if what it seals is not in the form
+                put writes: a header holding anything but a timezone and a frequency, each a str or null, a
+                timezone str that names none, which put refuses to record, rows that are no CSV of instants, or
+                rows not on the header's frequency
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
@@ -252,7 +252,10 @@ class WeatherCache:
         except FileNotFoundError:
             return None
         except ValueError as e:
-            raise ValueError(f"Cannot read the weather cache entry {cache_file}: {e}") from e
+            raise ValueError(
+                f"Cannot read the weather cache entry {cache_file}: {e}. Delete the file, or call "
+                "WeatherCache.invalidate for the entry, to have it fetched afresh"
+            ) from e
 
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
@@ -261,7 +264,8 @@ class WeatherCache:
 
         A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
         never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
-        as it was.
+        as it was. The new file is flushed to disk before it replaces the entry, so that a crash of the machine
+        cannot leave the entry's file empty or cut short either.
 
         Args:
             data: DataFrame to cache
@@ -284,6 +288,8 @@ class WeatherCache:
         with _staged_beside(cache_file) as staged:
             with open(staged, "w", encoding="utf-8", newline="") as file:
                 _write_entry(file, {"timezone": tz_str, "freq": freq_str}, data)
+                file.flush()
+                os.fsync(file.fileno())
             os.replace(staged, cache_file)
 
     def clear(self) -> int:
