@@ -851,12 +851,13 @@ capacity (`tests/unit/test_gridservices.py::TestFirmCapacityPerEventDay`).
 
 **Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
 the capacity available on at least 50% and on at least 90% of event days: the
-⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9. It is not an
-interpolated percentile: on daily totals (1.0, 2.0) kW the 90% figure is 1.0 kW,
-where numpy's linear 10th percentile, 1.1 kW, is available on only half the
-days. The 90% figure never exceeds the 50% figure. For a fleet whose homes share
-one simulated index, as `simulate_fleet`'s do, the season minimum, the 0.5.0
-tag's figure, never exceeds the 90% figure either (same test class).
+⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9, the rank
+rounded up, never to the nearest. It is not an interpolated percentile: on daily
+totals (1.0, 2.0) kW the 90% figure is 1.0 kW, where numpy's linear 10th
+percentile, 1.1 kW, is available on only half the days. The 90% figure never
+exceeds the 50% figure. For a fleet whose homes share one simulated index, as
+`simulate_fleet`'s do, the season minimum, the 0.5.0 tag's figure, never exceeds
+the 90% figure either (`tests/unit/test_gridservices.py::TestReliabilityRank`).
 
 **The energy ceiling.** A 5 kWh battery charged to 90% holds 4.0 kWh above its
 0.5 kWh floor: 1.33 kW over a 3 h event, against the 2.5 kW of discharge power

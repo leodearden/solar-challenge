@@ -1679,15 +1679,31 @@ class TestFirmCapacityPerEventDay:
         ) == pytest.approx((1.5,))
 
     def test_the_breakdown_books_the_mean_and_reports_the_reliability_capacities(self) -> None:
-        """p50 is the 1st largest of the 2 daily totals and p90 the 2nd (⌈0.9 × 2⌉), not numpy's interpolated 1.1; C9 orders them above the season minimum."""
+        """p50 is the 1st largest of the 2 daily totals and p90 the 2nd (⌈0.9 × 2⌉), not numpy's interpolated 1.1."""
         result = compute_grid_services_at_events(_two_event_day_fleet(), GridServicesEventsConfig())
 
         assert result.per_window_avail_kw == pytest.approx((1.5,))
         assert result.per_window_avail_p50_kw == pytest.approx((2.0,))
         assert result.per_window_avail_p90_kw == pytest.approx((1.0,))
         assert result.annual_income_gbp == pytest.approx(1.5 * 9.972)
-        season_minimum_kw = 1.0
-        assert season_minimum_kw <= result.per_window_avail_p90_kw[0] <= result.per_window_avail_p50_kw[0]
+
+    def test_an_event_day_is_a_date_on_the_index_s_own_clock(self) -> None:
+        """A June window at 00:00-01:59 BST, 23:00-00:59 UTC: one home at 2.5 kWh through 3 June's window and 4.5 kWh through 4 June's gives 1.0 and 2.0 kW over h = 2 h, mean 1.5.
+
+        Grouped by UTC date the same rows would make three event days, 1.0, 1.0 and
+        2.0 kW, mean 4/3.
+        """
+        index = pd.date_range("2024-06-03 00:00", "2024-06-04 23:00", freq="1h", tz="Europe/London")
+        after_midnight = EventWindow(
+            months=(6,), weekdays=(0, 1, 2, 3, 4, 5, 6), hours=(0, 1), events_per_year=12, event_hours=2.0
+        )
+        soc = pd.Series(3.5, index=index)
+        soc.loc[(index.day == 3) & (index.hour < 2)] = 2.5
+        soc.loc[(index.day == 4) & (index.hour < 2)] = 4.5
+        sim = _make_gs_sim_results(soc.tolist(), [0.0] * len(index), index)
+        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+
+        assert compute_fleet_spare_capacity_kw(fleet, (after_midnight,)) == pytest.approx((1.5,))
 
     def test_the_capacity_baseline_counts_the_whole_window_discharge(self) -> None:
         """Capacity: avail(home, d) = max(0, min(P, (soc(16:00) − floor) / h)) = min(2.5, 3.0 / 3) = 1.0 on each home-day; the own discharge is not subtracted and A's floor minute is after 16:00."""
@@ -1730,6 +1746,66 @@ class TestFirmCapacityPerEventDay:
         assert result.per_window_avail_kw == pytest.approx((1.5,))
         assert result.per_window_avail_p50_kw == pytest.approx((2.0,))
         assert result.per_window_avail_p90_kw == pytest.approx((1.0,))
+
+
+_EVERY_DAY_AT_FIVE_PM = EventWindow(
+    months=tuple(range(1, 13)), weekdays=tuple(range(7)), hours=(17,), events_per_year=12, event_hours=1.0
+)
+
+
+def _daily_capacity_fleet(per_home_avail_kw: list[list[float]]) -> FleetResults:
+    """Default 5 kWh homes sharing one hourly index from Monday 1 January 2024, a day per value, nothing charging or discharging.
+
+    Each home sits at 3.5 kWh except at 17:00 on day d, when it holds its 0.5 kWh
+    floor plus its list's d-th value: under _EVERY_DAY_AT_FIVE_PM (h = 1 h) that
+    value is its firm capacity on day d.
+    """
+    index = pd.date_range(
+        "2024-01-01", periods=24 * len(per_home_avail_kw[0]), freq="1h", tz="Europe/London"
+    )
+    homes = []
+    for avail_kw in per_home_avail_kw:
+        soc = pd.Series(3.5, index=index)
+        soc.loc[index.hour == 17] = [0.5 + kw for kw in avail_kw]
+        sim = _make_gs_sim_results(soc.tolist(), [0.0] * len(index), index)
+        homes.append((sim, _make_gs_home_config(BatteryConfig.default_5kwh())))
+    return _make_gs_fleet_results(homes)
+
+
+class TestReliabilityRank:
+    """The capacity available on at least q of the n event days is the ⌈q·n⌉-th largest of the fleet's daily totals, never a rounded rank or an interpolated percentile."""
+
+    def test_the_rank_rounds_up(self) -> None:
+        """Daily totals 1.0, 0.5, 1.5, 0.75 and 1.25 kW.
+
+        50% takes the ⌈2.5⌉ = 3rd largest, 1.0, where round(2.5) = 2 takes 1.25.
+        90% takes the ⌈4.5⌉ = 5th, 0.5, where round(4.5) = 4 takes 0.75 and numpy's
+        interpolated 10th percentile is 0.6.
+        """
+        result = compute_grid_services_at_events(
+            _daily_capacity_fleet([[1.0, 0.5, 1.5, 0.75, 1.25]]),
+            GridServicesEventsConfig(event_windows=(_EVERY_DAY_AT_FIVE_PM,)),
+        )
+
+        assert result.per_window_avail_kw == pytest.approx((1.0,))
+        assert result.per_window_avail_p50_kw == pytest.approx((1.0,))
+        assert result.per_window_avail_p90_kw == pytest.approx((0.5,))
+
+    def test_c9_the_season_minimum_never_exceeds_the_90_percent_capacity(self) -> None:
+        """Two homes whose low days differ, so the fleet's daily totals are 1.25, 1.5, 2.0, 2.0 and 2.0 kW.
+
+        The 0.5.0 tag's season minimum takes each home's least capacity over the
+        season, on a shared index its least daily figure: 0.5 + 0.25 = 0.75 kW.
+        """
+        per_home_avail_kw = [[1.0, 0.5, 1.5, 0.75, 1.25], [0.25, 1.0, 0.5, 1.25, 0.75]]
+        season_minimum_kw = sum(min(avail_kw) for avail_kw in per_home_avail_kw)
+
+        result = compute_grid_services_at_events(
+            _daily_capacity_fleet(per_home_avail_kw),
+            GridServicesEventsConfig(event_windows=(_EVERY_DAY_AT_FIVE_PM,)),
+        )
+
+        assert season_minimum_kw <= result.per_window_avail_p90_kw[0] <= result.per_window_avail_p50_kw[0]
 
 
 class TestOnlyTheBreakdownReadsTheStepLength:
