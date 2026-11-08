@@ -4,6 +4,7 @@
 import concurrent.futures
 import os
 import threading
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -70,6 +71,14 @@ def test_started_read_while_other_threads_re_mark_the_homes_sees_each_marker_who
     assert sorted(path.name for path in tmp_path.iterdir()) == sorted(f"{home.name}.json" for home in homes)
 
 
+def _started_once_a_home_is_marked(marker_dir: Path, *, within: float) -> dict[str, HomeStart]:
+    """started(*marker_dir*) as soon as it names a home, polling it, or once *within* seconds pass with none, whichever comes first."""
+    deadline = time.monotonic() + within
+    while not (starts := started(marker_dir)) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return starts
+
+
 def test_a_home_named_in_held_until_is_marked_then_waits_until_its_release_exists(tmp_path: Path) -> None:
     release = tmp_path / "release"
     simulator = MarkingHomeSimulator(tmp_path, held_until={"Held": release})
@@ -78,11 +87,12 @@ def test_a_home_named_in_held_until_is_marked_then_waits_until_its_release_exist
         held = holding.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
         with pytest.raises(concurrent.futures.TimeoutError):
             held.result(timeout=0.2)
+        marked_while_held = set(_started_once_a_home_is_marked(tmp_path, within=10))
         release.touch()
         results = held.result(timeout=10)
 
+    assert marked_while_held == {"Held"}
     assert calculate_summary(results).total_self_consumption_kwh == pytest.approx(4.0)
-    assert set(started(tmp_path)) == {"Held"}
 
 
 def test_a_home_whose_release_never_appears_raises_timeout_error_naming_it_and_its_release(tmp_path: Path) -> None:
