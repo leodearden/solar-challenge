@@ -79,10 +79,13 @@ def make_balanced_sim_results(
 
 def make_balanced_fleet(
     index: pd.DatetimeIndex,
-    homes: Sequence[tuple[Sequence[float], Sequence[float]]],
+    per_home_generation_and_demand: Sequence[tuple[Sequence[float], Sequence[float]]],
 ) -> FleetResults:
-    """A fleet of make_balanced_sim_results' results on *index* for each home's (generation, demand),
-    paired in order with a default make_home_config home."""
+    """A fleet of make_balanced_sim_results' results on *index*, one home for each (generation, demand)
+    pair of *per_home_generation_and_demand*, paired in order with a default make_home_config home."""
     return make_fleet_results_of(
-        [make_balanced_sim_results(index, generation, demand) for generation, demand in homes]
+        [
+            make_balanced_sim_results(index, generation, demand)
+            for generation, demand in per_home_generation_and_demand
+        ]
     )

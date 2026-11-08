@@ -117,12 +117,15 @@ def test_a_series_of_another_length_than_the_index_is_refused_naming_it(name: st
 
 
 def test_fleet_pairs_each_homes_results_in_order_with_a_default_home() -> None:
-    homes = [([3.0, 5.0, 0.0, 1.0], [1.0, 1.0, 2.0, 1.0]), ([0.0, 1.0, 4.0, 2.0], [2.0, 0.5, 1.0, 2.0])]
+    per_home_generation_and_demand = [
+        ([3.0, 5.0, 0.0, 1.0], [1.0, 1.0, 2.0, 1.0]),
+        ([0.0, 1.0, 4.0, 2.0], [2.0, 0.5, 1.0, 2.0]),
+    ]
 
-    fleet = make_balanced_fleet(_FOUR_MINUTES, homes)
+    fleet = make_balanced_fleet(_FOUR_MINUTES, per_home_generation_and_demand)
 
     assert len(fleet) == 2
-    for i, (generation, demand) in enumerate(homes):
+    for i, (generation, demand) in enumerate(per_home_generation_and_demand):
         alone = make_balanced_sim_results(_FOUR_MINUTES, generation, demand)
         pd.testing.assert_series_equal(fleet[i].generation, alone.generation)
         pd.testing.assert_series_equal(fleet[i].demand, alone.demand)
