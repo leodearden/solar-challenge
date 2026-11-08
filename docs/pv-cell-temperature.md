@@ -106,8 +106,9 @@ This is a dated record. Re-measure before relying on it.
   - Bristol's TMY comes through `get_tmy_data` from the weather cache: key
     `tmy_f8a4df0259c4` (key version 2), GHI 1069.46 kWh/m², scaled to PVGIS v5_3's
     2005–2020 mean ([tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)). Task 1134
-    commits that entry as `tests/fixtures/weather_cache/tmy_f8a4df0259c4.csv`; it
-    equalled PVGIS's live response on 2026-10-25.
+    committed that entry, and task 815 rewrote it, frame unchanged, as key version 3's one
+    file `tests/fixtures/weather_cache/tmy_28dd93105658.csv`; it equalled PVGIS's live
+    response on 2026-10-25.
     `tests/integration/test_pvgis.py::TestPVGISTMY::test_the_committed_bristol_tmy_equals_the_live_one`,
     which the offline lane's `pvgis` job runs after every merge, fails once the entry no
     longer does (task 1139).

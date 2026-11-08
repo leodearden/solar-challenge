@@ -43,7 +43,7 @@ def committed_bristol_tmy(*, cache_dir: Path = COMMITTED_WEATHER_CACHE_DIR) -> p
     if tmy is None:
         pytest.fail(
             f"WeatherCache reads no Bristol TMY entry in {cache_dir}, as after a change to WeatherCache's keys. "
-            f"{REWRITE_THE_COMMITTED_BRISTOL_TMY}, delete the old entry's two files, and re-measure as "
+            f"{REWRITE_THE_COMMITTED_BRISTOL_TMY}, delete the old entry, and re-measure as "
             "docs/pv-cell-temperature.md §3 records"
         )
     return tmy
