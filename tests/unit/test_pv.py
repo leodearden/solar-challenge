@@ -4,6 +4,7 @@ import dataclasses
 import math
 import re
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -72,7 +73,13 @@ def _assert_wires_the_default_cec_row(system: pvlib.pvsystem.PVSystem) -> None:
 
 
 class TestCECLibraryReuse:
-    """The CEC module and inverter libraries are parsed once, and each system gets its own parameters."""
+    """The CEC module and inverter libraries are parsed once and never copied, and each system gets its own parameters."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_library_shapes(cls) -> set[tuple[int, ...]]:
+        """The shapes of pvlib's CEC module and inverter libraries, read once for this class's tests."""
+        return {pvlib.pvsystem.retrieve_sam(library).shape for library in ("CECMod", "CECInverter")}
 
     def test_sam_libraries_are_read_at_most_once_across_systems(self, monkeypatch):
         reads = []
@@ -89,6 +96,40 @@ class TestCECLibraryReuse:
 
         assert reads.count("CECMod") <= 1, f"SAM library reads: {reads}"
         assert reads.count("CECInverter") <= 1, f"SAM library reads: {reads}"
+
+    @pytest.mark.parametrize(
+        "read_rows",
+        [
+            pytest.param(lambda: cec_module_params(DEFAULT_CEC_MODULE), id="cec_module_params"),
+            pytest.param(lambda: create_pv_system(PVConfig(capacity_kw=4.0)), id="a-default-system"),
+            pytest.param(
+                lambda: create_pv_system(
+                    PVConfig(capacity_kw=4.0, custom_module_params=pvwatts_300_w_module())
+                ),
+                id="a-module-without-T_NOCT-or-A_c",
+            ),
+        ],
+    )
+    def test_reading_library_rows_copies_no_library_frame(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        cec_library_shapes: set[tuple[int, ...]],
+        read_rows: Callable[[], object],
+    ) -> None:
+        """Once the libraries are parsed and cached, reading their rows copies no frame of a library's shape."""
+        read_rows()
+        copied_shapes: list[tuple[int, ...]] = []
+        real_copy = pd.DataFrame.copy
+
+        def recording_copy(frame: pd.DataFrame, *args: Any, **kwargs: Any) -> pd.DataFrame:
+            copied_shapes.append(frame.shape)
+            return real_copy(frame, *args, **kwargs)
+
+        monkeypatch.setattr(pd.DataFrame, "copy", recording_copy)
+
+        read_rows()
+
+        assert cec_library_shapes.isdisjoint(copied_shapes), f"frames copied: {copied_shapes}"
 
     def test_customised_system_leaves_later_default_systems_unchanged(self) -> None:
         create_pv_system(

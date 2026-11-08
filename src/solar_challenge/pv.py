@@ -214,13 +214,13 @@ class PVConfig:
 
 @functools.cache
 def _shared_sam_library(name: str) -> pd.DataFrame:
-    """pvlib's parsed SAM parameter library `name`, read once per process and shared by every _sam_library call."""
+    """pvlib's parsed SAM parameter library `name`, read once per process and shared by every reader.
+
+    No reader edits it, and none gives a caller a view of it: what leaves it is
+    values the caller owns, such as _cec_library_row's dict or the frozen
+    CecInverter values usable_cec_inverters builds.
+    """
     return pvlib.pvsystem.retrieve_sam(name)
-
-
-def _sam_library(name: str) -> pd.DataFrame:
-    """SAM parameter library `name` as the caller's own frame: under pandas copy-on-write, its edits never reach the shared one."""
-    return _shared_sam_library(name).copy(deep=False)
 
 
 def _require_cec_library_row(library: str, name: str) -> None:
@@ -232,7 +232,7 @@ def _require_cec_library_row(library: str, name: str) -> None:
 def _cec_library_row(library: str, name: str) -> dict[str, float]:
     """The named row of pvlib's CEC library `library` as parameters of the caller's own, refusing a name with no row there."""
     _require_cec_library_row(library, name)
-    return dict(_sam_library(library)[name])
+    return dict(_shared_sam_library(library)[name])
 
 
 DEFAULT_CEC_MODULE = "Canadian_Solar_Inc__CS1U_400MS"
