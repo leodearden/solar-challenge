@@ -534,8 +534,8 @@ subprojects:
 #     symbol lazily triggers a heavy pvlib import (PEP-562 by design).
 #   - weather.get_tmy_data makes LIVE outbound HTTPS calls to PVGIS at call time — on a
 #     cache miss two, the TMY and the 2005-2020 hourly series — so downstream tests
-#     must inject a WeatherCache mock. Cache files written before task 285 are ignored
-#     (WeatherCache key version 2), so a pre-built cache must be rebuilt with put().
+#     must inject a WeatherCache mock. Cache files written before task 815 are ignored
+#     (WeatherCache key version 3), so a pre-built cache must be rebuilt with put().
 #   - FlatRateTariff is a CamelCase FACTORY FUNCTION, not a class (a documented gotcha).
 #   - Two TariffPeriod symbols: tariff.TariffPeriod (dataclass) vs dispatch.TariffPeriod
 #     (enum, re-exported as DispatchTariffPeriod). Easy to import the wrong one.
