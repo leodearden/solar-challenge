@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""docs/prds/one-dispatch-engine.md §9 rows 8-12: a decision's powers, and a step's generation and demand, are finite and at least 0, and simulate_timestep refuses a decision that asks for more than its step allows, before the battery moves."""
+"""docs/prds/one-dispatch-engine.md §9 rows 8-12: a decision's powers, and a step's generation and demand, are finite and at least 0, and simulate_timestep refuses a decision that asks for more than its step allows, before the battery moves; no built-in strategy's decision does."""
 
 import dataclasses
 import functools
@@ -7,7 +7,7 @@ import math
 import re
 from collections.abc import Callable
 from datetime import datetime, time, timedelta
-from typing import Optional
+from typing import NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -22,6 +22,7 @@ from solar_challenge.dispatch import (
     PeakShavingStrategy,
     ScheduledChargeStrategy,
     SelfConsumptionStrategy,
+    StepLimits,
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou
@@ -226,6 +227,150 @@ class TestAStepAdmitsADecisionWithinItsLimits:
         assert battery.soc_kwh == pytest.approx(1.0 + battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
 
+_MAX_CHARGE_KW = 2.5
+
+# Task 1362's pair: two powers an ulp apart, whose energies over a minute are equal.
+_POWER_KW = 3.9243814029178457
+_AN_ULP_ABOVE_KW = math.nextafter(_POWER_KW, math.inf)
+
+
+class _Step(NamedTuple):
+    """A step's generation and demand, and the PV excess and shortfall they leave, all in kW."""
+
+    generation_kw: float
+    demand_kw: float
+    excess_kw: float
+    shortfall_kw: float
+
+
+STEPS = [
+    pytest.param(_Step(3.0, 1.0, excess_kw=2.0, shortfall_kw=0.0), id="excess"),
+    pytest.param(_Step(1.0, 3.0, excess_kw=0.0, shortfall_kw=2.0), id="shortfall"),
+    pytest.param(_Step(1.5, 1.5, excess_kw=0.0, shortfall_kw=0.0), id="balanced"),
+    pytest.param(
+        _Step(_POWER_KW, _AN_ULP_ABOVE_KW, excess_kw=0.0, shortfall_kw=4.440892098500626e-16), id="short-by-an-ulp"
+    ),
+    pytest.param(
+        _Step(_AN_ULP_ABOVE_KW, _POWER_KW, excess_kw=4.440892098500626e-16, shortfall_kw=0.0), id="over-by-an-ulp"
+    ),
+    pytest.param(_Step(0.1 + 0.2, 0.3, excess_kw=5.551115123125783e-17, shortfall_kw=0.0), id="0.1+0.2-over-0.3"),
+    pytest.param(_Step(0.0, 2.0, excess_kw=0.0, shortfall_kw=2.0), id="no-pv"),
+    pytest.param(_Step(2.0, 0.0, excess_kw=2.0, shortfall_kw=0.0), id="no-demand"),
+]
+
+
+class TestTheLimitsForAStep:
+    """StepLimits.for_step: a step's PV excess and its shortfall are each the difference of its powers in kW, or 0, even an ulp's difference, and its charge limit is the battery's."""
+
+    @pytest.mark.parametrize("step", STEPS)
+    def test_the_limits_are_the_step_s_excess_shortfall_and_charge_limit(self, step: _Step) -> None:
+        assert StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW) == StepLimits(
+            excess_kw=step.excess_kw, shortfall_kw=step.shortfall_kw, max_charge_kw=_MAX_CHARGE_KW
+        )
+
+
+def _on_2024_01_15_at(hour: int) -> datetime:
+    """*hour* o'clock on 2024-01-15, on London's wall clock."""
+    return datetime(2024, 1, 15, hour, tzinfo=ZoneInfo("Europe/London"))
+
+
+def _scheduled_in(window: ChargeWindow) -> ScheduledChargeStrategy:
+    """A strategy that *window* decides while it is open, on London's wall clock, and self-consumption decides otherwise."""
+    return ScheduledChargeStrategy(SelfConsumptionStrategy(), (window,), ZoneInfo("Europe/London"))
+
+
+_CHARGE_WINDOW_01_TO_05 = ChargeWindow(
+    days="daily",
+    start=time(1, 0),
+    duration=timedelta(hours=4),
+    target_soc_fraction=0.8,
+    allow_discharge=False,
+)
+_DISCHARGE_WINDOW_17_TO_19 = ChargeWindow(
+    days="daily",
+    start=time(17, 0),
+    duration=timedelta(hours=2),
+    target_soc_fraction=0.3,
+    allow_discharge=True,
+)
+
+# Each built-in strategy, at a moment of each of its kinds of decision.
+BUILT_IN_DECIDERS = [
+    pytest.param(SelfConsumptionStrategy(), _on_2024_01_15_at(12), id="self_consumption"),
+    pytest.param(TOUOptimizedStrategy([(16, 20)]), _on_2024_01_15_at(18), id="tou_optimized-peak"),
+    pytest.param(TOUOptimizedStrategy([(16, 20)]), _on_2024_01_15_at(3), id="tou_optimized-off_peak"),
+    pytest.param(PeakShavingStrategy(0.25), _on_2024_01_15_at(18), id="peak_shaving"),
+    pytest.param(
+        _scheduled_in(_DISCHARGE_WINDOW_17_TO_19), _on_2024_01_15_at(18), id="scheduled_charge-discharge_window"
+    ),
+    pytest.param(_scheduled_in(_CHARGE_WINDOW_01_TO_05), _on_2024_01_15_at(3), id="scheduled_charge-charge_window"),
+]
+
+GRID_CHARGE_CONTEXTS = [
+    pytest.param(None, id="no_grid_charging"),
+    pytest.param(
+        GridChargeContext(
+            current_rate=0.1,
+            peak_rate=0.3,
+            is_cheap_period=True,
+            target_soc_kwh=4.5,
+            max_charge_kw=_MAX_CHARGE_KW,
+            round_trip_efficiency=0.95,
+            charge_efficiency=0.975,
+        ),
+        id="cheap_period",
+    ),
+]
+
+
+def _decision(
+    strategy: DispatchStrategy,
+    timestamp: datetime,
+    generation_kw: float,
+    demand_kw: float,
+    grid_charge_ctx: Optional[GridChargeContext] = None,
+) -> DispatchDecision:
+    """*strategy*'s decision at *timestamp* for a minute of *generation_kw* and *demand_kw*, with a 5 kWh battery at 2.5 kWh."""
+    return strategy.decide_action(
+        timestamp=timestamp,
+        generation_kw=generation_kw,
+        demand_kw=demand_kw,
+        battery_soc_kwh=2.5,
+        battery_capacity_kwh=5.0,
+        timestep_minutes=1.0,
+        grid_charge_ctx=grid_charge_ctx,
+    )
+
+
+class TestEveryBuiltInDecisionIsWithinTheLimitsForItsStep:
+    """§9 row 12, a step at a time: each built-in strategy's decision is within StepLimits.for_step's limits for its step, even where its powers are an ulp apart.
+
+    At 2.5 kWh of 5.0, the battery is above the discharge window's target, so that window discharges on a shortfall,
+    and below the charge window's, so that window charges from the grid.
+    """
+
+    @pytest.mark.parametrize("grid_charge_ctx", GRID_CHARGE_CONTEXTS)
+    @pytest.mark.parametrize(("strategy", "timestamp"), BUILT_IN_DECIDERS)
+    @pytest.mark.parametrize("step", STEPS)
+    def test_the_decision_passes_the_limits_for_its_step(
+        self,
+        step: _Step,
+        strategy: DispatchStrategy,
+        timestamp: datetime,
+        grid_charge_ctx: Optional[GridChargeContext],
+    ) -> None:
+        decision = _decision(strategy, timestamp, step.generation_kw, step.demand_kw, grid_charge_ctx)
+        StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW).require_admissible(
+            decision, strategy.name
+        )
+
+    @pytest.mark.parametrize("step", STEPS)
+    def test_self_consumption_asks_for_exactly_the_step_s_excess_or_shortfall(self, step: _Step) -> None:
+        limits = StepLimits.for_step(step.generation_kw, step.demand_kw, max_charge_kw=_MAX_CHARGE_KW)
+        decision = _decision(SelfConsumptionStrategy(), _on_2024_01_15_at(12), step.generation_kw, step.demand_kw)
+        assert decision == DispatchDecision(charge_kw=limits.excess_kw, discharge_kw=limits.shortfall_kw)
+
+
 BUILT_IN_STRATEGIES: dict[str, DispatchStrategy] = {
     "self_consumption": SelfConsumptionStrategy(),
     "tou_optimized": TOUOptimizedStrategy([(16, 20)]),
@@ -233,22 +378,7 @@ BUILT_IN_STRATEGIES: dict[str, DispatchStrategy] = {
     "peak_shaving": PeakShavingStrategy(0.25),
     "scheduled_charge": ScheduledChargeStrategy(
         TOUOptimizedStrategy([(16, 20)]),
-        (
-            ChargeWindow(
-                days="daily",
-                start=time(1, 0),
-                duration=timedelta(hours=4),
-                target_soc_fraction=0.8,
-                allow_discharge=False,
-            ),
-            ChargeWindow(
-                days="daily",
-                start=time(17, 0),
-                duration=timedelta(hours=2),
-                target_soc_fraction=0.3,
-                allow_discharge=True,
-            ),
-        ),
+        (_CHARGE_WINDOW_01_TO_05, _DISCHARGE_WINDOW_17_TO_19),
         ZoneInfo("Europe/London"),
     ),
 }
