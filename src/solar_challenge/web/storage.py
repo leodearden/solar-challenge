@@ -590,6 +590,9 @@ def _row_brought_forward(
     return bring_run_documents_forward(run_type, documents, FIRST_FORMAT_VERSION, to_version)
 
 
+_MAY_BE_NONE = "may_be_none"
+
+
 @dataclass(frozen=True)
 class RunHeadline:
     """The figures the web shows for a run of either kind: its five energy totals, its self-consumption, grid dependency and export ratios, and the share of its generation the battery stored from PV.
@@ -611,12 +614,12 @@ class RunHeadline:
     self_consumption_ratio: float
     grid_dependency_ratio: float
     export_ratio: float
-    pv_stored_share: float | None
+    pv_stored_share: float | None = field(metadata={_MAY_BE_NONE: True})
 
     def __post_init__(self) -> None:
         for figure in fields(self):
             value = getattr(self, figure.name)
-            if figure.name == "pv_stored_share" and value is None:
+            if value is None and figure.metadata.get(_MAY_BE_NONE, False):
                 continue
             _require_finite_number(figure.name, value)
 
@@ -636,12 +639,12 @@ def _is_finite_as_float(number: int | float) -> bool:
 
 
 def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
-    """*kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
+    """RunHeadline's *figure*: *kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
 
     Raises:
-        ValueError: *generation_kwh*, or *kwh*, the energy RunHeadline's *figure* is read from,
-            is not a finite number a float can hold, as _require_finite_number refuses it,
-            before anything is divided.
+        ValueError: *generation_kwh* or *kwh* is not a finite number a float can hold, as
+            _require_finite_number refuses it, naming generation_kwh or *figure*, before anything
+            is divided.
     """
     _require_finite_number("generation_kwh", generation_kwh)
     _require_finite_number(figure, kwh)
@@ -687,7 +690,7 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
                 self_consumption_ratio=summary.fleet_self_consumption_ratio,
                 grid_dependency_ratio=summary.fleet_grid_dependency_ratio,
                 export_ratio=_share_of_generation(
-                    "grid_export_kwh", summary.total_grid_export_kwh, summary.total_generation_kwh
+                    "export_ratio", summary.total_grid_export_kwh, summary.total_generation_kwh
                 ),
                 pv_stored_share=None,
             )

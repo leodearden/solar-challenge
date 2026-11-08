@@ -404,6 +404,26 @@ class TestRunHeadline:
 
         assert headline.pv_stored_share is None
 
+    @pytest.mark.parametrize(
+        "figure",
+        [
+            "generation_kwh",
+            "demand_kwh",
+            "self_consumption_kwh",
+            "grid_import_kwh",
+            "grid_export_kwh",
+            "self_consumption_ratio",
+            "grid_dependency_ratio",
+            "export_ratio",
+        ],
+    )
+    def test_a_headline_with_no_value_for_a_figure_every_run_has_is_refused_naming_it(self, figure: str) -> None:
+        """Only pv_stored_share, which a fleet run has none of, may be None."""
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(run_headline(home_summary()), **{figure: None})
+
+        assert f"{figure} is None" in str(refusal.value)
+
     def test_a_headline_whose_pv_stored_share_is_not_a_finite_number_is_refused_naming_it_and_its_value(self) -> None:
         with pytest.raises(ValueError) as refusal:
             dataclasses.replace(run_headline(home_summary()), pv_stored_share=math.nan)
@@ -442,9 +462,9 @@ class TestRunHeadline:
             ),
             pytest.param(
                 fleet_summary(total_grid_export_kwh=None),
-                "grid_export_kwh",
+                "export_ratio",
                 None,
-                id="fleet-export-null-the-dividend-of-its-export-ratio",
+                id="fleet-export-null-so-its-export-ratio",
             ),
             pytest.param(
                 home_summary(total_battery_charge_kwh=math.inf),
