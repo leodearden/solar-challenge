@@ -189,10 +189,10 @@ class CommunityResults:
 
 
 # ---------------------------------------------------------------------------
-# _grid_flow_prices
+# _grid_flow_prices_or_warn
 # ---------------------------------------------------------------------------
 
-def _grid_flow_prices(billing: CommunityBillingConfig | None) -> tuple[TariffConfig, SEGTariff] | None:
+def _grid_flow_prices_or_warn(billing: CommunityBillingConfig | None) -> tuple[TariffConfig, SEGTariff] | None:
     """The import tariff and SEG tariff billing prices simulate_community's grid flows at; None when billing is None, and None with a UserWarning, attributed to simulate_community's caller, naming each input it leaves unset."""
     if billing is None:
         return None
@@ -410,7 +410,7 @@ def simulate_community(
         )
 
     # --- Virtual-net-metering billing: baseline vs community net cost ---
-    prices = _grid_flow_prices(config.billing)
+    prices = _grid_flow_prices_or_warn(config.billing)
     if prices is not None:
         # Baseline: what the fleet would pay/earn WITHOUT community sharing
         base_imp, base_exp = _price_grid_flows(
