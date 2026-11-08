@@ -480,8 +480,11 @@ def generate_finance_report(
             when provided (and ``flex_band`` is also set), renders a
             "Grid services (capacity-at-events)" sub-section inside the
             flexibility-value block showing the event-derived annual fleet
-            income and per-event available capacity; ``None`` (default)
-            omits it.
+            income, the per-event available capacity, the capacity on 50% and
+            on 90% of event days, and the evening self-use an event displaces,
+            per event and its value per year, each summed over the event
+            windows, with a note that the income is gross of that displaced
+            self-use; ``None`` (default) omits it.
 
     Returns:
         A markdown-formatted finance report string.
@@ -641,14 +644,20 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
 """
         # Optional capacity-at-events sub-section
         if grid_services_at_events is not None:
-            _avail_kw = sum(grid_services_at_events.per_window_avail_kw)
+            events = grid_services_at_events
             report += f"""
 **Grid services (capacity-at-events)**
 
 | Metric | Value |
 |--------|-------|
-| Annual fleet income | £{grid_services_at_events.annual_income_gbp:,.0f} |
-| Per-event available capacity | {_avail_kw:.1f} kW |
+| Annual fleet income | £{events.annual_income_gbp:,.0f} |
+| Per-event available capacity | {sum(events.per_window_avail_kw):.1f} kW |
+| Capacity on 50% of event days | {sum(events.per_window_avail_p50_kw):.1f} kW |
+| Capacity on 90% of event days | {sum(events.per_window_avail_p90_kw):.1f} kW |
+| Evening self-use displaced, per event | {sum(events.per_window_displaced_self_use_kwh_per_event):.1f} kWh |
+| Evening self-use displaced, value per year | £{sum(events.per_window_displaced_import_gbp_per_year):,.0f} |
+
+*The income is gross of the evening self-use an event displaces, which householders then import; it is not netted off.*
 """
 
     return report
