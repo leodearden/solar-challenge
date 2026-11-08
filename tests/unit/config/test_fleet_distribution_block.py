@@ -1094,6 +1094,42 @@ class TestAProportionalToSourceIsDrawnEarlierForEveryHomeThatDrawsIt:
         assert [read(home) for home in homes] == [expected, expected]
 
 
+#: The path of a fleet_distribution: block read inside a scenario file's first scenario.
+_SCENARIO_FLEET_PATH = "scenarios[0].fleet_distribution"
+
+
+class TestAFleetReadAtABlockPathNamesEachKeyItRefusesUnderIt:
+    """A fleet_distribution: block read at a path other than the top level, as a scenario's is, names each key it refuses under that path."""
+
+    @pytest.mark.parametrize(
+        ("sections", "refusal"),
+        [
+            pytest.param(
+                {"pv": {"tilt": 30.0}},
+                f"Missing required keys in {_SCENARIO_FLEET_PATH}.pv: {_SCENARIO_FLEET_PATH}.pv.capacity_kw",
+                id="a required key left out",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0, "tilt": {"type": "weighted_discrete", "values": [30, "35"], "weights": [1, 1]}}},
+                _number_value_refusal(f"{_SCENARIO_FLEET_PATH}.pv.tilt", "35"),
+                id="a string among a number field's values",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": _proportional_to("pv.capacity")}},
+                proportional_source_refusal(
+                    f"{_SCENARIO_FLEET_PATH}.battery.capacity_kwh", "pv.capacity", ["pv.capacity_kw"]
+                ),
+                id="a proportional_to source not drawn earlier for every home",
+            ),
+        ],
+    )
+    def test_the_refusal_names_the_key_under_the_block_path(self, sections: dict[str, Any], refusal: str) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            parse_fleet_distribution_config({"n_homes": 2, **sections}, block_path=_SCENARIO_FLEET_PATH)
+
+        assert str(refused.value) == refusal
+
+
 class TestANullSettingReadsAsAbsent:
     """A setting given null in a fleet's component block reads as the block without it."""
 

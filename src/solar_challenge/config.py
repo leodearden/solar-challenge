@@ -350,7 +350,7 @@ class FleetDistributionConfig:
         _refuse_keys_held_where_no_row_puts_them(self)
         _refuse_required_keys_not_drawn(self)
         _refuse_specs_their_kinds_cannot_draw(self)
-        _refuse_proportional_sources_not_drawn_earlier(self)
+        _refuse_proportional_sources_not_drawn_earlier(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
         _refuse_rounded_counts_with_no_whole_number(self)
@@ -446,8 +446,10 @@ def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> No
         _refuse_a_spec_its_row_cannot_draw(row, spec, _child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
 
 
-def _refuse_proportional_sources_not_drawn_earlier(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a proportional_to's source is not a number or count field drawn earlier for every home that draws the dependent, naming the dependent's path, its source and those it may name, in draw order.
+def _refuse_proportional_sources_not_drawn_earlier(
+    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]], block_path: str
+) -> None:
+    """Refuse the fleet at *block_path* whose *components*, by name, hold a proportional_to whose source is not a number or count field drawn earlier for every home that draws the dependent, naming the dependent's path under *block_path*, its source and those it may name, in draw order.
 
     Those are the number and count fields the components every home has draw before the
     dependent's component in _HOME_DRAW_ORDER, and those the dependent's own component draws
@@ -455,7 +457,6 @@ def _refuse_proportional_sources_not_drawn_earlier(config: FleetDistributionConf
     is never one, even when every home of this fleet has it, so whether a fleet is refused does
     not depend on what it draws.
     """
-    components = _fleet_components(config)
     drawn_for_every_home: list[str] = []
     for name in _HOME_DRAW_ORDER:
         block, component = components[name]
@@ -468,7 +469,7 @@ def _refuse_proportional_sources_not_drawn_earlier(config: FleetDistributionConf
             path, spec = f"{name}.{key}", component.draws[key]
             if isinstance(spec, ProportionalDistribution) and spec.source not in drawn_earlier:
                 raise ConfigurationError(
-                    f"Invalid {_child_path(_FLEET_DISTRIBUTION_PATH, path)} source {spec.source!r}; "
+                    f"Invalid {_child_path(block_path, path)} source {spec.source!r}; "
                     "valid sources: a number or count field drawn earlier for every home that draws it, "
                     f"one of {drawn_earlier!r}"
                 )
@@ -1294,17 +1295,31 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
 )
 
 
+def _components_by_name(
+    *,
+    pv: ComponentDistribution,
+    battery: Optional[ComponentDistribution],
+    load: ComponentDistribution,
+    heat_pump: Optional[ComponentDistribution],
+    ev: Optional[ComponentDistribution],
+) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
+    """Each of a fleet's components by name, with its table and its distribution, None for a component the fleet gives no home."""
+    return {
+        "pv": (PV_BLOCK, pv),
+        "battery": (BATTERY_BLOCK, battery),
+        "load": (LOAD_BLOCK, load),
+        "heat_pump": (HEAT_PUMP_BLOCK, heat_pump),
+        "ev": (EV_BLOCK, ev),
+    }
+
+
 def _fleet_components(
     config: FleetDistributionConfig,
 ) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
-    """Each component of *config* by name, with its table and its distribution, None for a component the fleet gives no home."""
-    return {
-        "pv": (PV_BLOCK, config.pv),
-        "battery": (BATTERY_BLOCK, config.battery),
-        "load": (LOAD_BLOCK, config.load),
-        "heat_pump": (HEAT_PUMP_BLOCK, config.heat_pump),
-        "ev": (EV_BLOCK, config.ev),
-    }
+    """Each component of *config* by name, with its table and its distribution, as _components_by_name pairs them."""
+    return _components_by_name(
+        pv=config.pv, battery=config.battery, load=config.load, heat_pump=config.heat_pump, ev=config.ev
+    )
 
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
@@ -1774,28 +1789,37 @@ _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 def parse_fleet_distribution_config(
     data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
 ) -> FleetDistributionConfig:
-    """Parse a fleet_distribution: block, each component block read by its table's fleet rows."""
+    """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
+
+    A refusal of a component's key names it under *block_path*: one outside its rows, a
+    required one left out, a spec its kind does not draw, and a proportional_to source not
+    drawn earlier for every home that draws the dependent.
+    """
     _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
     if "n_homes" not in data:
         raise ConfigurationError("Fleet distribution config requires 'n_homes'")
     if "pv" not in data:
         raise ConfigurationError("Fleet distribution config requires 'pv' section")
 
+    pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=_child_path(block_path, "pv"))
+    load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=_child_path(block_path, "load"))
+    battery = _parse_optional_component_distribution(
+        BATTERY_BLOCK, data.get("battery"), block_path=_child_path(block_path, "battery")
+    )
+    heat_pump = _parse_optional_component_distribution(
+        HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
+    )
+    ev = _parse_optional_component_distribution(EV_BLOCK, data.get("ev"), block_path=_child_path(block_path, "ev"))
+    _refuse_proportional_sources_not_drawn_earlier(
+        _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
+    )
     return FleetDistributionConfig(
         n_homes=int(data["n_homes"]),
-        pv=_parse_component_distribution(PV_BLOCK, data["pv"], block_path=_child_path(block_path, "pv")),
-        load=_parse_component_distribution(
-            LOAD_BLOCK, data.get("load", {}), block_path=_child_path(block_path, "load")
-        ),
-        battery=_parse_optional_component_distribution(
-            BATTERY_BLOCK, data.get("battery"), block_path=_child_path(block_path, "battery")
-        ),
-        heat_pump=_parse_optional_component_distribution(
-            HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
-        ),
-        ev=_parse_optional_component_distribution(
-            EV_BLOCK, data.get("ev"), block_path=_child_path(block_path, "ev")
-        ),
+        pv=pv,
+        load=load,
+        battery=battery,
+        heat_pump=heat_pump,
+        ev=ev,
         seed=data.get("seed"),
         random_order=data.get("random_order", "default"),
         dispatch_strategy=_read_dispatch_strategy_key(data, block_path=block_path),
