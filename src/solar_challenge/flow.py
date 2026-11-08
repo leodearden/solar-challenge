@@ -336,11 +336,9 @@ def simulate_timestep(
         timestep_minutes=timestep_minutes,
         grid_charge_ctx=grid_charge_ctx,
     )
-    StepLimits(
-        excess_kw=max(0.0, generation_kw - demand_kw),
-        shortfall_kw=max(0.0, demand_kw - generation_kw),
-        max_charge_kw=battery.max_charge_kw,
-    ).require_admissible(decision, strategy.name)
+    StepLimits.for_step(generation_kw, demand_kw, max_charge_kw=battery.max_charge_kw).require_admissible(
+        decision, strategy.name
+    )
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)

@@ -220,6 +220,16 @@ def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
     return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
 
 
+def _step_excess_kw(generation_kw: float, demand_kw: float) -> float:
+    """A step's PV excess in kW: its generation beyond its demand, or 0."""
+    return max(0.0, generation_kw - demand_kw)
+
+
+def _step_shortfall_kw(generation_kw: float, demand_kw: float) -> float:
+    """A step's shortfall in kW: its demand beyond its generation, or 0."""
+    return max(0.0, demand_kw - generation_kw)
+
+
 @dataclass(frozen=True)
 class StepLimits:
     """What one step's decision may ask of the battery, in kW.
@@ -233,6 +243,19 @@ class StepLimits:
     excess_kw: float
     shortfall_kw: float
     max_charge_kw: float
+
+    @classmethod
+    def for_step(cls, generation_kw: float, demand_kw: float, *, max_charge_kw: float) -> "StepLimits":
+        """The limits of a step at generation_kw and demand_kw, for a battery whose charge limit is max_charge_kw.
+
+        Its excess and shortfall are those the built-in strategies decide from, so a decision that asks
+        for all of either is within its limit to the last bit.
+        """
+        return cls(
+            excess_kw=_step_excess_kw(generation_kw, demand_kw),
+            shortfall_kw=_step_shortfall_kw(generation_kw, demand_kw),
+            max_charge_kw=max_charge_kw,
+        )
 
     def require_admissible(self, decision: DispatchDecision, strategy_name: str) -> None:
         """Refuse *decision*, by the strategy named *strategy_name*, if a power is above its limit.
