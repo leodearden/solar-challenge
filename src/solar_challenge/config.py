@@ -2300,6 +2300,7 @@ _GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = Map
     "utilisation_factor": _number,
     "availability_gbp_per_kw_per_event": _number_or_none,
     "utilisation_gbp_per_mwh": _number_or_none,
+    "delivery_baseline": str,
 })
 
 _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
