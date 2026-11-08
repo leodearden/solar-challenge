@@ -65,7 +65,7 @@ class CommunityBillingConfig:
 # ---------------------------------------------------------------------------
 
 def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | None:
-    """The community's one tariff, billing's: the community battery dispatches by it, and it prices the grid flows."""
+    """The community's one tariff, billing's, or None without billing: the community battery dispatches by it and simulate_community prices the grid flows at it (docs/prds/community-dispatch-from-factory.md §6, decision 3)."""
     return None if billing is None else billing.tariff
 
 
@@ -327,6 +327,7 @@ def simulate_community(
     deficit: pd.Series = fleet_results.total_grid_import
     index: pd.DatetimeIndex = surplus.index
     window = SimulationWindow.of_index(index)
+    tariff = _billing_tariff(config.billing)
 
     # Branch on the community battery config; using a local variable so mypy
     # narrows Optional[BatteryConfig] → BatteryConfig for the Battery(...) call.
@@ -353,7 +354,6 @@ def simulate_community(
         # Like each home's battery, it starts at the midpoint of its usable SOC window.
         battery = Battery(cb_config)
         strategy = _battery_strategy(cb_config, config.billing)
-        tariff = _billing_tariff(config.billing)
 
         # Pre-extract arrays to avoid repeated label-based .loc[t] hash lookups
         # and redundant pd.Timestamp construction inside the hot loop
@@ -417,7 +417,7 @@ def simulate_community(
     billing = config.billing
     if (
         billing is not None
-        and billing.tariff is not None
+        and tariff is not None
         and billing.seg_rate_pence_per_kwh is not None
     ):
         seg = SEGTariff(
@@ -429,7 +429,7 @@ def simulate_community(
             window,
             fleet_results.total_grid_import,
             fleet_results.total_grid_export,
-            billing.tariff,
+            tariff,
             seg,
         )
         # Community: what the fleet pays/earns AFTER sharing
@@ -437,7 +437,7 @@ def simulate_community(
             window,
             result.grid_import,
             result.grid_export,
-            billing.tariff,
+            tariff,
             seg,
         )
         result.baseline_net_cost_gbp = base_imp - base_exp
