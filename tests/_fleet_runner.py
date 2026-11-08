@@ -42,6 +42,10 @@ class HomeStart:
 class MarkingHomeSimulator:
     """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, then refuses each home named in *failing*.
 
+    A marker appears at its name, <home name>.json, only once whole: it is written under a temporary
+    name that carries the writer's process id, since two pool workers can mark homes of one name at
+    once, and then renamed.
+
     A home it does not refuse gets make_sim_results(self_kwh=<its PV kW>, days=1), so the
     results total the home's PV kW of self-consumption, which identifies the home.
     """
@@ -55,9 +59,10 @@ class MarkingHomeSimulator:
     ) -> SimulationResults:
         """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results."""
         locations = [location.name for location in weather.frames] if isinstance(weather, PrefetchedWeather) else None
-        (self.marker_dir / f"{config.name}.json").write_text(
-            json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8"
-        )
+        marker = self.marker_dir / f"{config.name}.json"
+        partial = marker.with_name(f"{marker.name}.{os.getpid()}.partial")
+        partial.write_text(json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8")
+        partial.replace(marker)
         time.sleep(self.seconds)
         if config.name in self.failing:
             raise ValueError(f"{config.name} cannot be simulated")
@@ -65,7 +70,11 @@ class MarkingHomeSimulator:
 
 
 def started(marker_dir: Path) -> dict[str, HomeStart]:
-    """Each home a MarkingHomeSimulator over *marker_dir* started, by name, with what it recorded as the home started."""
+    """Each home a MarkingHomeSimulator over *marker_dir* started, by name, with what it recorded as the home started.
+
+    It is safe to call while a MarkingHomeSimulator is still marking homes, in pool workers or other
+    threads, because each marker appears at its name only when whole.
+    """
     starts: dict[str, HomeStart] = {}
     for marker in sorted(marker_dir.glob("*.json")):
         recorded = json.loads(marker.read_text(encoding="utf-8"))
