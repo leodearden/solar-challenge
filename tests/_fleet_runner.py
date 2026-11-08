@@ -21,7 +21,8 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -47,6 +48,9 @@ class MarkingHomeSimulator:
     name that carries the writer's process id and thread id, since two pool workers, or two threads
     of one process, can mark homes of one name at once, and then renamed.
 
+    A home named in *held_until* is marked, then waits until its path exists; if the path has not
+    appeared within *hold_limit_seconds*, it raises TimeoutError naming the home and the path.
+
     A home it does not refuse gets make_sim_results(self_kwh=<its PV kW>, days=1), so the
     results total the home's PV kW of self-consumption, which identifies the home.
     """
@@ -54,6 +58,8 @@ class MarkingHomeSimulator:
     marker_dir: Path
     failing: frozenset[str] = frozenset()
     seconds: float = 0.0
+    held_until: Mapping[str, Path] = field(default_factory=dict, hash=False)
+    hold_limit_seconds: float = 120.0
 
     def __call__(
         self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
@@ -64,10 +70,21 @@ class MarkingHomeSimulator:
         partial = marker.with_name(f"{marker.name}.{os.getpid()}.{threading.get_ident()}.partial")
         partial.write_text(json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8")
         partial.replace(marker)
+        if config.name in self.held_until:
+            _wait_until_exists(self.held_until[config.name], config.name, self.hold_limit_seconds)
         time.sleep(self.seconds)
         if config.name in self.failing:
             raise ValueError(f"{config.name} cannot be simulated")
         return make_sim_results(self_kwh=config.pv_config.capacity_kw, days=1)
+
+
+def _wait_until_exists(release: Path, home_name: str, limit: float) -> None:
+    """Return once *release* exists, polling it; raise TimeoutError naming *home_name*, *release* and *limit* once *limit* seconds pass without it."""
+    deadline = time.monotonic() + limit
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{home_name} was held until {release} existed, which it did not within {limit} s")
+        time.sleep(0.01)
 
 
 def started(marker_dir: Path) -> dict[str, HomeStart]:
