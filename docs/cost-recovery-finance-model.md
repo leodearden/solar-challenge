@@ -882,7 +882,7 @@ days; the value-per-year row sums the windows. A note says the income is gross
 of the displaced self-use, and that a home without a tariff values it at £0
 (`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
 `tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`,
-`::test_several_event_windows_show_no_per_window_figure_summed`).
+`tests/integration/test_grid_services_events.py::test_several_event_windows_show_no_per_window_figure_summed`).
 
 The flat rates (£1.5, £12 and £48 per kW of installed discharge power per year
 in the low, central and high bands) and the events rates are
