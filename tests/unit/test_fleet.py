@@ -918,6 +918,33 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         )
 
 
+class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
+    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started."""
+
+    def test_in_turn_each_fleet_is_yielded_once_its_last_home_finishes_and_before_a_later_home_starts(
+        self, tmp_path: Path
+    ) -> None:
+        fleets = [
+            FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
+            FleetConfig(homes=[_home("B 1", 3.0)], name="B"),
+            FleetConfig(homes=[_home("C 1", 4.0), _home("C 2", 5.0), _home("C 3", 6.0)], name="C"),
+        ]
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False)
+        told: list[tuple[int, int]] = []
+        at_each_fleet: list[tuple[int, list[tuple[int, int]], set[str]]] = []
+
+        for index, _ in runner.simulate_each(
+            fleets, *_JUNE_DAYS.window(), progress=lambda done, total: told.append((done, total))
+        ):
+            at_each_fleet.append((index, list(told), set(started(tmp_path))))
+
+        assert at_each_fleet == [
+            (0, [(1, 6), (2, 6)], {"A 1", "A 2"}),
+            (1, [(1, 6), (2, 6), (3, 6)], {"A 1", "A 2", "B 1"}),
+            (2, [(done, 6) for done in range(1, 7)], {"A 1", "A 2", "B 1", "C 1", "C 2", "C 3"}),
+        ]
+
+
 def _emptying_after_the_first_home(cache: WeatherCache) -> HomesDone:
     """A progress sink that empties *cache* once the first home of the call has finished, before any other home runs in a sequential call."""
 
