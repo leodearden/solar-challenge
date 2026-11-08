@@ -944,6 +944,18 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
             (2, [(done, 6) for done in range(1, 7)], {"A 1", "A 2", "B 1", "C 1", "C 2", "C 3"}),
         ]
 
+    def test_in_turn_closing_the_iterator_after_the_first_fleet_starts_no_later_home(self, tmp_path: Path) -> None:
+        fleets = [FleetConfig(homes=[_home("Alone", 2.0)], name="One"), _uniform_fleet(5, "Five")]
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False)
+        each = runner.simulate_each(fleets, *_JUNE_DAYS.window())
+
+        index, results = next(each)
+        each.close()
+
+        assert index == 0
+        _assert_marked_results_of(results, fleets[0])
+        assert set(started(tmp_path)) == {"Alone"}
+
 
 def _emptying_after_the_first_home(cache: WeatherCache) -> HomesDone:
     """A progress sink that empties *cache* once the first home of the call has finished, before any other home runs in a sequential call."""
