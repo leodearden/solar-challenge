@@ -984,6 +984,33 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
             "and the two queued behind that one, so the fifth and sixth homes were cancelled"
         )
 
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_a_later_fleet_whose_homes_finish_first_is_yielded_before_an_earlier_fleet_still_running(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleets = [
+            FleetConfig(homes=[_home("A 1", 1.0), _home("A 2", 2.0)], name="A"),
+            FleetConfig(homes=[_home("B 1", 3.0)], name="B"),
+        ]
+        release = tmp_path / "a fleet was yielded"
+        runner = FleetRunner(
+            weather=_CountingWeather(),
+            home_simulator=MarkingHomeSimulator(tmp_path, held_until={"A 1": release}),
+            parallel=True,
+            max_workers=2,
+        )
+        yielded: list[int] = []
+
+        for index, results in runner.simulate_each(fleets, *_JUNE_DAYS.window()):
+            yielded.append(index)
+            _assert_marked_results_of(results, fleets[index])
+            release.touch()
+
+        assert yielded == [1, 0], (
+            "A 1 held one worker until a fleet was yielded, so B 1 ran on the other worker and fleet B finished "
+            "while fleet A was still running"
+        )
+
 
 def _emptying_after_the_first_home(cache: WeatherCache) -> HomesDone:
     """A progress sink that empties *cache* once the first home of the call has finished, before any other home runs in a sequential call."""
