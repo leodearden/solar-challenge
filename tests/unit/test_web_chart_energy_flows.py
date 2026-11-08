@@ -14,6 +14,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE
+from solar_challenge.web.storage import run_headline
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._plotly_figure import annotation_texts, opaque, sankey_link_colours, sankey_node_colours, traces
 
@@ -93,7 +94,7 @@ def test_a_chart_coloured_by_flow_draws_each_flow_under_its_label_in_its_roles_c
 _NAMED: dict[str, tuple[Callable[[], list[str]], list[str]]] = {
     "fleet_heatmap": (lambda: traces(charts.fleet_heatmap([_summary()] * 2).content)[0]["x"], list(_FIVE_FLOWS)),
     "comparison_bar_chart": (
-        lambda: traces(charts.comparison_bar_chart([dataclasses.asdict(_summary())], ["Run A"]).content)[0]["x"],
+        lambda: traces(charts.comparison_bar_chart([charts.ComparedRun("Run A", run_headline(_summary()))]).content)[0]["x"],
         list(_FIVE_FLOWS),
     ),
     "seasonal_comparison": (

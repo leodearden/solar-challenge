@@ -4,6 +4,7 @@ import dataclasses
 import io
 import json
 import logging
+import math
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -29,10 +30,6 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.web.charts import (
-    comparison_bar_chart,
-    comparison_radar,
-)
 from solar_challenge.web.database import Database
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
@@ -41,8 +38,9 @@ from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
 
 from tests._dashboard_databases import write_database_at_schema_version
-from tests._finance_builders import make_fleet_results, make_home_config
-from tests._html_page import element_attributes, element_count, texts, texts_after
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._html_page import chart_figures, element_attributes, element_count, texts, texts_after
+from tests._plotly_figure import annotation_texts, traces_by_name
 from tests._run_storage_layout import stored_run_dir
 from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, summary_json
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
@@ -1012,9 +1010,12 @@ class TestComparisonRoute:
         assert "No Runs Selected" in html
 
     def test_compare_single_id_redirects(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with only 1 ID redirects to runs page."""
-        response = client.get("/history/compare?ids=run-1")
-        assert response.status_code == 302
+        """Test GET /history/compare with only 1 ID redirects to runs page, flashing that it needs 2."""
+        response = client.get("/history/compare?ids=run-1", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if "At least 2 runs are required" in text]) == 1, page_texts
 
     def test_compare_two_valid_runs(self, app: Flask, client: FlaskClient) -> None:
         """Test GET /history/compare with 2 valid run IDs returns 200."""
@@ -1089,6 +1090,11 @@ class TestComparisonRoute:
                 "total_battery_charge_kwh",
                 id="summary-holds-a-figure-no-float-can-hold",
             ),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=math.nan)),
+                "generation_kwh",
+                id="summary-holds-nan-for-the-generation",
+            ),
         ],
     )
     def test_compare_of_a_run_whose_summary_cannot_be_read_redirects_to_the_runs_page_flashing_its_refusal(
@@ -1107,84 +1113,45 @@ class TestComparisonRoute:
         assert len([text for text in page_texts if all(name in text for name in named)]) == 1, page_texts
 
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with all invalid IDs redirects to runs page."""
-        response = client.get("/history/compare?ids=fake-1,fake-2")
-        assert response.status_code == 302
+        """Test GET /history/compare with all invalid IDs redirects to runs page, flashing that it found too few."""
+        response = client.get("/history/compare?ids=fake-1,fake-2", follow_redirects=True)
 
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if "Could not find at least 2 valid runs" in text]) == 1, page_texts
 
-# ---------------------------------------------------------------------------
-# Comparison chart function tests
-# ---------------------------------------------------------------------------
+    def test_compare_of_a_home_run_and_a_fleet_run_draws_the_fleet_at_its_own_ratios_and_names_it_in_the_left_out_axis_s_note(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """B11: the fleet was drawn at 0 % on every axis while the radar read a fleet summary by a home summary's names."""
+        store_home_run(storage, "cmp-home", make_home_config(), make_sim_results(days=1), name="Home A")
+        store_fleet_run(
+            storage,
+            "cmp-fleet",
+            make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1),
+            name="Fleet B",
+        )
 
+        page = client.get("/history/compare?ids=cmp-home,cmp-fleet").get_data(as_text=True)
 
-class TestComparisonCharts:
-    """Tests for the comparison chart functions in charts.py."""
+        radar = chart_figures(page)["chart-comparison-radar"]
+        assert traces_by_name(radar)["Fleet B"]["r"] == [25.0, 60.0, 75.0, 25.0]
+        assert annotation_texts(radar) == ["PV stored in battery % is left out: no figure for Fleet B"]
 
-    def test_comparison_bar_chart_returns_json(self) -> None:
-        """Test comparison_bar_chart returns a panel of Plotly figure JSON."""
-        summaries = [
-            {
-                "total_generation_kwh": 100,
-                "total_demand_kwh": 80,
-                "total_self_consumption_kwh": 60,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 40,
-            },
-            {
-                "total_generation_kwh": 120,
-                "total_demand_kwh": 90,
-                "total_self_consumption_kwh": 70,
-                "total_grid_import_kwh": 20,
-                "total_grid_export_kwh": 50,
-            },
-        ]
-        result = comparison_bar_chart(summaries, ["Run A", "Run B"]).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
+    def test_compare_of_a_run_with_no_summary_redirects_to_the_runs_page_flashing_that_it_has_none(
+        self, app: Flask, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """A run still running, or failed, has no summary, and is not compared as a run of zeros."""
+        _insert_test_run(app, run_id="cmp-1", name="Compare A")
+        storage.create_run(
+            "cmp-running", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00"
+        )
 
-    def test_comparison_radar_returns_json(self) -> None:
-        """Test comparison_radar returns a panel of Plotly figure JSON."""
-        summaries = [
-            {
-                "self_consumption_ratio": 0.6,
-                "grid_dependency_ratio": 0.25,
-                "export_ratio": 0.4,
-                "total_battery_charge_kwh": 10,
-                "total_generation_kwh": 100,
-            },
-            {
-                "self_consumption_ratio": 0.7,
-                "grid_dependency_ratio": 0.2,
-                "export_ratio": 0.3,
-                "total_battery_charge_kwh": 15,
-                "total_generation_kwh": 120,
-            },
-        ]
-        result = comparison_radar(summaries, ["Run A", "Run B"]).content
-        assert isinstance(result, str)
-        parsed = json.loads(result)
-        assert "data" in parsed
+        response = client.get("/history/compare?ids=cmp-1,cmp-running", follow_redirects=True)
 
-    def test_comparison_bar_chart_handles_missing_keys(self) -> None:
-        """Test comparison_bar_chart handles summaries with missing keys."""
-        summaries = [{"total_generation_kwh": 50}, {}]
-        result = comparison_bar_chart(summaries, ["A", "B"]).content
-        assert isinstance(result, str)
-
-    def test_comparison_radar_handles_zero_generation(self) -> None:
-        """Test comparison_radar handles zero generation gracefully."""
-        summaries = [
-            {
-                "self_consumption_ratio": 0,
-                "grid_dependency_ratio": 1.0,
-                "export_ratio": 0,
-                "total_battery_charge_kwh": 0,
-                "total_generation_kwh": 0,
-            },
-        ]
-        result = comparison_radar(summaries, ["Empty Run"]).content
-        assert isinstance(result, str)
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if "cmp-running" in text and "North Roof" in text]) == 1, page_texts
 
 
 # ---------------------------------------------------------------------------

@@ -196,7 +196,7 @@ Side-by-side comparison of 2-4 simulation runs.
   - Overlaid power flow timelines (different colours per run, shared axes)
   - Overlaid battery SOC curves
   - Grouped bar chart of energy totals per run
-  - Radar chart comparing efficiency ratios (self-consumption, grid dependency, export ratio)
+  - Radar chart comparing efficiency ratios (self-consumption, grid dependency, export ratio, and PV stored in battery, the share of generation the battery stored from PV). An axis that a compared run has no figure for, such as a fleet run's PV stored in battery, is left out, and a note names the run.
 - **Delta Table**: Metric | Run A | Run B | Delta | % Change
 
 ### 8. AI Assistant
