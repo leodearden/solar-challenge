@@ -424,13 +424,8 @@ def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) ->
         block_path = _child_path(_FLEET_DISTRIBUTION_PATH, name)
         _refuse_unrecognised_keys(block_path, {**component.draws, **component.settings}, block.fleet)
         for key, row in block.fleet.items():
-            given_every_home = row.kind in _GIVEN_EVERY_HOME
-            if key in (component.draws if given_every_home else component.settings):
-                held_in, not_in = ("settings", "draws") if given_every_home else ("draws", "settings")
-                raise ConfigurationError(
-                    f"{_child_path(block_path, key)} is a {row.kind.value} key, "
-                    f"which a ComponentDistribution holds in its {held_in}, not its {not_in}"
-                )
+            if key in (component.draws if row.kind in _GIVEN_EVERY_HOME else component.settings):
+                raise _held_in_the_wrong_place(_child_path(block_path, key), row)
 
 
 def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
@@ -809,14 +804,14 @@ class _DrawnKindRule:
 
     *spec_types* are the types of the specs the kind draws, beside null. *admits* says whether a
     value a spec lists, or a bare spec, is one the kind admits for a key of the row given; null
-    always is. *specs* and *values* phrase, for a refusal naming a key of the row, the specs the
-    kind draws and the values it admits.
+    always is. *describe_specs* and *describe_values* return the prose a refusal naming a key of
+    the row uses for the specs the kind draws and the values it admits, e.g. 'null or a number'.
     """
 
     spec_types: tuple[type[DistributionSpec], ...]
     admits: Callable[[SpecValue, FleetField], bool]
-    specs: Callable[[FleetField], str]
-    values: Callable[[FleetField], str]
+    describe_specs: Callable[[FleetField], str]
+    describe_values: Callable[[FleetField], str]
 
 
 #: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
@@ -826,15 +821,19 @@ _NUMBER_KIND_RULE = _DrawnKindRule(
         ShuffledPoolDistribution, ProportionalDistribution,
     ),
     admits=lambda value, row: not isinstance(value, str),
-    specs=lambda row: "null, a number, or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers",
-    values=lambda row: "null or a number",
+    describe_specs=lambda row: (
+        "null, a number, or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers"
+    ),
+    describe_values=lambda row: "null or a number",
 )
 
 _CHOICE_KIND_RULE = _DrawnKindRule(
     spec_types=(str, WeightedDiscreteDistribution, ShuffledPoolDistribution),
     admits=lambda value, row: value in row.choices,
-    specs=lambda row: f"null, one of {list(row.choices)}, or a weighted_discrete or shuffled_pool of them and nulls",
-    values=lambda row: f"null or one of {list(row.choices)}",
+    describe_specs=lambda row: (
+        f"null, one of {list(row.choices)}, or a weighted_discrete or shuffled_pool of them and nulls"
+    ),
+    describe_values=lambda row: f"null or one of {list(row.choices)}",
 )
 
 #: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
@@ -854,22 +853,33 @@ def _listed_values(spec: DistributionSpec) -> tuple[SpecValue, ...]:
     return (spec,)
 
 
-def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str, written: object) -> DistributionSpec:
-    """Return *spec*, the spec of the drawn key at *path* whose fleet row is *row*, refusing it unless it is null or a spec the row's kind draws, every value it lists one the kind admits.
+def _held_in_the_wrong_place(path: str, row: FleetField) -> ConfigurationError:
+    """The refusal of the key at *path*, whose fleet row is *row*, held in the wrong one of a ComponentDistribution's draws and settings: a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings."""
+    held_in, not_in = ("settings", "draws") if row.kind in _GIVEN_EVERY_HOME else ("draws", "settings")
+    return ConfigurationError(
+        f"{path} is a {row.kind.value} key, which a ComponentDistribution holds in its {held_in}, not its {not_in}"
+    )
 
-    A spec of a type the kind does not draw is refused naming *path* and *written*, the spec as
-    its block gives it. A value it lists, or a bare spec, that the kind does not admit is refused
-    naming *path* and the value, even one no home would draw. _DRAWN_KIND_RULES holds each
-    kind's rule.
+
+def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str, written: object) -> DistributionSpec:
+    """Return *spec*, the spec of the key at *path* whose fleet row is *row*, refusing it unless the row's kind is drawn and *spec* is null or a spec the kind draws, every value it lists one the kind admits.
+
+    A key of a kind no home draws, a SETTING or FLAG, is refused whatever its spec, as
+    _held_in_the_wrong_place states. A spec of a type the kind does not draw is refused naming
+    *path* and *written*, the spec as its block gives it. A value it lists, or a bare spec, that
+    the kind does not admit is refused naming *path* and the value, even one no home would draw.
+    _DRAWN_KIND_RULES holds each drawn kind's rule.
     """
+    rule = _DRAWN_KIND_RULES.get(row.kind)
+    if rule is None:
+        raise _held_in_the_wrong_place(path, row)
     if spec is None:
         return None
-    rule = _DRAWN_KIND_RULES[row.kind]
     if not isinstance(spec, rule.spec_types):
-        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.specs(row)}")
+        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.describe_specs(row)}")
     for value in _listed_values(spec):
         if value is not None and not rule.admits(value, row):
-            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.values(row)}")
+            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.describe_values(row)}")
     return spec
 
 
