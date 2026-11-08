@@ -180,6 +180,7 @@ def run(
     """
     runner = _runner(workers, sequential)
     fleet_config = load_fleet_config(config)
+    community_config = load_community_config(config)
     n_homes = len(fleet_config.homes)
 
     start_date, end_date = _period_in_fleet_timezone(fleet_config, start, end)
@@ -202,7 +203,6 @@ def run(
         print_success(f"Aggregate results saved to {output}")
 
     # Community sharing layer
-    community_config = load_community_config(config)
     if community_config is not None:
         community_results = simulate_community(results, community_config)
         _print_community_section(community_results)
