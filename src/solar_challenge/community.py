@@ -37,10 +37,10 @@ if TYPE_CHECKING:
 class CommunityBillingConfig:
     """The community's import tariff and SEG export rate.
 
-    :func:`simulate_community` prices the community's grid flows only when both
-    are set; otherwise the result's ``baseline_net_cost_gbp``,
+    :func:`simulate_community` prices the community's grid flows only when every
+    billing input is set; otherwise the result's ``baseline_net_cost_gbp``,
     ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``, and
-    it warns, naming each one unset.
+    it warns, naming each billing input left unset.
 
     Attributes
     ----------
@@ -180,27 +180,34 @@ class CommunityResults:
     battery_soc: pd.Series
     fleet_results: "FleetResults"
     sharing_mode: Literal["p2p", "community_battery"]
-    # Billing fields populated by simulate_community when config.billing is
-    # fully specified (both tariff and seg_rate_pence_per_kwh present); None
-    # otherwise, and a config.billing missing either one warns.
+    # Set by simulate_community when _grid_flow_prices_or_warn prices config.billing; None otherwise.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
     community_savings_gbp: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
-# _unset_billing_inputs
+# _grid_flow_prices_or_warn
 # ---------------------------------------------------------------------------
 
-def _unset_billing_inputs(billing: CommunityBillingConfig | None) -> tuple[str, ...]:
-    """The dotted names of billing's unset pricing inputs, billing.tariff before billing.seg_rate_pence_per_kwh; none when billing is None or sets both."""
+def _grid_flow_prices_or_warn(billing: CommunityBillingConfig | None) -> tuple[TariffConfig, SEGTariff] | None:
+    """The import tariff and SEG tariff billing prices simulate_community's grid flows at; None when billing is None, and None with a UserWarning, attributed to simulate_community's caller, naming each input it leaves unset."""
     if billing is None:
-        return ()
-    inputs = (
-        ("billing.tariff", billing.tariff),
-        ("billing.seg_rate_pence_per_kwh", billing.seg_rate_pence_per_kwh),
+        return None
+    tariff, seg_rate = _billing_tariff(billing), billing.seg_rate_pence_per_kwh
+    if tariff is not None and seg_rate is not None:
+        return tariff, SEGTariff(name="community", rate_pence_per_kwh=seg_rate)
+    inputs = (("billing.tariff", tariff), ("billing.seg_rate_pence_per_kwh", seg_rate))
+    unset_inputs = tuple(name for name, value in inputs if value is None)
+    unset = " and ".join(unset_inputs)
+    warnings.warn(
+        f"{unset} {'is' if len(unset_inputs) == 1 else 'are'} not set, so simulate_community "
+        "prices no grid flow and baseline_net_cost_gbp, community_net_cost_gbp and community_savings_gbp "
+        f"stay None; set {unset} to price the grid flows",
+        UserWarning,
+        stacklevel=3,
     )
-    return tuple(name for name, value in inputs if value is None)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -310,10 +317,10 @@ def simulate_community(
     Warns
     -----
     UserWarning
-        If ``config.billing`` is set but its ``tariff`` or
-        ``seg_rate_pence_per_kwh`` is not, naming each one unset: no grid flow
-        is priced, and the result's ``baseline_net_cost_gbp``,
-        ``community_net_cost_gbp`` and ``community_savings_gbp`` stay ``None``.
+        If ``config.billing`` is set but leaves any billing input unset, naming
+        each billing input left unset: no grid flow is priced, and the result's
+        ``baseline_net_cost_gbp``, ``community_net_cost_gbp`` and
+        ``community_savings_gbp`` stay ``None``.
 
     Raises
     ------
@@ -401,45 +408,14 @@ def simulate_community(
         )
 
     # --- Virtual-net-metering billing: baseline vs community net cost ---
-    # Gated on BOTH tariff and seg_rate being present so _price_grid_flows
-    # always receives non-None arguments (keeps it total / no None branches).
-    # A billing block missing either one prices nothing and warns, naming it.
-    unset_billing_inputs = _unset_billing_inputs(config.billing)
-    if unset_billing_inputs:
-        unset = " and ".join(unset_billing_inputs)
-        warnings.warn(
-            f"{unset} {'is' if len(unset_billing_inputs) == 1 else 'are'} not set, so simulate_community "
-            "prices no grid flow and baseline_net_cost_gbp, community_net_cost_gbp and community_savings_gbp "
-            f"stay None; set {unset} to price the grid flows",
-            UserWarning,
-            stacklevel=2,
-        )
-    billing = config.billing
-    if (
-        billing is not None
-        and tariff is not None
-        and billing.seg_rate_pence_per_kwh is not None
-    ):
-        seg = SEGTariff(
-            name="community",
-            rate_pence_per_kwh=billing.seg_rate_pence_per_kwh,
-        )
+    prices = _grid_flow_prices_or_warn(config.billing)
+    if prices is not None:
         # Baseline: what the fleet would pay/earn WITHOUT community sharing
         base_imp, base_exp = _price_grid_flows(
-            window,
-            fleet_results.total_grid_import,
-            fleet_results.total_grid_export,
-            tariff,
-            seg,
+            window, fleet_results.total_grid_import, fleet_results.total_grid_export, *prices
         )
         # Community: what the fleet pays/earns AFTER sharing
-        comm_imp, comm_exp = _price_grid_flows(
-            window,
-            result.grid_import,
-            result.grid_export,
-            tariff,
-            seg,
-        )
+        comm_imp, comm_exp = _price_grid_flows(window, result.grid_import, result.grid_export, *prices)
         result.baseline_net_cost_gbp = base_imp - base_exp
         result.community_net_cost_gbp = comm_imp - comm_exp
         result.community_savings_gbp = result.baseline_net_cost_gbp - result.community_net_cost_gbp
