@@ -4,6 +4,7 @@ Tests the full stack:
   - output.generate_community_report (fast, unit-like)
   - scenarios/bristol-community.yaml contract
   - `fleet run` CLI wiring with community section + report
+  - `fleet run` refusing a community block before it simulates any home
   - End-to-end pipeline A/B (community on vs off) with injected weather
   - The community battery's dispatch over the scenario's fleet, simulated on the
     committed Bristol TMY: the strategy its dispatch_strategy names, at the
@@ -21,6 +22,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
+import solar_challenge.cli.fleet as _cli_fleet_module
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.community import (
@@ -32,13 +34,15 @@ from solar_challenge.community import (
 )
 from solar_challenge.config import load_community_config, load_fleet_config
 from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
-from solar_challenge.fleet import FleetResults
+from solar_challenge.fleet import FleetResults, FleetRunner
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
+from solar_challenge.weather import PrefetchedWeather
 from tests._committed_weather_cache import committed_bristol_tmy
+from tests._fleet_runner import MarkingHomeSimulator, started
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
@@ -864,6 +868,59 @@ class TestFleetRunCommunityBillingCLI:
         assert "Baseline Net Cost" in result.output or "Savings" in result.output, (
             f"Expected billing rows in community table stdout:\n{result.output[-500:]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestFleetRunRefusesTheCommunityBlockBeforeSimulating
+# ---------------------------------------------------------------------------
+
+class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
+    """`fleet run` reads the community: block before it simulates, so a block it refuses costs no simulation.
+
+    The CLI's default_runner is replaced with a FleetRunner whose home simulator marks each
+    home it starts, on the committed Bristol TMY, so the runs are offline and need no seeded
+    weather cache. monkeypatch.setattr fails if the CLI no longer binds default_runner.
+    """
+
+    @pytest.fixture
+    def marker_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """The directory where the home simulator of each `fleet run` in the test marks each home it starts."""
+        marker_dir = tmp_path / "started"
+        marker_dir.mkdir()
+        weather = PrefetchedWeather({load_fleet_config(SCENARIO).homes[0].location: committed_bristol_tmy()})
+        monkeypatch.setattr(
+            _cli_fleet_module,
+            "default_runner",
+            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir), parallel=False),
+        )
+        return marker_dir
+
+    def test_a_refused_community_block_exits_before_any_home_is_simulated(
+        self, tmp_path: Path, marker_dir: Path
+    ) -> None:
+        """The scenario's community battery names no strategy, so self-consumption refuses the grid_charging added to it."""
+        scenario = yaml.safe_load(SCENARIO.read_text())
+        scenario["community"]["community_battery"]["grid_charging"] = {"target_soc_fraction": 0.9}
+        refused = tmp_path / "bristol-community-grid-charging-under-self-consumption.yaml"
+        refused.write_text(yaml.safe_dump(scenario))
+
+        result = _fleet_run_in_process(refused, "--start", "2024-01-15", "--end", "2024-01-15")
+
+        assert result.exit_code == 1, result.output
+        assert "Configuration error" in result.output
+        assert "grid_charging" in result.output
+        assert "self_consumption" in result.output
+        assert "Simulating fleet" not in result.output
+        assert started(marker_dir) == {}
+
+    def test_the_injected_simulator_is_the_one_fleet_run_runs(self, marker_dir: Path) -> None:
+        """The positive control, without which the test above could pass on a simulator `fleet run` never calls.
+
+        It asserts only on the marks: the simulator's stand-in results need not suit the rest of the run.
+        """
+        _fleet_run_in_process(SCENARIO, "--start", "2024-01-15", "--end", "2024-01-15")
+
+        assert set(started(marker_dir)) == {home.name for home in load_fleet_config(SCENARIO).homes}
 
 
 # ---------------------------------------------------------------------------
