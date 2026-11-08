@@ -159,6 +159,14 @@ LEVELS = ("battery_soc", "tariff_rate")
 AMOUNT_SERIES = tuple(name for name in _series_field_names() if name not in LEVELS)
 
 
+def _no_number_reason(count: int, size: int, value: str, at: object) -> str:
+    """The reason SeriesRefused gives for an amount series holding no number in count of its size rows, the first being value, at index label at."""
+    return (
+        f"holds no number in {count} of its {size} rows, though the run's totals sum every row's amount; "
+        f"the first is {value}, at {at}"
+    )
+
+
 class TestSimulationResults:
     """Test SimulationResults functionality."""
 
@@ -396,14 +404,20 @@ class TestSimulationResultsHoldsNumbers:
             pytest.param("generation", lambda index: pd.Series(1, index=index, dtype="uint8"), id="uint8"),
             pytest.param("generation", lambda index: pd.Series(1.0, index=index, dtype="float32"), id="float32"),
             pytest.param(
-                "generation",
-                lambda index: pd.Series([pd.NA] + [1] * (len(index) - 1), index=index, dtype="Int64"),
-                id="nullable-integers-holding-na",
+                "generation", lambda index: pd.Series(1, index=index, dtype="Int64"), id="nullable-integers"
             ),
             pytest.param(
-                "generation",
+                "generation", lambda index: pd.Series(1.5, index=index, dtype="Float64"), id="nullable-floats"
+            ),
+            pytest.param(
+                "battery_soc",
+                lambda index: pd.Series([pd.NA] + [1] * (len(index) - 1), index=index, dtype="Int64"),
+                id="a-level-of-nullable-integers-holding-na",
+            ),
+            pytest.param(
+                "battery_soc",
                 lambda index: pd.Series([pd.NA] + [1.5] * (len(index) - 1), index=index, dtype="Float64"),
-                id="nullable-floats-holding-na",
+                id="a-level-of-nullable-floats-holding-na",
             ),
             pytest.param(
                 "battery_soc",
@@ -413,7 +427,7 @@ class TestSimulationResultsHoldsNumbers:
         ],
     )
     def test_a_series_of_integers_or_floats_is_admitted_as_given(self, field, make):
-        """A series of an integer or a float dtype is admitted as given, NA, NaN and the infinities included."""
+        """A series of an integer or a float dtype is admitted as given; a level also holds NA, NaN and the infinities as given, as only an amount series must hold a number in every row."""
         built = _results_with_every_series_set()
         series = make(built.generation.index)
 
@@ -482,17 +496,22 @@ class TestPerMinuteAmounts:
 
 
 class TestSimulationResultsRefusesANaNAmount:
-    """Each amount series is what a run's totals sum, so SimulationResults refuses one that holds a NaN, naming it."""
+    """Each amount series is what a run's totals sum, so SimulationResults refuses one holding no number in a row, a NaN or an NA, with SeriesRefused naming it."""
 
     @pytest.mark.parametrize("name", AMOUNT_SERIES)
     def test_a_nan_in_an_amount_series_is_refused_naming_its_column_first_nan_and_count(self, name):
-        """A NaN in any amount series is refused, naming its column, its first NaN and when, and how many rows are NaN."""
+        """A NaN in any amount series is refused, naming its column, how many of its rows hold no number, and the first and when."""
         built = _results_with_every_series_set()
         series = getattr(built, name).copy()
         series.iloc[[5, 9]] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"{series.name}=nan at {series.index[5]} (2 of 60 rows)")):
+        with pytest.raises(SeriesRefused) as refused:
             dataclasses.replace(built, **{name: series})
+
+        assert (refused.value.column, refused.value.reason) == (
+            series.name,
+            _no_number_reason(2, 60, "nan", series.index[5]),
+        )
 
     def test_a_nan_is_counted_in_rows_however_long_each_row_lasts(self):
         """A NaN in half-hourly results is counted among their rows, each half an hour long, not in minutes."""
@@ -500,31 +519,70 @@ class TestSimulationResultsRefusesANaNAmount:
         demand = week.demand.copy()
         demand.iloc[3] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {demand.index[3]} (1 of 336 rows)")):
+        with pytest.raises(SeriesRefused) as refused:
             dataclasses.replace(week, demand=demand)
 
-    def test_every_amount_series_holding_a_nan_is_named_in_field_order(self):
-        """Every amount series holding a NaN is named, in field declaration order, whatever order they were given in."""
+        assert (refused.value.column, refused.value.reason) == (
+            "demand_kw",
+            _no_number_reason(1, 336, "nan", demand.index[3]),
+        )
+
+    def test_of_two_amount_series_holding_a_nan_the_first_in_declaration_order_is_named(self):
+        """Of import_cost, NaN throughout, and demand, NaN in one row, demand, declared first, is named, though import_cost is given first."""
         built = _results_with_every_series_set()
         index = built.demand.index
         demand = built.demand.copy()
         demand.iloc[3] = math.nan
 
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(SeriesRefused) as refused:
             dataclasses.replace(built, import_cost=pd.Series(math.nan, index=index), demand=demand)
 
-        assert str(refusal.value) == (
-            "SimulationResults' amount series are what its totals sum, so each holds a number in every row: "
-            f"got demand_kw=nan at {index[3]} (1 of 60 rows), import_cost_gbp=nan at {index[0]} (60 of 60 rows)"
-        )
+        assert str(refused.value) == f"SimulationResults' demand_kw series {_no_number_reason(1, 60, 'nan', index[3])}"
 
     def test_from_dataframe_refuses_a_frame_whose_amount_column_holds_a_nan(self):
         """from_dataframe, which reloads a stored run, refuses a frame whose amount column holds a NaN, naming it."""
         frame = _results_with_every_series_set().to_dataframe()
         frame.loc[frame.index[7], "grid_export_kw"] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"grid_export_kw=nan at {frame.index[7]} (1 of 60 rows)")):
+        with pytest.raises(SeriesRefused) as refused:
             SimulationResults.from_dataframe(frame, strategy_name="tou_optimized")
+
+        assert (refused.value.column, refused.value.reason) == (
+            "grid_export_kw",
+            _no_number_reason(1, 60, "nan", frame.index[7]),
+        )
+
+    @pytest.mark.parametrize(
+        "dtype", [pytest.param("Int64", id="nullable-integers"), pytest.param("Float64", id="nullable-floats")]
+    )
+    def test_an_na_in_a_nullable_amount_series_is_refused_as_a_nan_is(self, dtype):
+        """pandas' sum skips an NA as it skips a NaN, so a total would drop it the same way."""
+        built = _results_with_every_series_set()
+        index = built.generation.index
+        generation = pd.Series(1, index=index, dtype=dtype)
+        generation.iloc[5] = pd.NA
+
+        with pytest.raises(SeriesRefused) as refused:
+            dataclasses.replace(built, generation=generation)
+
+        assert (refused.value.column, refused.value.reason) == (
+            "generation_kw",
+            _no_number_reason(1, 60, "<NA>", index[5]),
+        )
+
+    def test_a_series_that_is_not_numbers_is_refused_before_an_amount_holding_a_nan(self):
+        """Boundary guard, green before and after the refusal became a SeriesRefused: the dtype refusal reads every series before any amount's NaN is read, so battery_soc's strings are named though demand, declared before it, holds a NaN."""
+        built = _results_with_every_series_set()
+        index = built.demand.index
+        demand = built.demand.copy()
+        demand.iloc[3] = math.nan
+        strings = pd.Series("x", index=index)
+
+        with pytest.raises(SeriesRefused) as refused:
+            dataclasses.replace(built, demand=demand, battery_soc=strings)
+
+        assert refused.value.column == "battery_soc_kwh"
+        assert str(strings.dtype) in refused.value.reason
 
     @pytest.mark.parametrize(
         "read",
@@ -541,8 +599,13 @@ class TestSimulationResultsRefusesANaNAmount:
         results = dataclasses.replace(_results_with_every_series_set(), grid_charge=None)
         results.demand.iloc[5] = math.nan
 
-        with pytest.raises(ValueError, match=re.escape(f"demand_kw=nan at {results.demand.index[5]} (1 of 60 rows)")):
+        with pytest.raises(SeriesRefused) as refused:
             read(results)
+
+        assert (refused.value.column, refused.value.reason) == (
+            "demand_kw",
+            _no_number_reason(1, 60, "nan", results.demand.index[5]),
+        )
 
     @pytest.mark.parametrize("name", LEVELS)
     def test_a_nan_level_is_accepted_as_no_total_sums_it(self, name):
