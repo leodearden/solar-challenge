@@ -304,7 +304,7 @@ class TestBatteryAnswersItsGridChargeTarget:
     def test_the_charge_limit_is_the_configured_one_and_the_one_charge_applies(self) -> None:
         battery = Battery(BatteryConfig(capacity_kwh=10.0, max_charge_kw=3.3), initial_soc_kwh=1.0)
         assert battery.max_charge_kw == 3.3
-        assert battery.charge(math.inf, 60) == pytest.approx(
+        assert battery.charge(2 * battery.max_charge_kw, 60) == pytest.approx(
             battery.max_charge_kw * 1.0 * battery.charge_efficiency
         )
 
@@ -777,33 +777,29 @@ class TestBatteryPastAnAssignedSocLimit:
 
 @dataclasses.dataclass(frozen=True)
 class _Move:
-    """One of a battery's two moves: its method, the direction its refusals open with, and the limit in a config that caps its rate."""
+    """One of a battery's two moves: its method and the direction its refusals open with."""
 
     method: Callable[[Battery, float, float], float]
     direction: str
-    max_rate_kw_in: Callable[[BatteryConfig], float]
 
 
 MOVES = [
-    pytest.param(_Move(Battery.charge, "Charge", lambda config: config.max_charge_kw), id="charge"),
-    pytest.param(
-        _Move(Battery.discharge, "Discharge", lambda config: config.max_discharge_kw),
-        id="discharge",
-    ),
+    pytest.param(_Move(Battery.charge, "Charge"), id="charge"),
+    pytest.param(_Move(Battery.discharge, "Discharge"), id="discharge"),
 ]
 
 
 class TestBatteryRefusesARequestItCannotCarryOut:
-    """charge() and discharge() refuse a power that is not >= 0, or a duration that is not positive and finite, naming the value, and leave the battery unchanged."""
+    """charge() and discharge() refuse a power that is not finite and at least 0, or a duration that is not positive and finite, naming the value, and leave the battery unchanged."""
 
     @pytest.mark.parametrize("move", MOVES)
-    @pytest.mark.parametrize("power_kw", [math.nan, -math.inf, -1.0])
-    def test_a_power_that_is_not_at_least_0_is_refused_and_moves_no_energy(
+    @pytest.mark.parametrize("power_kw", [math.nan, math.inf, -math.inf, -1.0])
+    def test_a_power_that_is_not_finite_and_at_least_0_is_refused_and_moves_no_energy(
         self, move: _Move, power_kw: float
     ) -> None:
         battery = Battery(BatteryConfig.default_5kwh())
         soc_kwh = battery.soc_kwh
-        message = f"{move.direction} power must be non-negative, got {power_kw} kW"
+        message = f"{move.direction} power must be non-negative and finite, got {power_kw} kW"
         with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
             move.method(battery, power_kw, 60.0)
         assert battery.soc_kwh == soc_kwh
@@ -828,16 +824,6 @@ class TestBatteryRefusesARequestItCannotCarryOut:
         soc_kwh = battery.soc_kwh
         assert move.method(battery, 0.0, 60.0) == 0.0
         assert battery.soc_kwh == soc_kwh
-
-    @pytest.mark.parametrize("move", MOVES)
-    def test_an_infinite_power_moves_what_the_maximum_rate_moves(self, move: _Move) -> None:
-        config = BatteryConfig(capacity_kwh=10.0, max_charge_kw=2.0, max_discharge_kw=3.0)
-        at_infinite_power = Battery(config)
-        at_maximum_rate = Battery(config)
-        moved = move.method(at_infinite_power, math.inf, 30.0)
-        assert moved == move.method(at_maximum_rate, move.max_rate_kw_in(config), 30.0)
-        assert moved > 0.0
-        assert at_infinite_power.soc_kwh == at_maximum_rate.soc_kwh
 
 
 @pytest.fixture
@@ -1036,10 +1022,10 @@ class TestBatteryDischargeToMeetDemand:
     def test_a_discharge_held_to_its_rate_limit_delivers_the_limit_for_the_duration_and_never_more(
         self, limit_kw: float, duration_minutes: float
     ) -> None:
-        """Asked for an infinite power, the battery discharges at its max_discharge_kw, each limit here a power whose request over-rounds."""
+        """Asked for twice its max_discharge_kw, the battery discharges at its max_discharge_kw, each limit here a power whose request over-rounds."""
         limit_kwh = limit_kw * (duration_minutes * HOURS_PER_MINUTE)
         config = dataclasses.replace(BATTERY_THEY_OVER_ROUND_ON, max_discharge_kw=limit_kw)
-        delivered = Battery(config).discharge(math.inf, duration_minutes)
+        delivered = Battery(config).discharge(2 * limit_kw, duration_minutes)
         assert delivered <= limit_kwh
         assert delivered == pytest.approx(limit_kwh, rel=1e-12)
 

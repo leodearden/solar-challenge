@@ -10,19 +10,19 @@ charging with: the variants of DispatchStrategyConfig, and GridChargeConfig;
 build_dispatch_strategy builds the strategy a variant configures.
 """
 
-import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 from types import MappingProxyType
-from typing import ClassVar, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
+from typing import ClassVar, Final, List, Literal, Optional, Tuple, TypeAlias, assert_never, get_args
 from zoneinfo import ZoneInfo
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
+    NON_NEGATIVE,
     POSITIVE,
     Interval,
     as_finite_float,
@@ -38,14 +38,18 @@ class DispatchDecision:
     """Decision from a dispatch strategy for a single timestep.
 
     Attributes:
-        charge_kw: Requested battery charging power in kW (non-negative).
+        charge_kw: Requested battery charging power in kW, finite and at least 0.
             Represents PV or other on-site charge power.
-        discharge_kw: Requested battery discharge power in kW (non-negative)
-        grid_charge_kw: Requested grid-to-battery charging power in kW
-            (non-negative, default 0.0). Represents deliberate charging from
+        discharge_kw: Requested battery discharge power in kW, finite and at least 0.
+        grid_charge_kw: Requested grid-to-battery charging power in kW, finite and
+            at least 0 (default 0.0). Represents deliberate charging from
             the grid (e.g. during cheap-rate periods). May co-exist with
             charge_kw > 0 (both are charging), but is mutually exclusive with
             discharge_kw > 0.
+
+    Raises:
+        ValueError: If a power is negative, NaN or infinite, naming it and its value; or if
+            discharge_kw > 0 alongside charge_kw > 0 or grid_charge_kw > 0.
     """
 
     charge_kw: float
@@ -53,19 +57,10 @@ class DispatchDecision:
     grid_charge_kw: float = 0.0
 
     def __post_init__(self) -> None:
-        """Validate dispatch decision parameters."""
-        if self.charge_kw < 0:
-            raise ValueError(
-                f"Charge power must be non-negative, got {self.charge_kw} kW"
-            )
-        if self.discharge_kw < 0:
-            raise ValueError(
-                f"Discharge power must be non-negative, got {self.discharge_kw} kW"
-            )
-        if self.grid_charge_kw < 0:
-            raise ValueError(
-                f"Grid-charge power must be non-negative, got {self.grid_charge_kw} kW"
-            )
+        """Refuse a power NON_NEGATIVE does not admit, then a discharge alongside either charge."""
+        for name in _DECISION_POWERS:
+            if not NON_NEGATIVE.admits(value := getattr(self, name)):
+                raise ValueError(f"{name} must be non-negative and finite, got {value!r} kW")
         if self.charge_kw > 0 and self.discharge_kw > 0:
             raise ValueError(
                 "Cannot charge and discharge simultaneously: "
@@ -76,6 +71,9 @@ class DispatchDecision:
                 "Cannot grid-charge and discharge simultaneously: "
                 f"grid_charge={self.grid_charge_kw} kW, discharge={self.discharge_kw} kW"
             )
+
+
+_DECISION_POWERS: Final = tuple(power.name for power in fields(DispatchDecision))
 
 
 @dataclass(frozen=True)
@@ -220,6 +218,51 @@ def _grid_charge_kw(
 def _charge_headroom_kw(max_charge_kw: float, charge_kw: float) -> float:
     """The max_charge_kw a step's charge_kw of PV charge leaves for grid charging."""
     return max(0.0, max_charge_kw - min(charge_kw, max_charge_kw))
+
+
+@dataclass(frozen=True)
+class StepLimits:
+    """What one step's decision may ask of the battery, in kW.
+
+    Attributes:
+        excess_kw: PV beyond demand, the most charge_kw may take.
+        shortfall_kw: Demand beyond PV, the most discharge_kw may give.
+        max_charge_kw: The battery's charge limit, which PV and grid charging share.
+    """
+
+    excess_kw: float
+    shortfall_kw: float
+    max_charge_kw: float
+
+    def require_admissible(self, decision: DispatchDecision, strategy_name: str) -> None:
+        """Refuse *decision*, by the strategy named *strategy_name*, if a power is above its limit.
+
+        A charge_kw above max_charge_kw is admissible: it is a PV offer the battery clamps,
+        and the grid charge's limit is the headroom left after the clamped offer.
+
+        Raises:
+            ValueError: Naming the strategy and, for each power above its limit, the field,
+                its value and its limit.
+        """
+        bounds = (
+            ("charge_kw", decision.charge_kw, self.excess_kw, "the step's PV excess"),
+            ("discharge_kw", decision.discharge_kw, self.shortfall_kw, "the step's shortfall"),
+            (
+                "grid_charge_kw",
+                decision.grid_charge_kw,
+                _charge_headroom_kw(self.max_charge_kw, decision.charge_kw),
+                "the charge limit's headroom after charge_kw",
+            ),
+        )
+        breaches = [
+            f"{name}={value!r} kW is above {limit!r} kW, {what}"
+            for name, value, limit, what in bounds
+            if not value <= limit
+        ]
+        if breaches:
+            raise ValueError(
+                f"Dispatch strategy {strategy_name!r} decided more than the step allows: " + "; ".join(breaches)
+            )
 
 
 def _grid_power_to_target_kw(
@@ -431,12 +474,33 @@ class DispatchStrategy(ABC):
                 grid-charge ignores it.  ``None`` means no grid charging.
 
         Returns:
-            DispatchDecision specifying charge_kw or discharge_kw
+            DispatchDecision specifying charge_kw or discharge_kw, and any grid_charge_kw,
+            within the step's bounds:
+            - each power is finite and at least 0, as DispatchDecision requires;
+            - charge_kw is at most the step's PV excess, max(0, generation_kw - demand_kw); it
+              may exceed the battery's charge limit, Battery.max_charge_kw, which the battery
+              applies;
+            - discharge_kw is at most the step's shortfall, max(0, demand_kw - generation_kw);
+            - grid_charge_kw is at most the headroom the charge limit leaves after charge_kw.
+            simulate_timestep refuses a decision that breaks a bound with ValueError before the
+            battery moves; see StepLimits.
 
         Raises:
             ValueError: If inputs are invalid (negative, NaN or infinite values, etc.)
         """
         pass
+
+
+def require_valid_step_powers(generation_kw: float, demand_kw: float) -> None:
+    """Refuse a step's generation or demand power unless NON_NEGATIVE admits it: finite and at least 0.
+
+    Raises:
+        ValueError: Naming the power and its value.
+    """
+    if not NON_NEGATIVE.admits(generation_kw):
+        raise ValueError(f"Generation must be non-negative and finite, got {generation_kw} kW")
+    if not NON_NEGATIVE.admits(demand_kw):
+        raise ValueError(f"Demand must be non-negative and finite, got {demand_kw} kW")
 
 
 def _require_valid_strategy_inputs(
@@ -451,13 +515,10 @@ def _require_valid_strategy_inputs(
     Raises:
         ValueError: Naming the input, its bound and its value.
     """
-    if not 0 <= generation_kw < math.inf:
-        raise ValueError(f"Generation must be non-negative and finite, got {generation_kw} kW")
-    if not 0 <= demand_kw < math.inf:
-        raise ValueError(f"Demand must be non-negative and finite, got {demand_kw} kW")
-    if not 0 <= battery_soc_kwh < math.inf:
+    require_valid_step_powers(generation_kw, demand_kw)
+    if not NON_NEGATIVE.admits(battery_soc_kwh):
         raise ValueError(f"Battery SOC must be non-negative and finite, got {battery_soc_kwh} kWh")
-    if not 0 < battery_capacity_kwh < math.inf:
+    if not POSITIVE.admits(battery_capacity_kwh):
         raise ValueError(f"Battery capacity must be positive and finite, got {battery_capacity_kwh} kWh")
     require_valid_duration(timestep_minutes, "Timestep")
 

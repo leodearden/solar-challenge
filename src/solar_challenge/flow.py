@@ -13,7 +13,9 @@ from solar_challenge.dispatch import (
     DispatchStrategy,
     GridChargeContext,
     SelfConsumptionStrategy,
+    StepLimits,
     compute_grid_charge_power_kw,
+    require_valid_step_powers,
 )
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
@@ -191,7 +193,12 @@ class _StepEnergies:
 
     @classmethod
     def from_powers(cls, generation_kw: float, demand_kw: float, timestep_minutes: float) -> "_StepEnergies":
-        """Return the energies a timestep of timestep_minutes moves at generation_kw and demand_kw."""
+        """Return the energies a timestep of timestep_minutes moves at generation_kw and demand_kw.
+
+        Raises:
+            ValueError: If require_valid_step_powers refuses generation_kw or demand_kw.
+        """
+        require_valid_step_powers(generation_kw, demand_kw)
         duration_hours = timestep_minutes * HOURS_PER_MINUTE
         generation_kwh = generation_kw * duration_hours
         demand_kwh = demand_kw * duration_hours
@@ -296,7 +303,11 @@ def simulate_timestep(
         EnergyFlowResult with all energy flows in kWh
 
     Raises:
-        ValueError: If timestep_minutes is not positive and finite, naming it, before any battery moves energy.
+        ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
+            or demand_kw is not finite and at least 0, naming it; then if the strategy's decision
+            asks for more than the step allows (StepLimits.require_admissible), naming the
+            strategy and each power above its limit. Each check runs before any battery moves
+            energy.
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
@@ -325,6 +336,11 @@ def simulate_timestep(
         timestep_minutes=timestep_minutes,
         grid_charge_ctx=grid_charge_ctx,
     )
+    StepLimits(
+        excess_kw=max(0.0, generation_kw - demand_kw),
+        shortfall_kw=max(0.0, demand_kw - generation_kw),
+        max_charge_kw=battery.max_charge_kw,
+    ).require_admissible(decision, strategy.name)
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)
@@ -371,7 +387,9 @@ def simulate_timestep_tou(
         EnergyFlowResult with all energy flows in kWh
 
     Raises:
-        ValueError: If timestep_minutes is not positive and finite, naming it, before any battery moves energy.
+        ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
+            or demand_kw is not finite and at least 0, naming it. Each check runs before any battery
+            moves energy.
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
@@ -441,8 +459,8 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # _settle derives the flows so that this balance closes whenever a step's PV charge is within
-    # its excess and its discharge within its shortfall.
+    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
+    # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
     storage_delta = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + storage_delta

@@ -61,10 +61,10 @@ def require_valid_power_limit(kw: float, direction: Literal["charge", "discharge
 def _require_valid_request(
     direction: Literal["charge", "discharge"], power_kw: float, duration_minutes: float
 ) -> None:
-    """Refuse a *direction* request unless its power is >= 0 and its duration is positive and finite."""
-    if not power_kw >= 0:
+    """Refuse a *direction* request unless its power is finite and at least 0 and its duration is positive and finite."""
+    if not NON_NEGATIVE.admits(power_kw):
         raise ValueError(
-            f"{direction.capitalize()} power must be non-negative, got {power_kw} kW"
+            f"{direction.capitalize()} power must be non-negative and finite, got {power_kw} kW"
         )
     require_valid_duration(duration_minutes, f"{direction.capitalize()} duration")
 
@@ -435,16 +435,16 @@ class Battery:
         """Charge the battery.
 
         Args:
-            power_kw: Charging power in kW (before efficiency losses), at least 0;
-                inf asks for the maximum charge rate
+            power_kw: Charging power in kW (before efficiency losses), finite and at
+                least 0; a power above max_charge_kw moves energy at that limit
             duration_minutes: Duration of charging in minutes, positive and finite
 
         Returns:
             Actual energy charged in kWh (after efficiency losses)
 
         Raises:
-            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
-                positive and finite; the battery is left unchanged.
+            ValueError: If power_kw is negative, NaN or infinite, or duration_minutes is
+                not positive and finite; the battery is left unchanged.
         """
         _require_valid_request("charge", power_kw, duration_minutes)
 
@@ -470,8 +470,8 @@ class Battery:
         """Discharge the battery.
 
         Args:
-            power_kw: Requested discharge power in kW, at least 0; inf asks for the
-                maximum discharge rate
+            power_kw: Requested discharge power in kW, finite and at least 0; a power
+                above max_discharge_kw moves energy at that limit
             duration_minutes: Duration of discharging in minutes, positive and finite
 
         Returns:
@@ -479,8 +479,8 @@ class Battery:
             requested power, capped at max_discharge_kw, for duration_minutes
 
         Raises:
-            ValueError: If power_kw is below 0 or NaN, or duration_minutes is not
-                positive and finite; the battery is left unchanged.
+            ValueError: If power_kw is negative, NaN or infinite, or duration_minutes is
+                not positive and finite; the battery is left unchanged.
         """
         _require_valid_request("discharge", power_kw, duration_minutes)
 
