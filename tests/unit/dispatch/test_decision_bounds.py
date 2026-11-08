@@ -25,7 +25,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou
-from solar_challenge.home import HomeConfig, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
@@ -226,34 +226,36 @@ class TestAStepAdmitsADecisionWithinItsLimits:
         assert battery.soc_kwh == pytest.approx(1.0 + battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
 
-BUILT_IN_STRATEGIES = [
-    pytest.param(SelfConsumptionStrategy(), id="self_consumption"),
-    pytest.param(TOUOptimizedStrategy([(16, 20)]), id="tou_optimized"),
-    pytest.param(PeakShavingStrategy(1.0), id="peak_shaving"),
-    pytest.param(
-        ScheduledChargeStrategy(
-            TOUOptimizedStrategy([(16, 20)]),
-            (
-                ChargeWindow(
-                    days="daily",
-                    start=time(1, 0),
-                    duration=timedelta(hours=4),
-                    target_soc_fraction=0.8,
-                    allow_discharge=False,
-                ),
-                ChargeWindow(
-                    days="daily",
-                    start=time(17, 0),
-                    duration=timedelta(hours=2),
-                    target_soc_fraction=0.3,
-                    allow_discharge=True,
-                ),
+BUILT_IN_STRATEGIES: dict[str, DispatchStrategy] = {
+    "self_consumption": SelfConsumptionStrategy(),
+    "tou_optimized": TOUOptimizedStrategy([(16, 20)]),
+    # Below the home's peak demand on each day here, so the strategy discharges.
+    "peak_shaving": PeakShavingStrategy(0.25),
+    "scheduled_charge": ScheduledChargeStrategy(
+        TOUOptimizedStrategy([(16, 20)]),
+        (
+            ChargeWindow(
+                days="daily",
+                start=time(1, 0),
+                duration=timedelta(hours=4),
+                target_soc_fraction=0.8,
+                allow_discharge=False,
             ),
-            ZoneInfo("Europe/London"),
+            ChargeWindow(
+                days="daily",
+                start=time(17, 0),
+                duration=timedelta(hours=2),
+                target_soc_fraction=0.3,
+                allow_discharge=True,
+            ),
         ),
-        id="scheduled_charge",
+        ZoneInfo("Europe/London"),
     ),
-]
+}
+
+# Every built-in strategy but self-consumption, which ignores grid_charge_ctx, charges from the grid toward the
+# target its battery's grid_charging sets.
+GRID_CHARGING_STRATEGIES = ["tou_optimized", "peak_shaving", "scheduled_charge"]
 
 _SCENARIO_HOME = bristol_arbitrage_home()
 _TWO_CLEAR_JUNE_DAYS = synthetic_june_weather("2024-06-20", (1.0, 1.0))
@@ -288,22 +290,66 @@ def _without_grid_charging(home: HomeConfig) -> HomeConfig:
     return dataclasses.replace(home, battery_config=dataclasses.replace(home.battery_config, grid_charging=None))
 
 
-HOME_RUNS = [
-    pytest.param(run_home, weather, pd.Timestamp(start), pd.Timestamp(end), id=f"{day}-{grid_charging}")
+# Each day's home as _DAYS gives it, its battery's grid_charging the scenario's; then each without it.
+GRID_CHARGING_RUNS: dict[str, tuple[HomeConfig, pd.DataFrame, pd.Timestamp, pd.Timestamp]] = {
+    f"{day}-grid_charging": (home, weather, pd.Timestamp(start), pd.Timestamp(end))
     for day, home, weather, start, end in _DAYS
-    for grid_charging, run_home in (("grid_charging", home), ("no_grid_charging", _without_grid_charging(home)))
-]
+}
+HOME_RUNS = GRID_CHARGING_RUNS | {
+    f"{day}-no_grid_charging": (_without_grid_charging(home), weather, pd.Timestamp(start), pd.Timestamp(end))
+    for day, home, weather, start, end in _DAYS
+}
+
+
+@functools.cache
+def _run(strategy_id: str, run_id: str) -> SimulationResults:
+    """HOME_RUNS[run_id] under BUILT_IN_STRATEGIES[strategy_id], its balance checked every minute, simulated once for every test that reads it."""
+    home, weather, start, end = HOME_RUNS[run_id]
+    return simulate_home(
+        home,
+        start,
+        end,
+        validate_balance=True,
+        weather=weather_for(home, weather),
+        strategy=BUILT_IN_STRATEGIES[strategy_id],
+    )
+
+
+def _grid_charge_kw(results: SimulationResults) -> pd.Series:
+    """The power *results*' battery stored from the grid each minute; every run here has a tariff, so it is set."""
+    assert results.grid_charge is not None
+    return results.grid_charge
+
+
+def _pv_charge_kw(results: SimulationResults) -> pd.Series:
+    """The power *results*' battery stored from PV each minute: its charge less its grid charge."""
+    return results.battery_charge - _grid_charge_kw(results)
 
 
 class TestNoBuiltInStrategyTripsABound:
-    """§9 row 12: each built-in strategy keeps every decision within its step's limits, so its run, its balance checked every minute, completes."""
+    """§9 row 12: each built-in strategy keeps every decision within its step's limits, so each of its runs, its balance checked every minute, completes.
 
-    @pytest.mark.parametrize(("home", "weather", "start", "end"), HOME_RUNS)
-    @pytest.mark.parametrize("strategy", BUILT_IN_STRATEGIES)
-    def test_the_run_completes(
-        self, strategy: DispatchStrategy, home: HomeConfig, weather: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp
+    Every bound meets decisions that reach it: each grid-charging strategy charges from the grid in each run whose
+    battery sets a target, and between its runs each strategy charges from PV and discharges.
+    """
+
+    @pytest.mark.parametrize("run_id", list(HOME_RUNS))
+    @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
+    def test_the_run_completes(self, strategy_id: str, run_id: str) -> None:
+        assert _run(strategy_id, run_id).strategy_name == BUILT_IN_STRATEGIES[strategy_id].name
+
+    @pytest.mark.parametrize("run_id", list(GRID_CHARGING_RUNS))
+    @pytest.mark.parametrize("strategy_id", GRID_CHARGING_STRATEGIES)
+    def test_a_grid_charging_strategy_charges_from_the_grid_in_a_run_whose_battery_sets_a_target(
+        self, strategy_id: str, run_id: str
     ) -> None:
-        results = simulate_home(
-            home, start, end, validate_balance=True, weather=weather_for(home, weather), strategy=strategy
-        )
-        assert results.strategy_name == strategy.name
+        assert _grid_charge_kw(_run(strategy_id, run_id)).gt(0).any()
+
+    @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
+    def test_between_its_runs_the_strategy_charges_from_pv(self, strategy_id: str) -> None:
+        """A battery that a strategy fills from the grid overnight takes no PV the next day, so not every sunny run charges from PV."""
+        assert any(_pv_charge_kw(_run(strategy_id, run_id)).gt(0).any() for run_id in HOME_RUNS)
+
+    @pytest.mark.parametrize("strategy_id", list(BUILT_IN_STRATEGIES))
+    def test_between_its_runs_the_strategy_discharges(self, strategy_id: str) -> None:
+        assert any(_run(strategy_id, run_id).battery_discharge.gt(0).any() for run_id in HOME_RUNS)
