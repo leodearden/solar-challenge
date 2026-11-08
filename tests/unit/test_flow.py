@@ -522,7 +522,7 @@ def grid_charge_battery() -> Battery:
 
 
 class _RecordingStrategy(DispatchStrategy):
-    """Test double: records the grid_charge_ctx passed in and returns a fixed decision."""
+    """Test double: records the timestep of each call and the last grid_charge_ctx passed in, checks none of its inputs, and returns a fixed decision."""
 
     def __init__(
         self,
@@ -536,6 +536,7 @@ class _RecordingStrategy(DispatchStrategy):
             grid_charge_kw=grid_charge_kw,
         )
         self.received_ctx: Optional[GridChargeContext] = None
+        self.received_timesteps: list[float] = []
 
     @property
     def name(self) -> str:
@@ -553,7 +554,8 @@ class _RecordingStrategy(DispatchStrategy):
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
-        """Record grid_charge_ctx and return the pre-configured decision."""
+        """Record timestep_minutes and grid_charge_ctx, and return the pre-configured decision."""
+        self.received_timesteps.append(timestep_minutes)
         self.received_ctx = grid_charge_ctx
         return self._decision
 
@@ -1511,32 +1513,73 @@ class TestStepRefusesANegativeFlow:
 
 
 # ---------------------------------------------------------------------------
-# A timestep or a power that is not finite
+# A timestep that is not positive and finite, or a power that is not finite
 # ---------------------------------------------------------------------------
 
 NAN_OR_INFINITE = [pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")]
 
+NOT_POSITIVE_AND_FINITE_MINUTES = [
+    pytest.param(math.nan, id="nan"),
+    pytest.param(math.inf, id="inf"),
+    pytest.param(-math.inf, id="-inf"),
+    pytest.param(0.0, id="zero"),
+    pytest.param(-60.0, id="negative"),
+]
 
-class TestStepWithATimestepThatIsNotFinite:
-    """A step refuses a NaN or infinite timestep, naming it, before its battery moves any energy."""
+# Both engines, self-consuming at peak and grid-charging at Economy 7's off-peak.
+EVERY_STEP = SELF_CONSUMING_STEPS + GRID_CHARGING_STEPS
 
-    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
-    @pytest.mark.parametrize(
-        ("generation_kw", "demand_kw"),
-        [
-            pytest.param(2.0, 1.0, id="surplus-charges"),
-            pytest.param(1.0, 2.0, id="shortfall-discharges"),
-            pytest.param(1.0, 1.0, id="balanced-moves-nothing"),
-        ],
-    )
-    def test_the_step_refuses_the_timestep_and_leaves_the_battery_s_soc_unchanged(
-        self, generation_kw: float, demand_kw: float, timestep_minutes: float
+STEP_POWERS = [
+    pytest.param(2.0, 1.0, id="surplus"),
+    pytest.param(1.0, 2.0, id="shortfall"),
+    pytest.param(1.0, 1.0, id="balanced"),
+]
+
+NEW_BATTERIES = [
+    pytest.param(lambda: Battery(BatteryConfig.default_5kwh()), id="battery"),
+    pytest.param(_grid_charging_battery, id="grid-charging-battery"),
+]
+
+
+class TestStepWithATimestepThatIsNotPositiveAndFinite:
+    """Every step refuses a timestep that is not positive and finite, naming it, before its battery moves any energy."""
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), STEP_POWERS)
+    @pytest.mark.parametrize("step", EVERY_STEP)
+    def test_a_step_without_a_battery_refuses_the_timestep_naming_it(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
     ) -> None:
-        battery = Battery(BatteryConfig.default_5kwh())
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
+            step(
+                generation_kw=generation_kw,
+                demand_kw=demand_kw,
+                battery=None,
+                timestep_minutes=timestep_minutes,
+            )
+
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    @pytest.mark.parametrize(("generation_kw", "demand_kw"), STEP_POWERS)
+    @pytest.mark.parametrize("new_battery", NEW_BATTERIES)
+    @pytest.mark.parametrize("step", EVERY_STEP)
+    def test_a_step_with_a_battery_refuses_the_timestep_naming_it_and_leaves_the_soc_unchanged(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        new_battery: Callable[[], Battery],
+        generation_kw: float,
+        demand_kw: float,
+        timestep_minutes: float,
+    ) -> None:
+        battery = new_battery()
         soc_kwh = battery.soc_kwh
         refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            simulate_timestep(
+            step(
                 generation_kw=generation_kw,
                 demand_kw=demand_kw,
                 battery=battery,
@@ -1544,35 +1587,25 @@ class TestStepWithATimestepThatIsNotFinite:
             )
         assert battery.soc_kwh == soc_kwh
 
-    @pytest.mark.parametrize("timestep_minutes", NAN_OR_INFINITE)
-    @pytest.mark.parametrize(
-        ("generation_kw", "demand_kw"),
-        [
-            pytest.param(2.0, 1.0, id="surplus-charges-from-pv-and-grid"),
-            pytest.param(1.0, 1.0, id="balanced-charges-from-grid"),
-        ],
-    )
-    def test_a_grid_charging_tou_step_in_a_cheap_period_refuses_it_with_the_controller_s_message(
-        self,
-        generation_kw: float,
-        demand_kw: float,
-        timestep_minutes: float,
-        grid_charge_battery: Battery,
-        economy7_tariff: TariffConfig,
-        off_peak_ts: pd.Timestamp,
+    @pytest.mark.parametrize("timestep_minutes", NOT_POSITIVE_AND_FINITE_MINUTES)
+    def test_simulate_timestep_refuses_the_timestep_naming_it_before_calling_a_strategy_of_the_consumer_s_own(
+        self, timestep_minutes: float
     ) -> None:
-        soc_kwh = grid_charge_battery.soc_kwh
-        refusal = f"timestep_minutes must be positive and finite, got {timestep_minutes} minutes"
+        """Unlike the built-in strategies, _RecordingStrategy checks none of its inputs, so the step's own check is all that refuses the timestep."""
+        strategy = _RecordingStrategy()
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_kwh = battery.soc_kwh
+        refusal = f"Timestep must be positive and finite, got {timestep_minutes} minutes"
         with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
-            simulate_timestep_tou(
-                generation_kw=generation_kw,
-                demand_kw=demand_kw,
-                battery=grid_charge_battery,
-                timestamp=off_peak_ts,
-                tariff=economy7_tariff,
+            simulate_timestep(
+                generation_kw=2.0,
+                demand_kw=1.0,
+                battery=battery,
                 timestep_minutes=timestep_minutes,
+                strategy=strategy,
             )
-        assert grid_charge_battery.soc_kwh == soc_kwh
+        assert strategy.received_timesteps == []
+        assert battery.soc_kwh == soc_kwh
 
 
 class TestStepWithAPowerThatIsNotFinite:
