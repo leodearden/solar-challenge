@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Literal, Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import SelfConsumptionStrategy
 from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
@@ -44,7 +43,8 @@ class CommunityBillingConfig:
     Attributes
     ----------
     tariff:
-        Community import tariff configuration.
+        Community import tariff configuration; the community battery also
+        dispatches by it.
     seg_rate_pence_per_kwh:
         Smart Export Guarantee rate in pence per kWh, a finite number of at
         least 0, or ``None``.
@@ -263,8 +263,10 @@ def simulate_community(
         A shared :class:`~solar_challenge.battery.Battery` is instantiated once
         and each net surplus/deficit step, the fleet window's ``step_minutes``
         long, is dispatched in order via
-        :func:`~solar_challenge.flow.simulate_timestep` with
-        :class:`~solar_challenge.dispatch.SelfConsumptionStrategy`.  The
+        :func:`~solar_challenge.flow.simulate_timestep` with the strategy the
+        battery's ``dispatch_strategy`` names, self-consumption when it names
+        none, built by :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
+        and with ``billing.tariff`` as the step's tariff.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
         dividing by the fleet window's ``step_hours``.
@@ -324,7 +326,8 @@ def simulate_community(
         # Community battery dispatch — sequential because SOC is stateful.
         # Like each home's battery, it starts at the midpoint of its usable SOC window.
         battery = Battery(cb_config)
-        strategy = SelfConsumptionStrategy()
+        strategy = _battery_strategy(cb_config, config.billing)
+        tariff = _billing_tariff(config.billing)
 
         # Pre-extract arrays to avoid repeated label-based .loc[t] hash lookups
         # and redundant pd.Timestamp construction inside the hot loop
@@ -350,6 +353,7 @@ def simulate_community(
                 timestep_minutes=step_minutes,
                 timestamp=t.to_pydatetime(),
                 strategy=strategy,
+                tariff=tariff,
             )
             if validate_balance:
                 validate_energy_balance(r)
