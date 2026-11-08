@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +44,8 @@ class MarkingHomeSimulator:
     """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, then refuses each home named in *failing*.
 
     A marker appears at its name, <home name>.json, only once whole: it is written under a temporary
-    name that carries the writer's process id, since two pool workers can mark homes of one name at
-    once, and then renamed.
+    name that carries the writer's process id and thread id, since two pool workers, or two threads
+    of one process, can mark homes of one name at once, and then renamed.
 
     A home it does not refuse gets make_sim_results(self_kwh=<its PV kW>, days=1), so the
     results total the home's PV kW of self-consumption, which identifies the home.
@@ -60,7 +61,7 @@ class MarkingHomeSimulator:
         """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results."""
         locations = [location.name for location in weather.frames] if isinstance(weather, PrefetchedWeather) else None
         marker = self.marker_dir / f"{config.name}.json"
-        partial = marker.with_name(f"{marker.name}.{os.getpid()}.partial")
+        partial = marker.with_name(f"{marker.name}.{os.getpid()}.{threading.get_ident()}.partial")
         partial.write_text(json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8")
         partial.replace(marker)
         time.sleep(self.seconds)
