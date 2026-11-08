@@ -172,6 +172,22 @@ def _make_fleet_summary(n_homes: int = 2) -> FleetSummary:
     )
 
 
+def _results_with_a_demand_made_nan(index: pd.DatetimeIndex | None = None) -> SimulationResults:
+    """Create a SimulationResults, then make one row of its demand NaN in place, as construction refuses a NaN passed in."""
+    results = _make_simulation_results(index)
+    results.demand.iloc[5] = math.nan
+    return results
+
+
+def _fleet_results_with_a_later_home_demand_made_nan(first_name: str, later_name: str) -> FleetResults:
+    """Create a FleetResults of two homes over one index, named *first_name* and *later_name*, the later home's results being _results_with_a_demand_made_nan's."""
+    index = _make_index()
+    return FleetResults(
+        per_home_results=[_make_simulation_results(index), _results_with_a_demand_made_nan(index)],
+        home_configs=[_make_home_config(first_name), _make_home_config(later_name)],
+    )
+
+
 def _json_field_tree(obj: Any) -> Any:
     """Return a dataclass's field tree as JSON gives it back."""
     return json.loads(json.dumps(dataclasses.asdict(obj)))
@@ -1002,8 +1018,7 @@ class TestSaveOfAnAmountMadeNaNInPlace:
 
     def test_a_home_save_is_refused_and_writes_no_file(self, storage: RunStorage) -> None:
         """The refused save leaves no run directory and no runs row."""
-        results = _make_simulation_results()
-        results.demand.iloc[5] = math.nan
+        results = _results_with_a_demand_made_nan()
 
         with pytest.raises(SeriesRefused) as refused:
             storage.save_home_run(
@@ -1020,12 +1035,7 @@ class TestSaveOfAnAmountMadeNaNInPlace:
 
     def test_a_fleet_save_is_refused_before_its_first_homes_files_are_written(self, storage: RunStorage) -> None:
         """The NaN is in the later home, yet the refused save leaves no run directory, so none of the first home's files, and no runs row."""
-        index = _make_index()
-        fleet_results = FleetResults(
-            per_home_results=[_make_simulation_results(index) for _ in range(2)],
-            home_configs=[_make_home_config(f"Home {i}") for i in range(2)],
-        )
-        fleet_results.per_home_results[1].demand.iloc[5] = math.nan
+        fleet_results = _fleet_results_with_a_later_home_demand_made_nan("Home 0", "Home 1")
 
         with pytest.raises(SeriesRefused) as refused:
             storage.save_fleet_run(
@@ -1049,8 +1059,7 @@ class TestSaveOfAnAmountMadeNaNInPlace:
             summary=_make_summary(),
             name="Saved Run",
         )
-        results = _make_simulation_results()
-        results.demand.iloc[5] = math.nan
+        results = _results_with_a_demand_made_nan()
 
         with pytest.raises(SeriesRefused):
             storage.save_home_run(
@@ -1076,11 +1085,7 @@ class TestSaveOfAnAmountMadeNaNInPlace:
             per_home_summaries=[_make_summary(), _make_summary()],
             name="Saved Run",
         )
-        refused_fleet_results = FleetResults(
-            per_home_results=[_make_simulation_results(index) for _ in range(2)],
-            home_configs=[_make_home_config(f"Second {i}") for i in range(2)],
-        )
-        refused_fleet_results.per_home_results[1].demand.iloc[5] = math.nan
+        refused_fleet_results = _fleet_results_with_a_later_home_demand_made_nan("Second 0", "Second 1")
 
         with pytest.raises(SeriesRefused):
             storage.save_fleet_run(
