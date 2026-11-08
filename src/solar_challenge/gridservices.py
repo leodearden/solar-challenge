@@ -35,8 +35,9 @@ Key public symbols:
   installed battery discharge power per year.
 * :data:`GridServicesModel` — the union of the three pricing values, each of
   which prices a simulated fleet with ``annual_income_gbp(fleet_results)``.
-* :func:`compute_fleet_spare_capacity_kw` — per-event-window firm spare
-  dispatchable battery capacity (kW) summed across the fleet.
+* :func:`compute_fleet_spare_capacity_kw` — per event window, the mean over
+  event days of the fleet's daily firm spare dispatchable battery capacity (kW),
+  under a named delivery baseline.
 * :class:`GridServicesAtEvents` — frozen dataclass holding the banded
   availability + utilisation income breakdown returned by
   :func:`compute_grid_services_at_events`.
