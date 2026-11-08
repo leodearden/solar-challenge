@@ -1,5 +1,6 @@
 """Tests for weather data handling."""
 
+import hashlib
 import json
 import pickle
 import re
@@ -140,10 +141,59 @@ def _utc_hours_indexed_as_pvgis_tmy():
     )
 
 
+_SYNTHETIC_JUNE_DAY = synthetic_june_weather("2024-06-21")
+"""synthetic_june_weather's 2024-06-21: 24 hourly rows in Europe/London, on an index whose frequency is h."""
+
+
+def _entry_text(entry):
+    """The text of entry, a cache entry's file, read as UTF-8 bytes so that no newline is translated."""
+    return entry.read_bytes().decode("utf-8")
+
+
+def _write_entry_text(entry, text):
+    """Write text over entry, a cache entry's file, as UTF-8 bytes so that no newline is translated."""
+    entry.write_bytes(text.encode("utf-8"))
+
+
+def _sealed(content):
+    """An entry file's text with content after a first line sealing it, as put seals it."""
+    return json.dumps({"sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}) + "\n" + content
+
+
 def _rewrite_header(entry, rewrite):
-    """Replace the JSON object on the first line of entry, a cache entry's file, with what rewrite makes of it, keeping the frame's CSV below it."""
-    header, frame_csv = entry.read_text(encoding="utf-8").split("\n", 1)
-    entry.write_text(json.dumps(rewrite(json.loads(header))) + "\n" + frame_csv, encoding="utf-8")
+    """Replace the JSON object on the header line of entry, a cache entry's file, with what rewrite makes of it, keeping the frame's CSV below it.
+
+    It seals the file again over its new content, as put seals it, so that get reads past the seal to the header's own checks.
+    """
+    _seal, header, frame_csv = _entry_text(entry).split("\n", 2)
+    _write_entry_text(entry, _sealed(json.dumps(rewrite(json.loads(header))) + "\n" + frame_csv))
+
+
+def _cut_short_at_a_row_boundary(entry):
+    """Cut entry, a cache entry's file, short after the first half of its lines."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    _write_entry_text(entry, "".join(lines[: len(lines) // 2]))
+
+
+def _cut_short_mid_row(entry):
+    """Cut entry, a cache entry's file, short after the first half of its lines and the next line but its last field."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    half = len(lines) // 2
+    _write_entry_text(entry, "".join(lines[:half]) + lines[half].rsplit(",", 1)[0])
+
+
+def _cut_short_above_the_rows(entry):
+    """Cut entry, the file of _SYNTHETIC_JUNE_DAY's entry, short to the lines above the frame's rows."""
+    lines = _entry_text(entry).splitlines(keepends=True)
+    _write_entry_text(entry, "".join(lines[: -len(_SYNTHETIC_JUNE_DAY)]))
+
+
+def _change_the_timezone_keeping_the_seal(entry):
+    """Change the timezone the header of entry, a cache entry's file, names from Europe/London to UTC, leaving every other byte as it was."""
+    text = _entry_text(entry)
+    changed = text.replace('"timezone": "Europe/London"', '"timezone": "UTC"', 1)
+    assert changed != text, f"the entry's file names no Europe/London timezone to change: {text[:200]!r}"
+    _write_entry_text(entry, changed)
 
 
 class TestWeatherCache:
@@ -274,8 +324,14 @@ class TestWeatherCache:
             pytest.param(lambda entry: entry.write_bytes(b"\x00\xff\xfe"), id="bytes that are not UTF-8"),
             pytest.param(lambda entry: entry.write_bytes(b""), id="an empty file"),
             pytest.param(
-                lambda entry: entry.write_text(entry.read_text(encoding="utf-8").split("\n", 1)[1], encoding="utf-8"),
+                lambda entry: _write_entry_text(entry, _SYNTHETIC_JUNE_DAY.to_csv()),
                 id="the frame's CSV with no header line, as key version 2 wrote it",
+            ),
+            pytest.param(
+                lambda entry: _write_entry_text(
+                    entry, json.dumps({"timezone": "Europe/London", "freq": "h"}) + "\n" + _SYNTHETIC_JUNE_DAY.to_csv()
+                ),
+                id="a header line then the frame's CSV, with no seal line",
             ),
             pytest.param(
                 lambda entry: _rewrite_header(entry, lambda header: {"timezone": header["timezone"]}),
@@ -285,12 +341,22 @@ class TestWeatherCache:
                 lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": "2h"}),
                 id="a header naming a freq the rows do not follow",
             ),
+            pytest.param(_cut_short_at_a_row_boundary, id="cut short at a row boundary"),
+            pytest.param(_cut_short_mid_row, id="cut short mid-row"),
+            pytest.param(_cut_short_above_the_rows, id="cut short to the lines above the frame's rows"),
+            pytest.param(
+                lambda entry: _write_entry_text(entry, _entry_text(entry).rstrip("\n")[:-3]),
+                id="cut short inside its last row, keeping the row count",
+            ),
+            pytest.param(
+                _change_the_timezone_keeping_the_seal, id="its header's timezone changed, its seal as put wrote it"
+            ),
         ],
     )
     def test_get_refuses_an_entry_it_cannot_read_naming_its_file(self, cache, bristol, spoil):
-        """get refuses an entry file it cannot read back as the frame put stored with a ValueError naming the file, so it
-        never returns a degraded frame."""
-        cache.put(synthetic_june_weather("2024-06-21"), "tmy", bristol)
+        """get refuses an entry file cut short, changed after put wrote it, or holding anything but a frame as put writes
+        one, with a ValueError naming the file, so it never returns a degraded frame."""
+        cache.put(_SYNTHETIC_JUNE_DAY, "tmy", bristol)
         [entry] = cache.cache_dir.iterdir()
         spoil(entry)
 
