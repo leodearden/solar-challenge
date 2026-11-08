@@ -309,7 +309,7 @@ class FleetRunner:
 
     Attributes:
         weather: Asked once per call for each distinct location of the call's homes, in the calling process
-        home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it is a top-level function
+        home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it must pickle, e.g. a top-level function or an instance of a top-level class
         parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process
         max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
     """
