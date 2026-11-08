@@ -3,6 +3,7 @@
 import json
 import pickle
 import re
+import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -30,10 +31,14 @@ from solar_challenge.weather import (
     set_weather_cache,
 )
 from solar_challenge.location import Location
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._synthetic_weather import TMY_DAYS, synthetic_june_weather, synthetic_tmy
 
 PRE_SCALING_BRISTOL_TMY_STEM = "tmy_5dc8c8bca218"
 """The file stem of Bristol's cached TMY before task 285, when the cache held PVGIS's TMY unscaled."""
+
+KEY_VERSION_2_ENTRY_DIR = REPOSITORY_ROOT / "tests" / "fixtures" / "weather_cache_key_version_2"
+"""Bristol's entry for synthetic_june_weather("2024-06-21") as key version 2's put wrote it: a CSV and a .meta.json sidecar."""
 
 
 @pytest.fixture
@@ -117,6 +122,30 @@ class _ZonePandasCannotLocalizeIn(tzinfo):
         return self._london.tzname(dt)
 
 
+def _london_hours_across_the_march_clock_change():
+    """Hourly weather in Europe/London from 2024-03-30 00:00 to 2024-04-01 23:00: 71 hours, since 31 March has 23."""
+    index = pd.date_range("2024-03-30", "2024-04-01 23:00", freq="h", tz="Europe/London")
+    return pd.DataFrame(
+        {"ghi": np.linspace(0.0, 870.0, len(index)), "temp_air": np.linspace(4.0, 13.0, len(index))}, index=index
+    )
+
+
+def _utc_hours_indexed_as_pvgis_tmy():
+    """48 hours of weather from 1990-01-01 00:00 UTC on an index with no frequency, named time(UTC), as pvlib returns PVGIS's TMY."""
+    index = pd.DatetimeIndex(
+        pd.date_range("1990-01-01", periods=48, freq="h", tz="UTC"), freq=None, name="time(UTC)"
+    )
+    return pd.DataFrame(
+        {"ghi": np.linspace(0.0, 870.0, len(index)), "temp_air": np.linspace(4.0, 13.0, len(index))}, index=index
+    )
+
+
+def _rewrite_header(entry, rewrite):
+    """Replace the JSON object on the first line of entry, a cache entry's file, with what rewrite makes of it, keeping the frame's CSV below it."""
+    header, frame_csv = entry.read_text(encoding="utf-8").split("\n", 1)
+    entry.write_text(json.dumps(rewrite(json.loads(header))) + "\n" + frame_csv, encoding="utf-8")
+
+
 class TestWeatherCache:
     """Test weather data caching (LOC-004)."""
 
@@ -146,6 +175,14 @@ class TestWeatherCache:
             "dhi": np.linspace(0, 300, 24),
             "temp_air": np.linspace(5, 15, 24),
         }, index=sample_index)
+
+    @pytest.fixture
+    def key_version_2_entry_names(self, cache):
+        """The names of the files in KEY_VERSION_2_ENTRY_DIR, each copied into cache's directory."""
+        names = sorted(file.name for file in KEY_VERSION_2_ENTRY_DIR.iterdir())
+        for name in names:
+            shutil.copy2(KEY_VERSION_2_ENTRY_DIR / name, cache.cache_dir / name)
+        return names
 
     def test_cache_directory_created(self, temp_cache_dir):
         """Cache directory is created if it doesn't exist."""
@@ -201,6 +238,66 @@ class TestWeatherCache:
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
 
     @pytest.mark.parametrize(
+        "frame",
+        [
+            pytest.param(synthetic_june_weather("2024-06-21"), id="the synthetic June day, Europe/London hourly"),
+            pytest.param(_london_hours_across_the_march_clock_change(), id="Europe/London hourly across the March clock change"),
+            pytest.param(_utc_hours_indexed_as_pvgis_tmy(), id="UTC with no frequency, named time(UTC) as PVGIS's TMY"),
+        ],
+    )
+    def test_put_writes_one_file_that_get_returns_exactly(self, cache, bristol, frame):
+        """put leaves one file under cache_dir, and get returns the frame from it exactly: its values bit for bit, and its
+        index's timezone, frequency and name."""
+        cache.put(frame, "tmy", bristol)
+
+        assert len(list(cache.cache_dir.iterdir())) == 1
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
+
+    def test_an_entry_written_at_key_version_2_is_a_miss(self, cache, bristol, key_version_2_entry_names):
+        """An entry as key version 2 wrote it, a CSV and a .meta.json sidecar, is never read: get finds no entry."""
+        assert cache.get("tmy", bristol) is None
+
+    def test_clear_removes_entries_of_key_version_2_too(self, cache, bristol, sample_weather_data, key_version_2_entry_names):
+        """clear removes the files of an entry key version 2 wrote along with the entry put writes beside them, and
+        returns how many files it removed."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        names_before = {file.name for file in cache.cache_dir.iterdir()}
+        assert set(key_version_2_entry_names) < names_before
+
+        assert cache.clear() == len(names_before)
+        assert list(cache.cache_dir.iterdir()) == []
+
+    @pytest.mark.parametrize(
+        "spoil",
+        [
+            pytest.param(lambda entry: entry.write_bytes(b"garbage"), id="text that is not JSON"),
+            pytest.param(lambda entry: entry.write_bytes(b"\x00\xff\xfe"), id="bytes that are not UTF-8"),
+            pytest.param(lambda entry: entry.write_bytes(b""), id="an empty file"),
+            pytest.param(
+                lambda entry: entry.write_text(entry.read_text(encoding="utf-8").split("\n", 1)[1], encoding="utf-8"),
+                id="the frame's CSV with no header line, as key version 2 wrote it",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {"timezone": header["timezone"]}),
+                id="a header lacking freq",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": "2h"}),
+                id="a header naming a freq the rows do not follow",
+            ),
+        ],
+    )
+    def test_get_refuses_an_entry_it_cannot_read_naming_its_file(self, cache, bristol, spoil):
+        """get refuses an entry file it cannot read back as the frame put stored with a ValueError naming the file, so it
+        never returns a degraded frame."""
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        spoil(entry)
+
+        with pytest.raises(ValueError, match=re.escape(str(entry))):
+            cache.get("tmy", bristol)
+
+    @pytest.mark.parametrize(
         "tz",
         [
             pytest.param("dateutil/Europe/London", id="a dateutil zone"),
@@ -223,15 +320,18 @@ class TestWeatherCache:
 
     def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
         """get refuses an entry recording its timezone as a str that names none, a dateutil zone's say, which put
-        refuses to record: its ValueError names that str."""
+        refuses to record: its ValueError names that str and the entry's file."""
         index = pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London")
         cache.put(pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index), "tmy", bristol)
         dateutil_london = "tzfile('/usr/share/zoneinfo/Europe/London')"
-        [meta_file] = cache.cache_dir.glob("*.meta.json")
-        meta_file.write_text(json.dumps({**json.loads(meta_file.read_text()), "timezone": dateutil_london}))
+        [entry] = cache.cache_dir.iterdir()
+        _rewrite_header(entry, lambda header: {**header, "timezone": dateutil_london})
 
-        with pytest.raises(ValueError, match=re.escape(dateutil_london)):
+        with pytest.raises(ValueError) as refusal:
             cache.get("tmy", bristol)
+
+        assert dateutil_london in str(refusal.value)
+        assert str(entry) in str(refusal.value)
 
     def test_different_locations_different_cache(self, cache, sample_weather_data):
         """Different locations use different cache entries."""
@@ -299,12 +399,13 @@ class TestWeatherCache:
         assert result is None
 
     def test_invalidate_specific_entry(self, cache, bristol, sample_weather_data):
-        """Invalidate removes specific cache entry."""
+        """Invalidate removes specific cache entry, leaving no file of it."""
         cache.put(sample_weather_data, "tmy", bristol)
         removed = cache.invalidate("tmy", bristol)
         assert removed is True
         result = cache.get("tmy", bristol)
         assert result is None
+        assert list(cache.cache_dir.iterdir()) == []
 
     def test_invalidate_returns_false_if_not_found(self, cache, bristol):
         """Invalidate returns False if entry doesn't exist."""
