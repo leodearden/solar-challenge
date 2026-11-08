@@ -711,7 +711,7 @@ class TestFleetRunnerSimulates:
         assert sorted(index for index, _ in each) == [0, 1, 2]
         for index, results in each:
             _assert_marked_results_of(results, fleets[index])
-        assert told[-1] == (6, 6)
+        assert told == [(done, 6) for done in range(1, 7)]
 
     def test_no_fleets_yield_nothing_and_fetch_no_weather(self, tmp_path: Path) -> None:
         weather = _CountingWeather()
