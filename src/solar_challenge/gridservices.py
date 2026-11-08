@@ -51,6 +51,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
@@ -458,6 +459,47 @@ GridServicesModel: TypeAlias = NoGridServices | FlatGridServices | GridServicesE
 # ---------------------------------------------------------------------------
 
 
+def _span_sums(
+    series: pd.Series, start: npt.NDArray[np.intp], stop: npt.NDArray[np.intp]
+) -> npt.NDArray[np.float64]:
+    """The sum of *series* over each span of rows from *start* up to, not including, *stop*: 0.0 for an empty span."""
+    values: npt.NDArray[np.float64] = series.to_numpy(dtype=float)
+    cumulative = np.concatenate((np.zeros(1), np.cumsum(values)))
+    return np.take(cumulative, stop) - np.take(cumulative, start)
+
+
+def _home_displaced_self_use(
+    sim: "SimulationResults",
+    first_rows: npt.NDArray[np.intp],
+    last_rows: npt.NDArray[np.intp],
+    avail_kw: npt.NDArray[np.float64],
+    event_hours: float,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """One battery home's displaced evening self-use on each of its event days: the kWh, and its value (£).
+
+    A day's span is its rows after *last_rows* (its last in-window row) and before
+    the first later row that charges, the next event day's first in-window row
+    (*first_rows*, in date order) or the index's end, whichever comes first.  The
+    kWh is ``min(avail_kw × event_hours, the span's discharge)``; its value is that
+    kWh at the span's mean tariff, £0 for an empty span.
+    """
+    rows = len(sim.battery_discharge)
+    charging = np.flatnonzero(sim.battery_charge.to_numpy(dtype=float) > 0)
+    next_charge = np.append(charging, rows)[np.searchsorted(charging, last_rows, side="right")]
+    start = last_rows + 1
+    stop = np.minimum(next_charge, np.append(first_rows[1:], rows))
+    span_rows = stop - start
+    discharge_kwh = _span_sums(sim.battery_discharge, start, stop) * sim.window.step_hours
+    mean_rate = np.divide(
+        _span_sums(sim.tariff_rate, start, stop),
+        span_rows,
+        out=np.zeros(len(span_rows)),
+        where=span_rows > 0,
+    )
+    displaced_kwh = np.minimum(avail_kw * event_hours, discharge_kwh)
+    return displaced_kwh, displaced_kwh * mean_rate
+
+
 def _home_event_days(
     sim: "SimulationResults",
     battery_config: BatteryConfig,
@@ -465,10 +507,13 @@ def _home_event_days(
     window: EventWindow,
     baseline: DeliveryBaseline,
 ) -> pd.DataFrame:
-    """One battery home's firm spare capacity on each of its event days in *window* under *baseline*: column avail_kw (kW), indexed by date in date order.
+    """One battery home's figures on each of its event days in *window* under *baseline*, indexed by date in date order.
 
-    The formulas are :func:`compute_fleet_spare_capacity_kw`'s.  A home whose index
-    the window never enters has no event day: the frame is empty.
+    Columns: avail_kw, its firm spare capacity (kW); displaced_kwh and
+    displaced_gbp, the evening self-use that capacity displaces and its value (see
+    :func:`_home_displaced_self_use`).  The formulas are
+    :func:`compute_fleet_spare_capacity_kw`'s.  A home whose index the window never
+    enters has no event day: the frame is empty.
     """
     index = sim.battery_soc.index
     rows = np.flatnonzero(window.mask(index).to_numpy())
@@ -486,17 +531,30 @@ def _home_event_days(
             min_above_floor=("above_floor", "min"),
             max_discharge=("discharge", "max"),
             first_row=("row", "min"),
+            last_row=("row", "max"),
         )
     )
+    first_rows = days["first_row"].to_numpy()
     match baseline:
         case DeliveryBaseline.OPERATIONAL:
             headroom_kw = battery_config.max_discharge_kw - days["max_discharge"].to_numpy()
             energy_kwh = days["min_above_floor"].to_numpy()
         case DeliveryBaseline.CAPACITY:
             headroom_kw = np.full(len(days), battery_config.max_discharge_kw)
-            energy_kwh = above_floor[days["first_row"].to_numpy()]
+            energy_kwh = above_floor[first_rows]
     avail_kw = np.maximum(0.0, np.minimum(headroom_kw, energy_kwh / window.event_hours))
-    return pd.DataFrame({"avail_kw": avail_kw}, index=days.index)
+    displaced_kwh, displaced_gbp = _home_displaced_self_use(
+        sim, first_rows, days["last_row"].to_numpy(), avail_kw, window.event_hours
+    )
+    return pd.DataFrame(
+        {"avail_kw": avail_kw, "displaced_kwh": displaced_kwh, "displaced_gbp": displaced_gbp},
+        index=days.index,
+    )
+
+
+def _mean_or_zero(values: tuple[float, ...]) -> float:
+    """The mean of *values*; 0.0 when there are none."""
+    return sum(values) / len(values) if values else 0.0
 
 
 @dataclass(frozen=True)
@@ -509,18 +567,27 @@ class _EventDayTotals:
     Attributes:
         window: The event window.
         avail_kw: The fleet's firm spare capacity on each event day, A(d) (kW).
+        displaced_kwh: The fleet's evening self-use displaced on each event day (kWh).
+        displaced_gbp: The value of that displaced self-use on each event day (£).
     """
 
     window: EventWindow
     avail_kw: tuple[float, ...]
+    displaced_kwh: tuple[float, ...]
+    displaced_gbp: tuple[float, ...]
 
     @classmethod
     def of_homes(cls, window: EventWindow, home_days: list[pd.DataFrame]) -> "_EventDayTotals":
         """Sum *home_days*, each one home's figures per event date, over the homes on the sorted union of their dates."""
         if not home_days:
-            return cls(window=window, avail_kw=())
+            return cls(window=window, avail_kw=(), displaced_kwh=(), displaced_gbp=())
         fleet_days = pd.concat(home_days).groupby(level=0).sum()
-        return cls(window=window, avail_kw=tuple(fleet_days["avail_kw"].tolist()))
+        return cls(
+            window=window,
+            avail_kw=tuple(fleet_days["avail_kw"].tolist()),
+            displaced_kwh=tuple(fleet_days["displaced_kwh"].tolist()),
+            displaced_gbp=tuple(fleet_days["displaced_gbp"].tolist()),
+        )
 
     @property
     def observed(self) -> bool:
@@ -530,7 +597,17 @@ class _EventDayTotals:
     @property
     def mean_avail_kw(self) -> float:
         """The mean of A(d) over the event days, the capacity the pricing books (kW); 0.0 with no event day."""
-        return sum(self.avail_kw) / len(self.avail_kw) if self.avail_kw else 0.0
+        return _mean_or_zero(self.avail_kw)
+
+    @property
+    def displaced_kwh_per_event(self) -> float:
+        """The mean over the event days of the fleet's displaced evening self-use (kWh); 0.0 with no event day."""
+        return _mean_or_zero(self.displaced_kwh)
+
+    @property
+    def displaced_gbp_per_year(self) -> float:
+        """The mean over the event days of the displaced self-use's value, times the window's events per year (£); 0.0 with no event day."""
+        return _mean_or_zero(self.displaced_gbp) * self.window.events_per_year
 
     def avail_on_share_of_days_kw(self, percent: int) -> float:
         """The capacity available on at least *percent* % of the event days (kW): the ⌈percent·n / 100⌉-th largest of the n values of A(d); 0.0 with no event day.
@@ -667,6 +744,18 @@ class GridServicesAtEvents:
         per_window_avail_p90_kw: Per-window capacity available on at least 90%
             of event days (kW), in window order: the ⌈0.9·n⌉-th largest fleet
             daily total; 0.0 for a window with no event day.
+        per_window_displaced_self_use_kwh_per_event: Per-window evening
+            self-use an event displaces (kWh), in window order: per home and
+            event day, ``min(avail × event_hours, the discharge after the window
+            until the next recharge, the next event day's window or the index
+            end)``, summed over homes and averaged over event days.  A reported
+            figure: neither *annual_income_gbp* nor *per_window_income_gbp*
+            subtracts it.
+        per_window_displaced_import_gbp_per_year: Per-window value of that
+            displaced self-use (£/year), in window order: each home-day's
+            displaced kWh at the mean tariff over its span, summed over homes,
+            averaged over event days and multiplied by ``events_per_year``.  The
+            householders import it; neither income figure subtracts it.
 
     .. note::
         ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
@@ -680,6 +769,8 @@ class GridServicesAtEvents:
     per_window_income_gbp: tuple[float, ...]
     per_window_avail_p50_kw: tuple[float, ...] = ()
     per_window_avail_p90_kw: tuple[float, ...] = ()
+    per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = ()
+    per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -766,6 +857,10 @@ def compute_grid_services_at_events(
         - ``annual_income_gbp`` — sum of per-window net income.
         - ``per_window_avail_p50_kw`` and ``per_window_avail_p90_kw`` — the
           capacity available on at least 50% and 90% of each window's event days.
+        - ``per_window_displaced_self_use_kwh_per_event`` and
+          ``per_window_displaced_import_gbp_per_year`` — the evening self-use an
+          event displaces and its value, reported beside the income, which is
+          gross of them.
     """
     battery_homes = _battery_homes(fleet_results)
     baseline = DeliveryBaseline.parse(
@@ -807,4 +902,10 @@ def compute_grid_services_at_events(
         per_window_income_gbp=tuple(per_window_net),
         per_window_avail_p50_kw=tuple(totals.avail_on_share_of_days_kw(50) for totals in per_window),
         per_window_avail_p90_kw=tuple(totals.avail_on_share_of_days_kw(90) for totals in per_window),
+        per_window_displaced_self_use_kwh_per_event=tuple(
+            totals.displaced_kwh_per_event for totals in per_window
+        ),
+        per_window_displaced_import_gbp_per_year=tuple(
+            totals.displaced_gbp_per_year for totals in per_window
+        ),
     )
