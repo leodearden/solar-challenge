@@ -338,6 +338,14 @@ class TestWeatherCache:
                 id="a header lacking freq",
             ),
             pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "timezone": 5}),
+                id="a header whose timezone is no str",
+            ),
+            pytest.param(
+                lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": 5}),
+                id="a header whose freq is no str",
+            ),
+            pytest.param(
                 lambda entry: _rewrite_header(entry, lambda header: {**header, "freq": "2h"}),
                 id="a header naming a freq the rows do not follow",
             ),
