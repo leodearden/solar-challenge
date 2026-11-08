@@ -30,98 +30,16 @@ from solar_challenge.community import (
 from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.load import LoadConfig
 from solar_challenge.output import compute_community_metrics
-from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
+from tests._balanced_sim_results import make_balanced_fleet, make_balanced_sim_results
+from tests._finance_builders import make_fleet_results_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 # ---------------------------------------------------------------------------
 # Helpers / Fixtures shared across test classes
 # ---------------------------------------------------------------------------
-
-def _make_home_result(
-    index: pd.DatetimeIndex,
-    gen: list[float],
-    dem: list[float],
-) -> SimulationResults:
-    """Build a minimal, individually-balanced SimulationResults (no battery)."""
-    n = len(index)
-    assert len(gen) == n
-    assert len(dem) == n
-    exp = [max(0.0, g - d) for g, d in zip(gen, dem)]
-    imp = [max(0.0, d - g) for g, d in zip(gen, dem)]
-    zeros = [0.0] * n
-    return SimulationResults(
-        generation=pd.Series(gen, index=index, dtype=float),
-        demand=pd.Series(dem, index=index, dtype=float),
-        self_consumption=pd.Series([min(g, d) for g, d in zip(gen, dem)], index=index, dtype=float),
-        battery_charge=pd.Series(zeros, index=index, dtype=float),
-        battery_discharge=pd.Series(zeros, index=index, dtype=float),
-        battery_soc=pd.Series(zeros, index=index, dtype=float),
-        grid_import=pd.Series(imp, index=index, dtype=float),
-        grid_export=pd.Series(exp, index=index, dtype=float),
-        import_cost=pd.Series(zeros, index=index, dtype=float),
-        export_revenue=pd.Series(zeros, index=index, dtype=float),
-        tariff_rate=pd.Series(zeros, index=index, dtype=float),
-    )
-
-
-def _make_fleet(
-    index: pd.DatetimeIndex,
-    homes: list[tuple[list[float], list[float]]],
-) -> FleetResults:
-    """Build a synthetic FleetResults from (gen, dem) pairs per home."""
-    per_home = [_make_home_result(index, g, d) for g, d in homes]
-    configs = [
-        HomeConfig(pv_config=PVConfig(capacity_kw=1.0), load_config=LoadConfig())
-        for _ in homes
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=configs)
-
-
-def _make_home_result_with_battery(
-    index: pd.DatetimeIndex,
-    gen: list[float],
-    dem: list[float],
-    bch: list[float],
-    bdis: list[float],
-) -> SimulationResults:
-    """Build a balanced SimulationResults with home battery series.
-
-    Grid flows are derived so that the per-home energy balance holds:
-    ``gen + imp + bdis == dem + exp + bch``.
-    """
-    n = len(index)
-    # net = gen - dem + bdis - bch; positive → export, negative → import
-    exp = [max(0.0, g - d + dis - ch) for g, d, ch, dis in zip(gen, dem, bch, bdis)]
-    imp = [max(0.0, d - g + ch - dis) for g, d, ch, dis in zip(gen, dem, bch, bdis)]
-    zeros = [0.0] * n
-    return SimulationResults(
-        generation=pd.Series(gen, index=index, dtype=float),
-        demand=pd.Series(dem, index=index, dtype=float),
-        self_consumption=pd.Series([min(g, d) for g, d in zip(gen, dem)], index=index, dtype=float),
-        battery_charge=pd.Series(bch, index=index, dtype=float),
-        battery_discharge=pd.Series(bdis, index=index, dtype=float),
-        battery_soc=pd.Series(zeros, index=index, dtype=float),
-        grid_import=pd.Series(imp, index=index, dtype=float),
-        grid_export=pd.Series(exp, index=index, dtype=float),
-        import_cost=pd.Series(zeros, index=index, dtype=float),
-        export_revenue=pd.Series(zeros, index=index, dtype=float),
-        tariff_rate=pd.Series(zeros, index=index, dtype=float),
-    )
-
-
-def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResults:
-    """Build a FleetResults directly from pre-built SimulationResults."""
-    configs = [
-        HomeConfig(pv_config=PVConfig(capacity_kw=1.0), load_config=LoadConfig())
-        for _ in per_home
-    ]
-    return FleetResults(per_home_results=per_home, home_configs=configs)
-
 
 def _community_battery(
     *,
@@ -318,7 +236,7 @@ class TestSimulateCommunityP2P:
         # step2: home A exports 2.0, home B imports 2.0 → balanced
         home_a = ([4.0, 1.0, 2.0], [0.0, 0.0, 0.0])  # gen, dem → exp=gen, imp=0
         home_b = ([0.0, 0.0, 0.0], [1.0, 3.0, 2.0])  # gen=0 → imp=dem, exp=0
-        return _make_fleet(index, [home_a, home_b])
+        return make_balanced_fleet(index, [home_a, home_b])
 
     def test_community_results_returned(self, fleet: FleetResults) -> None:
         """simulate_community returns a CommunityResults object."""
@@ -399,7 +317,7 @@ class TestValidateCommunityBalance:
     def fleet(self, index: pd.DatetimeIndex) -> FleetResults:
         home_a = ([4.0, 1.0, 2.0], [0.0, 0.0, 0.0])
         home_b = ([0.0, 0.0, 0.0], [1.0, 3.0, 2.0])
-        return _make_fleet(index, [home_a, home_b])
+        return make_balanced_fleet(index, [home_a, home_b])
 
     def test_balance_returns_true(self, fleet: FleetResults) -> None:
         """validate_community_balance returns True for a correctly computed result."""
@@ -436,21 +354,13 @@ class TestValidateCommunityBalance:
         P2P netting: surplus=2, deficit=0 → cg_exp=2, cg_imp=0
         Community balance: 6+0 == 4+2+(4-4)+0  (6==6) ✓
         """
-        home_a = _make_home_result_with_battery(
-            index,
-            gen=[6.0] * 3,
-            dem=[0.0] * 3,
-            bch=[4.0] * 3,
-            bdis=[0.0] * 3,
+        home_a = make_balanced_sim_results(
+            index, [6.0] * 3, [0.0] * 3, battery_charge=[4.0] * 3, battery_discharge=[0.0] * 3
         )
-        home_b = _make_home_result_with_battery(
-            index,
-            gen=[0.0] * 3,
-            dem=[4.0] * 3,
-            bch=[0.0] * 3,
-            bdis=[4.0] * 3,
+        home_b = make_balanced_sim_results(
+            index, [0.0] * 3, [4.0] * 3, battery_charge=[0.0] * 3, battery_discharge=[4.0] * 3
         )
-        return _make_fleet_from_sim_results([home_a, home_b])
+        return make_fleet_results_of([home_a, home_b])
 
     def test_balance_returns_true_with_home_batteries(
         self, battery_fleet: FleetResults
@@ -520,7 +430,7 @@ class TestSimulateCommunityBattery:
         """
         home_a = ([10.0, 10.0, 10.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0])
         home_b = ([0.0, 0.0, 0.0, 0.0, 0.0], [2.0, 2.0, 2.0, 10.0, 10.0])
-        return _make_fleet(index5, [home_a, home_b])
+        return make_balanced_fleet(index5, [home_a, home_b])
 
     # --- (a) returns CommunityResults (no longer raises) ---
 
@@ -667,7 +577,7 @@ class TestSimulateCommunityBattery:
         index2 = pd.date_range("2024-06-21 12:00", periods=2, freq="1min")
         home_a = ([100.0, 0.0], [0.0, 0.0])
         home_b = ([0.0, 0.0], [0.0, 100.0])
-        return _make_fleet(index2, [home_a, home_b])
+        return make_balanced_fleet(index2, [home_a, home_b])
 
     def test_charge_capped_at_max_charge_kw(
         self, sat_fleet: FleetResults, sat_cfg: CommunityConfig
@@ -728,7 +638,7 @@ class TestSimulateCommunityBattery:
     def test_a_peak_shaving_community_battery_discharges_only_the_import_above_its_limit(self) -> None:
         """The battery dispatches by the strategy it names; one naming none runs self-consumption, which covers the whole deficit."""
         evening = pd.date_range("2024-01-15 18:00", periods=3, freq="1min", tz="Europe/London")
-        fleet = _make_fleet(evening, [([0.0] * 3, [5.0] * 3)])
+        fleet = make_balanced_fleet(evening, [([0.0] * 3, [5.0] * 3)])
 
         peak_shaving = simulate_community(
             fleet,
@@ -755,7 +665,7 @@ class TestSimulateCommunityBattery:
         simulate_community call validates the community balance, as validate_balance defaults to True.
         """
         night = pd.date_range("2024-01-15 01:00", periods=3, freq="1min", tz="Europe/London")
-        fleet = _make_fleet(night, [([0.0] * 3, [1.0] * 3)])
+        fleet = make_balanced_fleet(night, [([0.0] * 3, [1.0] * 3)])
         billing = CommunityBillingConfig(tariff=TariffConfig.economy_7(), seg_rate_pence_per_kwh=4.1)
 
         grid_charging = simulate_community(
@@ -789,7 +699,7 @@ class TestCommunityBillingTimeOfUse:
     def test_import_only_fleet_pays_its_time_of_use_bill(self) -> None:
         # Each row lasts the index's 2 h: 4 kWh in the 06:00 off-peak row, then 6 kWh in the 08:00 peak row.
         index = pd.date_range("2024-06-21 06:00", periods=2, freq="2h", tz="Europe/London")
-        fleet = _make_fleet(index, [([0.0, 0.0], [2.0, 3.0])])
+        fleet = make_balanced_fleet(index, [([0.0, 0.0], [2.0, 3.0])])
         tariff = TariffConfig.economy_7(
             off_peak_rate=0.09, peak_rate=0.25, off_peak_start="00:30", off_peak_end="07:30"
         )
@@ -842,7 +752,7 @@ class TestCommunityBillingSavings:
     @pytest.fixture
     def billing_fleet(self, billing_idx: pd.DatetimeIndex) -> FleetResults:
         """Exporter (gen=[4,4], dem=[1,1]) + importer (gen=[0,0], dem=[2,2])."""
-        return _make_fleet(
+        return make_balanced_fleet(
             billing_idx,
             [
                 ([4.0, 4.0], [1.0, 1.0]),  # exporter
@@ -1002,7 +912,7 @@ class TestCommunityResultsSharingMode:
     @pytest.fixture
     def small_fleet(self, index: pd.DatetimeIndex) -> FleetResults:
         """Minimal 2-home fleet for sharing_mode field tests."""
-        return _make_fleet(
+        return make_balanced_fleet(
             index,
             [
                 ([4.0, 1.0, 2.0], [0.0, 0.0, 0.0]),  # exporter
@@ -1075,7 +985,7 @@ class TestCommunityRowLength:
     def test_metrics_count_a_single_row_as_long_as_its_freq(self, freq: str, row_hours: float) -> None:
         # The exporter sends out 2 kW and the importer draws 1.5 kW, so netting leaves 0.5 kW of export.
         row = pd.date_range("2024-06-21 12:00", periods=1, freq=freq, tz="Europe/London")
-        fleet = _make_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
+        fleet = make_balanced_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
 
         m = compute_community_metrics(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
 
@@ -1096,7 +1006,7 @@ class TestCommunityRowLength:
             battery_charge=zeros,
             battery_discharge=zeros,
             battery_soc=zeros,
-            fleet_results=_make_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)]),
+            fleet_results=make_balanced_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)]),
             sharing_mode="p2p",
         )
 
@@ -1106,7 +1016,7 @@ class TestCommunityRowLength:
     def test_billing_prices_a_single_row_as_one_minute(
         self, single_row: pd.DatetimeIndex, billed_p2p: CommunityConfig
     ) -> None:
-        fleet = _make_fleet(single_row, [([3.0], [1.0]), ([0.0], [1.5])])
+        fleet = make_balanced_fleet(single_row, [([3.0], [1.0]), ([0.0], [1.5])])
 
         cr = simulate_community(fleet, billed_p2p)
 
@@ -1120,7 +1030,7 @@ class TestCommunityRowLength:
         # Lossless, so no charge loss is booked as export. Starting half full, the battery
         # takes all of a 10 kW surplus for a minute; over an hour its 4 kWh of headroom
         # would bind, leaving 4 kW of charge and 6 kW of export.
-        fleet = _make_fleet(single_row, [([11.0], [1.0])])
+        fleet = make_balanced_fleet(single_row, [([11.0], [1.0])])
         battery = BatteryConfig(
             capacity_kwh=10.0,
             max_charge_kw=30.0,
@@ -1140,7 +1050,7 @@ class TestCommunityRowLength:
     def test_a_fleet_index_with_a_dropped_middle_row_is_refused(self, config: CommunityConfig) -> None:
         # The first and last gaps are both one minute; only the gap before position 5 is two.
         minutes = pd.date_range("2024-06-21 12:00", periods=10, freq="min", tz="Europe/London").delete(5)
-        fleet = _make_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)])
+        fleet = make_balanced_fleet(minutes, [([3.0] * 9, [1.0] * 9), ([0.0] * 9, [1.5] * 9)])
 
         with pytest.raises(ValueError, match="evenly spaced"):
             simulate_community(fleet, config)
@@ -1148,7 +1058,7 @@ class TestCommunityRowLength:
     @pytest.mark.parametrize("config", _CONFIG_FOR_EACH_PATH)
     def test_a_single_row_without_a_freq_is_refused(self, config: CommunityConfig) -> None:
         row = pd.DatetimeIndex([pd.Timestamp("2024-06-21 12:00", tz="Europe/London")])
-        fleet = _make_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
+        fleet = make_balanced_fleet(row, [([3.0], [1.0]), ([0.0], [1.5])])
 
         with pytest.raises(ValueError, match="one row"):
             simulate_community(fleet, config)
