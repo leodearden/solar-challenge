@@ -15,6 +15,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
+    DeliveryBaseline,
     EventWindow,
     FlatGridServices,
     GridServicesAtEvents,
@@ -288,6 +289,33 @@ class TestGridServicesBand:
 
 
 # ---------------------------------------------------------------------------
+# DeliveryBaseline: the one delivery-baseline vocabulary (docs/prds/grid-services-pricing-model.md §5.10)
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryBaseline:
+    """DeliveryBaseline names how an event's delivery is measured, and its parse refuses any other value."""
+
+    def test_members_are_operational_then_capacity(self) -> None:
+        assert [baseline.value for baseline in DeliveryBaseline] == ["operational", "capacity"]
+
+    @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
+    def test_parse_returns_the_member_its_value_names(self, baseline: DeliveryBaseline) -> None:
+        assert DeliveryBaseline.parse(baseline.value, what="test baseline") is baseline
+
+    @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
+    def test_parse_returns_a_member_it_is_given(self, baseline: DeliveryBaseline) -> None:
+        assert DeliveryBaseline.parse(baseline, what="test baseline") is baseline
+
+    @pytest.mark.parametrize("value", ["metered", "Operational", "", None, ["capacity"]])
+    def test_parse_refuses_any_other_value_naming_what_and_the_baselines(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            DeliveryBaseline.parse(value, what="test baseline")
+
+        assert str(excinfo.value) == f"test baseline must be one of operational, capacity, got {value!r}"
+
+
+# ---------------------------------------------------------------------------
 # Step-5: GridServicesRateBand + GridServicesRateBands + module constant
 # ---------------------------------------------------------------------------
 
@@ -430,6 +458,7 @@ class TestGridServicesEventsConfigDefaults:
         assert 0.0 <= cfg.utilisation_factor <= 1.0
         assert cfg.availability_gbp_per_kw_per_event is None
         assert cfg.utilisation_gbp_per_mwh is None
+        assert cfg.delivery_baseline == "operational"
 
     def test_fully_specified_config_round_trips(self) -> None:
         """All fields survive round-trip when explicitly set."""
@@ -441,6 +470,7 @@ class TestGridServicesEventsConfigDefaults:
             utilisation_factor=0.8,
             availability_gbp_per_kw_per_event=2.5,
             utilisation_gbp_per_mwh=80.0,
+            delivery_baseline="capacity",
         )
         assert cfg.band == "high"
         assert cfg.event_windows == ews
@@ -448,6 +478,7 @@ class TestGridServicesEventsConfigDefaults:
         assert cfg.utilisation_factor == 0.8
         assert cfg.availability_gbp_per_kw_per_event == 2.5
         assert cfg.utilisation_gbp_per_mwh == 80.0
+        assert cfg.delivery_baseline == "capacity"
 
     def test_is_frozen(self) -> None:
         """GridServicesEventsConfig is frozen — assignment raises FrozenInstanceError."""
@@ -521,6 +552,15 @@ class TestGridServicesEventsConfigValidation:
         """Unknown band name raises ConfigurationError."""
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(band="mid")
+
+    def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            GridServicesEventsConfig(delivery_baseline="metered")
+
+        assert isinstance(exc_info.value, ConfigurationError)
+        assert str(exc_info.value) == (
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
+        )
 
     def test_aggregator_share_zero_ok(self) -> None:
         """aggregator_share == 0.0 is valid."""
