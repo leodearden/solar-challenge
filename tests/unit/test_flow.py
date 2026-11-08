@@ -1500,15 +1500,16 @@ class TestStepRefusesANegativeFlow:
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
     @pytest.mark.parametrize(
-        ("power", "flow"), [("generation_kw", "generation"), ("demand_kw", "demand")]
+        ("power", "quantity"), [("generation_kw", "Generation"), ("demand_kw", "Demand")]
     )
     @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
-    def test_a_negative_or_nan_power_makes_the_step_raise_naming_its_flow(
-        self, step: Callable[..., EnergyFlowResult], power: str, flow: str, value: float
+    def test_a_negative_or_nan_power_is_refused_by_the_step_naming_the_power(
+        self, step: Callable[..., EnergyFlowResult], power: str, quantity: str, value: float
     ) -> None:
-        """With no battery, no dispatch strategy checks the power first."""
+        """With no battery no dispatch strategy runs, so the step's own check refuses the power."""
         powers = {"generation_kw": 0.0, "demand_kw": 0.0, power: value}
-        with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
+        refusal = f"{quantity} must be non-negative and finite, got {value} kW"
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$"):
             step(**powers, battery=None, timestep_minutes=60)
 
 
