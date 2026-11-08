@@ -17,6 +17,7 @@ import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import SelfConsumptionStrategy
+from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
@@ -58,6 +59,32 @@ class CommunityBillingConfig:
 
 
 # ---------------------------------------------------------------------------
+# _billing_tariff, _battery_strategy
+# ---------------------------------------------------------------------------
+
+def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | None:
+    """The community's one tariff, billing's: the community battery dispatches by it, and it prices the grid flows."""
+    return None if billing is None else billing.tariff
+
+
+def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | None) -> DispatchStrategy:
+    """The strategy the community battery's dispatch_strategy names, self-consumption when it names none, built for its grid_charging at the billing tariff.
+
+    Raises
+    ------
+    ConfigurationError
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses the
+        battery's grid_charging, which the strategy would ignore; its refusal
+        propagates unchanged.
+    """
+    return build_dispatch_strategy(
+        battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+        grid_charging=battery.grid_charging,
+        tariff=_billing_tariff(billing),
+    )
+
+
+# ---------------------------------------------------------------------------
 # CommunityConfig
 # ---------------------------------------------------------------------------
 
@@ -77,6 +104,18 @@ class CommunityConfig:
     billing:
         The community's import tariff and SEG rate, for pricing its grid
         flows; ``None`` (default) skips billing.
+
+    Raises
+    ------
+    ConfigurationError
+        If sharing_mode is neither ``"p2p"`` nor ``"community_battery"``; if
+        a ``"p2p"`` config has a community_battery, or a
+        ``"community_battery"`` config has none; or if the community
+        battery's dispatch would ignore its grid_charging, as
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses it:
+        the strategy its dispatch_strategy names, self-consumption when it
+        names none, does not charge from the grid, or billing names no tariff
+        to find a cheap period in.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -84,7 +123,7 @@ class CommunityConfig:
     billing: Optional[CommunityBillingConfig] = None
 
     def __post_init__(self) -> None:
-        """Refuse an unknown sharing mode, or a community battery the mode does not take, raising ConfigurationError."""
+        """Refuse an unknown sharing mode, a community battery the mode does not take, or a community battery whose dispatch would ignore its grid_charging, raising ConfigurationError."""
         if self.sharing_mode not in ("p2p", "community_battery"):
             raise ConfigurationError.must_be("sharing_mode", "'p2p' or 'community_battery'", got=self.sharing_mode)
         if self.sharing_mode == "p2p" and self.community_battery is not None:
@@ -97,6 +136,8 @@ class CommunityConfig:
                 "sharing_mode='community_battery' requires a community_battery config; "
                 "provide a BatteryConfig or switch to sharing_mode='p2p'."
             )
+        if self.community_battery is not None:
+            _battery_strategy(self.community_battery, self.billing)
 
 
 # ---------------------------------------------------------------------------
