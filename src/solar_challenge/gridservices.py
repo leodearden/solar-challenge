@@ -12,6 +12,8 @@ Key public symbols:
   that returns a boolean :class:`pandas.Series` selecting in-window timesteps.
 * :class:`GridServicesBand` — the one low / central / high uncertainty-band
   vocabulary, whose :meth:`~GridServicesBand.parse` refuses any other value.
+* :class:`DeliveryBaseline` — the one operational / capacity delivery-baseline
+  vocabulary, whose :meth:`~DeliveryBaseline.parse` refuses any other value.
 * :class:`GridServicesRateBand` — frozen dataclass holding per-event availability
   and utilisation rates, and a flat rate per kW of battery discharge power per
   year, for one uncertainty band.
@@ -93,6 +95,33 @@ class GridServicesBand(str, Enum):
         except ValueError:
             raise ConfigurationError.must_be(
                 what, f"one of {', '.join(band.value for band in cls)}", got=value
+            ) from None
+
+
+# ---------------------------------------------------------------------------
+# DeliveryBaseline
+# ---------------------------------------------------------------------------
+
+
+class DeliveryBaseline(str, Enum):
+    """How an event's delivery is measured: operational, the increment above the battery's own discharge, as NESO's DFS measures it; capacity, the battery's whole window discharge, as NGED baselines domestic storage."""
+
+    OPERATIONAL = "operational"
+    CAPACITY = "capacity"
+
+    @classmethod
+    def parse(cls, value: object, *, what: str) -> "DeliveryBaseline":
+        """Return the baseline *value* names: a baseline's value, exactly, or a baseline itself.
+
+        Raises:
+            ConfigurationError: If *value* is anything else; the message names
+                *what*, the baselines in order and *value*.
+        """
+        try:
+            return cls(value)
+        except ValueError:
+            raise ConfigurationError.must_be(
+                what, f"one of {', '.join(baseline.value for baseline in cls)}", got=value
             ) from None
 
 
@@ -320,6 +349,9 @@ class GridServicesEventsConfig:
         utilisation_gbp_per_mwh: Optional override for the utilisation rate
             (£/MWh).  If ``None``, the rate is taken from
             :data:`GRID_SERVICES_RATE_BANDS` via *band*.
+        delivery_baseline: How an event's delivery is measured, a
+            :class:`DeliveryBaseline` value (``"operational"`` or
+            ``"capacity"``).
     """
 
     band: str = "central"
@@ -328,14 +360,16 @@ class GridServicesEventsConfig:
     utilisation_factor: float = 0.6
     availability_gbp_per_kw_per_event: Optional[float] = None
     utilisation_gbp_per_mwh: Optional[float] = None
+    delivery_baseline: str = "operational"
 
     def __post_init__(self) -> None:
-        """Read the numbers through number_fields, holding the floats read, then refuse an unknown band or no event windows, raising ConfigurationError."""
+        """Read the numbers through number_fields, holding the floats read, then refuse an unknown band, an unknown delivery baseline or no event windows, raising ConfigurationError."""
         read_field(self, "aggregator_share", as_finite_float, Interval(0, 1, high_open=True))
         read_field(self, "utilisation_factor", as_finite_float, UNIT_INTERVAL)
         read_field(self, "availability_gbp_per_kw_per_event", as_finite_float, NON_NEGATIVE, optional=True)
         read_field(self, "utilisation_gbp_per_mwh", as_finite_float, NON_NEGATIVE, optional=True)
         GridServicesBand.parse(self.band, what="GridServicesEventsConfig.band")
+        DeliveryBaseline.parse(self.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
         if not self.event_windows:
             raise ConfigurationError(
                 "GridServicesEventsConfig.event_windows must be a non-empty tuple"
