@@ -767,45 +767,62 @@ class _NoctSamInput:
         )
 
 
-def _require_cells_noct_sam_can_heat(module_params: Mapping[str, float]) -> None:
-    """Refuse a module with no rating, or one that is not a finite number above 0 (_module_rating_w), or a T_NOCT or A_c with which NOCT-SAM cannot heat a sunlit cell above the air.
+@dataclass(frozen=True)
+class _NoctSamModule:
+    """A module as NOCT-SAM reads it, its T_NOCT and A_c (_NoctSamInput) and its rating (_module_rating_w), inside the domain in which NOCT-SAM heats a sunlit cell above the air.
 
     That takes a finite T_NOCT above NOCT's test air, and a finite area A_c over
-    which the module's rating is an efficiency, rating / (A_c × 1000), below
-    _TRANSMITTANCE_ABSORPTANCE. A module that lacks T_NOCT or A_c is checked with
-    DEFAULT_CEC_MODULE's value of that key (_NoctSamInput).
+    which the rating is an efficiency, rating / (A_c × 1000), below
+    _TRANSMITTANCE_ABSORPTANCE. Construction refuses a T_NOCT or an A_c outside it,
+    but takes the rating as checked: build the record with
+    _require_cells_noct_sam_can_heat, which reads the rating through
+    _module_rating_w, the check that refuses one that is not a finite number above 0.
     """
-    t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
-    area = _NoctSamInput.for_module(module_params, "A_c")
-    rating_w = _module_rating_w(module_params)
-    if not _NOCT_TEST_AIR_C < t_noct.value < math.inf:
-        raise t_noct.refusal(
-            f"a finite temperature above {_NOCT_TEST_AIR_C:g} °C, the air temperature at which "
-            "NOCT is measured"
-        )
-    smallest_area_m2 = rating_w / (_TRANSMITTANCE_ABSORPTANCE * 1000)
-    if not max(0.0, smallest_area_m2) < area.value < math.inf:
-        raise area.refusal(
-            f"a finite area above {smallest_area_m2:.4g} m², over which the module's {rating_w} W "
-            "rating is an efficiency, rating / (A_c × 1000), below NOCT-SAM's "
-            f"{_TRANSMITTANCE_ABSORPTANCE} transmittance-absorptance"
-        )
+
+    t_noct: _NoctSamInput
+    area: _NoctSamInput
+    rating_w: float
+
+    def __post_init__(self) -> None:
+        """Refuse a T_NOCT, then an A_c, outside NOCT-SAM's domain (_NoctSamInput.refusal)."""
+        if not _NOCT_TEST_AIR_C < self.t_noct.value < math.inf:
+            raise self.t_noct.refusal(
+                f"a finite temperature above {_NOCT_TEST_AIR_C:g} °C, the air temperature at which "
+                "NOCT is measured"
+            )
+        smallest_area_m2 = self.rating_w / (_TRANSMITTANCE_ABSORPTANCE * 1000)
+        if not max(0.0, smallest_area_m2) < self.area.value < math.inf:
+            raise self.area.refusal(
+                f"a finite area above {smallest_area_m2:.4g} m², over which the module's {self.rating_w} W "
+                "rating is an efficiency, rating / (A_c × 1000), below NOCT-SAM's "
+                f"{_TRANSMITTANCE_ABSORPTANCE} transmittance-absorptance"
+            )
+
+    @property
+    def efficiency(self) -> float:
+        """The rating over the area, A_c × 1000 W/m²."""
+        return self.rating_w / (self.area.value * 1000)
+
+
+def _require_cells_noct_sam_can_heat(module_params: Mapping[str, float]) -> _NoctSamModule:
+    """The module as NOCT-SAM reads it (_NoctSamModule), refusing a module with no rating, or one that is not a finite number above 0 (_module_rating_w), or whose cells NOCT-SAM cannot heat above the air.
+
+    A module that lacks T_NOCT or A_c is read with DEFAULT_CEC_MODULE's value of
+    that key (_NoctSamInput).
+    """
+    return _NoctSamModule(
+        t_noct=_NoctSamInput.for_module(module_params, "T_NOCT"),
+        area=_NoctSamInput.for_module(module_params, "A_c"),
+        rating_w=_module_rating_w(module_params),
+    )
 
 
 def _temperature_model_parameters(module_params: Mapping[str, float]) -> dict[str, float]:
-    """pvlib's NOCT-SAM parameters for the module's cells: its T_NOCT, and its rating over its area, A_c × 1000 W/m², as its efficiency.
-
-    A module that lacks T_NOCT or A_c takes DEFAULT_CEC_MODULE's value of that
-    key (_NoctSamInput; docs/pv-cell-temperature.md). A module with no rating, or
-    one that is not a finite number above 0 (_module_rating_w), or whose cells
-    NOCT-SAM cannot heat above the air, is refused (_require_cells_noct_sam_can_heat).
-    """
-    _require_cells_noct_sam_can_heat(module_params)
-    t_noct = _NoctSamInput.for_module(module_params, "T_NOCT")
-    area = _NoctSamInput.for_module(module_params, "A_c")
+    """pvlib's NOCT-SAM parameters for the module's cells, from the inputs _require_cells_noct_sam_can_heat reads and checks: its T_NOCT, and its rating over its area, A_c × 1000 W/m², as its efficiency (docs/pv-cell-temperature.md)."""
+    module = _require_cells_noct_sam_can_heat(module_params)
     return {
-        "noct": t_noct.value,
-        "module_efficiency": _module_rating_w(module_params) / (area.value * 1000),
+        "noct": module.t_noct.value,
+        "module_efficiency": module.efficiency,
         "transmittance_absorptance": _TRANSMITTANCE_ABSORPTANCE,
     }
 
