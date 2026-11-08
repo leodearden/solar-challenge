@@ -75,6 +75,12 @@ def _assert_wires_the_default_cec_row(system: pvlib.pvsystem.PVSystem) -> None:
 class TestCECLibraryReuse:
     """The CEC module and inverter libraries are parsed once and never copied, and each system gets its own parameters."""
 
+    @pytest.fixture(scope="class")
+    @classmethod
+    def cec_library_shapes(cls) -> set[tuple[int, ...]]:
+        """The shapes of pvlib's CEC module and inverter libraries, read once for this class's tests."""
+        return {pvlib.pvsystem.retrieve_sam(library).shape for library in ("CECMod", "CECInverter")}
+
     def test_sam_libraries_are_read_at_most_once_across_systems(self, monkeypatch):
         reads = []
         real_retrieve_sam = pvlib.pvsystem.retrieve_sam
@@ -105,11 +111,13 @@ class TestCECLibraryReuse:
         ],
     )
     def test_reading_library_rows_copies_no_library_frame(
-        self, monkeypatch: pytest.MonkeyPatch, read_rows: Callable[[], object]
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        cec_library_shapes: set[tuple[int, ...]],
+        read_rows: Callable[[], object],
     ) -> None:
-        library_shapes = {
-            pvlib.pvsystem.retrieve_sam(library).shape for library in ("CECMod", "CECInverter")
-        }
+        """Once the libraries are parsed and cached, reading their rows copies no frame of a library's shape."""
+        read_rows()
         copied_shapes: list[tuple[int, ...]] = []
         real_copy = pd.DataFrame.copy
 
@@ -121,7 +129,7 @@ class TestCECLibraryReuse:
 
         read_rows()
 
-        assert library_shapes.isdisjoint(copied_shapes), f"frames copied: {copied_shapes}"
+        assert cec_library_shapes.isdisjoint(copied_shapes), f"frames copied: {copied_shapes}"
 
     def test_customised_system_leaves_later_default_systems_unchanged(self) -> None:
         create_pv_system(
