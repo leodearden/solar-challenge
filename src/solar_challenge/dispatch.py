@@ -10,7 +10,6 @@ charging with: the variants of DispatchStrategyConfig, and GridChargeConfig;
 build_dispatch_strategy builds the strategy a variant configures.
 """
 
-import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
@@ -438,6 +437,18 @@ class DispatchStrategy(ABC):
         pass
 
 
+def require_valid_step_powers(generation_kw: float, demand_kw: float) -> None:
+    """Refuse a step's generation or demand power unless NON_NEGATIVE admits it: finite and at least 0.
+
+    Raises:
+        ValueError: Naming the power and its value.
+    """
+    if not NON_NEGATIVE.admits(generation_kw):
+        raise ValueError(f"Generation must be non-negative and finite, got {generation_kw} kW")
+    if not NON_NEGATIVE.admits(demand_kw):
+        raise ValueError(f"Demand must be non-negative and finite, got {demand_kw} kW")
+
+
 def _require_valid_strategy_inputs(
     generation_kw: float,
     demand_kw: float,
@@ -450,13 +461,10 @@ def _require_valid_strategy_inputs(
     Raises:
         ValueError: Naming the input, its bound and its value.
     """
-    if not 0 <= generation_kw < math.inf:
-        raise ValueError(f"Generation must be non-negative and finite, got {generation_kw} kW")
-    if not 0 <= demand_kw < math.inf:
-        raise ValueError(f"Demand must be non-negative and finite, got {demand_kw} kW")
-    if not 0 <= battery_soc_kwh < math.inf:
+    require_valid_step_powers(generation_kw, demand_kw)
+    if not NON_NEGATIVE.admits(battery_soc_kwh):
         raise ValueError(f"Battery SOC must be non-negative and finite, got {battery_soc_kwh} kWh")
-    if not 0 < battery_capacity_kwh < math.inf:
+    if not POSITIVE.admits(battery_capacity_kwh):
         raise ValueError(f"Battery capacity must be positive and finite, got {battery_capacity_kwh} kWh")
     require_valid_duration(timestep_minutes, "Timestep")
 
