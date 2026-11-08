@@ -1801,9 +1801,9 @@ def parse_fleet_distribution_config(
 ) -> FleetDistributionConfig:
     """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
 
-    A refusal of a component's key names it under *block_path*: one outside its rows, a
-    required one left out, a spec its kind does not draw, and a proportional_to source not
-    drawn earlier for every home that draws the dependent.
+    The refusals of a key outside its component's rows, a required key left out, a spec its
+    key's kind does not draw and a proportional_to source not drawn earlier for every home that
+    draws the dependent name the key under *block_path*.
     """
     _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
     if "n_homes" not in data:
