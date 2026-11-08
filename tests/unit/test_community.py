@@ -26,6 +26,7 @@ from solar_challenge.community import (
     simulate_community,
     validate_community_balance,
 )
+from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
@@ -121,12 +122,38 @@ def _make_fleet_from_sim_results(per_home: list[SimulationResults]) -> FleetResu
     return FleetResults(per_home_results=per_home, home_configs=configs)
 
 
+def _community_battery(
+    *,
+    dispatch_strategy: DispatchStrategyConfig | None = None,
+    grid_charging: GridChargeConfig | None = None,
+) -> BatteryConfig:
+    """A 20 kWh community battery with 10 kW power limits, dispatched by *dispatch_strategy*, self-consumption when None."""
+    return BatteryConfig(
+        capacity_kwh=20.0,
+        max_charge_kw=10.0,
+        max_discharge_kw=10.0,
+        dispatch_strategy=dispatch_strategy,
+        grid_charging=grid_charging,
+    )
+
+
+def _grid_charging_peak_shaving_battery() -> BatteryConfig:
+    """A community battery that peak-shaves the import above 3 kW and grid-charges to 0.9 in a cheap period."""
+    return _community_battery(
+        dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9)
+    )
+
+
 # ---------------------------------------------------------------------------
 # TestCommunityConfig
 # ---------------------------------------------------------------------------
 
 class TestCommunityConfig:
-    """CommunityConfig validates its fields, is frozen and survives pickling."""
+    """CommunityConfig validates its fields, refuses a community battery whose dispatch would ignore its grid_charging, is frozen and survives pickling.
+
+    No refused CommunityConfig is built at import: each test builds its own inside
+    pytest.raises, so a refusal fails its own cases and not the module's collection.
+    """
 
     def test_valid_p2p_config(self) -> None:
         """p2p config with no community_battery constructs OK."""
@@ -151,6 +178,58 @@ class TestCommunityConfig:
         """community_battery mode without a battery → ConfigurationError."""
         with pytest.raises(ConfigurationError, match="community_battery"):
             CommunityConfig(sharing_mode="community_battery")
+
+    @pytest.mark.parametrize(
+        "billing",
+        [
+            pytest.param(None, id="no-billing"),
+            pytest.param(CommunityBillingConfig(tariff=TariffConfig.economy_7()), id="billing-tariff"),
+        ],
+    )
+    def test_a_self_consumption_community_battery_that_grid_charges_is_refused(
+        self, billing: CommunityBillingConfig | None
+    ) -> None:
+        """Self-consumption, the dispatch of a battery that names none, never charges from the grid, whatever the billing tariff."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_community_battery(grid_charging=GridChargeConfig(0.9)),
+                billing=billing,
+            )
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "'self_consumption'" in message
+
+    @pytest.mark.parametrize(
+        "billing",
+        [
+            pytest.param(None, id="no-billing"),
+            pytest.param(CommunityBillingConfig(seg_rate_pence_per_kwh=4.1), id="billing-seg-rate-only"),
+        ],
+    )
+    def test_a_grid_charging_community_battery_without_a_billing_tariff_is_refused(
+        self, billing: CommunityBillingConfig | None
+    ) -> None:
+        """Peak shaving charges from the grid in a cheap period of the billing tariff, so with no tariff it never would."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_grid_charging_peak_shaving_battery(),
+                billing=billing,
+            )
+        message = str(exc_info.value)
+        assert "grid_charging" in message
+        assert "'peak_shaving'" in message
+        assert "no tariff" in message
+
+    def test_a_grid_charging_peak_shaving_community_battery_with_a_billing_tariff_is_accepted(self) -> None:
+        battery = _grid_charging_peak_shaving_battery()
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=battery,
+            billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+        )
+        assert cfg.community_battery is battery
 
     @pytest.mark.parametrize(
         "value",
