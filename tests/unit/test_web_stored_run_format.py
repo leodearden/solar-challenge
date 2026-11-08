@@ -390,7 +390,8 @@ def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_it
         pytest.param(lambda frame: frame.assign(generation_kw=1), id="integers"),
         pytest.param(
             lambda frame: frame.assign(
-                generation_kw=np.r_[[np.nan, np.inf, -np.inf], frame["generation_kw"].to_numpy()[3:]]
+                generation_kw=np.r_[[np.inf, -np.inf], frame["generation_kw"].to_numpy()[2:]],
+                battery_soc_kwh=np.r_[[np.nan], frame["battery_soc_kwh"].to_numpy()[1:]],
             ),
             id="nan-and-infinities",
         ),
@@ -399,7 +400,10 @@ def test_a_time_series_holding_a_series_that_is_not_numbers_is_refused_naming_it
 def test_a_time_series_whose_series_hold_integers_nan_or_infinities_loads_them_as_stored(
     storage: RunStorage, damage: Callable[[pd.DataFrame], pd.DataFrame]
 ) -> None:
-    """The boundary of the rule above: integers are numbers, and NaN and the infinities are floats, as a float field admits each."""
+    """The boundary of the rule above: integers are numbers, and NaN and the infinities are floats, as a float field admits each.
+
+    The NaN is in a level, as SimulationResults refuses one in an amount series.
+    """
     _store_home_run_of_every_shape(storage)
     path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
     rewrite_time_series(path, damage)
@@ -407,7 +411,21 @@ def test_a_time_series_whose_series_hold_integers_nan_or_infinities_loads_them_a
     loaded = storage.load_run(_HOME_RUN_ID)
 
     assert isinstance(loaded, StoredHomeRun)
-    pd.testing.assert_series_equal(loaded.results.generation, pd.read_parquet(path, engine="pyarrow")["generation_kw"])
+    pd.testing.assert_frame_equal(loaded.results.to_dataframe(), pd.read_parquet(path, engine="pyarrow"))
+
+
+def test_a_time_series_holding_a_nan_in_an_amount_series_is_refused_naming_its_column(storage: RunStorage) -> None:
+    """SimulationResults refuses a NaN in an amount series as it refuses a series that is not numbers, so the refusal names the column and SimulationResults' refusal is its cause."""
+    _store_home_run_of_every_shape(storage)
+    path = stored_run_dir(storage, _HOME_RUN_ID) / "data.parquet"
+    rewrite_time_series(
+        path, lambda frame: frame.assign(generation_kw=np.r_[[np.nan], frame["generation_kw"].to_numpy()[1:]])
+    )
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "data.parquet", "generation_kw")
+
+    assert repr(refusal.__cause__) == repr(_results_refusal(path))
+    assert refusal.reason == refusal.__cause__.reason
 
 
 def test_a_document_that_cannot_be_read_is_refused_naming_it(storage: RunStorage) -> None:

@@ -176,6 +176,23 @@ def _refuse_unless_numbers(column: str, series: pd.Series) -> None:
         raise SeriesRefused(column, f"is of dtype {series.dtype}, not of an integer or a float dtype")
 
 
+def _refuse_unless_a_number_in_every_row(column: str, series: pd.Series) -> None:
+    """Refuse *series*, an amount written under *column*, unless it holds a number in every row, as the run's totals sum every row's amount; a NaN, or an NA in a nullable series, is none.
+
+    Raises:
+        SeriesRefused: Naming the column, how many of its rows hold no number, and the first one's
+            value and index label.
+    """
+    missing = series.isna().to_numpy()
+    if missing.any():
+        first = int(missing.argmax())
+        raise SeriesRefused(
+            column,
+            f"holds no number in {missing.sum()} of its {missing.size} rows, though the run's totals sum every "
+            f"row's amount; the first is {series.iloc[first]}, at {series.index[first]}",
+        )
+
+
 @dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
@@ -188,6 +205,14 @@ class SimulationResults:
     series holds numbers: its dtype is an integer's or a float's, never a
     bool's, and NaN and the infinities are floats. Construction refuses any
     other series with SeriesRefused, naming its column and its dtype.
+
+    Each amount series, every series but the battery_soc and tariff_rate levels,
+    holds a number in every row, as the run's totals sum every row's amount.
+    Construction, after its dtype refusal, and per_minute_amounts, total_amounts
+    and to_dataframe, since a series can still be written in place, refuse the
+    first amount series holding a NaN, or an NA in a nullable series, with
+    SeriesRefused, naming its column, how many of its rows hold no number and
+    the first; an infinite sample is kept.
 
     Attributes:
         generation: PV generation in kW
@@ -230,13 +255,15 @@ class SimulationResults:
 
         Raises:
             SeriesRefused: The first set series, in declaration order, whose dtype is no
-                integer's or float's; it names the series' column and its dtype.
+                integer's or float's; it names the series' column and its dtype. Or else the
+                first amount series holding no number in a row (see the class docstring).
         """
         for name, column in self._series_columns():
             series = getattr(self, name)
             if series is not None:
                 _refuse_unless_numbers(column, series)
                 object.__setattr__(self, name, series.rename(column))
+        self._refuse_amounts_missing_a_number()
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
@@ -256,14 +283,29 @@ class SimulationResults:
         """
         return SimulationWindow.of_index(self.generation.index)
 
-    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
-        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
-        window = self.window
+    def _series_with_amounts(self) -> Iterator[tuple[str, pd.Series, _StepAmount]]:
+        """Each set series that has an amount, in declaration order: its column, the series and how its samples become its rows' amounts."""
         for attribute in fields(self):
             amount = attribute.metadata.get(_AMOUNT)
             series = getattr(self, attribute.name)
             if isinstance(amount, _StepAmount) and series is not None:
-                yield amount.column, amount.row_amounts(series, window)
+                yield attribute.metadata[_COLUMN], series, amount
+
+    def _refuse_amounts_missing_a_number(self) -> None:
+        """Refuse the first set amount series, in declaration order, that holds no number in a row (see the class docstring).
+
+        Raises:
+            SeriesRefused: As _refuse_unless_a_number_in_every_row does.
+        """
+        for column, series, _ in self._series_with_amounts():
+            _refuse_unless_a_number_in_every_row(column, series)
+
+    def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
+        """Each amount's column and each row's amount, in declaration order, for every series that is set."""
+        self._refuse_amounts_missing_a_number()
+        window = self.window
+        for _, series, amount in self._series_with_amounts():
+            yield amount.column, amount.row_amounts(series, window)
 
     def per_minute_amounts(self) -> pd.DataFrame:
         """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
@@ -273,6 +315,8 @@ class SimulationResults:
 
         Raises:
             ValueError: As window does, for an index no window describes.
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
         """
         return pd.concat(dict(self._amount_series()), axis=1)
 
@@ -281,11 +325,19 @@ class SimulationResults:
 
         Raises:
             ValueError: As window does, for an index no window describes.
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
         """
         return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert results to a DataFrame with one column per series that is set."""
+        """Convert results to a DataFrame with one column per series that is set.
+
+        Raises:
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
+        """
+        self._refuse_amounts_missing_a_number()
         return pd.DataFrame(
             {
                 column: series
@@ -303,7 +355,8 @@ class SimulationResults:
         Raises:
             ValueError: If frame lacks any required series' column; the message names each one.
             SeriesRefused: If a column is not numbers, as construction refuses its series; it
-                names the first such column and its dtype.
+                names the first such column and its dtype. Or else, as construction refuses
+                it, the first amount column holding no number in a row (see the class docstring).
         """
         required_fields = {
             attribute.name

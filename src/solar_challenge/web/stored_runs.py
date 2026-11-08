@@ -16,8 +16,8 @@ read_field_tree, and a value it refuses becomes a StoredRunUnreadable naming the
 document, the field's dotted path and the reason. Non-JSON text, JSON nested too deeply to
 decode, a document that is missing or cannot be read, a time series that cannot be read, and one
 whose index SimulationResults.window refuses are refused the same way. So is a time series
-holding a series SimulationResults refuses, one not of numbers; the refusal's field is then
-that series' column.
+holding a series SimulationResults refuses, one not of numbers or an amount series holding no
+number in a row; the refusal's field is then that series' column.
 StoredRunUnreadable is not a ValueError: a request's bad value is a ValueError the boundary
 answers 400, while a stored run that cannot be read is answered 409 or flashed.
 
@@ -519,9 +519,10 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
             damaged page, is not a parquet of a SimulationResults' columns, or has an index
             SimulationResults.window refuses: not a DatetimeIndex, empty, one row with no
             fixed-duration freq, or rows not evenly spaced at a positive cadence. The error is
-            the cause, and the field is None. Or it holds a series SimulationResults refuses as
-            not numbers, of a dtype no integer's or float's; the field is then that series'
-            column, and SimulationResults' refusal is the cause.
+            the cause, and the field is None. Or it holds a series SimulationResults refuses:
+            one not of numbers, of a dtype no integer's or float's, or an amount series holding
+            no number in a row; the field is then that series' column, and SimulationResults'
+            refusal is the cause.
     """
     path = run_dir / name
     if not path.is_file():
