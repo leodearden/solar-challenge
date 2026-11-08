@@ -6,7 +6,7 @@ Test classes, in file order:
   - TestValidateCommunityBalance: validate_community_balance
   - TestSimulateCommunityBattery: the community_battery dispatch path
   - TestCommunityBillingTimeOfUse: time-of-use import billing via simulate_community
-  - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community
+  - TestCommunityBillingSavings: CommunityResults billing fields via simulate_community, and the warning a half-specified billing gives
   - TestCommunityResultsSharingMode: sharing_mode carried onto CommunityResults
   - TestCommunityRowLength: the row length simulate_community and compute_community_metrics read from the index's window, and the indexes they refuse
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import pickle
+import warnings
 
 import pandas as pd
 import pytest
@@ -827,7 +828,12 @@ class TestCommunityBillingSavings:
 
     savings = 0.954 - (-0.082) = 1.036 ✓
     Also: savings == 4kWh * (0.30 - 0.041) = 4 * 0.259 = 1.036 ✓
+
+    A billing block missing either input prices nothing and warns once, naming the
+    missing inputs and the three fields that stay None.
     """
+
+    _COMPLETE_BILLING = CommunityBillingConfig(tariff=FlatRateTariff(0.30), seg_rate_pence_per_kwh=4.1)
 
     @pytest.fixture
     def billing_idx(self) -> pd.DatetimeIndex:
@@ -846,11 +852,7 @@ class TestCommunityBillingSavings:
 
     @pytest.fixture
     def billing_cfg(self) -> CommunityConfig:
-        billing = CommunityBillingConfig(
-            tariff=FlatRateTariff(0.30),
-            seg_rate_pence_per_kwh=4.1,
-        )
-        return CommunityConfig(sharing_mode="p2p", billing=billing)
+        return CommunityConfig(sharing_mode="p2p", billing=self._COMPLETE_BILLING)
 
     def test_baseline_net_cost(
         self, billing_fleet: FleetResults, billing_cfg: CommunityConfig
@@ -901,27 +903,84 @@ class TestCommunityBillingSavings:
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
 
-    def test_partial_billing_tariff_only_fields_are_none(
-        self, billing_fleet: FleetResults
+    @pytest.mark.parametrize(
+        ("billing", "unset", "set_"),
+        [
+            pytest.param(
+                CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
+                ["billing.seg_rate_pence_per_kwh"],
+                ["billing.tariff"],
+                id="tariff-only",
+            ),
+            pytest.param(
+                CommunityBillingConfig(seg_rate_pence_per_kwh=4.1),
+                ["billing.tariff"],
+                ["billing.seg_rate_pence_per_kwh"],
+                id="seg-rate-only",
+            ),
+            pytest.param(
+                CommunityBillingConfig(),
+                ["billing.tariff", "billing.seg_rate_pence_per_kwh"],
+                [],
+                id="neither",
+            ),
+        ],
+    )
+    def test_a_half_specified_billing_warns_once_naming_what_is_unset_and_the_fields_that_stay_none(
+        self,
+        billing_fleet: FleetResults,
+        billing: CommunityBillingConfig,
+        unset: list[str],
+        set_: list[str],
     ) -> None:
-        """All three fields stay None when billing has tariff but no seg_rate."""
-        partial_billing = CommunityBillingConfig(tariff=FlatRateTariff(0.30))
-        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
-        cr = simulate_community(billing_fleet, cfg)
+        """The warning names each unset input and no set one, and is attributed to simulate_community's caller."""
+        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cr = simulate_community(billing_fleet, cfg)
+
+        user_warnings = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user_warnings) == 1, [str(w.message) for w in caught]
+        (warning,) = user_warnings
+        message = str(warning.message)
+        assert all(name in message for name in unset), message
+        assert not any(name in message for name in set_), message
+        assert "baseline_net_cost_gbp" in message
+        assert "community_net_cost_gbp" in message
+        assert "community_savings_gbp" in message
+        assert warning.filename == __file__
         assert cr.baseline_net_cost_gbp is None
         assert cr.community_net_cost_gbp is None
         assert cr.community_savings_gbp is None
 
-    def test_partial_billing_seg_only_fields_are_none(
+    @pytest.mark.parametrize(
+        "billing", [pytest.param(_COMPLETE_BILLING, id="complete"), pytest.param(None, id="absent")]
+    )
+    def test_complete_or_absent_billing_does_not_warn(
+        self, billing_fleet: FleetResults, billing: CommunityBillingConfig | None
+    ) -> None:
+        cfg = CommunityConfig(sharing_mode="p2p", billing=billing)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            simulate_community(billing_fleet, cfg)
+
+        assert [str(w.message) for w in caught if issubclass(w.category, UserWarning)] == []
+
+    def test_a_half_specified_billing_warns_once_and_the_community_battery_still_dispatches(
         self, billing_fleet: FleetResults
     ) -> None:
-        """All three fields stay None when billing has seg_rate but no tariff."""
-        partial_billing = CommunityBillingConfig(seg_rate_pence_per_kwh=4.1)
-        cfg = CommunityConfig(sharing_mode="p2p", billing=partial_billing)
-        cr = simulate_community(billing_fleet, cfg)
-        assert cr.baseline_net_cost_gbp is None
-        assert cr.community_net_cost_gbp is None
-        assert cr.community_savings_gbp is None
+        """A tariff-only billing is a valid dispatch config: the battery stores the 1 kW the fleet nets to."""
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=_community_battery(),
+            billing=CommunityBillingConfig(tariff=FlatRateTariff(0.30)),
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cr = simulate_community(billing_fleet, cfg)
+
+        assert len([w for w in caught if issubclass(w.category, UserWarning)]) == 1, [str(w.message) for w in caught]
+        assert (cr.battery_charge > 0).all(), cr.battery_charge.tolist()
 
 
 # ---------------------------------------------------------------------------

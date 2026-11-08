@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import yaml
 from typer.testing import CliRunner, Result
 
 from solar_challenge.battery import BatteryConfig
@@ -797,8 +798,21 @@ class TestFleetRunCommunityBillingCLI:
     """CLI integration test: fleet run on bristol-community.yaml produces billing section.
 
     Covers the _print_community_section billing rows and the
-    --community-report billing section.
+    --community-report billing section, and the warning a billing block
+    missing its SEG rate gives.
     """
+
+    def test_a_billing_block_without_its_seg_rate_warns_naming_it(self, tmp_path: Path) -> None:
+        """fleet run on the scenario with no billing SEG rate warns, naming the setting, and still runs."""
+        scenario = yaml.safe_load(SCENARIO.read_text())
+        del scenario["community"]["billing"]["seg_rate_pence_per_kwh"]
+        without_seg_rate = tmp_path / "bristol-community-without-a-seg-rate.yaml"
+        without_seg_rate.write_text(yaml.safe_dump(scenario))
+
+        with pytest.warns(UserWarning, match=r"billing\.seg_rate_pence_per_kwh"):
+            result = _fleet_run_in_process(without_seg_rate, "--start", "2024-06-21", "--end", "2024-06-21")
+
+        assert result.exit_code == 0, result.output
 
     def test_community_report_has_billing_section(self, tmp_path: Path) -> None:
         """Written --community-report contains 'Community Billing' and 'Savings'."""
