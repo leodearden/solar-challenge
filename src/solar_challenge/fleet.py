@@ -420,7 +420,7 @@ def _homes_in_a_pool(
             job = futures[future]
             yield job, _result_naming_the_home(job, future)
     finally:
-        pool.shutdown(cancel_futures=True)
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _result_naming_the_home(job: _HomeJob, future: Future[SimulationResults]) -> SimulationResults:
@@ -448,7 +448,7 @@ def _simulate_fleets(
     end_date: pd.Timestamp,
     progress: HomesDone | None,
 ) -> Iterator[tuple[int, FleetResults]]:
-    """FleetRunner.simulate_each's fan-out: every home of fleets run in one process pool when runner is parallel and the call has two homes or more, else in turn here, on weather fetched once per distinct location; each fleet's results are yielded in home order as its last home finishes."""
+    """FleetRunner.simulate_each's fan-out: every home of fleets run as FleetRunner.parallel says, on weather fetched once per distinct location; each fleet's results are yielded in home order as its last home finishes."""
     jobs = [
         _HomeJob(fleet_index, home_index, fleet, home)
         for fleet_index, fleet in enumerate(fleets)
