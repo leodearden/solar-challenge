@@ -773,7 +773,10 @@ class _NoctSamModule:
 
     That takes a finite T_NOCT above NOCT's test air, and a finite area A_c over
     which the rating is an efficiency, rating / (A_c × 1000), below
-    _TRANSMITTANCE_ABSORPTANCE; construction refuses anything else.
+    _TRANSMITTANCE_ABSORPTANCE. Construction refuses a T_NOCT or an A_c outside it,
+    but takes the rating as checked: build the record with
+    _require_cells_noct_sam_can_heat, which reads the rating through
+    _module_rating_w, the check that refuses one that is not a finite number above 0.
     """
 
     t_noct: _NoctSamInput
