@@ -1135,8 +1135,10 @@ class RunStorage:
                 original creation time from job submission.
 
         Raises:
-            ValueError: If the store refuses run_id, or name cannot name a run, as
-                require_run_name refuses it. The save has written nothing then.
+            ValueError: If the store refuses run_id, name cannot name a run, as
+                require_run_name refuses it, or an amount series of results holds no number in
+                a row, a SeriesRefused as SimulationResults.to_dataframe refuses it. The save has
+                written nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
@@ -1214,8 +1216,10 @@ class RunStorage:
 
         Raises:
             ValueError: If the store refuses run_id, per_home_summaries does not hold one
-                summary per home's results, or name cannot name a run, as require_run_name
-                refuses it. The save has written nothing then.
+                summary per home's results, name cannot name a run, as require_run_name
+                refuses it, or an amount series of a home's results holds no number in a row, a
+                SeriesRefused as SimulationResults.to_dataframe refuses it. The save has written
+                nothing then.
         """
         run_dir = self._get_run_dir(run_id)
         stored = StoredFleetRun(

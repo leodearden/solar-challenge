@@ -25,6 +25,9 @@ Tests cover:
   it, until migrated
 - An unset module_efficiency or temperature_coefficient is stored as null, and a run
   stored with the 0.5.0 tag's 0.2 and -0.004 loads them as set
+- A save whose results hold an amount series made NaN in place is refused with
+  SeriesRefused before it writes any file: no run directory and no runs row, and an
+  earlier save under the same id still loads as it was
 - A corrupted parquet is refused naming its file
 - Missing run directory graceful error handling
 - Delete run removes DB record and filesystem files
@@ -32,6 +35,7 @@ Tests cover:
 
 import dataclasses
 import json
+import math
 import shutil
 from datetime import date, timedelta
 from pathlib import Path
@@ -50,7 +54,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.fleet import FleetResults, FleetSummary
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
+from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -165,6 +169,22 @@ def _make_fleet_summary(n_homes: int = 2) -> FleetSummary:
         per_home_self_consumption_ratio_max=0.65,
         per_home_self_consumption_ratio_mean=0.6,
         simulation_days=1,
+    )
+
+
+def _results_with_a_demand_made_nan(index: pd.DatetimeIndex | None = None) -> SimulationResults:
+    """Create a SimulationResults, then make one row of its demand NaN in place, as construction refuses a NaN passed in."""
+    results = _make_simulation_results(index)
+    results.demand.iloc[5] = math.nan
+    return results
+
+
+def _fleet_results_with_a_later_home_demand_made_nan(first_name: str, later_name: str) -> FleetResults:
+    """Create a FleetResults of two homes over one index, named *first_name* and *later_name*, the later home's results being _results_with_a_demand_made_nan's."""
+    index = _make_index()
+    return FleetResults(
+        per_home_results=[_make_simulation_results(index), _results_with_a_demand_made_nan(index)],
+        home_configs=[_make_home_config(first_name), _make_home_config(later_name)],
     )
 
 
@@ -991,6 +1011,93 @@ class TestRunWithEachDispatchStrategy:
 
         assert loaded_config == config
         assert hash(loaded_config) == hash(config)
+
+
+class TestSaveOfAnAmountMadeNaNInPlace:
+    """SimulationResults' series can be written in place after construction, so a save refuses such results with to_dataframe's SeriesRefused before it writes any file."""
+
+    def test_a_home_save_is_refused_and_writes_no_file(self, storage: RunStorage) -> None:
+        """The refused save leaves no run directory and no runs row."""
+        results = _results_with_a_demand_made_nan()
+
+        with pytest.raises(SeriesRefused) as refused:
+            storage.save_home_run(
+                run_id="nan-home",
+                config=_make_home_config(),
+                results=results,
+                summary=_make_summary(),
+                name="Saved Run",
+            )
+
+        assert refused.value.column == "demand_kw"
+        assert not stored_run_dir(storage, "nan-home").exists()
+        assert storage.run_record("nan-home") is None
+
+    def test_a_fleet_save_is_refused_before_its_first_homes_files_are_written(self, storage: RunStorage) -> None:
+        """The NaN is in the later home, yet the refused save leaves no run directory, so none of the first home's files, and no runs row."""
+        fleet_results = _fleet_results_with_a_later_home_demand_made_nan("Home 0", "Home 1")
+
+        with pytest.raises(SeriesRefused) as refused:
+            storage.save_fleet_run(
+                run_id="nan-fleet",
+                fleet_results=fleet_results,
+                fleet_summary=_make_fleet_summary(n_homes=2),
+                per_home_summaries=[_make_summary(), _make_summary()],
+                name="Saved Run",
+            )
+
+        assert refused.value.column == "demand_kw"
+        assert not stored_run_dir(storage, "nan-fleet").exists()
+        assert storage.run_record("nan-fleet") is None
+
+    def test_a_refused_home_re_save_leaves_the_earlier_save_loading_as_it_was(self, storage: RunStorage) -> None:
+        """A re-save under the same id, refused, leaves the earlier save's format.json and documents, so it loads its own config."""
+        storage.save_home_run(
+            run_id="resave-home",
+            config=_make_home_config("First"),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+            name="Saved Run",
+        )
+        results = _results_with_a_demand_made_nan()
+
+        with pytest.raises(SeriesRefused):
+            storage.save_home_run(
+                run_id="resave-home",
+                config=_make_home_config("Second"),
+                results=results,
+                summary=_make_summary(),
+                name="Saved Run",
+            )
+
+        assert storage.load_run("resave-home").config.name == "First"
+
+    def test_a_refused_fleet_re_save_leaves_the_earlier_save_loading_as_it_was(self, storage: RunStorage) -> None:
+        """A fleet re-save under the same id, refused for its later home, leaves the earlier save's files, so it loads its own homes' configs."""
+        index = _make_index()
+        storage.save_fleet_run(
+            run_id="resave-fleet",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results(index) for _ in range(2)],
+                home_configs=[_make_home_config(f"First {i}") for i in range(2)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary(), _make_summary()],
+            name="Saved Run",
+        )
+        refused_fleet_results = _fleet_results_with_a_later_home_demand_made_nan("Second 0", "Second 1")
+
+        with pytest.raises(SeriesRefused):
+            storage.save_fleet_run(
+                run_id="resave-fleet",
+                fleet_results=refused_fleet_results,
+                fleet_summary=_make_fleet_summary(n_homes=2),
+                per_home_summaries=[_make_summary(), _make_summary()],
+                name="Saved Run",
+            )
+
+        loaded_home_configs = storage.load_run("resave-fleet").fleet_results.home_configs
+        assert [home.name for home in loaded_home_configs] == ["First 0", "First 1"]
 
 
 class TestCorruptedParquet:

@@ -240,12 +240,18 @@ class StoredHomeRun:
         The two documents are the run's config_document() and summary_document(), which its
         save builds once for these files and its runs row alike. An earlier save's format.json
         is removed first, so the directory holds one only once this save has finished.
+
+        Raises:
+            SeriesRefused: An amount series of the results holds no number in a row, as
+                SimulationResults.to_dataframe refuses it; nothing has been written then, and an
+                earlier save in run_dir is left as it was.
         """
+        frame = self.results.to_dataframe()
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
         _write_json(run_dir / _CONFIG_DOCUMENT, config_document)
         _write_json(run_dir / _SUMMARY_DOCUMENT, summary_document)
-        self.results.to_dataframe().to_parquet(run_dir / "data.parquet", engine="pyarrow")
+        frame.to_parquet(run_dir / "data.parquet", engine="pyarrow")
         _write_format_marker(run_dir, RUN_FORMAT_VERSION)
 
     def export_frame(self) -> pd.DataFrame:
@@ -285,8 +291,18 @@ class StoredFleetRun:
 
         The two documents are the run's config_document() and summary_document(), which its
         save builds once for these files and its runs row alike. An earlier save's format.json
-        is removed first, so the directory holds one only once this save has finished.
+        is removed first, so the directory holds one only once this save has finished. Each
+        home's time series is built once to check it before any file is written, one home at a
+        time, and again as it is written.
+
+        Raises:
+            SeriesRefused: The results of the first home, in the fleet's order, that hold an
+                amount series with no number in a row, as SimulationResults.to_dataframe refuses
+                them; nothing has been written then, and an earlier save in run_dir is left as it
+                was.
         """
+        for home_result in self.fleet_results.per_home_results:
+            _check_time_series(home_result)
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
         (run_dir / _HOMES_DIR).mkdir(exist_ok=True)
@@ -500,6 +516,16 @@ def _json_document(run_dir: Path, run_id: str, name: str) -> StoredDocument:
     except OSError as unreadable:
         raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
     return StoredDocument.decoded(run_id, name, text)
+
+
+def _check_time_series(results: SimulationResults) -> None:
+    """Check that SimulationResults.to_dataframe builds a frame from the series of *results*.
+
+    Raises:
+        SeriesRefused: As SimulationResults.to_dataframe does, for the first amount series holding
+            no number in a row.
+    """
+    _ = results.to_dataframe()
 
 
 def _check_window(results: SimulationResults) -> None:
