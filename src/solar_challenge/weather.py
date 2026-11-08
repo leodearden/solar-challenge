@@ -355,6 +355,8 @@ class PvgisTmy:
             WeatherDataError: If a PVGIS request fails, its TMY lacks a required column, its hourly series lacks
                 or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
                 ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
+            ValueError: From its cache's get, naming the entry's file, if the entry cached for location was cut
+                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)

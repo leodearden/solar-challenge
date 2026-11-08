@@ -556,6 +556,20 @@ class TestPvgisTmy:
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
 
+    def test_an_entry_its_cache_cannot_read_raises_naming_its_file_and_fetches_nothing(
+        self, seeded_cache, pvgis_requests
+    ):
+        """get passes on the ValueError its cache's get raises for an entry file no longer as put wrote it, naming
+        the file, and requests nothing from PVGIS."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
+
+        with pytest.raises(ValueError, match=re.escape(str(entry))):
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
     def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
         self, tmp_path, weather_cache, pvgis_requests
     ):
