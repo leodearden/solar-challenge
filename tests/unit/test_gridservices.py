@@ -15,6 +15,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     GRID_SERVICES_RATE_BANDS,
+    DeliveryBaseline,
     EventWindow,
     FlatGridServices,
     GridServicesAtEvents,
@@ -288,6 +289,33 @@ class TestGridServicesBand:
 
 
 # ---------------------------------------------------------------------------
+# DeliveryBaseline: the one delivery-baseline vocabulary (docs/prds/grid-services-pricing-model.md §5.10)
+# ---------------------------------------------------------------------------
+
+
+class TestDeliveryBaseline:
+    """DeliveryBaseline names how an event's delivery is measured, and its parse refuses any other value."""
+
+    def test_members_are_operational_then_capacity(self) -> None:
+        assert [baseline.value for baseline in DeliveryBaseline] == ["operational", "capacity"]
+
+    @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
+    def test_parse_returns_the_member_its_value_names(self, baseline: DeliveryBaseline) -> None:
+        assert DeliveryBaseline.parse(baseline.value, what="test baseline") is baseline
+
+    @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
+    def test_parse_returns_a_member_it_is_given(self, baseline: DeliveryBaseline) -> None:
+        assert DeliveryBaseline.parse(baseline, what="test baseline") is baseline
+
+    @pytest.mark.parametrize("value", ["metered", "Operational", "", None, ["capacity"]])
+    def test_parse_refuses_any_other_value_naming_what_and_the_baselines(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as excinfo:
+            DeliveryBaseline.parse(value, what="test baseline")
+
+        assert str(excinfo.value) == f"test baseline must be one of operational, capacity, got {value!r}"
+
+
+# ---------------------------------------------------------------------------
 # Step-5: GridServicesRateBand + GridServicesRateBands + module constant
 # ---------------------------------------------------------------------------
 
@@ -430,6 +458,7 @@ class TestGridServicesEventsConfigDefaults:
         assert 0.0 <= cfg.utilisation_factor <= 1.0
         assert cfg.availability_gbp_per_kw_per_event is None
         assert cfg.utilisation_gbp_per_mwh is None
+        assert cfg.delivery_baseline == "operational"
 
     def test_fully_specified_config_round_trips(self) -> None:
         """All fields survive round-trip when explicitly set."""
@@ -441,6 +470,7 @@ class TestGridServicesEventsConfigDefaults:
             utilisation_factor=0.8,
             availability_gbp_per_kw_per_event=2.5,
             utilisation_gbp_per_mwh=80.0,
+            delivery_baseline="capacity",
         )
         assert cfg.band == "high"
         assert cfg.event_windows == ews
@@ -448,6 +478,7 @@ class TestGridServicesEventsConfigDefaults:
         assert cfg.utilisation_factor == 0.8
         assert cfg.availability_gbp_per_kw_per_event == 2.5
         assert cfg.utilisation_gbp_per_mwh == 80.0
+        assert cfg.delivery_baseline == "capacity"
 
     def test_is_frozen(self) -> None:
         """GridServicesEventsConfig is frozen — assignment raises FrozenInstanceError."""
@@ -522,6 +553,15 @@ class TestGridServicesEventsConfigValidation:
         with pytest.raises(ConfigurationError):
             GridServicesEventsConfig(band="mid")
 
+    def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            GridServicesEventsConfig(delivery_baseline="metered")
+
+        assert isinstance(exc_info.value, ConfigurationError)
+        assert str(exc_info.value) == (
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
+        )
+
     def test_aggregator_share_zero_ok(self) -> None:
         """aggregator_share == 0.0 is valid."""
         cfg = GridServicesEventsConfig(aggregator_share=0.0)
@@ -556,25 +596,31 @@ def _make_gs_sim_results(
     battery_soc: list[float],
     battery_discharge: list[float],
     index: pd.DatetimeIndex,
+    *,
+    battery_charge: list[float] | None = None,
+    tariff_rate: list[float] | None = None,
 ) -> SimulationResults:
-    """Build a minimal SimulationResults with hand-set battery_soc and battery_discharge.
+    """Build a minimal SimulationResults with hand-set battery_soc and battery_discharge, and optionally battery_charge and tariff_rate.
 
-    All other series are set to zero.  Use this helper for grid-services spare-capacity
-    tests that only read battery_soc / battery_discharge.
+    Every other series, and battery_charge and tariff_rate when not given, is zero.
     """
     zeros = pd.Series(0.0, index=index)
+
+    def given_or_zeros(values: list[float] | None) -> pd.Series:
+        return zeros.copy() if values is None else pd.Series(values, index=index, dtype=float)
+
     return SimulationResults(
         generation=zeros.copy(),
         demand=zeros.copy(),
         self_consumption=zeros.copy(),
-        battery_charge=zeros.copy(),
+        battery_charge=given_or_zeros(battery_charge),
         battery_discharge=pd.Series(battery_discharge, index=index, dtype=float),
         battery_soc=pd.Series(battery_soc, index=index, dtype=float),
         grid_import=zeros.copy(),
         grid_export=zeros.copy(),
         import_cost=zeros.copy(),
         export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
+        tariff_rate=given_or_zeros(tariff_rate),
     )
 
 
@@ -928,6 +974,18 @@ class TestGridServicesAtEvents:
         assert obj.annual_income_gbp == 150.0
         assert obj.per_window_avail_kw == (1.0, 2.0)
         assert obj.per_window_income_gbp == (60.0, 90.0)
+
+    def test_a_breakdown_built_from_its_three_original_fields_has_none_of_the_added_figures(self) -> None:
+        """The reliability and displaced-self-use fields are additive: a breakdown built as before they existed holds () for each."""
+        obj = GridServicesAtEvents(
+            annual_income_gbp=150.0,
+            per_window_avail_kw=(1.0, 2.0),
+            per_window_income_gbp=(60.0, 90.0),
+        )
+        assert obj.per_window_avail_p50_kw == ()
+        assert obj.per_window_avail_p90_kw == ()
+        assert obj.per_window_displaced_self_use_kwh_per_event == ()
+        assert obj.per_window_displaced_import_gbp_per_year == ()
 
     def test_single_window_fields(self) -> None:
         """Single-window construction works and fields have correct types."""
@@ -1542,6 +1600,310 @@ class TestUnobservedEventWindowWarns:
         assert _DEFAULT_WINDOW_FIELDS[0] in texts[0]
         assert "months=(6,)" not in texts[0]
         assert result.per_window_income_gbp[0] == 0.0
+        assert result.per_window_avail_p50_kw[0] == 0.0
+        assert result.per_window_avail_p90_kw[0] == 0.0
+        assert result.per_window_displaced_self_use_kwh_per_event[0] == 0.0
+        assert result.per_window_displaced_import_gbp_per_year[0] == 0.0
         assert result.annual_income_gbp == pytest.approx(result.per_window_income_gbp[1])
         assert result.annual_income_gbp > 0.0
 
+
+
+# ---------------------------------------------------------------------------
+# Firm capacity per event day, booked at the mean (PRD §9 P6, P7; §5.9 C9)
+# ---------------------------------------------------------------------------
+
+_TWO_DECEMBER_EVENT_DAYS = pd.date_range(
+    "2024-12-02 00:00", "2024-12-03 23:59", freq="1min", tz="Europe/London"
+)
+
+
+def _by_time_of_day(
+    index: pd.DatetimeIndex, values: dict[tuple[str, str], float], elsewhere: float = 0.0
+) -> list[float]:
+    """Each row of *index*'s value: that of the time-of-day span, first to last minute inclusive, holding the row; *elsewhere* outside every span."""
+    series = pd.Series(elsewhere, index=index)
+    for (first, last), value in values.items():
+        series.iloc[index.indexer_between_time(first, last)] = value
+    return series.tolist()
+
+
+def _two_event_day_fleet(
+    *, a_floor_minute: bool = True, evening_discharge_kw: float = 1.0, recharge_at: str = "20:30"
+) -> FleetResults:
+    """Homes A and B, each a default 5 kWh battery, over Monday 2 and Tuesday 3 December 2024, two days of the default winter window, at one-minute rows.
+
+    Each home sits at 3.5 kWh, 3.0 kWh above its 0.5 kWh floor, and discharges 0.5 kW
+    through the window (16:00-18:59) and *evening_discharge_kw* over the evening
+    after it (19:00-20:29), then charges at 1.0 kW for the one minute *recharge_at*;
+    its tariff is 0.30 £/kWh over that evening and 0.10 elsewhere. With
+    *a_floor_minute*, home A sits at its 0.5 kWh floor for one minute, 17:30 on
+    2 December.
+    """
+    index = _TWO_DECEMBER_EVENT_DAYS
+    discharge = _by_time_of_day(
+        index, {("16:00", "18:59"): 0.5, ("19:00", "20:29"): evening_discharge_kw}
+    )
+    charge = _by_time_of_day(index, {(recharge_at, recharge_at): 1.0})
+    tariff = _by_time_of_day(index, {("19:00", "20:29"): 0.30}, elsewhere=0.10)
+    soc_b = [3.5] * len(index)
+    soc_a = list(soc_b)
+    if a_floor_minute:
+        soc_a[index.get_loc(pd.Timestamp("2024-12-02 17:30", tz="Europe/London"))] = 0.5
+    home = _make_gs_home_config(BatteryConfig.default_5kwh())
+    return _make_gs_fleet_results(
+        [
+            (_make_gs_sim_results(soc, discharge, index, battery_charge=charge, tariff_rate=tariff), home)
+            for soc in (soc_a, soc_b)
+        ]
+    )
+
+
+class TestFirmCapacityPerEventDay:
+    """Firm spare capacity is measured per event day under the delivery baseline, booked at the mean over event days, with the 50% and 90% reliability capacities beside it.
+
+    On _two_event_day_fleet, P = 2.5 kW, the floor is 0.5 kWh and the window lasts
+    h = 3 h. Operational: avail(home, d) = max(0, min(P − max discharge, min(soc −
+    floor) / h)) over d's in-window minutes, so home A gives 0 on 2 December (its
+    floor minute) and 1.0 on 3 December, and home B 1.0 on both: the fleet's daily
+    totals are (1.0, 2.0).
+    """
+
+    def test_a_floor_minute_zeroes_that_day_not_the_season(self) -> None:
+        """The mean of (1.0, 2.0); the season minimum, A's 0 plus B's 1.0, gave 1.0."""
+        fleet = _two_event_day_fleet()
+
+        assert compute_fleet_spare_capacity_kw(fleet, DEFAULT_EVENT_WINDOWS) == pytest.approx((1.5,))
+        assert compute_fleet_spare_capacity_kw(
+            fleet, DEFAULT_EVENT_WINDOWS, "operational"
+        ) == pytest.approx((1.5,))
+
+    def test_the_breakdown_books_the_mean_and_reports_the_reliability_capacities(self) -> None:
+        """p50 is the 1st largest of the 2 daily totals and p90 the 2nd (⌈0.9 × 2⌉), not numpy's interpolated 1.1."""
+        result = compute_grid_services_at_events(_two_event_day_fleet(), GridServicesEventsConfig())
+
+        assert result.per_window_avail_kw == pytest.approx((1.5,))
+        assert result.per_window_avail_p50_kw == pytest.approx((2.0,))
+        assert result.per_window_avail_p90_kw == pytest.approx((1.0,))
+        assert result.annual_income_gbp == pytest.approx(1.5 * 9.972)
+
+    def test_an_event_day_is_a_date_on_the_index_s_own_clock(self) -> None:
+        """A June window at 00:00-01:59 BST, 23:00-00:59 UTC: one home at 2.5 kWh through 3 June's window and 4.5 kWh through 4 June's gives 1.0 and 2.0 kW over h = 2 h, mean 1.5.
+
+        Grouped by UTC date the same rows would make three event days, 1.0, 1.0 and
+        2.0 kW, mean 4/3.
+        """
+        index = pd.date_range("2024-06-03 00:00", "2024-06-04 23:00", freq="1h", tz="Europe/London")
+        after_midnight = EventWindow(
+            months=(6,), weekdays=(0, 1, 2, 3, 4, 5, 6), hours=(0, 1), events_per_year=12, event_hours=2.0
+        )
+        soc = pd.Series(3.5, index=index)
+        soc.loc[(index.day == 3) & (index.hour < 2)] = 2.5
+        soc.loc[(index.day == 4) & (index.hour < 2)] = 4.5
+        sim = _make_gs_sim_results(soc.tolist(), [0.0] * len(index), index)
+        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+
+        assert compute_fleet_spare_capacity_kw(fleet, (after_midnight,)) == pytest.approx((1.5,))
+
+    def test_the_capacity_baseline_counts_the_whole_window_discharge(self) -> None:
+        """Capacity: avail(home, d) = max(0, min(P, (soc(16:00) − floor) / h)) = min(2.5, 3.0 / 3) = 1.0 on each home-day; the own discharge is not subtracted and A's floor minute is after 16:00."""
+        fleet = _two_event_day_fleet()
+
+        assert compute_fleet_spare_capacity_kw(
+            fleet, DEFAULT_EVENT_WINDOWS, "capacity"
+        ) == pytest.approx((2.0,))
+        result = compute_grid_services_at_events(
+            fleet, GridServicesEventsConfig(delivery_baseline="capacity")
+        )
+        assert result.per_window_avail_kw == pytest.approx((2.0,))
+        assert result.per_window_avail_p50_kw == pytest.approx((2.0,))
+        assert result.per_window_avail_p90_kw == pytest.approx((2.0,))
+
+    def test_an_unknown_baseline_is_refused_naming_both_values(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            compute_fleet_spare_capacity_kw(_two_event_day_fleet(), DEFAULT_EVENT_WINDOWS, "metered")
+
+        assert str(exc_info.value) == "delivery_baseline must be one of operational, capacity, got 'metered'"
+
+    def test_a_home_whose_index_lacks_an_event_day_adds_nothing_to_it(self) -> None:
+        """Home B on both days and home C, its index 3 December alone, at 1.0 kW each: the daily totals over the union of dates are (1.0, 2.0)."""
+        two_days = _two_event_day_fleet()
+        third_of_december = pd.date_range(
+            "2024-12-03 00:00", "2024-12-03 23:59", freq="1min", tz="Europe/London"
+        )
+        steps = len(third_of_december)
+        home_c = _make_gs_sim_results([3.5] * steps, [0.5] * steps, third_of_december)
+        fleet = _make_gs_fleet_results(
+            [
+                (two_days.per_home_results[1], two_days.home_configs[1]),
+                (home_c, _make_gs_home_config(BatteryConfig.default_5kwh())),
+            ]
+        )
+
+        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+
+        assert compute_fleet_spare_capacity_kw(fleet, DEFAULT_EVENT_WINDOWS) == pytest.approx((1.5,))
+        assert result.per_window_avail_kw == pytest.approx((1.5,))
+        assert result.per_window_avail_p50_kw == pytest.approx((2.0,))
+        assert result.per_window_avail_p90_kw == pytest.approx((1.0,))
+
+
+_EVERY_DAY_AT_FIVE_PM = EventWindow(
+    months=tuple(range(1, 13)), weekdays=tuple(range(7)), hours=(17,), events_per_year=12, event_hours=1.0
+)
+
+
+def _daily_capacity_fleet(per_home_avail_kw: list[list[float]]) -> FleetResults:
+    """Default 5 kWh homes sharing one hourly index from Monday 1 January 2024, a day per value, nothing charging or discharging.
+
+    Each home sits at 3.5 kWh except at 17:00 on day d, when it holds its 0.5 kWh
+    floor plus its list's d-th value: under _EVERY_DAY_AT_FIVE_PM (h = 1 h) that
+    value is its firm capacity on day d.
+    """
+    index = pd.date_range(
+        "2024-01-01", periods=24 * len(per_home_avail_kw[0]), freq="1h", tz="Europe/London"
+    )
+    homes = []
+    for avail_kw in per_home_avail_kw:
+        soc = pd.Series(3.5, index=index)
+        soc.loc[index.hour == 17] = [0.5 + kw for kw in avail_kw]
+        sim = _make_gs_sim_results(soc.tolist(), [0.0] * len(index), index)
+        homes.append((sim, _make_gs_home_config(BatteryConfig.default_5kwh())))
+    return _make_gs_fleet_results(homes)
+
+
+class TestReliabilityRank:
+    """The capacity available on at least q of the n event days is the ⌈q·n⌉-th largest of the fleet's daily totals, never a rounded rank or an interpolated percentile."""
+
+    def test_the_rank_rounds_up(self) -> None:
+        """Daily totals 1.0, 0.5, 1.5, 0.75 and 1.25 kW.
+
+        50% takes the ⌈2.5⌉ = 3rd largest, 1.0, where round(2.5) = 2 takes 1.25.
+        90% takes the ⌈4.5⌉ = 5th, 0.5, where round(4.5) = 4 takes 0.75 and numpy's
+        interpolated 10th percentile is 0.6.
+        """
+        result = compute_grid_services_at_events(
+            _daily_capacity_fleet([[1.0, 0.5, 1.5, 0.75, 1.25]]),
+            GridServicesEventsConfig(event_windows=(_EVERY_DAY_AT_FIVE_PM,)),
+        )
+
+        assert result.per_window_avail_kw == pytest.approx((1.0,))
+        assert result.per_window_avail_p50_kw == pytest.approx((1.0,))
+        assert result.per_window_avail_p90_kw == pytest.approx((0.5,))
+
+    def test_c9_the_season_minimum_never_exceeds_the_90_percent_capacity(self) -> None:
+        """Two homes whose low days differ, so the fleet's daily totals are 1.25, 1.5, 2.0, 2.0 and 2.0 kW.
+
+        The 0.5.0 tag's season minimum takes each home's least capacity over the
+        season, on a shared index its least daily figure: 0.5 + 0.25 = 0.75 kW.
+        """
+        per_home_avail_kw = [[1.0, 0.5, 1.5, 0.75, 1.25], [0.25, 1.0, 0.5, 1.25, 0.75]]
+        season_minimum_kw = sum(min(avail_kw) for avail_kw in per_home_avail_kw)
+
+        result = compute_grid_services_at_events(
+            _daily_capacity_fleet(per_home_avail_kw),
+            GridServicesEventsConfig(event_windows=(_EVERY_DAY_AT_FIVE_PM,)),
+        )
+
+        assert season_minimum_kw <= result.per_window_avail_p90_kw[0] <= result.per_window_avail_p50_kw[0]
+
+
+class TestOnlyTheBreakdownReadsTheStepLength:
+    """The capacity and the income need no step length; the breakdown reads one to report the displaced self-use's energy.
+
+    One default 5 kWh home at 3.5 kWh discharging 0.5 kW, its index 16:00, 17:00,
+    17:30 and 19:00 on Monday 2 December 2024: its rows are not evenly spaced, so
+    SimulationResults.window refuses it.
+    """
+
+    @staticmethod
+    def _unevenly_spaced_fleet() -> FleetResults:
+        index = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 17:30", "2024-12-02 19:00"],
+            tz="Europe/London",
+        )
+        sim = _make_gs_sim_results([3.5] * len(index), [0.5] * len(index), index)
+        return _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+
+    def test_the_capacity_and_the_income_read_no_step_length(self) -> None:
+        """min(2.5 − 0.5, (3.5 − 0.5) / 3) = 1.0 kW on its one event day, priced at £9.972 per kW."""
+        fleet = self._unevenly_spaced_fleet()
+
+        assert compute_fleet_spare_capacity_kw(fleet, DEFAULT_EVENT_WINDOWS) == pytest.approx((1.0,))
+        assert GridServicesEventsConfig().annual_income_gbp(fleet) == pytest.approx(9.972)
+
+    def test_the_breakdown_refuses_an_index_with_no_step_length(self) -> None:
+        with pytest.raises(ValueError, match="evenly spaced"):
+            compute_grid_services_at_events(self._unevenly_spaced_fleet(), GridServicesEventsConfig())
+
+
+# ---------------------------------------------------------------------------
+# The displaced evening self-use is reported beside the income, never netted (PRD §9 P8; §5.9 C10)
+# ---------------------------------------------------------------------------
+
+
+class TestDisplacedEveningSelfUse:
+    """Each home-day displaces min(avail × h, the discharge after the window until the next recharge, the next event day's window or the index end), valued at that span's mean tariff; the income does not subtract it.
+
+    On _two_event_day_fleet each home discharges 1.0 kW from 19:00 to 20:29 and
+    recharges at 20:30: 1.5 kWh at 0.30 £/kWh, under the 3.0 kWh a 1.0 kW home-day
+    holds over the 3 h window.
+    """
+
+    def test_each_home_day_displaces_its_capacity_up_to_the_evening_discharge_before_recharge(self) -> None:
+        """Home A on 2 December has avail 0, so displaces 0; every other home-day 1.5 kWh: fleet daily (1.5, 3.0), mean 2.25 kWh, at 0.30 £/kWh over 12 events a year."""
+        result = compute_grid_services_at_events(_two_event_day_fleet(), GridServicesEventsConfig())
+        no_evening_discharge = compute_grid_services_at_events(
+            _two_event_day_fleet(evening_discharge_kw=0.0), GridServicesEventsConfig()
+        )
+
+        assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((2.25,))
+        assert result.per_window_displaced_import_gbp_per_year == pytest.approx((2.25 * 0.30 * 12,))
+        assert result.annual_income_gbp == pytest.approx(1.5 * 9.972)
+        assert result.annual_income_gbp == pytest.approx(no_evening_discharge.annual_income_gbp)
+
+    def test_without_the_floor_minute_every_home_day_displaces_its_evening_discharge(self) -> None:
+        result = compute_grid_services_at_events(
+            _two_event_day_fleet(a_floor_minute=False), GridServicesEventsConfig()
+        )
+
+        assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((3.0,))
+        assert result.per_window_displaced_import_gbp_per_year == pytest.approx((3.0 * 0.30 * 12,))
+
+    def test_the_capacity_baseline_displaces_each_home_days_evening_discharge(self) -> None:
+        """Under capacity every home-day's avail is 1.0 kW, so each displaces min(3.0, 1.5) kWh."""
+        result = compute_grid_services_at_events(
+            _two_event_day_fleet(), GridServicesEventsConfig(delivery_baseline="capacity")
+        )
+
+        assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((3.0,))
+
+    def test_the_span_stops_at_the_next_event_day_or_the_end_of_the_index(self) -> None:
+        """One home, avail 1.0 kW each day, never recharging and discharging 0.05 kW outside the window at 0.10 £/kWh.
+
+        2 December's span runs from 19:00 to 15:59 on 3 December, 21 h × 0.05 = 1.05 kWh;
+        3 December's runs to the index's end at 23:59, 5 h × 0.05 = 0.25 kWh. Per event,
+        (1.05 + 0.25) / 2 = 0.65 kWh, worth 0.65 × 0.10 × 12 = £0.78 a year.
+        """
+        index = _TWO_DECEMBER_EVENT_DAYS
+        sim = _make_gs_sim_results(
+            [3.5] * len(index),
+            _by_time_of_day(index, {("16:00", "18:59"): 0.5}, elsewhere=0.05),
+            index,
+            tariff_rate=[0.10] * len(index),
+        )
+        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+
+        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+
+        assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((0.65,))
+        assert result.per_window_displaced_import_gbp_per_year == pytest.approx((0.78,))
+
+    def test_a_recharge_straight_after_the_window_displaces_nothing(self) -> None:
+        """A charge at 19:00 leaves an empty span: 0 kWh worth £0, not a NaN mean tariff."""
+        result = compute_grid_services_at_events(
+            _two_event_day_fleet(recharge_at="19:00"), GridServicesEventsConfig()
+        )
+
+        assert result.per_window_displaced_self_use_kwh_per_event == (0.0,)
+        assert result.per_window_displaced_import_gbp_per_year == (0.0,)

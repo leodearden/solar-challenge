@@ -823,7 +823,7 @@ class TestFinanceConfigGridServicesModel:
 _EVENTS_NUMERIC_KEYS = tuple(
     f.name
     for f in dataclasses.fields(GridServicesEventsConfig)
-    if f.name not in {"band", "event_windows"}
+    if f.name not in {"band", "event_windows", "delivery_baseline"}
 )
 
 
@@ -845,6 +845,7 @@ class TestFinanceConfigParsingGridServices:
         "utilisation_factor": 0.8,
         "availability_gbp_per_kw_per_event": 2.5,
         "utilisation_gbp_per_mwh": 80.0,
+        "delivery_baseline": "capacity",
     }
     _EVENTS_FIELDS: dict[str, object] = {
         **_EVENTS_BLOCK,
@@ -867,6 +868,7 @@ class TestFinanceConfigParsingGridServices:
                 "utilisation_factor": 0.8,
                 "availability_gbp_per_kw_per_event": 2.5,
                 "utilisation_gbp_per_mwh": 80.0,
+                "delivery_baseline": "capacity",
                 "event_windows": [
                     {
                         "months": [11, 12, 1, 2],
@@ -888,6 +890,7 @@ class TestFinanceConfigParsingGridServices:
         assert cfg.utilisation_factor == 0.8
         assert cfg.availability_gbp_per_kw_per_event == 2.5
         assert cfg.utilisation_gbp_per_mwh == 80.0
+        assert cfg.delivery_baseline == "capacity"
         assert len(cfg.event_windows) == 1
         ew = cfg.event_windows[0]
         assert isinstance(ew, EventWindow)
@@ -1043,12 +1046,29 @@ class TestFinanceConfigParsingGridServices:
             ),
             pytest.param("aggregator_share", "non-numeric", id="aggregator_share"),
             pytest.param("utilisation_factor", "non-numeric", id="utilisation_factor"),
+            pytest.param(
+                "delivery_baseline",
+                "delivery_baseline must be one of operational, capacity",
+                id="delivery_baseline",
+            ),
         ],
     )
     def test_null_events_value_is_refused(self, key: str, refusal: str) -> None:
         """A null for an events key whose declared default is not None is refused for that key, not read as that default."""
         with pytest.raises(ConfigurationError, match=refusal):
             self._parse_events_block({**self._EVENTS_BLOCK, key: None})
+
+    def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
+        """An unknown delivery_baseline is refused by the events configuration's own check, not as a non-numeric value."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            self._parse_events_block({**self._EVENTS_BLOCK, "delivery_baseline": "metered"})
+
+        message = str(exc_info.value)
+        assert (
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
+            in message
+        )
+        assert "non-numeric" not in message
 
     @pytest.mark.parametrize(
         "key", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"]

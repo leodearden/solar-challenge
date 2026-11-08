@@ -93,6 +93,12 @@ backward-compatibility; the board scenario opts in.
    capacity for the whole event; an expected/time-integrated figure would over-state dispatchable kW and
    inflate revenue. The optimistic/expected variant is deferred to §Open questions.
 
+   *(2026-11, task 837)* Firmness is now measured per event day and booked at the mean over event days,
+   under a named delivery baseline (`GridServicesEventsConfig.delivery_baseline`: `operational` or
+   `capacity`), with the capacity available on 50% and on 90% of event days reported beside it. The
+   minimum over every in-window minute of the season priced the board fleet at £3 a year. See
+   docs/prds/grid-services-pricing-model.md §5.10.
+
 2. **"Net of contention" via observable headroom, not purpose-attribution.** Forced by substrate
    (`battery_discharge` is unattributed, `flow.py:267–268`). The baseline trajectory already reflects
    self-consumption + arbitrage draw; spare = above-floor energy + unused inverter power. This is the
@@ -277,6 +283,10 @@ assigned at decompose time. Out-of-batch deps wired to the W1/W2/W3 leaf tasks t
    Decide during α/γ.
 3. **Firm-minimum vs expected/time-integrated spare.** Decision 1 picks firm-minimum. If the board wants an
    expected-value variant, add it as a second pricing mode later. Decide post-ε if raised.
+
+   *(2026-11, task 837)* Resolved without a second pricing mode: firmness is now measured per event day and
+   booked at the mean over event days under a named delivery baseline, with the 50% and 90% reliability
+   figures reported beside it (docs/prds/grid-services-pricing-model.md §5.10).
 4. **Default event-window schedule.** Winter weekday 16:00–19:00 is the assumed DFS-style window; exact
    `months`/`hours`/`events_per_year` are tunable. **Suggested resolution:** a single winter-evening window,
    ~12 events/yr, 3 h. Decide during α.

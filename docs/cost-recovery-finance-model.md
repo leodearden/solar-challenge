@@ -334,8 +334,9 @@ grid_services_income(t) = pricing.annual_income_gbp(F_t)
   FlatGridServices(r) → r × Σ_{battery homes of F_t} max_discharge_kw
   grid_services_model = "capacity_at_events", the GridServicesEventsConfig:
                       → Σ_w avail_w(F_t) × (a × N_w + u × h_w × U / 1000 × N_w) × (1 − s)
-    avail_w = compute_fleet_spare_capacity_kw(F_t, windows)[w], the fleet's firm
-              spare battery capacity in event window w (kW)
+    avail_w = compute_fleet_spare_capacity_kw(F_t, windows, delivery_baseline)[w],
+              the mean over event window w's event days of the fleet's firm
+              spare battery capacity (kW), see §8.1
     a = availability rate (£/kW/event), U = utilisation rate (£/MWh): the band's,
         unless the configuration overrides them
     u = utilisation_factor, h_w = event_hours, N_w = events_per_year,
@@ -824,6 +825,64 @@ This directional property is hard-asserted in
 Under `grid_services_model = "capacity_at_events"` the income is §4's
 capacity-at-events term, priced at each projection age from that age's simulated
 fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
+
+**Firm capacity per event day.** An event day of window w is a local calendar
+date holding at least one of w's timesteps. Per battery home and event day d,
+with `P = max_discharge_kw`, `floor = Battery(battery_config).min_soc_kwh` and
+`h = event_hours`:
+
+```
+operational:  avail(home, d) = max(0, min(P − max_{t∈d∩w} discharge(t),
+                                          min_{t∈d∩w}(soc(t) − floor) / h))
+capacity:     avail(home, d) = max(0, min(P, (soc(t₀) − floor) / h)),
+              t₀ the first timestep of d in w
+A(d)        = Σ_home avail(home, d)      a home whose index lacks d adds 0
+avail_w     = mean over w's event days d of A(d)      the figure §4 prices
+```
+
+`GridServicesEventsConfig.delivery_baseline` names the baseline, and the
+scenario key `grid_services_events.delivery_baseline` sets it: `"operational"`,
+the default, or `"capacity"`; any other value is refused with a
+`ConfigurationError` naming both. Each mirrors a product. `operational` counts the
+increment above the battery's own discharge, as NESO's Demand Flexibility
+Service measures delivery against an operational baseline; `capacity` counts the
+battery's whole window discharge, as NGED baselines domestic storage at its
+capacity (`tests/unit/test_gridservices.py::TestFirmCapacityPerEventDay`).
+
+**Reliability.** Beside the booked mean, the capacity-at-events breakdown reports
+the capacity available on at least 50% and on at least 90% of event days: the
+⌈q·n⌉-th largest of the n daily totals A(d), for q = 0.5 and 0.9, the rank
+rounded up, never to the nearest. It is not an interpolated percentile: on daily
+totals (1.0, 2.0) kW the 90% figure is 1.0 kW, where numpy's linear 10th
+percentile, 1.1 kW, is available on only half the days. The 90% figure never
+exceeds the 50% figure. For a fleet whose homes share one simulated index, as
+`simulate_fleet`'s do, the season minimum, the 0.5.0 tag's figure, never exceeds
+the 90% figure either (`tests/unit/test_gridservices.py::TestReliabilityRank`).
+
+**The energy ceiling.** A 5 kWh battery charged to 90% holds 4.0 kWh above its
+0.5 kWh floor: 1.33 kW over a 3 h event, against the 2.5 kW of discharge power
+the flat rate prices.
+
+**Displaced evening self-use.** The energy an event would take is energy the
+home would otherwise use that evening. Per home and event day the breakdown
+takes `min(avail(home, d) × h, the discharge after the window)`, the discharge
+counted until the next recharge, the next event day's window or the end of the
+simulated index, whichever comes first. It reports the fleet's mean over event
+days (kWh per event) and its value, each home-day's kWh at the mean tariff over
+its span, times `events_per_year` (£ a year). A home simulated without a tariff
+has a `tariff_rate` of 0, so its displaced self-use is valued at £0, where the
+bill prices that home's import at the retail baseline rate. Both are reported
+beside the income and not netted from it: the displaced energy lands on the
+householder's bill, not on CBS revenue, and netting it needs a counterfactual
+run with an event-day dispatch (docs/prds/grid-services-pricing-model.md §6
+decision 15, §11). The finance report's capacity-at-events table renders the
+two reliability rows and the per-event displaced row for a single event window,
+and — for several, since summed over windows they describe no set of event
+days; the value-per-year row sums the windows. A note says the income is gross
+of the displaced self-use, and that a home without a tariff values it at £0
+(`tests/unit/test_gridservices.py::TestDisplacedEveningSelfUse`;
+`tests/integration/test_grid_services_events.py::test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement`,
+`tests/integration/test_grid_services_events.py::test_several_event_windows_show_no_per_window_figure_summed`).
 
 The flat rates (£1.5, £12 and £48 per kW of installed discharge power per year
 in the low, central and high bands) and the events rates are
