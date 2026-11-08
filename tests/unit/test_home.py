@@ -571,7 +571,7 @@ class TestSimulationResultsRefusesANaNAmount:
         )
 
     def test_a_series_that_is_not_numbers_is_refused_before_an_amount_holding_a_nan(self):
-        """Boundary guard, green before and after the refusal became a SeriesRefused: the dtype refusal reads every series before any amount's NaN is read, so battery_soc's strings are named though demand, declared before it, holds a NaN."""
+        """The dtype refusal reads every series before any amount's NaN is read, so battery_soc's strings are named though demand, declared before it, holds a NaN."""
         built = _results_with_every_series_set()
         index = built.demand.index
         demand = built.demand.copy()
@@ -609,7 +609,7 @@ class TestSimulationResultsRefusesANaNAmount:
 
     @pytest.mark.parametrize("name", LEVELS)
     def test_a_nan_level_is_accepted_as_no_total_sums_it(self, name):
-        """Boundary guard, green with or without the refusal: an all-NaN level builds and leaves every total as it was."""
+        """An all-NaN level builds and leaves every total as it was."""
         built = _results_with_every_series_set()
 
         results = dataclasses.replace(built, **{name: pd.Series(math.nan, index=built.demand.index)})
@@ -617,7 +617,7 @@ class TestSimulationResultsRefusesANaNAmount:
         assert results.total_amounts() == pytest.approx(built.total_amounts())
 
     def test_an_infinite_amount_is_kept_so_its_total_is_infinite(self):
-        """Boundary guard, green with or without the refusal: only NaN is refused, so an infinite total reaches the caller, and project_multi_year refuses a non-finite aggregate."""
+        """Only NaN is refused, so an infinite total reaches the caller, and project_multi_year refuses a non-finite aggregate."""
         built = _results_with_every_series_set()
         demand = built.demand.copy()
         demand.iloc[2] = math.inf
