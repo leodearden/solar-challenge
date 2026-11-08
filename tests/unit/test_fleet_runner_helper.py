@@ -81,7 +81,7 @@ def _started_once_a_home_is_marked(marker_dir: Path, *, within: float) -> dict[s
 
 def test_a_home_named_in_held_until_is_marked_then_waits_until_its_release_exists(tmp_path: Path) -> None:
     release = tmp_path / "release"
-    simulator = MarkingHomeSimulator(tmp_path, held_until={"Held": release})
+    simulator = MarkingHomeSimulator(tmp_path, held_until=(("Held", release),))
 
     with ThreadPoolExecutor(max_workers=1) as holding:
         held = holding.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
@@ -97,7 +97,7 @@ def test_a_home_named_in_held_until_is_marked_then_waits_until_its_release_exist
 
 def test_a_home_whose_release_never_appears_raises_timeout_error_naming_it_and_its_release(tmp_path: Path) -> None:
     never = tmp_path / "never"
-    simulator = MarkingHomeSimulator(tmp_path, held_until={"Held": never}, hold_limit_seconds=0.05)
+    simulator = MarkingHomeSimulator(tmp_path, held_until=(("Held", never),), hold_limit_seconds=0.05)
 
     with pytest.raises(TimeoutError) as caught:
         simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)

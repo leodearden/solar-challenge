@@ -995,7 +995,7 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
         release = tmp_path / "a fleet was yielded"
         runner = FleetRunner(
             weather=_CountingWeather(),
-            home_simulator=MarkingHomeSimulator(tmp_path, held_until={"A 1": release}),
+            home_simulator=MarkingHomeSimulator(tmp_path, held_until=(("A 1", release),)),
             parallel=True,
             max_workers=2,
         )

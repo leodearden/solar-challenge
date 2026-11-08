@@ -21,8 +21,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -48,8 +47,9 @@ class MarkingHomeSimulator:
     name that carries the writer's process id and thread id, since two pool workers, or two threads
     of one process, can mark homes of one name at once, and then renamed.
 
-    A home named in *held_until* is marked, then waits until its path exists; if the path has not
-    appeared within *hold_limit_seconds*, it raises TimeoutError naming the home and the path.
+    Each (name, path) pair in *held_until* holds the home of that name: it is marked, then waits until
+    the path exists; if the path has not appeared within *hold_limit_seconds*, it raises TimeoutError
+    naming the home and the path.
 
     A home it does not refuse gets make_sim_results(self_kwh=<its PV kW>, days=1), so the
     results total the home's PV kW of self-consumption, which identifies the home.
@@ -58,7 +58,7 @@ class MarkingHomeSimulator:
     marker_dir: Path
     failing: frozenset[str] = frozenset()
     seconds: float = 0.0
-    held_until: Mapping[str, Path] = field(default_factory=dict, hash=False)
+    held_until: tuple[tuple[str, Path], ...] = ()
     hold_limit_seconds: float = 120.0
 
     def __call__(
@@ -70,8 +70,9 @@ class MarkingHomeSimulator:
         partial = marker.with_name(f"{marker.name}.{os.getpid()}.{threading.get_ident()}.partial")
         partial.write_text(json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8")
         partial.replace(marker)
-        if config.name in self.held_until:
-            _wait_until_exists(self.held_until[config.name], config.name, self.hold_limit_seconds)
+        release = dict(self.held_until).get(config.name)
+        if release is not None:
+            _wait_until_exists(release, config.name, self.hold_limit_seconds)
         time.sleep(self.seconds)
         if config.name in self.failing:
             raise ValueError(f"{config.name} cannot be simulated")
