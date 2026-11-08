@@ -86,7 +86,7 @@ The simulation flows through these core modules:
 5. **`battery.py`** — Tracks state of charge with configurable power limits, efficiency, and SOC constraints
 6. **`flow.py`** — Per-timestep energy dispatch: self-consumption → battery charge → grid export; grid import for shortfalls
 7. **`home.py`** — Orchestrates a single home simulation combining PV + Load + Battery + Weather → `SimulationResults`
-8. **`fleet.py`** — Runs multiple homes in parallel via `ProcessPoolExecutor`; aggregates results
+8. **`fleet.py`** — `FleetRunner` is the one fleet execution value (weather provider, home simulator, `parallel`, `max_workers`), and `default_runner()` is the production one. Its one fan-out prefetches each location's weather once per call and runs homes in a `ProcessPoolExecutor` or in turn; a failed home is named on its own exception and the homes not yet started are cancelled. It aggregates results
 
 ### Finance & Community Layer
 

@@ -14,9 +14,9 @@ warnings and errors print as ever.
 
 `finance run` and `optimize configs` read their fleet simulator from Click's
 context object, ctx.ensure_object(CliFleetSimulator).simulate:
-fleet.simulate_fleet, unless whoever invokes the CLI passes another
-CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they call
-fleet.simulate_fleet_iter and fleet.simulate_multi_sweep_iter themselves.
+fleet.default_runner().simulate, unless whoever invokes the CLI passes another
+CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they build
+a fleet.FleetRunner from their --workers and --sequential.
 """
 
 import dataclasses
@@ -25,7 +25,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
 
-import pandas as pd
 import typer
 from rich.console import Console
 from rich.progress import (
@@ -45,7 +44,7 @@ from rich.text import Text
 from solar_challenge.battery import has_battery
 from solar_challenge.config import load_config
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetConfig, FleetResults, FleetSummary, simulate_fleet
+from solar_challenge.fleet import FleetSimulate, FleetSummary, default_runner
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import parse_location
 from solar_challenge.scenario_writer import location_block
@@ -85,8 +84,10 @@ def handle_errors(func: F) -> F:
 
 
 def _print_error_verbatim(label: str, error: Exception) -> None:
-    """Print label in red, then error's text exactly as it is."""
+    """Print label in red, then error's text exactly as it is, then each of its notes exactly as it is, on a line of its own."""
     _print_verbatim(error_console, (f"{label}:", "red"), " ", str(error))
+    for note in getattr(error, "__notes__", ()):
+        _print_verbatim(error_console, note)
 
 
 def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
@@ -98,7 +99,7 @@ def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
 class CliFleetSimulator:
     """Fleet simulator a command reads from Click's context object."""
 
-    simulate: Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults] = simulate_fleet
+    simulate: FleetSimulate = dataclasses.field(default_factory=lambda: default_runner().simulate)
 
 
 def load_config_with_overrides(

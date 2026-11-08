@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fleet simulation for multiple homes."""
 
+import contextlib
+import math
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Optional, Sequence
+from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
 
@@ -21,8 +23,9 @@ from solar_challenge.home import (
 )
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
+from solar_challenge.number_fields import Interval, as_whole_number, read_field
 from solar_challenge.pv import PVConfig
-from solar_challenge.weather import PrefetchedWeather, default_weather
+from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_weather
 
 
 @dataclass
@@ -261,46 +264,102 @@ class FleetSummary:
     total_export_revenue_gbp: Optional[float] = None
 
 
-def _simulate_home_worker(
-    home_index: int,
-    home_config: HomeConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    validate_balance: bool,
-    weather: PrefetchedWeather,
-) -> tuple[int, SimulationResults]:
-    """Run one home's simulation job, on the PrefetchedWeather it carries, tagged with the home's index. Must be top-level for pickle."""
-    results = simulate_home(home_config, start_date, end_date, validate_balance, weather=weather)
-    return (home_index, results)
+FleetSimulate: TypeAlias = Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]
+"""Simulates a fleet over a window: what finance and optimize take, a FleetSimulator's simulate."""
+
+HomesDone: TypeAlias = Callable[[int, int], None]
+"""Told in the calling process after each home finishes: (homes finished, homes in the call)."""
 
 
-def _simulate_home_worker_tagged(
-    sweep_index: int,
-    home_index: int,
-    home_config: HomeConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    validate_balance: bool,
-    weather: PrefetchedWeather,
-) -> tuple[int, int, SimulationResults]:
-    """Run one home's simulation job, on the PrefetchedWeather it carries, tagged with its sweep and home indices.
+class HomeSimulator(Protocol):
+    """Simulates one home over a window on the weather it is given, as home.simulate_home does."""
 
-    Must be top-level for pickle.
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults: ...
 
-    Args:
-        sweep_index: Index of the sweep iteration this job belongs to
-        home_index: Index of the home within the sweep
-        home_config: Configuration for the home
-        start_date: Start of simulation period
-        end_date: End of simulation period
-        validate_balance: Whether to validate energy balance
-        weather: The job's weather, holding the weather of the home's location alone
 
-    Returns:
-        Tuple of (sweep_index, home_index, SimulationResults)
+class FleetSimulator(Protocol):
+    """How a composition root simulates homes and fleets."""
+
+    def simulate(
+        self, fleet: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, progress: HomesDone | None = None
+    ) -> FleetResults: ...
+
+    def simulate_each(
+        self,
+        fleets: Sequence[FleetConfig],
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        *,
+        progress: HomesDone | None = None,
+    ) -> Iterator[tuple[int, FleetResults]]:
+        """Each fleet's index once, with its FleetResults, as its last home finishes."""
+        ...
+
+    def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults: ...
+
+
+_WORKER_COUNTS = Interval(1, math.inf)
+
+
+@dataclass(frozen=True)
+class FleetRunner:
+    """A FleetSimulator that runs each home through home_simulator on the weather it prefetches from weather.
+
+    Attributes:
+        weather: Asked once per call for each distinct location of the call's homes, in the calling process
+        home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it is a top-level function
+        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process
+        max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
     """
-    results = simulate_home(home_config, start_date, end_date, validate_balance, weather=weather)
-    return (sweep_index, home_index, results)
+
+    weather: WeatherProvider
+    home_simulator: HomeSimulator
+    parallel: bool = True
+    max_workers: int | None = None
+
+    def __post_init__(self) -> None:
+        """Read a set max_workers as a whole number of at least 1, holding the int read, else a ConfigurationError (a ValueError) naming it and its value; None stays None."""
+        read_field(self, "max_workers", as_whole_number, _WORKER_COUNTS, optional=True)
+
+    def simulate(
+        self, fleet: FleetConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, progress: HomesDone | None = None
+    ) -> FleetResults:
+        """fleet simulated from start_date to end_date: simulate_each of fleet alone."""
+        ((_, results),) = self.simulate_each([fleet], start_date, end_date, progress=progress)
+        return results
+
+    def simulate_each(
+        self,
+        fleets: Sequence[FleetConfig],
+        start_date: pd.Timestamp,
+        end_date: pd.Timestamp,
+        *,
+        progress: HomesDone | None = None,
+    ) -> Iterator[tuple[int, FleetResults]]:
+        """Each fleet's index once, with its FleetResults, as its last home finishes; the homes of all the fleets share one pool.
+
+        Each distinct location's weather is fetched once, in this process, before any home runs, and
+        each home's job carries its own location's alone. progress, when given, is told in this process
+        after each home finishes: (homes finished, homes in the call).
+
+        A home that fails re-raises its own exception, with a note naming the home and its fleet; an
+        exception progress raises propagates as raised. Either, or closing the iterator early, cancels
+        the homes not yet started, and the call ends once the homes already running have finished.
+        """
+        return _simulate_fleets(self, fleets, start_date, end_date, progress)
+
+    def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        """home simulated in this process from start_date to end_date, on weather holding its location's alone."""
+        return self.home_simulator(
+            home, start_date, end_date, weather=PrefetchedWeather.fetch(self.weather, [home.location])
+        )
+
+
+def default_runner() -> FleetRunner:
+    """FleetRunner(weather=default_weather(), home_simulator=simulate_home): the runner a root uses when given none."""
+    return FleetRunner(weather=default_weather(), home_simulator=simulate_home)
 
 
 def _job_weather(weather: PrefetchedWeather, home: HomeConfig) -> PrefetchedWeather:
@@ -308,106 +367,93 @@ def _job_weather(weather: PrefetchedWeather, home: HomeConfig) -> PrefetchedWeat
     return PrefetchedWeather.fetch(weather, [home.location])
 
 
-def simulate_fleet_iter(
-    config: FleetConfig,
+@dataclass(frozen=True)
+class _HomeJob:
+    """One home of a runner's call: the home, and the fleet and the place in it its results go to."""
+
+    fleet_index: int
+    home_index: int
+    fleet: FleetConfig
+    home: HomeConfig
+
+
+def _finished_homes(
+    runner: FleetRunner,
+    jobs: Sequence[_HomeJob],
+    weather: PrefetchedWeather,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-    validate_balance: bool = True,
-    parallel: bool = True,
-    max_workers: int | None = None,
-) -> Iterator[tuple[int, SimulationResults]]:
-    """Yield (home_index, result) as each simulation completes.
+) -> Generator[tuple[_HomeJob, SimulationResults], None, None]:
+    """Each job with its home's results as the home finishes: in turn in this process, or in one process pool when runner is parallel and there are two jobs or more.
 
-    Each home is simulated on its location's weather from default_weather(),
-    fetched once per distinct location in the calling process before any home
-    runs. Each home's job carries a PrefetchedWeather holding its location's
-    weather alone, so a worker reads no weather cache and no network under any
-    multiprocessing start method.
-
-    Args:
-        config: Fleet configuration
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        validate_balance: Whether to validate energy balance
-        parallel: Whether to run simulations in parallel
-        max_workers: Maximum number of parallel workers (defaults to CPU count)
-
-    Yields:
-        Tuples of (home_index, SimulationResults) as each completes
+    A pool's job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and
+    its weather provider are never pickled. A home's exception carries a note naming the home. In turn, no later home
+    starts once the generator stops; a pool that stops, for whatever exception or when the generator is closed,
+    cancels the homes not yet started and waits for those running.
     """
-    n_homes = len(config.homes)
-    weather = PrefetchedWeather.fetch(default_weather(), (home.location for home in config.homes))
-
-    if not parallel or n_homes == 1:
-        for idx, home in enumerate(config.homes):
-            yield _simulate_home_worker(
-                idx,
-                home,
-                start_date,
-                end_date,
-                validate_balance,
-                _job_weather(weather, home),
-            )
-    else:
-        workers = max_workers or min(n_homes, os.cpu_count() or 4)
-        with ProcessPoolExecutor(max_workers=workers) as executor:
+    if not runner.parallel or len(jobs) < 2:
+        for job in jobs:
+            with _naming_the_home(job):
+                results = runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
+            yield job, results
+        return
+    workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        try:
             futures = {
-                executor.submit(
-                    _simulate_home_worker,
-                    i,
-                    h,
-                    start_date,
-                    end_date,
-                    validate_balance,
-                    _job_weather(weather, h),
-                ): i
-                for i, h in enumerate(config.homes)
+                pool.submit(
+                    runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
+                ): job
+                for job in jobs
             }
             for future in as_completed(futures):
-                yield future.result()
+                job = futures[future]
+                with _naming_the_home(job):
+                    results = future.result()
+                yield job, results
+        except BaseException:
+            pool.shutdown(cancel_futures=True)
+            raise
 
 
-def simulate_fleet(
-    config: FleetConfig,
+@contextlib.contextmanager
+def _naming_the_home(job: _HomeJob) -> Iterator[None]:
+    """Re-raise an exception the block raises, that same object, with a note naming job's home and fleet."""
+    try:
+        yield
+    except Exception as error:
+        error.add_note(
+            f"simulating home {job.home_index} ({job.home.name!r}) of fleet {job.fleet_index} ({job.fleet.name!r})"
+        )
+        raise
+
+
+def _simulate_fleets(
+    runner: FleetRunner,
+    fleets: Sequence[FleetConfig],
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-    validate_balance: bool = True,
-    parallel: bool = True,
-    max_workers: int | None = None,
-) -> FleetResults:
-    """Simulate all homes in a fleet for a date range.
-
-    Each home runs on its location's weather from default_weather(), fetched as
-    simulate_fleet_iter fetches it, and carried in its job's PrefetchedWeather.
-
-    Args:
-        config: Fleet configuration
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        validate_balance: Whether to validate energy balance
-        parallel: Whether to run simulations in parallel
-        max_workers: Maximum number of parallel workers (defaults to CPU count)
-
-    Returns:
-        FleetResults with per-home results
-    """
-    results: list[SimulationResults | None] = [None] * len(config.homes)
-
-    for idx, result in simulate_fleet_iter(
-        config, start_date, end_date, validate_balance, parallel, max_workers
-    ):
-        results[idx] = result
-
-    # Convert to non-optional list (all positions filled)
-    final_results: list[SimulationResults] = []
-    for r in results:
-        assert r is not None
-        final_results.append(r)
-
-    return FleetResults(
-        per_home_results=final_results,
-        home_configs=config.homes,
-    )
+    progress: HomesDone | None,
+) -> Iterator[tuple[int, FleetResults]]:
+    """FleetRunner.simulate_each's fan-out: every home of fleets run through _finished_homes on weather fetched once per distinct location, each fleet's results yielded in home order as its last home finishes."""
+    jobs = [
+        _HomeJob(fleet_index, home_index, fleet, home)
+        for fleet_index, fleet in enumerate(fleets)
+        for home_index, home in enumerate(fleet.homes)
+    ]
+    weather = PrefetchedWeather.fetch(runner.weather, (job.home.location for job in jobs))
+    finished: dict[int, dict[int, SimulationResults]] = {fleet_index: {} for fleet_index in range(len(fleets))}
+    with contextlib.closing(_finished_homes(runner, jobs, weather, start_date, end_date)) as homes:
+        for done, (job, results) in enumerate(homes, start=1):
+            if progress is not None:
+                progress(done, len(jobs))
+            fleet_finished = finished[job.fleet_index]
+            fleet_finished[job.home_index] = results
+            if len(fleet_finished) == len(job.fleet.homes):
+                yield job.fleet_index, FleetResults(
+                    per_home_results=[fleet_finished[home_index] for home_index in range(len(job.fleet.homes))],
+                    home_configs=job.fleet.homes,
+                )
 
 
 def calculate_home_summaries(
@@ -529,163 +575,3 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
     )
 
 
-def simulate_multi_sweep_iter(
-    sweep_configs: list[tuple[Any, FleetConfig]],
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    validate_balance: bool = True,
-    parallel: bool = True,
-    max_workers: int | None = None,
-) -> Iterator[tuple[int, int, SimulationResults]]:
-    """Submit all jobs from all sweeps to a single executor for maximum CPU utilization.
-
-    This function enables cross-sweep parallel execution: when sweep N's last batch
-    has only a few jobs, sweep N+1's jobs fill the remaining worker slots.
-
-    Weather is fetched from default_weather() as simulate_fleet_iter fetches it, over
-    every sweep's homes, and each job carries its home's PrefetchedWeather.
-
-    Args:
-        sweep_configs: List of (sweep_value, FleetConfig) pairs
-        start_date: Start of simulation period
-        end_date: End of simulation period (inclusive)
-        validate_balance: Whether to validate energy balance
-        parallel: Whether to run simulations in parallel
-        max_workers: Maximum number of parallel workers (defaults to CPU count)
-
-    Yields:
-        Tuples of (sweep_index, home_index, SimulationResults) as each completes
-    """
-    if not sweep_configs:
-        return
-
-    weather = PrefetchedWeather.fetch(
-        default_weather(), (home.location for _, fleet_config in sweep_configs for home in fleet_config.homes)
-    )
-
-    # Count total jobs
-    total_jobs = sum(len(cfg.homes) for _, cfg in sweep_configs)
-
-    if not parallel or total_jobs == 1:
-        # Sequential execution
-        for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
-            for home_idx, home in enumerate(fleet_config.homes):
-                yield _simulate_home_worker_tagged(
-                    sweep_idx,
-                    home_idx,
-                    home,
-                    start_date,
-                    end_date,
-                    validate_balance,
-                    _job_weather(weather, home),
-                )
-    else:
-        # Parallel execution with all jobs in single pool
-        workers = max_workers or min(total_jobs, os.cpu_count() or 4)
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {}
-            for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
-                for home_idx, home in enumerate(fleet_config.homes):
-                    future = executor.submit(
-                        _simulate_home_worker_tagged,
-                        sweep_idx,
-                        home_idx,
-                        home,
-                        start_date,
-                        end_date,
-                        validate_balance,
-                        _job_weather(weather, home),
-                    )
-                    futures[future] = (sweep_idx, home_idx)
-
-            for future in as_completed(futures):
-                yield future.result()
-
-
-@dataclass
-class MultiSweepResults:
-    """Results from multi-sweep simulation organized by sweep index.
-
-    Attributes:
-        sweep_results: Dict mapping sweep_index to (sweep_value, FleetResults)
-        sweep_values: List of sweep values in order
-    """
-
-    sweep_results: dict[int, tuple[Any, FleetResults]]
-    sweep_values: list[Any]
-
-    def __len__(self) -> int:
-        """Return number of sweeps."""
-        return len(self.sweep_results)
-
-    def __getitem__(self, sweep_index: int) -> tuple[Any, FleetResults]:
-        """Get (sweep_value, FleetResults) for a specific sweep."""
-        return self.sweep_results[sweep_index]
-
-    def iter_results(self) -> Iterator[tuple[Any, FleetResults]]:
-        """Iterate over (sweep_value, FleetResults) in sweep order."""
-        for i in range(len(self.sweep_values)):
-            yield self.sweep_results[i]
-
-
-def collect_multi_sweep_results(
-    sweep_configs: list[tuple[Any, FleetConfig]],
-    result_iter: Iterator[tuple[int, int, SimulationResults]],
-    on_sweep_complete: Optional[Callable[[int, Any, FleetResults], None]] = None,
-) -> MultiSweepResults:
-    """Collect results from multi-sweep iterator and organize by sweep.
-
-    Routes results to per-sweep buckets and calls callback when each sweep completes.
-
-    Args:
-        sweep_configs: List of (sweep_value, FleetConfig) pairs (same as passed to
-            simulate_multi_sweep_iter)
-        result_iter: Iterator from simulate_multi_sweep_iter
-        on_sweep_complete: Optional callback called when a sweep completes.
-            Receives (sweep_index, sweep_value, FleetResults).
-
-    Returns:
-        MultiSweepResults with organized results
-    """
-    n_sweeps = len(sweep_configs)
-
-    # Initialize per-sweep result buckets
-    # bucket[sweep_idx] = list of (home_idx, result) tuples
-    buckets: list[list[tuple[int, SimulationResults]]] = [[] for _ in range(n_sweeps)]
-    homes_per_sweep = [len(cfg.homes) for _, cfg in sweep_configs]
-    completed_sweeps: set[int] = set()
-
-    # Collect results
-    sweep_results: dict[int, tuple[Any, FleetResults]] = {}
-    sweep_values = [val for val, _ in sweep_configs]
-
-    for sweep_idx, home_idx, result in result_iter:
-        buckets[sweep_idx].append((home_idx, result))
-
-        # Check if this sweep is now complete
-        if sweep_idx not in completed_sweeps and len(buckets[sweep_idx]) == homes_per_sweep[sweep_idx]:
-            completed_sweeps.add(sweep_idx)
-
-            # Build FleetResults for this sweep
-            sweep_val, fleet_config = sweep_configs[sweep_idx]
-            bucket = buckets[sweep_idx]
-
-            # Sort by home_idx and extract results
-            bucket.sort(key=lambda x: x[0])
-            per_home_results = [r for _, r in bucket]
-
-            fleet_results = FleetResults(
-                per_home_results=per_home_results,
-                home_configs=fleet_config.homes,
-            )
-
-            sweep_results[sweep_idx] = (sweep_val, fleet_results)
-
-            # Call callback if provided
-            if on_sweep_complete is not None:
-                on_sweep_complete(sweep_idx, sweep_val, fleet_results)
-
-    return MultiSweepResults(
-        sweep_results=sweep_results,
-        sweep_values=sweep_values,
-    )

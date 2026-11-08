@@ -2,10 +2,9 @@
 """Fleet simulation commands."""
 
 import dataclasses
-import functools
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Optional, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 import pandas as pd
 import typer
@@ -40,12 +39,11 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
+    FleetRunner,
+    HomesDone,
     calculate_fleet_summary,
-    collect_multi_sweep_results,
-    simulate_fleet_iter,
-    simulate_multi_sweep_iter,
+    default_runner,
 )
-from solar_challenge.home import SimulationResults
 from solar_challenge.output import compute_community_metrics, generate_community_report
 
 app = typer.Typer(help="Fleet simulation commands")
@@ -180,6 +178,7 @@ def run(
     The config file should define a list of homes with their PV, battery,
     and load configurations.
     """
+    runner = _runner(workers, sequential)
     fleet_config = load_fleet_config(config)
     n_homes = len(fleet_config.homes)
 
@@ -188,27 +187,9 @@ def run(
     days = (end_date - start_date).days + 1
     print_info(f"Simulating fleet of {n_homes} homes for {days} days")
 
-    results_list: list[SimulationResults | None] = [None] * n_homes
-
     with create_fleet_progress() as progress:
         task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
-        for idx, result in simulate_fleet_iter(
-            fleet_config, start_date, end_date,
-            parallel=not sequential, max_workers=workers
-        ):
-            results_list[idx] = result
-            progress.update(task, advance=1)
-
-    # Build FleetResults from results_list
-    final_results: list[SimulationResults] = []
-    for r in results_list:
-        assert r is not None
-        final_results.append(r)
-
-    results = FleetResults(
-        per_home_results=final_results,
-        home_configs=fleet_config.homes,
-    )
+        results = runner.simulate(fleet_config, start_date, end_date, progress=_homes_done_on(progress, task))
 
     summary = calculate_fleet_summary(results)
 
@@ -355,6 +336,7 @@ def sweep(
         solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
     """
+    runner = _runner(workers, sequential)
     raw_config = load_config(config)
 
     if "fleet_distribution" not in raw_config:
@@ -379,33 +361,22 @@ def sweep(
 
     print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
-    export_point = (
-        None
-        if output_dir is None
-        else functools.partial(_export_sweep_point, output_dir, param_name)
-    )
-
-    # Run multi-sweep simulation with cross-sweep parallelism
+    sweep_results: dict[int, FleetResults] = {}
     with create_fleet_progress() as progress:
         task = progress.add_task(
             f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
             total=total_homes
         )
-
-        result_iter = simulate_multi_sweep_iter(
-            sweep_configs, start_date, end_date,
-            parallel=not sequential, max_workers=workers
-        )
-
-        sweep_results = collect_multi_sweep_results(
-            sweep_configs,
-            _advance_per_item(progress, task, result_iter),
-            on_sweep_complete=export_point,
-        )
+        for index, fleet_results in runner.simulate_each(
+            [fleet for _, fleet in sweep_configs], start_date, end_date, progress=_homes_done_on(progress, task)
+        ):
+            sweep_results[index] = fleet_results
+            if output_dir is not None:
+                _export_sweep_point(output_dir, param_name, sweep_configs[index][0], fleet_results)
 
     results_summary = [
-        _sweep_summary_row(param_name, sweep_value, fleet_results)
-        for sweep_value, fleet_results in sweep_results.iter_results()
+        _sweep_summary_row(param_name, sweep_value, sweep_results[index])
+        for index, (sweep_value, _) in enumerate(sweep_configs)
     ]
 
     # Print summary table
@@ -465,24 +436,22 @@ def _yaml_sweep(
     return param_name, parse_sweep_fleet_configs(raw_config)
 
 
-_T = TypeVar("_T")
+def _runner(workers: Optional[int], sequential: bool) -> FleetRunner:
+    """The default runner, simulating homes in turn when sequential, else in parallel on workers workers, None meaning as many as the homes need, up to the CPUs."""
+    return dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
 
 
-def _advance_per_item(progress: Progress, task: TaskID, items: Iterable[_T]) -> Iterator[_T]:
-    """Yield each of items after advancing progress's task by one."""
-    for item in items:
-        progress.update(task, advance=1)
-        yield item
+def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
+    """A progress sink that shows the homes finished as task's completed count on progress."""
+
+    def homes_done(done: int, total: int) -> None:
+        progress.update(task, completed=done)
+
+    return homes_done
 
 
-def _export_sweep_point(
-    output_dir: Path,
-    param_name: str,
-    _sweep_index: int,
-    sweep_value: float,
-    fleet_results: FleetResults,
-) -> None:
-    """Export a completed sweep point to its CSV under output_dir; the arguments after param_name are those collect_multi_sweep_results passes to on_sweep_complete."""
+def _export_sweep_point(output_dir: Path, param_name: str, sweep_value: float, fleet_results: FleetResults) -> None:
+    """Export a completed sweep point to its CSV under output_dir."""
     _export_fleet_results(fleet_results, output_dir / f"{param_name}_{sweep_value:.4f}.csv")
 
 

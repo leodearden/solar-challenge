@@ -1566,7 +1566,7 @@ def project_multi_year(
         error_target_pct: Target maximum PCHIP midpoint deviation (%) before
             adaptive bisection stops.
         simulate: Optional inject for testing.  Defaults to None → lazy import
-            ``fleet.simulate_fleet``.
+            ``fleet.default_runner().simulate``.
 
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
@@ -1591,10 +1591,10 @@ def project_multi_year(
             ``"capacity_at_events"`` and ``grid_services_events`` is None,
             raised before any simulation.
     """
-    # ---- Lazy import for the real simulate_fleet ----------------------------
+    # ---- Lazy import for the real fleet runner ------------------------------
     if simulate is None:
-        from solar_challenge.fleet import simulate_fleet as _simulate_fleet
-        simulate = _simulate_fleet
+        from solar_challenge.fleet import default_runner
+        simulate = default_runner().simulate
 
     homes = scenario.simulated_homes()
 
@@ -2223,7 +2223,7 @@ def solve_cost_recovery_rate(
         scenario: ScenarioConfig with homes, period, and location.
         finance: FinanceConfig with cost-recovery fields populated.
         simulate: Optional inject for testing.  Defaults to None → lazy import
-            ``fleet.simulate_fleet``.  Signature must match
+            ``fleet.default_runner().simulate``.  Signature must match
             ``(FleetConfig, pd.Timestamp, pd.Timestamp) → FleetResults``.
 
     Returns:
@@ -2231,8 +2231,8 @@ def solve_cost_recovery_rate(
     """
     # ---- Lazy import (mirrors project_multi_year) ----------------------------
     if simulate is None:
-        from solar_challenge.fleet import simulate_fleet as _simulate_fleet
-        simulate = _simulate_fleet
+        from solar_challenge.fleet import default_runner
+        simulate = default_runner().simulate
 
     homes = scenario.simulated_homes()
 
