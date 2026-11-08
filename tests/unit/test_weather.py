@@ -123,24 +123,6 @@ class _ZonePandasCannotLocalizeIn(tzinfo):
         return self._london.tzname(dt)
 
 
-def _london_hours_across_the_march_clock_change():
-    """Hourly weather in Europe/London from 2024-03-30 00:00 to 2024-04-01 23:00: 71 hours, since 31 March has 23."""
-    index = pd.date_range("2024-03-30", "2024-04-01 23:00", freq="h", tz="Europe/London")
-    return pd.DataFrame(
-        {"ghi": np.linspace(0.0, 870.0, len(index)), "temp_air": np.linspace(4.0, 13.0, len(index))}, index=index
-    )
-
-
-def _utc_hours_indexed_as_pvgis_tmy():
-    """48 hours of weather from 1990-01-01 00:00 UTC on an index with no frequency, named time(UTC), as pvlib returns PVGIS's TMY."""
-    index = pd.DatetimeIndex(
-        pd.date_range("1990-01-01", periods=48, freq="h", tz="UTC"), freq=None, name="time(UTC)"
-    )
-    return pd.DataFrame(
-        {"ghi": np.linspace(0.0, 870.0, len(index)), "temp_air": np.linspace(4.0, 13.0, len(index))}, index=index
-    )
-
-
 _SYNTHETIC_JUNE_DAY = synthetic_june_weather("2024-06-21")
 """synthetic_june_weather's 2024-06-21: 24 hourly rows in Europe/London, on an index whose frequency is h."""
 
@@ -269,35 +251,30 @@ class TestWeatherCache:
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), scaled, check_exact=True)
 
     @pytest.mark.parametrize(
-        ("start", "tz"),
+        "index",
         [
-            pytest.param("2024-03-30", "UTC", id="UTC across the March clock change"),
-            pytest.param("2024-06-21", "Europe/London", id="Europe/London at one offset"),
-            pytest.param("2024-03-30", "Europe/London", id="Europe/London across the March clock change"),
-            pytest.param("2024-10-26", "Europe/London", id="Europe/London across the October clock change"),
-            pytest.param("2024-06-21", "UTC+01:00", id="a fixed UTC offset"),
-            pytest.param("2024-03-30", None, id="naive"),
+            pytest.param(pd.date_range("2024-03-30", periods=48, freq="h", tz="UTC"), id="UTC across the March clock change"),
+            pytest.param(pd.date_range("2024-06-21", periods=48, freq="h", tz="Europe/London"), id="Europe/London at one offset"),
+            pytest.param(
+                pd.date_range("2024-03-30", periods=48, freq="h", tz="Europe/London"),
+                id="Europe/London across the March clock change",
+            ),
+            pytest.param(
+                pd.date_range("2024-10-26", periods=48, freq="h", tz="Europe/London"),
+                id="Europe/London across the October clock change",
+            ),
+            pytest.param(pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC+01:00"), id="a fixed UTC offset"),
+            pytest.param(pd.date_range("2024-03-30", periods=48, freq="h"), id="naive"),
+            pytest.param(
+                pd.DatetimeIndex(pd.date_range("1990-01-01", periods=48, freq="h", tz="UTC"), freq=None, name="time(UTC)"),
+                id="UTC with no frequency, named time(UTC) as pvlib returns PVGIS's TMY",
+            ),
         ],
     )
-    def test_get_returns_the_index_put_stored(self, cache, bristol, start, tz):
-        """get returns the frame on the index put stored: its instants, its timezone and its frequency."""
-        index = pd.date_range(start, periods=48, freq="h", tz=tz)
+    def test_put_writes_one_file_that_get_returns_exactly(self, cache, bristol, index):
+        """put leaves one file under cache_dir, and get returns the frame from it exactly: its values bit for bit, and
+        its index's instants, timezone, frequency and name."""
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
-        cache.put(frame, "tmy", bristol)
-
-        pd.testing.assert_frame_equal(cache.get("tmy", bristol), frame, check_exact=True)
-
-    @pytest.mark.parametrize(
-        "frame",
-        [
-            pytest.param(synthetic_june_weather("2024-06-21"), id="the synthetic June day, Europe/London hourly"),
-            pytest.param(_london_hours_across_the_march_clock_change(), id="Europe/London hourly across the March clock change"),
-            pytest.param(_utc_hours_indexed_as_pvgis_tmy(), id="UTC with no frequency, named time(UTC) as PVGIS's TMY"),
-        ],
-    )
-    def test_put_writes_one_file_that_get_returns_exactly(self, cache, bristol, frame):
-        """put leaves one file under cache_dir, and get returns the frame from it exactly: its values bit for bit, and its
-        index's timezone, frequency and name."""
         cache.put(frame, "tmy", bristol)
 
         assert len(list(cache.cache_dir.iterdir())) == 1
