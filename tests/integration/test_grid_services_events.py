@@ -15,6 +15,8 @@ Covers, after the shared helpers:
 - B4:backward-compat / flat bit-identical regression.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the capacity-at-events line.
+- α′ (PRD §9 C13): the events table's reliability and displaced-self-use rows,
+  and finance run's mean-over-event-days income beside them.
 """
 from __future__ import annotations
 
@@ -25,10 +27,11 @@ from typing import Callable, NamedTuple
 import pandas as pd
 import pytest
 
-from solar_challenge.battery import BatteryConfig
+from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
+    BillDistribution,
     FinanceConfig,
     MultiYearCurve,
     bill_distribution,
@@ -41,6 +44,7 @@ from solar_challenge.flex import resolve_flex_band
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
     EventWindow,
+    GridServicesAtEvents,
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
@@ -547,19 +551,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
-    """generate_finance_report with grid_services_at_events renders the event-derived line.
-
-    Builds a synthetic BillDistribution + a positive-spare FleetResults,
-    computes the event figure, then asserts the rendered report contains:
-      - "Grid services (capacity-at-events)" label
-      - the formatted annual £ (event-derived)
-      - the per-window avail_kW value
-
-    The Optional[GridServicesAtEvents] param renders the line inside the existing
-    flex-value block.
-    """
-    # Build a minimal synthetic BillDistribution (mirrors tests/integration/test_flex_timeshift.py's pattern)
+def _synthetic_bill_distribution() -> BillDistribution:
+    """A one-home BillDistribution over 365 days (mirrors tests/integration/test_flex_timeshift.py's pattern)."""
     sc_ratio = 2200.0 / 4000.0
     gd_ratio = 1200.0 / 3400.0
     ex_ratio = 1800.0 / 4000.0
@@ -587,7 +580,22 @@ def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    dist = bill_distribution([summary], finance, 365)
+    return bill_distribution([summary], finance, 365)
+
+
+def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:
+    """generate_finance_report with grid_services_at_events renders the event-derived line.
+
+    Builds a synthetic BillDistribution + a positive-spare FleetResults,
+    computes the event figure, then asserts the rendered report contains:
+      - "Grid services (capacity-at-events)" label
+      - the formatted annual £ (event-derived)
+      - the per-window avail_kW value
+
+    The Optional[GridServicesAtEvents] param renders the line inside the existing
+    flex-value block.
+    """
+    dist = _synthetic_bill_distribution()
 
     # Build an in-window FleetResults from the board homes
     scenario, _finance_base = board_econ_scenario()
@@ -679,3 +687,85 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
         f"flat term (£{flat_rate} × {sigma} kW = £{flat_rate * sigma:.2f}); "
         "confirms the supersede takes effect."
     )
+
+
+# ---------------------------------------------------------------------------
+# α′ — the events table's reliability and displaced-self-use rows (PRD §9 C13)
+# ---------------------------------------------------------------------------
+
+
+def test_the_events_table_renders_reliability_and_displacement_rows() -> None:
+    """Each row sums its figure over the windows, as the per-event available capacity row does, and a note says the income is gross of the displaced self-use."""
+    gse = GridServicesAtEvents(
+        annual_income_gbp=19.944,
+        per_window_avail_kw=(1.5, 0.5),
+        per_window_income_gbp=(14.958, 4.986),
+        per_window_avail_p50_kw=(2.0, 0.5),
+        per_window_avail_p90_kw=(1.0, 0.3),
+        per_window_displaced_self_use_kwh_per_event=(2.25, 0.75),
+        per_window_displaced_import_gbp_per_year=(8.1, 1.9),
+    )
+
+    report = generate_finance_report(
+        _synthetic_bill_distribution(),
+        scenario_name="Alpha-Prime-Events-Test",
+        flex_band=resolve_flex_band("central"),
+        flex_band_name="central",
+        grid_services_at_events=gse,
+    )
+
+    lines = report.splitlines()
+    for row in (
+        "| Capacity on 50% of event days | 2.5 kW |",
+        "| Capacity on 90% of event days | 1.3 kW |",
+        "| Evening self-use displaced, per event | 3.0 kWh |",
+        "| Evening self-use displaced, value per year | £10 |",
+    ):
+        assert row in lines, report
+    assert "gross of the evening self-use an event displaces" in report, report
+
+
+def test_c13_finance_run_books_the_mean_over_event_days_beside_its_reliability_and_displacement() -> None:
+    """finance run on the board scenario, every battery home at its floor through 8 January's window and 1.0 kW clear of it on 9 January.
+
+    Per home: avail 0 on 8 January and min(2.5 − 0.5, (3.5 − 0.5) / 3) = 1.0 kW on
+    9 January, so with N battery homes A = (0, N): the income books the mean N / 2
+    (× £9.972), p50 is N and p90 0. On 9 January each home displaces min(1.0 × 3,
+    2 h × 1.0 kW before the 21:00 recharge) = 2.0 kWh at 0.25 £/kWh: N kWh per
+    event, and mean(0, 0.5 N) × 12 = £3N a year.
+    """
+    scenario, _finance = board_econ_scenario()
+    battery_homes = [home for home in scenario.homes if home.battery_config is not None]
+    for home in battery_homes:
+        battery = home.battery_config
+        assert (battery.capacity_kwh, battery.max_discharge_kw) == (5.0, 2.5)
+        assert Battery(battery).min_soc_kwh == pytest.approx(0.5)
+    n = len(battery_homes)
+    hours = pd.date_range("2024-01-08", periods=48, freq="1h", tz="Europe/London")
+    window_hours = hours.hour.isin([16, 17, 18])
+    sim = dataclasses.replace(
+        _make_spare_battery_sim_results(hours=hours),
+        battery_soc=pd.Series(3.5, index=hours).mask((hours.day == 8) & window_hours, 0.5),
+        battery_discharge=pd.Series(0.0, index=hours)
+        .mask(window_hours, 0.5)
+        .mask(hours.hour.isin([19, 20]), 1.0),
+        battery_charge=pd.Series(0.0, index=hours).mask(hours.hour == 21, 1.0),
+        tariff_rate=pd.Series(0.25, index=hours),
+    )
+    fr = make_fleet_results_of([sim for _ in scenario.homes], homes=scenario.homes)
+
+    result = invoke_finance_run(
+        [str(SCENARIO), "--flex-band", "central", "--start", "2024-01-08", "--end", "2024-01-09"], fr
+    )
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    for row in (
+        f"| Annual fleet income | £{n / 2 * 9.972:,.0f} |",
+        f"| Per-event available capacity | {n / 2:.1f} kW |",
+        f"| Capacity on 50% of event days | {float(n):.1f} kW |",
+        "| Capacity on 90% of event days | 0.0 kW |",
+        f"| Evening self-use displaced, per event | {float(n):.1f} kWh |",
+        f"| Evening self-use displaced, value per year | £{3 * n:,.0f} |",
+    ):
+        assert row in lines, result.output
