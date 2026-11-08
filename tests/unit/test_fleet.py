@@ -1003,8 +1003,8 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
 
         for index, results in runner.simulate_each(fleets, *_JUNE_DAYS.window()):
             yielded.append(index)
-            _assert_marked_results_of(results, fleets[index])
             release.touch()
+            _assert_marked_results_of(results, fleets[index])
 
         assert yielded == [1, 0], (
             "A 1 held one worker until a fleet was yielded, so B 1 ran on the other worker and fleet B finished "
