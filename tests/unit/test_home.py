@@ -495,7 +495,7 @@ class TestPerMinuteAmounts:
         assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
 
 
-class TestSimulationResultsRefusesANaNAmount:
+class TestSimulationResultsRefusesAnAmountMissingANumber:
     """Each amount series is what a run's totals sum, so SimulationResults refuses one holding no number in a row, a NaN or an NA, with SeriesRefused naming it."""
 
     @pytest.mark.parametrize("name", AMOUNT_SERIES)
