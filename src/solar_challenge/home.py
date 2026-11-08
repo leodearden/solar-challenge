@@ -176,6 +176,23 @@ def _refuse_unless_numbers(column: str, series: pd.Series) -> None:
         raise SeriesRefused(column, f"is of dtype {series.dtype}, not of an integer or a float dtype")
 
 
+def _refuse_unless_a_number_in_every_row(column: str, series: pd.Series) -> None:
+    """Refuse *series*, an amount written under *column*, unless it holds a number in every row, as the run's totals sum every row's amount; a NaN, or an NA in a nullable series, is none.
+
+    Raises:
+        SeriesRefused: Naming the column, how many of its rows hold no number, and the first one's
+            value and index label.
+    """
+    missing = series.isna().to_numpy()
+    if missing.any():
+        first = int(missing.argmax())
+        raise SeriesRefused(
+            column,
+            f"holds no number in {missing.sum()} of its {missing.size} rows, though the run's totals sum every "
+            f"row's amount; the first is {series.iloc[first]}, at {series.index[first]}",
+        )
+
+
 @dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
@@ -191,8 +208,11 @@ class SimulationResults:
 
     Each amount series, every series but the battery_soc and tariff_rate levels,
     holds a number in every row, as the run's totals sum every row's amount.
-    A NaN in one raises ValueError at construction and in each method that reads
-    them, as a series can still be written in place; an infinite sample is kept.
+    Construction, after its dtype refusal, and per_minute_amounts, total_amounts
+    and to_dataframe, since a series can still be written in place, refuse the
+    first amount series holding a NaN, or an NA in a nullable series, with
+    SeriesRefused, naming its column, how many of its rows hold no number and
+    the first; an infinite sample is kept.
 
     Attributes:
         generation: PV generation in kW
@@ -231,19 +251,19 @@ class SimulationResults:
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
 
     def __post_init__(self) -> None:
-        """Name each set series after its column, without renaming the series it was built from, and refuse a NaN amount.
+        """Name each set series after its column, without renaming the series it was built from.
 
         Raises:
             SeriesRefused: The first set series, in declaration order, whose dtype is no
-                integer's or float's; it names the series' column and its dtype.
-            ValueError: If an amount series holds a NaN (see the class docstring).
+                integer's or float's; it names the series' column and its dtype. Or else the
+                first amount series holding no number in a row (see the class docstring).
         """
         for name, column in self._series_columns():
             series = getattr(self, name)
             if series is not None:
                 _refuse_unless_numbers(column, series)
                 object.__setattr__(self, name, series.rename(column))
-        self._refuse_nan_amounts()
+        self._refuse_amounts_missing_a_number()
 
     @classmethod
     def _series_columns(cls) -> Iterator[tuple[str, str]]:
@@ -271,25 +291,18 @@ class SimulationResults:
             if isinstance(amount, _StepAmount) and series is not None:
                 yield attribute.metadata[_COLUMN], series, amount
 
-    def _refuse_nan_amounts(self) -> None:
-        """Raise ValueError naming each amount series that holds a NaN: its column, its first NaN and when, and how many of its rows are NaN."""
-        refused: list[str] = []
+    def _refuse_amounts_missing_a_number(self) -> None:
+        """Refuse the first set amount series, in declaration order, that holds no number in a row (see the class docstring).
+
+        Raises:
+            SeriesRefused: As _refuse_unless_a_number_in_every_row does.
+        """
         for column, series, _ in self._series_with_amounts():
-            missing = series.isna().to_numpy()
-            if missing.any():
-                first = int(missing.argmax())
-                refused.append(
-                    f"{column}={series.iloc[first]} at {series.index[first]} ({missing.sum()} of {missing.size} rows)"
-                )
-        if refused:
-            raise ValueError(
-                "SimulationResults' amount series are what its totals sum, so each holds a number in every row: "
-                f"got {', '.join(refused)}"
-            )
+            _refuse_unless_a_number_in_every_row(column, series)
 
     def _amount_series(self) -> Iterator[tuple[str, pd.Series]]:
         """Each amount's column and each row's amount, in declaration order, for every series that is set."""
-        self._refuse_nan_amounts()
+        self._refuse_amounts_missing_a_number()
         window = self.window
         for _, series, amount in self._series_with_amounts():
             yield amount.column, amount.row_amounts(series, window)
@@ -301,8 +314,9 @@ class SimulationResults:
         time, and nor has an optional series that is None.
 
         Raises:
-            ValueError: As window does, for an index no window describes; or if an amount series
-                holds a NaN (see the class docstring).
+            ValueError: As window does, for an index no window describes.
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
         """
         return pd.concat(dict(self._amount_series()), axis=1)
 
@@ -310,8 +324,9 @@ class SimulationResults:
         """The run's total of each amount: per_minute_amounts' column sums, keyed by column.
 
         Raises:
-            ValueError: As window does, for an index no window describes; or if an amount series
-                holds a NaN (see the class docstring).
+            ValueError: As window does, for an index no window describes.
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
         """
         return {column: float(amounts.sum()) for column, amounts in self._amount_series()}
 
@@ -319,9 +334,10 @@ class SimulationResults:
         """Convert results to a DataFrame with one column per series that is set.
 
         Raises:
-            ValueError: If an amount series holds a NaN (see the class docstring).
+            SeriesRefused: The first amount series holding no number in a row (see the class
+                docstring).
         """
-        self._refuse_nan_amounts()
+        self._refuse_amounts_missing_a_number()
         return pd.DataFrame(
             {
                 column: series
@@ -337,10 +353,10 @@ class SimulationResults:
         Optional series whose column is absent are None.
 
         Raises:
-            ValueError: If frame lacks any required series' column, naming each one, or if an
-                amount column holds a NaN (see the class docstring).
+            ValueError: If frame lacks any required series' column; the message names each one.
             SeriesRefused: If a column is not numbers, as construction refuses its series; it
-                names the first such column and its dtype.
+                names the first such column and its dtype. Or else, as construction refuses
+                it, the first amount column holding no number in a row (see the class docstring).
         """
         required_fields = {
             attribute.name
