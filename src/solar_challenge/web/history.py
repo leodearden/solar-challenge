@@ -10,13 +10,13 @@ from typing import Any
 
 from flask import (
     Blueprint,
-    Response,
     flash,
     redirect,
     render_template,
     request,
     url_for,
 )
+from werkzeug.wrappers import Response
 
 from solar_challenge.web.charts import ComparedRun, comparison_tabs
 from solar_challenge.web.shared import get_storage
@@ -28,7 +28,7 @@ bp = Blueprint("history", __name__)
 @bp.route("/")
 def history_index() -> Response:
     """Redirect /history to /history/runs."""
-    return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+    return redirect(url_for("history.runs_page"))
 
 
 @bp.route("/runs")
@@ -67,8 +67,7 @@ def compare_page() -> str | Response:
 
     run_ids = [rid.strip() for rid in ids_param.split(",") if rid.strip()]
     if len(run_ids) < 2:
-        flash("At least 2 runs are required for comparison.", "error")
-        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+        return _back_to_runs("At least 2 runs are required for comparison.")
     if len(run_ids) > 4:
         run_ids = run_ids[:4]
 
@@ -83,16 +82,19 @@ def compare_page() -> str | Response:
             summary_tree = record.summary_tree()
             headline = record.headline()
         except StoredRunUnreadable as unreadable:
-            flash(str(unreadable), "error")
-            return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+            return _back_to_runs(str(unreadable))
         if headline is None:
-            flash(f"The run {record.name!r} ({record.id}) cannot be compared: it has no summary.", "error")
-            return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+            return _back_to_runs(f"The run {record.name!r} ({record.id}) cannot be compared: it has no summary.")
         runs.append({**asdict(record), "summary": summary_tree})
         compared.append(ComparedRun(record.name, headline))
 
     if len(runs) < 2:
-        flash("Could not find at least 2 valid runs to compare.", "error")
-        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+        return _back_to_runs("Could not find at least 2 valid runs to compare.")
 
     return str(render_template("history/compare.html", runs=runs, tabs=comparison_tabs(compared)))
+
+
+def _back_to_runs(message: str) -> Response:
+    """Redirect to the runs page, flashing *message* as an error."""
+    flash(message, "error")
+    return redirect(url_for("history.runs_page"))

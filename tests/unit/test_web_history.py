@@ -1010,9 +1010,12 @@ class TestComparisonRoute:
         assert "No Runs Selected" in html
 
     def test_compare_single_id_redirects(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with only 1 ID redirects to runs page."""
-        response = client.get("/history/compare?ids=run-1")
-        assert response.status_code == 302
+        """Test GET /history/compare with only 1 ID redirects to runs page, flashing that it needs 2."""
+        response = client.get("/history/compare?ids=run-1", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if "At least 2 runs are required" in text]) == 1, page_texts
 
     def test_compare_two_valid_runs(self, app: Flask, client: FlaskClient) -> None:
         """Test GET /history/compare with 2 valid run IDs returns 200."""
@@ -1110,9 +1113,12 @@ class TestComparisonRoute:
         assert len([text for text in page_texts if all(name in text for name in named)]) == 1, page_texts
 
     def test_compare_nonexistent_ids_redirects(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with all invalid IDs redirects to runs page."""
-        response = client.get("/history/compare?ids=fake-1,fake-2")
-        assert response.status_code == 302
+        """Test GET /history/compare with all invalid IDs redirects to runs page, flashing that it found too few."""
+        response = client.get("/history/compare?ids=fake-1,fake-2", follow_redirects=True)
+
+        assert [(hop.status_code, hop.location) for hop in response.history] == [(302, "/history/runs")]
+        page_texts = texts(response.get_data(as_text=True))
+        assert len([text for text in page_texts if "Could not find at least 2 valid runs" in text]) == 1, page_texts
 
     def test_compare_of_a_home_run_and_a_fleet_run_draws_the_fleet_at_its_own_ratios_and_names_it_in_the_left_out_axis_s_note(
         self, storage: RunStorage, client: FlaskClient
