@@ -4,7 +4,7 @@
 import contextlib
 import math
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
@@ -377,43 +377,56 @@ class _HomeJob:
     home: HomeConfig
 
 
-def _finished_homes(
+_FinishedHomes: TypeAlias = Generator[tuple[_HomeJob, SimulationResults], None, None]
+"""Each job of a runner's call with its home's results, as the home finishes."""
+
+
+def _homes_in_turn(
     runner: FleetRunner,
     jobs: Sequence[_HomeJob],
     weather: PrefetchedWeather,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
-) -> Generator[tuple[_HomeJob, SimulationResults], None, None]:
-    """Each job with its home's results as the home finishes: in turn in this process, or in one process pool when runner is parallel and there are two jobs or more.
+) -> _FinishedHomes:
+    """Each job with its home's results, the homes run one after another in this process: none starts once the generator stops."""
+    for job in jobs:
+        with _naming_the_home(job):
+            results = runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
+        yield job, results
 
-    A pool's job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and
-    its weather provider are never pickled. A home's exception carries a note naming the home. In turn, no later home
-    starts once the generator stops; a pool that stops, for whatever exception or when the generator is closed,
-    cancels the homes not yet started and waits for those running.
+
+def _homes_in_a_pool(
+    runner: FleetRunner,
+    jobs: Sequence[_HomeJob],
+    weather: PrefetchedWeather,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> _FinishedHomes:
+    """Each job with its home's results as the home finishes in one process pool; however the generator stops, the homes not yet started are cancelled and those running waited for.
+
+    A job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and its
+    weather provider are never pickled.
     """
-    if not runner.parallel or len(jobs) < 2:
-        for job in jobs:
-            with _naming_the_home(job):
-                results = runner.home_simulator(job.home, start_date, end_date, weather=_job_weather(weather, job.home))
-            yield job, results
-        return
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        try:
-            futures = {
-                pool.submit(
-                    runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
-                ): job
-                for job in jobs
-            }
-            for future in as_completed(futures):
-                job = futures[future]
-                with _naming_the_home(job):
-                    results = future.result()
-                yield job, results
-        except BaseException:
-            pool.shutdown(cancel_futures=True)
-            raise
+    pool = ProcessPoolExecutor(max_workers=workers)
+    try:
+        futures = {
+            pool.submit(
+                runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
+            ): job
+            for job in jobs
+        }
+        for future in as_completed(futures):
+            job = futures[future]
+            yield job, _result_naming_the_home(job, future)
+    finally:
+        pool.shutdown(cancel_futures=True)
+
+
+def _result_naming_the_home(job: _HomeJob, future: Future[SimulationResults]) -> SimulationResults:
+    """future's result; an exception it raised carries _naming_the_home's note for job."""
+    with _naming_the_home(job):
+        return future.result()
 
 
 @contextlib.contextmanager
@@ -435,7 +448,7 @@ def _simulate_fleets(
     end_date: pd.Timestamp,
     progress: HomesDone | None,
 ) -> Iterator[tuple[int, FleetResults]]:
-    """FleetRunner.simulate_each's fan-out: every home of fleets run through _finished_homes on weather fetched once per distinct location, each fleet's results yielded in home order as its last home finishes."""
+    """FleetRunner.simulate_each's fan-out: every home of fleets run in one process pool when runner is parallel and the call has two homes or more, else in turn here, on weather fetched once per distinct location; each fleet's results are yielded in home order as its last home finishes."""
     jobs = [
         _HomeJob(fleet_index, home_index, fleet, home)
         for fleet_index, fleet in enumerate(fleets)
@@ -443,7 +456,8 @@ def _simulate_fleets(
     ]
     weather = PrefetchedWeather.fetch(runner.weather, (job.home.location for job in jobs))
     finished: dict[int, dict[int, SimulationResults]] = {fleet_index: {} for fleet_index in range(len(fleets))}
-    with contextlib.closing(_finished_homes(runner, jobs, weather, start_date, end_date)) as homes:
+    finished_homes = _homes_in_a_pool if runner.parallel and len(jobs) >= 2 else _homes_in_turn
+    with contextlib.closing(finished_homes(runner, jobs, weather, start_date, end_date)) as homes:
         for done, (job, results) in enumerate(homes, start=1):
             if progress is not None:
                 progress(done, len(jobs))
