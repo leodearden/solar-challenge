@@ -722,6 +722,61 @@ class TestSimulateCommunityBattery:
         assert len(result.battery_soc) == len(index5)
         pd.testing.assert_index_equal(result.grid_import.index, index5)
 
+    # --- the strategy the battery's dispatch_strategy names, at the billing tariff ---
+
+    def test_a_peak_shaving_community_battery_discharges_only_the_import_above_its_limit(self) -> None:
+        """The battery dispatches by the strategy it names; one naming none runs self-consumption, which covers the whole deficit."""
+        evening = pd.date_range("2024-01-15 18:00", periods=3, freq="1min", tz="Europe/London")
+        fleet = _make_fleet(evening, [([0.0] * 3, [5.0] * 3)])
+
+        peak_shaving = simulate_community(
+            fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_community_battery(dispatch_strategy=PeakShavingStrategyConfig(3.0)),
+            ),
+        )
+        default = simulate_community(
+            fleet, CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery())
+        )
+
+        assert peak_shaving.battery_discharge.tolist() == pytest.approx([2.0] * 3, abs=1e-9)
+        assert peak_shaving.grid_import.tolist() == pytest.approx([3.0] * 3, abs=1e-9)
+        assert default.battery_discharge.tolist() == pytest.approx([5.0] * 3, abs=1e-9)
+        assert default.grid_import.tolist() == pytest.approx([0.0] * 3, abs=1e-9)
+
+    def test_a_grid_charging_community_battery_charges_from_the_grid_in_the_billing_tariffs_cheap_period(
+        self,
+    ) -> None:
+        """01:00 is in Economy 7's off-peak period, so a battery that grid-charges draws on the grid beyond the 1 kW deficit.
+
+        A battery naming no strategy discharges into the deficit under the same billing instead. Each
+        simulate_community call validates the community balance, as validate_balance defaults to True.
+        """
+        night = pd.date_range("2024-01-15 01:00", periods=3, freq="1min", tz="Europe/London")
+        fleet = _make_fleet(night, [([0.0] * 3, [1.0] * 3)])
+        billing = CommunityBillingConfig(tariff=TariffConfig.economy_7(), seg_rate_pence_per_kwh=4.1)
+
+        grid_charging = simulate_community(
+            fleet,
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=_grid_charging_peak_shaving_battery(),
+                billing=billing,
+            ),
+        )
+        default = simulate_community(
+            fleet,
+            CommunityConfig(sharing_mode="community_battery", community_battery=_community_battery(), billing=billing),
+        )
+
+        assert (grid_charging.battery_charge > 0).all(), grid_charging.battery_charge.tolist()
+        assert (grid_charging.grid_import > 1.0).all(), grid_charging.grid_import.tolist()
+        soc = grid_charging.battery_soc
+        assert soc.iloc[0] < soc.iloc[1] < soc.iloc[2], soc.tolist()
+        assert (default.battery_discharge > 0).all(), default.battery_discharge.tolist()
+        assert default.grid_import.tolist() == pytest.approx([0.0] * 3, abs=1e-9)
+
 
 # ---------------------------------------------------------------------------
 # TestCommunityBillingTimeOfUse
