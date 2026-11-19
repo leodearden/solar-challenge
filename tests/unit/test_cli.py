@@ -310,6 +310,23 @@ _HANDLED_ERRORS_AND_LABELS = [
 """Each error type handle_errors prints, with the label it prints it under."""
 
 
+def _an_error_whose_text_cannot_be_read(error_type: type[Exception]) -> Exception:
+    """An Unreadable: a subclass of *error_type* whose __str__ raises a RuntimeError, so its text cannot be read."""
+
+    def unreadable_text(error: Exception) -> str:
+        raise RuntimeError("the text of this error cannot be read")
+
+    unreadable: type[Exception] = type("Unreadable", (error_type,), {"__str__": unreadable_text})
+    return unreadable()
+
+
+class _ANoteWhoseTextCannotBeRead(str):
+    """A note that is a str, as add_note requires, but whose text cannot be read."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("the text of this note cannot be read")
+
+
 class TestErrorHandling:
     """Tests for CLI error handling."""
 
@@ -505,6 +522,55 @@ class TestErrorHandling:
         assert exit_.value.exit_code == 1
         lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
         assert lines == [f"{label}: it failed", "first note", "second note [/b]"]
+
+    @pytest.mark.parametrize(("error_type", "label"), _HANDLED_ERRORS_AND_LABELS)
+    def test_an_error_whose_text_cannot_be_read_is_named_unreadable_in_one_line_under_its_label(
+        self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
+    ) -> None:
+        """The error is named by its type, Unreadable, and what its __str__ raises does not escape the handler."""
+
+        @handle_errors
+        def fail() -> None:
+            raise _an_error_whose_text_cannot_be_read(error_type)
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
+        assert lines == [f"{label}: Unreadable, whose message could not be read"]
+
+    @pytest.mark.parametrize(
+        ("notes", "shown"),
+        [
+            pytest.param("abc", "'abc'", id="a-str"),
+            pytest.param(5, "5", id="an-int"),
+            pytest.param([5], "5", id="a-note-that-is-not-a-str"),
+            pytest.param(
+                [_ANoteWhoseTextCannotBeRead("hidden")],
+                "A note whose text could not be read",
+                id="a-note-whose-text-cannot-be-read",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(("error_type", "label"), _HANDLED_ERRORS_AND_LABELS)
+    def test_notes_that_cannot_be_printed_one_by_one_are_shown_under_its_text_as_the_shared_reader_gives_them(
+        self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str, notes: object, shown: str
+    ) -> None:
+        """A __notes__ that an assignment left other than a list of readable str, as add_note keeps it, prints as error_text_with_notes reads it: a str or an int is one line, its repr; a note that is not a str, its text; a note whose text cannot be read is named unreadable."""
+
+        @handle_errors
+        def fail() -> None:
+            error = error_type("it failed")
+            setattr(error, "__notes__", notes)
+            raise error
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
+        assert lines == [f"{label}: it failed", shown]
 
 
 class TestPrintHelpers:
