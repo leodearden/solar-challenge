@@ -1,18 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A home simulator for FleetRunner tests that marks each home it starts, so a test reads back which homes started, in which process, on which weather.
+"""Home simulators for FleetRunner tests: one marks each home it starts, so a test reads back which homes started, in which process, on which weather; one ends its worker process at named homes, to break a pool.
 
 A FleetRunner's pool pickles its home simulator into each job, so a spawn or forkserver
-worker imports this module to unpickle it. That is why the simulator is a top-level class
+worker imports this module to unpickle it. That is why each simulator is a top-level class
 of a helper module rather than one defined in a test.
 
 Usage::
 
-    from tests._fleet_runner import MarkingHomeSimulator, started
+    from tests._fleet_runner import MarkingHomeSimulator, ProcessEndingHomeSimulator, started
 
     runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"})))
     with pytest.raises(ValueError, match="Home 1 cannot be simulated"):
         runner.simulate(fleet, start, end)
     assert len(started(tmp_path)) < len(fleet.homes)
+
+    breaking = ProcessEndingHomeSimulator(MarkingHomeSimulator(tmp_path), ending=frozenset({"Home 2"}))
+    with pytest.raises(BrokenProcessPool):
+        FleetRunner(weather=weather, home_simulator=breaking, parallel=True).simulate(fleet, start, end)
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -100,3 +104,28 @@ def started(marker_dir: Path) -> dict[str, HomeStart]:
         locations = recorded["locations"]
         starts[marker.stem] = HomeStart(pid=recorded["pid"], locations=None if locations is None else tuple(locations))
     return starts
+
+
+@dataclass(frozen=True)
+class ProcessEndingHomeSimulator:
+    """A HomeSimulator that ends its worker process abruptly, as an out-of-memory kill would, at each home named in *ending*, and runs every other home as *marking* does.
+
+    Called in the process that built it, it raises RuntimeError naming the home instead, so it cannot end a test run.
+    """
+
+    marking: MarkingHomeSimulator
+    ending: frozenset[str]
+    building_process: int = field(default_factory=os.getpid)
+
+    def __call__(
+        self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
+        """Raise RuntimeError naming config's home in the building process; elsewhere end the process at a home named in ending, else return marking's results."""
+        if os.getpid() == self.building_process:
+            raise RuntimeError(
+                f"{config.name}: ProcessEndingHomeSimulator ends the process it runs in, so it runs only in a pool's "
+                "worker processes, never in the process that built it"
+            )
+        if config.name in self.ending:
+            os._exit(70)
+        return self.marking(config, start_date, end_date, weather=weather)
