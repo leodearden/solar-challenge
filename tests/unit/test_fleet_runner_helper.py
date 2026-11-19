@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_fleet_runner.py, the home simulator through which FleetRunner tests read back which homes started."""
+"""Unit tests for tests/_fleet_runner.py, the home simulators through which FleetRunner tests read back which homes started, or break a pool."""
 
 import concurrent.futures
 import os
@@ -16,7 +16,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import PrefetchedWeather
-from tests._fleet_runner import HomeStart, MarkingHomeSimulator, started
+from tests._fleet_runner import HomeStart, MarkingHomeSimulator, ProcessEndingHomeSimulator, started
 
 _DAY = pd.Timestamp("2024-06-21")
 _BRISTOL_ONLY = PrefetchedWeather({Location.bristol(): pd.DataFrame()})
@@ -103,3 +103,15 @@ def test_a_home_whose_release_never_appears_raises_timeout_error_naming_it_and_i
         simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
 
     assert str(caught.value) == f"Held was held until {never} existed, which it did not within 0.05 s"
+
+
+def test_a_process_ending_simulator_refuses_to_run_in_the_process_that_built_it_even_at_a_home_it_ends(
+    tmp_path: Path,
+) -> None:
+    simulator = ProcessEndingHomeSimulator(MarkingHomeSimulator(tmp_path), ending=frozenset({"Held"}))
+
+    with pytest.raises(RuntimeError) as caught:
+        simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
+
+    assert "Held" in str(caught.value)
+    assert started(tmp_path) == {}
