@@ -35,6 +35,9 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.weather import PrefetchedWeather, WeatherProvider
 from tests._finance_builders import make_sim_results
 
+_STARTED_SUFFIX = ".json"
+_FINISHED_SUFFIX = ".finished"
+
 
 @dataclass(frozen=True)
 class HomeStart:
@@ -48,11 +51,12 @@ class HomeStart:
 class MarkingHomeSimulator:
     """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, refuses each home named in *failing*, and marks the home finished once its call ends, whether it returns or raises.
 
-    A home's start marker, <home name>.json, and its finish marker, <home name>.finished, each appear
-    at that name only once whole: each is written under a temporary name that carries the writer's
-    process id and thread id, since two pool workers, or two threads of one process, can mark homes of
-    one name at once, and then renamed. The finish marker is written before the home's results or
-    exception leave the call, so before a pool worker sends them back.
+    A home's start marker, at start_marker(marker_dir, <home name>), and its finish marker, at
+    finish_marker(marker_dir, <home name>), each appear at that path only once whole: each is written
+    under a temporary name that carries the writer's process id and thread id, since two pool workers,
+    or two threads of one process, can mark homes of one name at once, and then renamed. The finish
+    marker is written before the home's results or exception leave the call, so before a pool worker
+    sends them back.
 
     Each (name, path) pair in *held_until* holds the home of that name: it is marked, then waits until
     the path exists; if the path has not appeared within *hold_limit_seconds*, it raises TimeoutError
@@ -73,7 +77,9 @@ class MarkingHomeSimulator:
     ) -> SimulationResults:
         """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results; either way, mark the home finished as the call ends."""
         locations = [location.name for location in weather.frames] if isinstance(weather, PrefetchedWeather) else None
-        _write_whole(self.marker_dir / f"{config.name}.json", json.dumps({"pid": os.getpid(), "locations": locations}))
+        _write_whole(
+            start_marker(self.marker_dir, config.name), json.dumps({"pid": os.getpid(), "locations": locations})
+        )
         try:
             release = dict(self.held_until).get(config.name)
             if release is not None:
@@ -83,7 +89,7 @@ class MarkingHomeSimulator:
                 raise ValueError(f"{config.name} cannot be simulated")
             return make_sim_results(self_kwh=config.pv_config.capacity_kw, days=1)
         finally:
-            _write_whole(self.marker_dir / f"{config.name}.finished", "")
+            _write_whole(finish_marker(self.marker_dir, config.name), "")
 
 
 def _write_whole(path: Path, text: str) -> None:
@@ -102,6 +108,16 @@ def _wait_until_exists(release: Path, home_name: str, limit: float) -> None:
         time.sleep(0.01)
 
 
+def start_marker(marker_dir: Path, home_name: str) -> Path:
+    """The path at which a MarkingHomeSimulator over *marker_dir* marks the home *home_name* started, which appears only once whole, e.g. for another home's held_until."""
+    return marker_dir / f"{home_name}{_STARTED_SUFFIX}"
+
+
+def finish_marker(marker_dir: Path, home_name: str) -> Path:
+    """The path at which a MarkingHomeSimulator over *marker_dir* marks the home *home_name* finished, which appears only once whole, e.g. for another home's held_until."""
+    return marker_dir / f"{home_name}{_FINISHED_SUFFIX}"
+
+
 def started(marker_dir: Path) -> dict[str, HomeStart]:
     """Each home a MarkingHomeSimulator over *marker_dir* started, by name, with what it recorded as the home started.
 
@@ -109,7 +125,7 @@ def started(marker_dir: Path) -> dict[str, HomeStart]:
     threads, because each marker appears at its name only when whole.
     """
     starts: dict[str, HomeStart] = {}
-    for marker in sorted(marker_dir.glob("*.json")):
+    for marker in sorted(marker_dir.glob(f"*{_STARTED_SUFFIX}")):
         recorded = json.loads(marker.read_text(encoding="utf-8"))
         locations = recorded["locations"]
         starts[marker.stem] = HomeStart(pid=recorded["pid"], locations=None if locations is None else tuple(locations))
@@ -122,7 +138,7 @@ def finished(marker_dir: Path) -> frozenset[str]:
     It is safe to call while a MarkingHomeSimulator is still marking homes, for the same reason
     started() is.
     """
-    return frozenset(marker.name.removesuffix(".finished") for marker in marker_dir.glob("*.finished"))
+    return frozenset(marker.name.removesuffix(_FINISHED_SUFFIX) for marker in marker_dir.glob(f"*{_FINISHED_SUFFIX}"))
 
 
 @dataclass(frozen=True)
