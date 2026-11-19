@@ -381,10 +381,10 @@ class GridServicesEventsConfig:
         priced on the same path without the displaced self-use that breakdown
         also reports, so it reads no step length of the fleet's indices.
         """
-        per_window = tuple(
-            _EventDayTotals.of(per_home) for per_home in _priced_event_days(fleet_results, self)
+        per_window_totals = tuple(
+            _EventDayTotals.of(event_days) for event_days in _priced_event_days(fleet_results, self)
         )
-        return float(sum(_net_income_per_window_gbp(self, per_window)))
+        return float(sum(_net_income_per_window_gbp(self, per_window_totals)))
 
 
 # ---------------------------------------------------------------------------
@@ -614,11 +614,11 @@ class _EventDayTotals:
     avail_kw: tuple[float, ...]
 
     @classmethod
-    def of(cls, per_home: _PerHomeEventDays) -> "_EventDayTotals":
-        """Sum *per_home*'s avail_kw over its homes on each event day."""
+    def of(cls, event_days: _PerHomeEventDays) -> "_EventDayTotals":
+        """Sum *event_days*' avail_kw over its homes on each event day."""
         return cls(
-            window=per_home.window,
-            avail_kw=_fleet_day_sums([days for _, days in per_home.homes], "avail_kw"),
+            window=event_days.window,
+            avail_kw=_fleet_day_sums([days for _, days in event_days.homes], "avail_kw"),
         )
 
     @property
@@ -638,8 +638,8 @@ class _EventDayTotals:
         return sorted(self.avail_kw, reverse=True)[rank - 1]
 
 
-def _displaced_self_use(per_home: _PerHomeEventDays) -> _DisplacedSelfUse:
-    """The fleet's evening self-use an event in *per_home*'s window displaces, from each home-day's (:func:`_home_displaced_self_use`); 0.0 each with no event day.
+def _displaced_self_use(event_days: _PerHomeEventDays) -> _DisplacedSelfUse:
+    """The fleet's evening self-use an event in *event_days*' window displaces, from each home-day's (:func:`_home_displaced_self_use`); 0.0 each with no event day.
 
     Only the breakdown computes it: it reads every row of each home's discharge,
     charge and tariff, and its index's step length.
@@ -647,16 +647,16 @@ def _displaced_self_use(per_home: _PerHomeEventDays) -> _DisplacedSelfUse:
     Raises:
         ValueError: If a battery home's index has no step length.
     """
-    if not per_home.observed:
+    if not event_days.observed:
         return _DisplacedSelfUse(kwh_per_event=0.0, gbp_per_year=0.0)
     home_days = [
-        _home_displaced_self_use(sim, days, per_home.window.event_hours)
-        for sim, days in per_home.homes
+        _home_displaced_self_use(sim, days, event_days.window.event_hours)
+        for sim, days in event_days.homes
     ]
     return _DisplacedSelfUse(
         kwh_per_event=_mean_or_zero(_fleet_day_sums(home_days, "displaced_kwh")),
         gbp_per_year=_mean_or_zero(_fleet_day_sums(home_days, "displaced_gbp"))
-        * per_home.window.events_per_year,
+        * event_days.window.events_per_year,
     )
 
 
@@ -748,8 +748,8 @@ def compute_fleet_spare_capacity_kw(
     """
     baseline = DeliveryBaseline.parse(delivery_baseline, what="delivery_baseline")
     return tuple(
-        _EventDayTotals.of(per_home).mean_avail_kw
-        for per_home in _per_home_event_days(_battery_homes(fleet_results), windows, baseline)
+        _EventDayTotals.of(event_days).mean_avail_kw
+        for event_days in _per_home_event_days(_battery_homes(fleet_results), windows, baseline)
     )
 
 
@@ -820,9 +820,9 @@ class GridServicesAtEvents:
 
 def _warn_unobserved_windows(
     battery_homes: list[tuple["SimulationResults", BatteryConfig]],
-    per_window: tuple[_PerHomeEventDays, ...],
+    per_window_event_days: tuple[_PerHomeEventDays, ...],
 ) -> None:
-    """Issue one UserWarning for each window of *per_window* that no battery home's simulated index enters.
+    """Issue one UserWarning for each window of *per_window_event_days* that no battery home's simulated index enters.
 
     Such a window contributes £0.  A fleet without a battery home has nothing to
     observe and does not warn.  The warning is attributed to the caller of the
@@ -831,7 +831,9 @@ def _warn_unobserved_windows(
     :meth:`GridServicesEventsConfig.annual_income_gbp`.  Its text names only the
     window and the span of the battery homes' indices.
     """
-    unobserved = [per_home.window for per_home in per_window if not per_home.observed]
+    unobserved = [
+        event_days.window for event_days in per_window_event_days if not event_days.observed
+    ]
     if not battery_homes or not unobserved:
         return
     first = min(sim.battery_soc.index.min() for sim, _ in battery_homes)
@@ -854,15 +856,15 @@ def _priced_event_days(
     baseline = DeliveryBaseline.parse(
         cfg.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline"
     )
-    per_window = _per_home_event_days(battery_homes, cfg.event_windows, baseline)
-    _warn_unobserved_windows(battery_homes, per_window)
-    return per_window
+    per_window_event_days = _per_home_event_days(battery_homes, cfg.event_windows, baseline)
+    _warn_unobserved_windows(battery_homes, per_window_event_days)
+    return per_window_event_days
 
 
 def _net_income_per_window_gbp(
-    cfg: "GridServicesEventsConfig", per_window: tuple[_EventDayTotals, ...]
+    cfg: "GridServicesEventsConfig", per_window_totals: tuple[_EventDayTotals, ...]
 ) -> tuple[float, ...]:
-    """The net income *cfg* prices each window of *per_window* at, booking its mean firm capacity (£ a year), in window order: :func:`compute_grid_services_at_events`' rates and formula."""
+    """The net income *cfg* prices each window of *per_window_totals* at, booking its mean firm capacity (£ a year), in window order: :func:`compute_grid_services_at_events`' rates and formula."""
     band = resolve_grid_services_rate_band(cfg.band)
 
     # Override precedence: use cfg field if explicitly set, else fall back to band.
@@ -878,7 +880,7 @@ def _net_income_per_window_gbp(
     )
 
     per_window_net: list[float] = []
-    for totals in per_window:
+    for totals in per_window_totals:
         window, avail = totals.window, totals.mean_avail_kw
         avail_income = avail * avail_rate * window.events_per_year
         util_income = (
@@ -959,16 +961,22 @@ def compute_grid_services_at_events(
             :meth:`GridServicesEventsConfig.annual_income_gbp`, which report no
             displaced self-use, read no step length.
     """
-    per_home_days = _priced_event_days(fleet_results, cfg)
-    per_window = tuple(_EventDayTotals.of(per_home) for per_home in per_home_days)
-    per_window_net = _net_income_per_window_gbp(cfg, per_window)
-    displaced = [_displaced_self_use(per_home) for per_home in per_home_days]
+    per_window_event_days = _priced_event_days(fleet_results, cfg)
+    per_window_totals = tuple(
+        _EventDayTotals.of(event_days) for event_days in per_window_event_days
+    )
+    per_window_net = _net_income_per_window_gbp(cfg, per_window_totals)
+    displaced = [_displaced_self_use(event_days) for event_days in per_window_event_days]
     return GridServicesAtEvents(
         annual_income_gbp=float(sum(per_window_net)),
-        per_window_avail_kw=tuple(totals.mean_avail_kw for totals in per_window),
+        per_window_avail_kw=tuple(totals.mean_avail_kw for totals in per_window_totals),
         per_window_income_gbp=per_window_net,
-        per_window_avail_p50_kw=tuple(totals.avail_on_share_of_days_kw(50) for totals in per_window),
-        per_window_avail_p90_kw=tuple(totals.avail_on_share_of_days_kw(90) for totals in per_window),
+        per_window_avail_p50_kw=tuple(
+            totals.avail_on_share_of_days_kw(50) for totals in per_window_totals
+        ),
+        per_window_avail_p90_kw=tuple(
+            totals.avail_on_share_of_days_kw(90) for totals in per_window_totals
+        ),
         per_window_displaced_self_use_kwh_per_event=tuple(
             window_displaced.kwh_per_event for window_displaced in displaced
         ),
