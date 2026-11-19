@@ -221,7 +221,11 @@ def _open_section(page: Page, section: str) -> None:
     *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
     """
     header = page.get_by_role("button", name=section, exact=True, expanded=False)
-    expect(header, f"the {section} section is open, so a click on its header would close it").to_be_visible()
+    expect(
+        header,
+        f"the {section} header should be exposed as collapsed before _open_section clicks it "
+        "(Alpine binds its aria-expanded, and a click on an open section's header closes it)",
+    ).to_be_visible()
     accordion = _accordion_with_open(page, section)
     header.click()
     try:
