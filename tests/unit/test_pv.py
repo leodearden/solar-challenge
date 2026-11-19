@@ -2,7 +2,10 @@
 
 import dataclasses
 import math
+import os
 import re
+import subprocess
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -1024,6 +1027,50 @@ class TestWiredDcCapacity:
         assert str(wiring.value) == str(building.value)
 
 
+CHECKED_KEYS_OF_THE_DEFAULT_MODULE = (
+    "alpha_sc",
+    "a_ref",
+    "I_L_ref",
+    "I_o_ref",
+    "R_sh_ref",
+    "R_s",
+    "Adjust",
+    "T_NOCT",
+    "A_c",
+    "V_mp_ref",
+)
+"""The module parameters default_module() gives that the number rule checks, each a finite float in pvlib's CECMod row."""
+
+_REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT = """
+import sys
+
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.pv import DEFAULT_CEC_MODULE, PVConfig, cec_module_params
+
+module = cec_module_params(DEFAULT_CEC_MODULE)
+module.update({key: str(module[key]) for key in sys.argv[1:]})
+try:
+    PVConfig(capacity_kw=4.0, custom_module_params=module)
+except ConfigurationError as refusal:
+    print(refusal)
+"""
+"""A program printing PVConfig's refusal of default_module() with each key its arguments name given as text."""
+
+
+def _refusal_in_a_process_under_hash_seed(hash_seed: str, keys_as_text: tuple[str, ...]) -> str:
+    """The refusal a fresh interpreter, with PYTHONHASHSEED=hash_seed, prints for default_module() with keys_as_text given as text."""
+    child = subprocess.run(
+        [sys.executable, "-c", _REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT, *keys_as_text],
+        env={**os.environ, "PYTHONHASHSEED": hash_seed},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert child.returncode == 0, child.stderr
+    return child.stdout
+
+
 class TestAModuleParameterAModelReadsIsAFiniteNumber:
     """pvlib's DC models, NOCT-SAM and the string wiring read the module's own gamma_pdc, CEC single-diode parameters, T_NOCT, A_c and V_mp_ref, so construction and use refuse one that is not a finite number, naming its key and value."""
 
@@ -1037,18 +1084,7 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
             pytest.param(pvwatts_300_w_module, "gamma_pdc", math.inf, id="gamma_pdc-inf"),
             *[
                 pytest.param(default_module, key, str(default_module()[key]), id=f"{key}-text")
-                for key in (
-                    "alpha_sc",
-                    "a_ref",
-                    "I_L_ref",
-                    "I_o_ref",
-                    "R_sh_ref",
-                    "R_s",
-                    "Adjust",
-                    "T_NOCT",
-                    "A_c",
-                    "V_mp_ref",
-                )
+                for key in CHECKED_KEYS_OF_THE_DEFAULT_MODULE
             ],
             pytest.param(default_module, "alpha_sc", math.nan, id="alpha_sc-nan"),
             pytest.param(default_module, "T_NOCT", math.nan, id="T_NOCT-nan"),
@@ -1077,6 +1113,16 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
         assert key in re.findall(r"\w+", message), message
         assert repr(value) in message, message
         assert "must be a finite number" in message, message
+
+    @pytest.mark.parametrize("hash_seed", ["0", "1"], ids=["hash-seed-0", "hash-seed-1"])
+    def test_several_that_are_not_are_refused_naming_the_first_in_sorted_order_under_any_hash_seed(
+        self, hash_seed: str
+    ) -> None:
+        """A set of the checked keys iterates in an order PYTHONHASHSEED varies, so the rule reads them sorted: a module with every one given as text is refused naming A_c, the first, under any seed."""
+        refusal = _refusal_in_a_process_under_hash_seed(hash_seed, CHECKED_KEYS_OF_THE_DEFAULT_MODULE)
+
+        named = [word for word in re.findall(r"\w+", refusal) if word in CHECKED_KEYS_OF_THE_DEFAULT_MODULE]
+        assert named == ["A_c"], refusal
 
     def test_a_text_a_c_is_refused_though_a_set_module_efficiency_replaces_it(self) -> None:
         module = default_module()
