@@ -22,7 +22,7 @@ import uuid
 import weakref
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Literal, TypeAlias
 
@@ -113,25 +113,34 @@ def _random_id() -> str:
     return str(uuid.uuid4())
 
 
-def _text_or(value: object, unreadable: str) -> str:
-    """str(*value*), or *unreadable* when reading it raises an Exception."""
+def _text_or(value: object, unreadable: str, read: Callable[[object], str] = str) -> str:
+    """*value* as *read* gives it, str by default, or *unreadable* when reading it raises an Exception."""
     try:
-        return str(value)
+        return read(value)
     except Exception:
         return unreadable
+
+
+def _note_texts_of(error: BaseException) -> list[str]:
+    """The text of each of *error*'s notes.
+
+    add_note keeps __notes__ a list, but an assignment can leave it anything. One that is not a sequence of notes, a
+    str or bytes included, is shown as the interpreter's traceback shows it: as a single entry, its repr.
+    """
+    notes = getattr(error, "__notes__", ())
+    if isinstance(notes, Sequence) and not isinstance(notes, (str, bytes)):
+        return [_text_or(note, "A note whose text could not be read") for note in notes]
+    return [_text_or(notes, "A __notes__ whose text could not be read", read=repr)]
 
 
 def _message_of(error: BaseException) -> str:
     """The message of a job that failed with *error*: the error's text, then each of its notes on a line of its own.
 
-    A text that cannot be read, the error's or a note's, is named as unreadable in its place.
+    A text that cannot be read, the error's or a note's, is named as unreadable in its place. A __notes__ that is not a
+    sequence of notes is one line, as _note_texts_of gives it.
     """
-    notes = getattr(error, "__notes__", ())
     return "\n".join(
-        [
-            _text_or(error, f"{type(error).__name__}, whose message could not be read"),
-            *(_text_or(note, "A note whose text could not be read") for note in notes),
-        ]
+        [_text_or(error, f"{type(error).__name__}, whose message could not be read"), *_note_texts_of(error)]
     )
 
 
