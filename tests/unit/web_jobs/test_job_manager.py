@@ -44,19 +44,16 @@ from tests.unit.web_jobs._fakes import (
 )
 
 
-_A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)
+_A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)  # a lone surrogate, which sqlite3 cannot bind
 
 
-def _a_simulation_failing_with_a_message_sqlite_cannot_store(
-    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
-) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs fails with a message holding a lone surrogate, which sqlite3 cannot bind."""
-    raise RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
+def _a_simulation_raising(error: Callable[[], BaseException]) -> HomeSimulator:
+    """Stands in for simulate_home: every job it runs raises error(), built anew for each call so no notes are shared between jobs."""
 
+    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        raise error()
 
-def _a_simulation_that_exits(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs raises SystemExit, an error that is not an Exception."""
-    raise SystemExit("the simulation exited")
+    return simulate
 
 
 class _AnErrorWhoseMessageCannotBeRead(BaseException):
@@ -66,11 +63,25 @@ class _AnErrorWhoseMessageCannotBeRead(BaseException):
         raise RuntimeError("the message of this error cannot be read")
 
 
-def _a_simulation_raising_an_error_whose_message_cannot_be_read(
-    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
-) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs raises an error whose message cannot be read."""
-    raise _AnErrorWhoseMessageCannotBeRead()
+_a_simulation_failing_with_a_message_sqlite_cannot_store = _a_simulation_raising(
+    lambda: RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
+)
+_a_simulation_that_exits = _a_simulation_raising(lambda: SystemExit("the simulation exited"))
+_a_simulation_raising_an_error_whose_message_cannot_be_read = _a_simulation_raising(_AnErrorWhoseMessageCannotBeRead)
+
+
+class _AnUnreadableNote(str):
+    """A note whose text cannot be read, so the message of a job whose error carries it names that note as unreadable in its place."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("the text of this note cannot be read")
+
+
+class _AnObjectWhoseReprCannotBeRead:
+    """An object whose repr cannot be read, so the message of a job whose error has it for its __notes__ names those notes as unreadable in their place."""
+
+    def __repr__(self) -> str:
+        raise RuntimeError("the repr of this object cannot be read")
 
 
 class _AnInterruption(BaseException):
@@ -92,6 +103,19 @@ def _released_then_raising(blocking_simulation: BlockingSimulation, error: Calla
         raise error()
 
     return simulate
+
+
+def _with_notes(error: BaseException, *notes: str) -> BaseException:
+    """*error*, once each of *notes* has been added to it."""
+    for note in notes:
+        error.add_note(note)
+    return error
+
+
+def _with_notes_assigned(error: BaseException, notes: object) -> BaseException:
+    """*error*, once *notes* is assigned to its __notes__: add_note keeps __notes__ a list, so only an assignment leaves it anything else."""
+    setattr(error, "__notes__", notes)
+    return error
 
 
 @pytest.fixture
@@ -865,6 +889,99 @@ class TestJobManagerEscapedErrors:
         ]
         assert records[0].exc_info is not None
         assert type(records[0].exc_info[1]) is _AnErrorWhoseMessageCannotBeRead
+
+
+class TestJobManagerFailureNotes:
+    """A failed job's message is its error's text, then each of the error's notes on a line of its own."""
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            pytest.param(
+                lambda: _with_notes(RuntimeError("the simulation failed"), "first note", "second note"),
+                "the simulation failed\nfirst note\nsecond note",
+                id="an exception",
+            ),
+            pytest.param(
+                lambda: _with_notes(SystemExit("the simulation exited"), "first note", "second note"),
+                "the simulation exited\nfirst note\nsecond note",
+                id="an error that is not an exception",
+            ),
+        ],
+    )
+    def test_a_job_whose_error_carries_notes_is_reported_failed_with_its_message_then_each_note_on_a_line_of_its_own(
+        self, storage: RunStorage, error: Callable[[], BaseException], expected: str
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_raising(error))
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+
+        state = manager.job_state(job_id)
+        assert state is not None
+        assert (state.status, state.message) == ("failed", expected)
+        run = _run_of_job(manager, job_id, storage)
+        assert (run.status, run.error_message) == ("failed", expected)
+
+    def test_a_note_whose_text_cannot_be_read_is_named_unreadable_in_its_place_and_the_other_notes_still_read(
+        self, storage: RunStorage
+    ) -> None:
+        manager = JobManager(
+            storage,
+            max_workers=1,
+            simulate_home=_a_simulation_raising(
+                lambda: _with_notes(RuntimeError("the simulation failed"), _AnUnreadableNote("hidden"), "a readable note")
+            ),
+        )
+        message = "the simulation failed\nA note whose text could not be read\na readable note"
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+
+        state = manager.job_state(job_id)
+        assert state is not None
+        assert (state.status, state.message) == ("failed", message)
+        run = _run_of_job(manager, job_id, storage)
+        assert (run.status, run.error_message) == ("failed", message)
+
+    @pytest.mark.parametrize(
+        "error_type", [RuntimeError, SystemExit], ids=["an exception", "an error that is not an exception"]
+    )
+    @pytest.mark.parametrize(
+        ("notes", "shown"),
+        [
+            pytest.param("a note", "'a note'", id="a str"),
+            pytest.param(5, "5", id="an int"),
+            pytest.param(
+                _AnObjectWhoseReprCannotBeRead(),
+                "A __notes__ whose text could not be read",
+                id="an object whose repr cannot be read",
+            ),
+        ],
+    )
+    def test_a_job_whose_error_has_notes_that_are_not_a_sequence_of_notes_is_reported_failed_with_them_as_one_line_as_the_traceback_shows_them(
+        self, storage: RunStorage, error_type: type[BaseException], notes: object, shown: str
+    ) -> None:
+        manager = JobManager(
+            storage,
+            max_workers=1,
+            simulate_home=_a_simulation_raising(
+                lambda: _with_notes_assigned(error_type("the simulation failed"), notes)
+            ),
+        )
+        message = f"the simulation failed\n{shown}"
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+
+        state = manager.job_state(job_id)
+        assert state is not None
+        assert (state.status, state.message) == ("failed", message)
+        run = _run_of_job(manager, job_id, storage)
+        assert (run.status, run.error_message) == ("failed", message)
 
 
 class TestJobManagerCancelRun:
