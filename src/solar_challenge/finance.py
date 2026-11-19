@@ -60,7 +60,7 @@ from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig
-    from solar_challenge.fleet import FleetConfig, FleetResults
+    from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
     from solar_challenge.home import SummaryStatistics
 
 
@@ -1544,7 +1544,7 @@ def project_multi_year(
     finance: "FinanceConfig",
     *,
     error_target_pct: float = 1.0,
-    simulate: Optional[Callable[["FleetConfig", pd.Timestamp, pd.Timestamp], "FleetResults"]] = None,
+    simulate: FleetSimulate,
 ) -> MultiYearCurve:
     """Project fleet energy and revenue over the full asset life.
 
@@ -1565,8 +1565,8 @@ def project_multi_year(
         finance: FinanceConfig with ``asset_life_years`` and other parameters.
         error_target_pct: Target maximum PCHIP midpoint deviation (%) before
             adaptive bisection stops.
-        simulate: Optional inject for testing.  Defaults to None → lazy import
-            ``fleet.default_runner().simulate``.
+        simulate: The fleet simulator each sampled age runs through, such as
+            a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
 
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
@@ -1591,11 +1591,6 @@ def project_multi_year(
             ``"capacity_at_events"`` and ``grid_services_events`` is None,
             raised before any simulation.
     """
-    # ---- Lazy import for the real fleet runner ------------------------------
-    if simulate is None:
-        from solar_challenge.fleet import default_runner
-        simulate = default_runner().simulate
-
     homes = scenario.simulated_homes()
 
     # ---- Derive timezone from scenario location (or first home) -------------
@@ -2229,7 +2224,7 @@ def solve_cost_recovery_rate(
     Returns:
         A :class:`CostRecoverySolution` with the solved rate and outlay.
     """
-    # ---- Lazy import (mirrors project_multi_year) ----------------------------
+    # ---- The frozen default simulator (until S16 ζ) --------------------------
     if simulate is None:
         from solar_challenge.fleet import default_runner
         simulate = default_runner().simulate
