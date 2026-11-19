@@ -12,6 +12,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
@@ -207,6 +208,22 @@ class TestHomeFormRender:
         assert element_count(page, "select", {"x-model": "formData.seg_preset"}) == 1
         assert _options_per_seg_preset_key(page) == dict.fromkeys(SEG_PRESETS, 1)
         assert element_count(page, "input", {"type": "number", "x-model.number": "formData.seg_rate_pence_per_kwh"}) == 1
+
+    def test_home_form_offers_each_location_preset_labelled_with_its_name_and_coordinates(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /simulate/home offers one option per LOCATION_PRESETS key and one for custom coordinates; each preset's label is its Location's name, then its coordinates.
+
+        The custom location option is found by its label: the SEG rate's own 'custom' option shares its value.
+        """
+        page = client.get("/simulate/home").get_data(as_text=True)
+
+        assert {key: element_count(page, "option", {"value": key}) for key in LOCATION_PRESETS} == dict.fromkeys(LOCATION_PRESETS, 1)
+        assert counts_of(texts(page), ("Custom coordinates...",)) == {"Custom coordinates...": 1}
+        for preset in LOCATION_PRESETS.values():
+            [label] = [text for text in texts(page) if text.startswith(preset.name)]
+            assert f"{abs(preset.latitude):.2f}" in label
+            assert f"{abs(preset.longitude):.2f}" in label
 
 
 class TestFleetConfigRoute:

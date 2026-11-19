@@ -106,6 +106,17 @@ class TestScenarioBuilderRoute:
             ]
         ]
 
+    def test_builder_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/builder offers one option per LOCATION_PRESETS key and one for a custom location, each preset labelled with its Location's name."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        values = (*LOCATION_PRESETS, "custom")
+        names = tuple(preset.name for preset in LOCATION_PRESETS.values())
+
+        assert {value: element_count(page, "option", {"value": value}) for value in values} == dict.fromkeys(values, 1)
+        assert counts_of(texts(page), names) == dict.fromkeys(names, 1)
+
 
 class TestSweepRoute:
     """Tests for the GET /scenarios/sweep route."""
@@ -120,6 +131,16 @@ class TestSweepRoute:
         response = client.get("/scenarios/sweep")
         page = response.get_data(as_text=True)
         assert element_count(page, "select", {"x-model": "parameter"}) == 1
+
+    def test_sweep_page_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/sweep offers one option per LOCATION_PRESETS key, each labelled with its Location's name."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        names = tuple(preset.name for preset in LOCATION_PRESETS.values())
+
+        assert {key: element_count(page, "option", {"value": key}) for key in LOCATION_PRESETS} == dict.fromkeys(LOCATION_PRESETS, 1)
+        assert counts_of(texts(page), names) == dict.fromkeys(names, 1)
 
     def test_sweep_page_contains_mode_options(self, client: FlaskClient) -> None:
         """GET /scenarios/sweep offers the Linear and Geometric modes, in that order, after the Sweep Mode label."""
