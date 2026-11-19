@@ -360,9 +360,10 @@ class TestWeatherCache:
             cache.get("tmy", bristol)
 
         message = str(refusal.value)
+        words_get_writes = message.replace(str(refusal.value.__cause__), "").replace(str(entry), "")
         assert "WeatherCache.invalidate" in message
         assert "so that get finds no entry" in message
-        assert "fetch" not in message.lower()
+        assert "fetch" not in words_get_writes.lower()
         assert cache.invalidate("tmy", bristol) is True
         assert cache.get("tmy", bristol) is None
 
@@ -555,13 +556,16 @@ class TestPvgisTmy:
         self, seeded_cache, pvgis_requests
     ):
         """get passes on the ValueError its cache's get raises for an entry file no longer as put wrote it, naming
-        the file, and requests nothing from PVGIS."""
+        the file, with one note that once the entry is removed the next get fetches the TMY afresh, and requests
+        nothing from PVGIS."""
         [entry] = seeded_cache.cache_dir.iterdir()
         entry.write_bytes(b"garbage")
 
-        with pytest.raises(ValueError, match=re.escape(str(entry))):
+        with pytest.raises(ValueError, match=re.escape(str(entry))) as refusal:
             PvgisTmy(seeded_cache).get(Location.bristol())
 
+        [note] = refusal.value.__notes__
+        assert "PvgisTmy.get fetches the TMY afresh" in note
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
 
@@ -577,15 +581,17 @@ class TestPvgisTmy:
     def test_once_an_entry_it_cannot_read_is_removed_get_fetches_it_afresh(
         self, seeded_cache, pvgis_requests, remove
     ):
-        """Once the entry its cache refused is removed, by deleting the file or with WeatherCache.invalidate, get
-        fetches the scaled TMY afresh from PVGIS, once, and puts it, so the cache holds a readable entry again."""
+        """Once the entry its cache refused is removed, by deleting the file or with WeatherCache.invalidate, the
+        same PvgisTmy's next get fetches the scaled TMY afresh from PVGIS, once, and puts it, so the cache holds a
+        readable entry again."""
+        weather = PvgisTmy(seeded_cache)
         [entry] = seeded_cache.cache_dir.iterdir()
         entry.write_bytes(b"garbage")
         with pytest.raises(ValueError):
-            PvgisTmy(seeded_cache).get(Location.bristol())
+            weather.get(Location.bristol())
 
         remove(seeded_cache, entry)
-        fetched = PvgisTmy(seeded_cache).get(Location.bristol())
+        fetched = weather.get(Location.bristol())
 
         pvgis_requests.tmy.assert_called_once()
         pvgis_requests.hourly.assert_called_once()
