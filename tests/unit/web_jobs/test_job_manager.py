@@ -73,6 +73,13 @@ def _a_simulation_raising_an_error_whose_message_cannot_be_read(
     raise _AnErrorWhoseMessageCannotBeRead()
 
 
+class _AnUnreadableNote(str):
+    """A note whose text cannot be read, so the message of a job whose error carries it names that note as unreadable in its place."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("the text of this note cannot be read")
+
+
 class _AnInterruption(BaseException):
     """An error that is not an Exception."""
 
@@ -915,6 +922,28 @@ class TestJobManagerFailureNotes:
         assert (state.status, state.message) == ("failed", expected)
         run = _run_of_job(manager, job_id, storage)
         assert (run.status, run.error_message) == ("failed", expected)
+
+    def test_a_note_whose_text_cannot_be_read_is_named_unreadable_in_its_place_and_the_other_notes_still_read(
+        self, storage: RunStorage
+    ) -> None:
+        manager = JobManager(
+            storage,
+            max_workers=1,
+            simulate_home=_a_simulation_raising(
+                lambda: _with_notes(RuntimeError("the simulation failed"), _AnUnreadableNote("hidden"), "a readable note")
+            ),
+        )
+        message = "the simulation failed\nA note whose text could not be read\na readable note"
+
+        with _errors_logged_by_jobs_py_kept_out_of_the_report():
+            job_id = _submit_home_job(manager)
+            assert manager.wait_until_idle(timeout=30)
+
+        state = manager.job_state(job_id)
+        assert state is not None
+        assert (state.status, state.message) == ("failed", message)
+        run = _run_of_job(manager, job_id, storage)
+        assert (run.status, run.error_message) == ("failed", message)
 
 
 class TestJobManagerCancelRun:
