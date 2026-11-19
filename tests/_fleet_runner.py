@@ -7,12 +7,21 @@ of a helper module rather than one defined in a test.
 
 Usage::
 
-    from tests._fleet_runner import MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, started
+    from tests._fleet_runner import (
+        MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, started, wait_until_started
+    )
 
     runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"})))
     with pytest.raises(ValueError, match="Home 1 cannot be simulated"):
         runner.simulate(fleet, start, end)
     assert len(started(tmp_path)) < len(fleet.homes)
+    assert finished(tmp_path) == set(started(tmp_path))
+
+    marking = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, seconds=0.2))
+    each = marking.simulate_each(fleets, start, end)
+    next(each)
+    wait_until_started(tmp_path, 2, within=10)
+    each.close()
     assert finished(tmp_path) == set(started(tmp_path))
 
     breaking = ProcessEndingHomeSimulator(MarkingHomeSimulator(tmp_path), ending=frozenset({"Home 2"}))
@@ -129,6 +138,21 @@ def started(marker_dir: Path) -> dict[str, HomeStart]:
         recorded = json.loads(marker.read_text(encoding="utf-8"))
         locations = recorded["locations"]
         starts[marker.stem] = HomeStart(pid=recorded["pid"], locations=None if locations is None else tuple(locations))
+    return starts
+
+
+def wait_until_started(marker_dir: Path, homes: int, *, within: float) -> dict[str, HomeStart]:
+    """started(*marker_dir*) as soon as it names at least *homes* homes, polling it; TimeoutError naming *homes*, *marker_dir*, *within* and the homes started once *within* seconds pass short of that.
+
+    A test uses it to know a home is running before it ends a FleetRunner call.
+    """
+    deadline = time.monotonic() + within
+    while len(starts := started(marker_dir)) < homes:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"{homes} homes had not started in {marker_dir} within {within} s; those started: {sorted(starts)}"
+            )
+        time.sleep(0.01)
     return starts
 
 
