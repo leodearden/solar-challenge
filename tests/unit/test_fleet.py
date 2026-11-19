@@ -30,7 +30,16 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, WeatherProvider, default_weather
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
-from tests._fleet_runner import HomeStart, MarkingHomeSimulator, ProcessEndingHomeSimulator, started
+from tests._fleet_runner import (
+    HomeStart,
+    MarkingHomeSimulator,
+    ProcessEndingHomeSimulator,
+    finish_marker,
+    finished,
+    start_marker,
+    started,
+    wait_until_started,
+)
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -664,6 +673,13 @@ def _assert_marked_results_of(results: FleetResults, fleet: FleetConfig) -> None
     ] == pytest.approx([home.pv_config.capacity_kw for home in fleet.homes])
 
 
+def _assert_every_started_home_finished(marker_dir: Path) -> None:
+    """Assert each home a MarkingHomeSimulator over *marker_dir* started has finished."""
+    assert finished(marker_dir) == set(started(marker_dir)), (
+        "the call ended while a home it had started was still running"
+    )
+
+
 @dataclass
 class _CountingWeather:
     """Serves a clear 21 June at Bristol and that day at half its irradiance at Bath, recording each location it is asked for, in the process that asks."""
@@ -844,6 +860,17 @@ def _raising_at_the_second_home(raised: BaseException) -> HomesDone:
     return homes_done
 
 
+def _raising_at_the_second_home_once_a_third_has_started(raised: BaseException, marker_dir: Path) -> HomesDone:
+    """A progress sink that, when told the second home has finished, waits until a third home has started in *marker_dir*, then raises *raised*."""
+
+    def homes_done(done: int, total: int) -> None:
+        if done == 2:
+            wait_until_started(marker_dir, 3, within=10)
+            raise raised
+
+    return homes_done
+
+
 def _raising_its_own_broken_process_pool(
     config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
 ) -> SimulationResults:
@@ -852,25 +879,35 @@ def _raising_its_own_broken_process_pool(
 
 
 class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
-    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
+    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start and the call ends only once the homes already running have finished; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
     def test_in_parallel_a_failed_home_is_named_on_its_own_exception_and_the_homes_still_pending_are_cancelled(
         self, tmp_path: Path, worker_start_method: str
     ) -> None:
-        fleet = _uniform_fleet(5, "Five")
-        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"}), seconds=0.2)
-        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=1)
+        fleet = _uniform_fleet(7, "Seven")
+        home_simulator = MarkingHomeSimulator(
+            tmp_path,
+            failing=frozenset({"Home 1"}),
+            seconds=0.2,
+            held_until=(
+                ("Home 1", start_marker(tmp_path, "Home 2")),
+                ("Home 2", finish_marker(tmp_path, "Home 1")),
+            ),
+        )
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=2)
 
         with pytest.raises(ValueError) as caught:
             runner.simulate(fleet, *_JUNE_DAYS.window())
 
         assert type(caught.value) is ValueError
         assert str(caught.value) == "Home 1 cannot be simulated"
-        assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Five')"]
+        assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Seven')"]
+        _assert_every_started_home_finished(tmp_path)
         assert len(started(tmp_path)) < len(fleet.homes), (
-            "when Home 1 failed, the one worker had started at most it, the home it took next and the two "
-            "queued behind that one, so the fifth home was cancelled"
+            "when Home 1 failed, the two workers had started at most it, Home 2 (held until Home 1 finished), the "
+            "home Home 1's worker took next and the three queued behind those (max_workers + 1), so the seventh "
+            "home was cancelled"
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
@@ -961,10 +998,15 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         )
 
         with pytest.raises(RuntimeError) as caught:
-            runner.simulate(fleet, *_JUNE_DAYS.window(), progress=_raising_at_the_second_home(raised))
+            runner.simulate(
+                fleet,
+                *_JUNE_DAYS.window(),
+                progress=_raising_at_the_second_home_once_a_third_has_started(raised, tmp_path),
+            )
 
         assert caught.value is raised
         assert getattr(caught.value, "__notes__", []) == []
+        _assert_every_started_home_finished(tmp_path)
         assert len(started(tmp_path)) < len(fleet.homes), (
             "when the second home finished, the one worker had started at most the two finished homes, the home "
             "it took next and the two queued behind that one, so the sixth home was cancelled"
@@ -972,7 +1014,7 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
 
 
 class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
-    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started."""
+    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started and returns once those running have finished."""
 
     def test_in_turn_each_fleet_is_yielded_once_its_last_home_finishes_and_before_a_later_home_starts(
         self, tmp_path: Path
@@ -1018,10 +1060,12 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
         each = runner.simulate_each(fleets, *_JUNE_DAYS.window())
 
         index, results = next(each)
+        wait_until_started(tmp_path, 2, within=10)
         each.close()
 
         assert index == 0
         _assert_marked_results_of(results, fleets[0])
+        _assert_every_started_home_finished(tmp_path)
         assert len(started(tmp_path)) < sum(len(fleet.homes) for fleet in fleets), (
             "when the first fleet was yielded, the one worker had started at most its home, the home it took next "
             "and the two queued behind that one, so the fifth and sixth homes were cancelled"
