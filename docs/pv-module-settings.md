@@ -49,7 +49,14 @@
       as the caller gives them, whatever form the module is in, so it refuses a bad
       key even where a set field replaces it, as a set efficiency replaces `A_c`.
       pvlib's CECMod rows give each as a finite float, and keys no model reads, such
-      as a row's `Technology` text, are not checked;
+      as a row's `Technology` text, are not checked. Nor yet are some numbers pvlib
+      reads: the optional keys it defaults, `calcparams_cec`'s `EgRef`, `dEgdT`,
+      `irrad_ref` and `temp_ref` and `pvwatts_dc`'s `temp_ref` and `k` (task 1440
+      decides whether to check them; `pvwatts_dc`'s `cap_adjustment` is a flag), and
+      a SAPM module's DC parameters, such as `C0` and `Isco`. One given as text
+      raises a bare `TypeError` inside pvlib when the system is simulated, or at
+      construction for an optional CEC key under a set coefficient, whose reach check
+      runs `calcparams_cec`;
     - a set coefficient that custom parameters cannot take, through
       `_require_template_takes_temperature_coefficient`, which use runs too: parameters
       in neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of
