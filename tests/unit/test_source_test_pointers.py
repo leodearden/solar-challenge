@@ -1107,7 +1107,7 @@ def test_reads_a_file_under_tests_that_is_not_python_whole(project: Path) -> Non
     ]
 
 
-def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None:
+def test_reads_the_briefing_only_in_its_conventions_rules_and_whys(project: Path) -> None:
     briefing = write_file(
         project,
         "review/briefing.yaml",
@@ -1117,7 +1117,7 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         '  - rule: "A rule pinned by tests/unit/test_absent_c.py and by tests/unit/test_pointed_at.py::test_top"\n'
         "    why: >\n"
         "      A why naming tests/unit/test_absent_d.py and a placeholder,\n"
-        "      tests/fixtures/databases/schema_v<N>.sql.\n"
+        "      schema_v<N>.sql in tests/unit.\n"
         "  - rule: >\n"
         "      A folded rule\n"
         "      pinned by test_top and by\n"
@@ -1134,9 +1134,13 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
     assert _dangling(checkout, _pointers(checkout, [briefing])) == [
         "review/briefing.yaml:4: tests/unit/test_absent_c.py:"
         " tests/unit/test_absent_c.py does not exist, or git ignores it",
+        "review/briefing.yaml:6: tests/unit/test_absent_d.py:"
+        " tests/unit/test_absent_d.py does not exist, or git ignores it",
         "review/briefing.yaml:10: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
         "review/briefing.yaml:11: tests/unit/test_absent_e.py:"
         " tests/unit/test_absent_e.py does not exist, or git ignores it",
+        "review/briefing.yaml:12: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
     ]
 
 
@@ -1147,8 +1151,23 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         ("conventions: none\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions: []\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
-        ("conventions:\n  - rule: [a, b]\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
-        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:3: a conventions entry has no scalar rule"),
+        (
+            "conventions:\n  - rule: [a, b]\n    why: x\n",
+            "review/briefing.yaml:2: a conventions entry has no scalar rule",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: b\n  - why: x\n",
+            "review/briefing.yaml:4: a conventions entry has no scalar rule",
+        ),
+        ("conventions:\n  - rule: a\n", "review/briefing.yaml:2: a conventions entry has no scalar why"),
+        (
+            "conventions:\n  - rule: a\n    why: [a, b]\n",
+            "review/briefing.yaml:2: a conventions entry has no scalar why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: b\n  - rule: c\n",
+            "review/briefing.yaml:4: a conventions entry has no scalar why",
+        ),
         ("conventions: [rule\n", "review/briefing.yaml does not parse"),
     ],
     ids=[
@@ -1158,10 +1177,15 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         "entry-without-a-rule",
         "rule-not-text",
         "second-entry-without-a-rule",
+        "entry-without-a-why",
+        "why-not-text",
+        "second-entry-without-a-why",
         "does-not-parse",
     ],
 )
-def test_refuses_a_briefing_whose_conventions_rules_cannot_be_read(project: Path, text: str, refusal: str) -> None:
+def test_refuses_a_briefing_whose_conventions_rules_or_whys_cannot_be_read(
+    project: Path, text: str, refusal: str
+) -> None:
     briefing = write_file(project, "review/briefing.yaml", text)
     checkout = _Checkout(project)
 
