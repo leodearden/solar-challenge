@@ -26,6 +26,7 @@ from solar_challenge.output import generate_config_ranking_report
 from tests._cli_fleet_simulator import invoke_cli
 from tests._factories import make_bill_distribution_from_statistics, make_config_result
 from tests._finance_builders import make_fleet_results
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
@@ -948,6 +949,26 @@ class TestOptimizeCLIE2EFast:
             f"Output:\n{result.output}"
         )
 
+    def test_the_default_sensitivity_without_events_sweeps_the_retained_floor_and_grid_services_axes(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """With no --sensitivity, a scenario that prices no grid services at events sweeps both default axes and notes no omission."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert set(_swept_values_by_axis(result.stdout)) == {
+            "retained_cash_floor_per_home_per_year_gbp",
+            "grid_services_income_per_kw_per_year_gbp",
+        }, result.output
+        assert "capacity_at_events" not in result.stderr, result.stderr
+
     def test_unknown_sensitivity_alias_exits_one(
         self,
         tmp_path: Path,
@@ -1088,3 +1109,71 @@ class TestOptimizeCLIE2EFast:
         assert "Computing sensitivity panel for axes" in stderr
         assert stderr.endswith("Configuration error: a refusal raised while the sensitivity panel runs")
         assert "Sensitivity panel skipped" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# §H — `optimize configs` ignores no grid-services input under the events model
+# ---------------------------------------------------------------------------
+
+
+def _invoke_configs_on_the_board(options: list[str]) -> tuple[Result, list[FleetConfig]]:
+    """Run `optimize configs` over one config of the committed board scenario, which prices grid services at events, with *options*.
+
+    Every fleet simulation is answered with the fleet's own homes, each
+    self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year, a
+    feasible baseline under the board's finance. Returns the CliRunner result
+    and the fleet configs the injected simulator was asked to simulate.
+    """
+    simulated_fleets: list[FleetConfig] = []
+
+    def simulate(fleet_config, start, end):  # type: ignore[no-untyped-def]
+        simulated_fleets.append(fleet_config)
+        return make_fleet_results(
+            homes=fleet_config.homes, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0
+        )
+
+    result = invoke_cli(
+        ["optimize", "configs", str(SCENARIO), "--pv", "4", "--battery", "5", "--inverter", "5", *options],
+        simulate,
+    )
+    return result, simulated_fleets
+
+
+def test_grid_services_kw_under_the_events_model_is_refused_before_any_simulation() -> None:
+    """C7: --grid-services-kw sets a flat rate the events model does not read, so it is refused, naming the flag and the model."""
+    result, simulated_fleets = _invoke_configs_on_the_board(["--grid-services-kw", "20"])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "--grid-services-kw" in stderr
+    assert "capacity_at_events" in stderr
+    assert simulated_fleets == []
+
+
+def test_the_default_sensitivity_under_the_events_model_omits_the_grid_services_axis_with_a_note() -> None:
+    """C8: with no --sensitivity, the events model's panel sweeps the retained floor alone, and one stderr note names the omitted grid_services axis and why."""
+    result, _ = _invoke_configs_on_the_board([])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 0, result.output
+    assert stderr.count("capacity_at_events") == 1, stderr
+    assert "grid_services" in stderr
+    assert set(_swept_values_by_axis(result.stdout)) == {
+        "retained_cash_floor_per_home_per_year_gbp"
+    }, result.output
+
+
+@pytest.mark.parametrize("sensitivity", ["grid_services", "retained_floor,grid_services"])
+def test_an_explicit_grid_services_axis_under_the_events_model_is_refused_before_any_simulation(
+    sensitivity: str,
+) -> None:
+    """C8: a grid_services axis sweeps a flat rate the events model does not read, so asking for it is refused before the sweep simulates."""
+    result, simulated_fleets = _invoke_configs_on_the_board(["--sensitivity", sensitivity])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "grid_services" in stderr
+    assert "capacity_at_events" in stderr
+    assert simulated_fleets == []
