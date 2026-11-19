@@ -197,8 +197,17 @@ _SHOWS_ALL_ITS_CONTENT = "panel => panel.scrollHeight <= panel.clientHeight"
 
 
 def _open_section(page: Page, section: str) -> None:
-    """Open the accordion section whose header button is named *section*, closing the open one; General is open when the page loads."""
+    """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
+
+    General is open when the page loads. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
+    """
     page.get_by_role("button", name=section, exact=True).click()
+    opened = _panel_of(page, section)
+    expect(opened).to_be_visible()
+    page.wait_for_function(_SHOWS_ALL_ITS_CONTENT, arg=opened.element_handle())
+    for other in _ACCORDION_SECTIONS:
+        if other != section:
+            expect(_panel_of(page, other)).to_be_hidden()
 
 
 def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
