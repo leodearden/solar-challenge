@@ -575,34 +575,52 @@ class TestHeadlineFigures:
         }
 
     @pytest.mark.parametrize(
-        ("damaged_summary_json", "field"),
+        ("damaged_summary_json", "field", "named"),
         [
-            pytest.param("{not json", None, id="summary-not-json"),
-            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, id="summary-nested-too-deeply"),
+            pytest.param("{not json", None, "runs.summary_json", id="summary-not-json"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, "runs.summary_json", id="summary-nested-too-deeply"),
             pytest.param(
-                summary_json(home_summary(total_generation_kwh=None)), "total_generation_kwh", id="generation-null"
+                summary_json(home_summary(total_generation_kwh=None)),
+                "total_generation_kwh",
+                "total_generation_kwh",
+                id="generation-null",
             ),
-            pytest.param(_with_a_retired_key(summary_json(home_summary())), "retired", id="summary-with-a-key-no-field-has"),
+            pytest.param(
+                _with_a_retired_key(summary_json(home_summary())), "retired", "retired", id="summary-with-a-key-no-field-has"
+            ),
             pytest.param(
                 summary_json(home_summary(total_generation_kwh=10**400)),
                 "total_generation_kwh",
+                "total_generation_kwh",
                 id="generation-no-float-can-hold",
             ),
-            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), None, id="generation-nan"),
             pytest.param(
-                summary_json(home_summary(export_ratio=math.nan)), None, id="export-ratio-nan-a-figure-no-run-list-shows"
+                summary_json(home_summary(total_generation_kwh=math.nan)), None, "generation_kwh", id="generation-nan"
+            ),
+            pytest.param(
+                summary_json(home_summary(export_ratio=math.nan)),
+                None,
+                "export_ratio",
+                id="export-ratio-nan-a-figure-no-run-list-shows",
             ),
         ],
     )
     def test_a_run_whose_headline_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str, field: str | None
+        self,
+        storage: RunStorage,
+        caplog: pytest.LogCaptureFixture,
+        damaged_summary_json: str,
+        field: str | None,
+        named: str,
     ) -> None:
         """The row's unreadable is the refusal RunRecord.headline() raises, the message the compare page flashes.
 
         A run list shows the run without figures and says why: the G7 waiver in
         docs/prds/run-store-one-owner.md §15 requires the run to be visible in History with its
         reason. NaN is a number, so a summary holding it reads, and its headline is refused all
-        the same, even for the export ratio, a figure no run list shows.
+        the same, even for the export ratio, a figure no run list shows. The reason names the
+        part of the summary at fault, *named*: the column when its text does not decode, else
+        the field or the headline's figure.
         """
         _store_a_home_run(storage, "damaged-run")
         _damage_summary(storage, "damaged-run", damaged_summary_json)
@@ -614,6 +632,7 @@ class TestHeadlineFigures:
         figures = headline_figures(damaged)
 
         assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(refusal.value)}
+        assert named in figures["unreadable"], figures["unreadable"]
         assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == (
             "damaged-run",
             "runs.summary_json",
