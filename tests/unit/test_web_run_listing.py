@@ -575,23 +575,23 @@ class TestHeadlineFigures:
         }
 
     @pytest.mark.parametrize(
-        ("damaged_summary_json", "field", "named"),
+        ("damaged_summary_json", "field", "refused_figure"),
         [
-            pytest.param("{not json", None, "runs.summary_json", id="summary-not-json"),
-            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, "runs.summary_json", id="summary-nested-too-deeply"),
+            pytest.param("{not json", None, None, id="summary-not-json"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, None, id="summary-nested-too-deeply"),
             pytest.param(
                 summary_json(home_summary(total_generation_kwh=None)),
                 "total_generation_kwh",
-                "total_generation_kwh",
+                None,
                 id="generation-null",
             ),
             pytest.param(
-                _with_a_retired_key(summary_json(home_summary())), "retired", "retired", id="summary-with-a-key-no-field-has"
+                _with_a_retired_key(summary_json(home_summary())), "retired", None, id="summary-with-a-key-no-field-has"
             ),
             pytest.param(
                 summary_json(home_summary(total_generation_kwh=10**400)),
                 "total_generation_kwh",
-                "total_generation_kwh",
+                None,
                 id="generation-no-float-can-hold",
             ),
             pytest.param(
@@ -611,16 +611,17 @@ class TestHeadlineFigures:
         caplog: pytest.LogCaptureFixture,
         damaged_summary_json: str,
         field: str | None,
-        named: str,
+        refused_figure: str | None,
     ) -> None:
         """The row's unreadable is the refusal RunRecord.headline() raises, the message the compare page flashes.
 
         A run list shows the run without figures and says why: the G7 waiver in
         docs/prds/run-store-one-owner.md §15 requires the run to be visible in History with its
         reason. NaN is a number, so a summary holding it reads, and its headline is refused all
-        the same, even for the export ratio, a figure no run list shows. The reason names the
-        part of the summary at fault, *named*: the column when its text does not decode, else
-        the field or the headline's figure.
+        the same, even for the export ratio, a figure no run list shows. When the summary reads
+        but its headline refuses a figure, the field is None, so the reason must name that
+        figure, *refused_figure*; a refusal made before the headline is built is pinned by its
+        document and field.
         """
         _store_a_home_run(storage, "damaged-run")
         _damage_summary(storage, "damaged-run", damaged_summary_json)
@@ -632,7 +633,7 @@ class TestHeadlineFigures:
         figures = headline_figures(damaged)
 
         assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(refusal.value)}
-        assert named in figures["unreadable"], figures["unreadable"]
+        assert refused_figure is None or refused_figure in refusal.value.reason, refusal.value.reason
         assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == (
             "damaged-run",
             "runs.summary_json",
