@@ -85,7 +85,7 @@ def handle_errors(func: F) -> F:
 
 
 def _print_error_verbatim(label: str, error: Exception) -> None:
-    """Print label in red, then error's text and each of its notes on a line of its own as error_text_with_notes reads them, none of it read as Rich markup."""
+    """Print label in red, then error's text and each of its __notes__ on a line of its own as error_text_with_notes reads them, none of it read as Rich markup."""
     _print_verbatim(error_console, (f"{label}:", "red"), " ", error_text_with_notes(error))
 
 
