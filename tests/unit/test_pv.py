@@ -1024,6 +1024,94 @@ class TestWiredDcCapacity:
         assert str(wiring.value) == str(building.value)
 
 
+class TestAModuleParameterAModelReadsIsAFiniteNumber:
+    """pvlib's DC models, NOCT-SAM and the string wiring read the module's own gamma_pdc, CEC single-diode parameters, T_NOCT, A_c and V_mp_ref, so construction and use refuse one that is not a finite number, naming its key and value."""
+
+    @pytest.mark.parametrize(
+        "temperature_coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
+    )
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            pytest.param(pvwatts_300_w_module, "gamma_pdc", "-0.004", id="gamma_pdc-text"),
+            pytest.param(pvwatts_300_w_module, "gamma_pdc", math.inf, id="gamma_pdc-inf"),
+            *[
+                pytest.param(default_module, key, str(default_module()[key]), id=f"{key}-text")
+                for key in (
+                    "alpha_sc",
+                    "a_ref",
+                    "I_L_ref",
+                    "I_o_ref",
+                    "R_sh_ref",
+                    "R_s",
+                    "Adjust",
+                    "T_NOCT",
+                    "A_c",
+                    "V_mp_ref",
+                )
+            ],
+            pytest.param(default_module, "alpha_sc", math.nan, id="alpha_sc-nan"),
+            pytest.param(default_module, "T_NOCT", math.nan, id="T_NOCT-nan"),
+            pytest.param(default_module, "A_c", math.nan, id="A_c-nan"),
+            pytest.param(default_module, "R_s", True, id="R_s-bool"),
+            pytest.param(default_module, "Adjust", np.True_, id="Adjust-numpy-bool"),
+        ],
+    )
+    def test_one_that_is_not_is_refused_at_construction_and_at_use_naming_its_key_and_value(
+        self,
+        build: Callable[[], dict[str, float]],
+        key: str,
+        value: float | str | np.bool_,
+        temperature_coefficient: float | None,
+    ) -> None:
+        """A set temperature coefficient replaces a module's Adjust or gamma_pdc, and its reach check reads the CEC parameters, yet the module's own key is refused first."""
+        module = build()
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=module,
+            temperature_coefficient=temperature_coefficient,
+        )
+        module[key] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert key in re.findall(r"\w+", message), message
+        assert repr(value) in message, message
+        assert "must be a finite number" in message, message
+
+    def test_a_text_a_c_is_refused_though_a_set_module_efficiency_replaces_it(self) -> None:
+        module = default_module()
+        config = PVConfig(capacity_kw=4.0, custom_module_params=module, module_efficiency=0.2)
+        module["A_c"] = "1.99"
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert "A_c" in re.findall(r"\w+", message), message
+        assert "'1.99'" in message, message
+
+    @pytest.mark.parametrize(
+        "t_noct",
+        [
+            pytest.param(46, id="int"),
+            pytest.param(np.int64(46), id="numpy-int64"),
+            pytest.param(np.float32(46.5), id="numpy-float32"),
+        ],
+    )
+    def test_a_python_or_numpy_number_is_read_as_its_number(
+        self, t_noct: int | np.int64 | np.float32
+    ) -> None:
+        config = PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), "T_NOCT": t_noct})
+
+        for array in create_pv_system(config).arrays:
+            assert array.temperature_model_parameters["noct"] == t_noct
+
+    def test_text_in_a_key_no_model_reads_is_kept(self) -> None:
+        """pvlib's own CECMod rows hold text, such as their Technology, so only the keys a model reads are checked."""
+        module = default_module()
+        assert isinstance(module["Technology"], str), module["Technology"]
+
+        for array in create_pv_system(PVConfig(capacity_kw=4.0, custom_module_params=module)).arrays:
+            assert array.module_parameters["Technology"] == module["Technology"]
+
+
 LINEAR_INVERTER_CONFIG = PVConfig(
     capacity_kw=4.0,
     custom_inverter_params=create_simple_inverter_params(efficiency=0.96, capacity_w=8000.0),

@@ -7,7 +7,6 @@ docs/pv-cell-temperature.md records the decision and its measurements.
 """
 
 import dataclasses
-import math
 from collections.abc import Callable
 
 import numpy as np
@@ -170,9 +169,7 @@ class TestAModuleWhoseCellsCannotHeatIsRefused:
     @pytest.mark.parametrize(
         ("key", "value"),
         [
-            ("T_NOCT", math.nan),
             ("T_NOCT", 20.0),
-            ("A_c", math.nan),
             ("A_c", 0.0),
             pytest.param("A_c", 0.4, id="A_c-0.4-so-an-efficiency-of-1.0"),
         ],
