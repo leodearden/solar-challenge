@@ -138,12 +138,18 @@ on the laptop instead, and the warm-up must move into it.
   leave a task waiting longer than it would have here. Compare a laptop verify's `remote_wait_secs` (arrival to the
   laptop's turn) plus `remote_wall_secs` (its run there), from the dispatch records whose `reason` is `remote`, with a
   local one's `data.slot_wait_secs` plus `data.duration_ms` / 1000, from the `workflow_verify` rows whose
-  `data.runner` is `local`. `duration_ms` is milliseconds and the three other figures are seconds. Take only the rows
-  whose dispatch record reads `reason: local_granted_first`, matched by task and `tip_sha`: only that run is the local
-  call that queued with the laptop's attempt, so its wait runs from the same arrival as `remote_wait_secs`. A fallback
-  re-run (`dirty_tree`, `runner_unavailable`, `infra_transient`) starts its wait over after the laptop's turn, and a
-  parity re-run (`cross_check`, `red_confirm`) arrives afresh, so both leave out the laptop time before them and
-  neither is like for like. If the laptop is consistently slower, roll task verifies back (§6).
+  `data.runner` is `local`. `duration_ms` is milliseconds and the three other figures are seconds. A row's dispatch
+  record is the one for the same task and `tip_sha`; where a task has several records at one tip, it is the latest
+  whose `<stamp>` precedes the row's `timestamp` (both UTC), because a row is written once its verify has returned.
+  Count only verifies that ran a test leg. A doc-only verify ran none: its row reads `units: []`, `duration_ms` 0 and
+  a null `slot_wait_secs`, which means it competed for no slot, never 0. So skip a local row whose
+  `data.slot_wait_secs` is null, and a `remote` record whose laptop row (`data.runner` `laptop`) has empty
+  `data.units`: its `remote_wall_secs` times no suite. Take only the local rows whose dispatch record reads
+  `reason: local_granted_first`: only that run is the local call that queued with the laptop's attempt, so its wait
+  runs from the same arrival as `remote_wait_secs`. A fallback re-run (`dirty_tree`, `runner_unavailable`,
+  `infra_transient`) starts its wait over after the laptop's turn, and a parity re-run (`cross_check`, `red_confirm`)
+  arrives afresh, so both leave out the laptop time before them and neither is like for like. If the laptop is
+  consistently slower, roll task verifies back (§6).
 - Drift outcomes, in the same database:
   - `verdict_parity_ok` when the hosts agree.
   - A verdict split is an L1 of category `verify_drift_divergence`, and it quarantines the laptop. Clear that with
