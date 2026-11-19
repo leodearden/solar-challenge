@@ -6,6 +6,8 @@ import dataclasses
 import math
 import pickle
 from collections.abc import Callable, Iterable
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
@@ -20,11 +22,13 @@ from solar_challenge.number_fields import (
     Interval,
     as_finite_float,
     as_finite_floats,
+    as_finite_real,
     as_whole_number,
     as_whole_numbers,
     read_field,
 )
 from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 
 def test_importing_the_module_loads_only_errors_boolean_fields_and_whole_numbers_from_the_package() -> None:
@@ -362,6 +366,61 @@ class TestAsFiniteFloatWithAnInterval:
         with pytest.raises(ConfigurationError) as exc_info:
             as_finite_float(value, "pv_kw", within=Interval(0.5, 20))
         assert str(exc_info.value) == f"pv_kw must be a finite number, got {value!r}"
+
+
+class TestAsFiniteReal:
+    """as_finite_real reads a numbers.Real as as_finite_float does, and refuses any other value, text that float() reads as a number included, with as_finite_float's refusal."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            pytest.param(4, 4.0, id="integer"),
+            pytest.param(4.5, 4.5, id="float"),
+            pytest.param(np.float32(0.5), 0.5, id="numpy-float32"),
+            pytest.param(np.int64(3), 3.0, id="numpy-int64"),
+            pytest.param(Fraction(1, 2), 0.5, id="fraction"),
+        ],
+    )
+    def test_a_finite_real_number_is_read_as_a_float(self, value: object, expected: float) -> None:
+        number = as_finite_real(value, "pdc0")
+        assert number == expected
+        assert type(number) is float
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("300", id="numeric-string"),
+            pytest.param(np.str_("300"), id="numpy-numeric-string"),
+            pytest.param(b"300", id="numeric-bytes"),
+            pytest.param("abc", id="non-numeric-string"),
+            pytest.param(Decimal("300"), id="decimal"),
+            pytest.param(None, id="null"),
+            pytest.param([300], id="list"),
+            pytest.param(np.True_, id="numpy-true"),
+        ],
+    )
+    def test_a_value_that_is_not_a_real_number_gets_the_finite_number_refusal(self, value: object) -> None:
+        """Text, bytes and a Decimal that float() reads as 300 are refused as a value it cannot read is."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(value, "pdc0")
+        assert str(exc_info.value) == f"pdc0 must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
+    def test_a_real_number_as_finite_float_refuses_is_refused_alike(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(value, "pdc0")
+        assert str(exc_info.value) == f"pdc0 must be a finite number, got {value!r}"
+
+    def test_a_real_number_outside_the_interval_is_refused_naming_the_interval(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real(0, "pdc0", within=POSITIVE)
+        assert str(exc_info.value) == "pdc0 must be greater than 0, got 0"
+
+    def test_text_is_refused_before_the_interval_is_checked(self) -> None:
+        """Text that float() reads as a number outside the interval is refused as text, not as out of range."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_finite_real("25", "pdc0", within=Interval(0.5, 20))
+        assert str(exc_info.value) == "pdc0 must be a finite number, got '25'"
 
 
 class TestAsWholeNumber:
