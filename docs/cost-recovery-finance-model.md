@@ -387,11 +387,18 @@ differs and both windows, and names the one window in
 `MultiYearCurve.annualised_from`
 (`tests/unit/test_finance_window.py::TestYearlyFiguresNameTheirWindow`).  A window
 that runs other than from 1 January to 31 December is extrapolated
-(`SimulationWindow.extrapolated`).  `annualised_from` carries the window for the
-board reports' extrapolated notice that replaces the short-period warnings, which
-task 783 adds (`docs/prds/simulation-window-and-cadence.md`, *Resolved design
-decisions* 7).  A short window is still one season's sample, so board figures want
-`scenario.period` to cover whole calendar years.
+(`SimulationWindow.extrapolated`).  `annualised_from`, here and on each
+`BillDistribution` (§3), carries the window for the board reports' extrapolated
+notice, which replaces the short-period warnings
+(`docs/prds/simulation-window-and-cadence.md`, *Resolved design decisions* 7).
+`finance run`'s and `optimize configs`' reports print it under their first heading
+when their bills' window is extrapolated: the annualisation scale to three
+decimals, the window's day count and its first and last days, as in *Yearly
+figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01),
+not whole calendar years.* (`output._extrapolation_notice`;
+`tests/unit/test_output.py::TestExtrapolationNotice`).  A short window is still one
+season's sample, so board figures want `scenario.period` to cover whole calendar
+years.
 
 **Battery ageing.** `project_multi_year` simulates each sampled age `t` with
 every home's battery at `battery.compute_soh(t, T_h(t), U_h)`, where `T_h(t)` is
@@ -953,6 +960,9 @@ markdown finance report it prints.  The block renders the `CostRecoverySolution`
 
 The `representative` outlay is the home whose `total_outlay_gbp` is closest to the
 fleet median — the board's single-home summary figure.
+
+A report whose bills come from a window other than whole calendar years opens, under
+its title, with the extrapolated notice (§4, *Annual basis*).
 
 ---
 
