@@ -8,11 +8,13 @@ the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
 Covers, after the shared helpers:
 - B3: supersede takes effect.
-- Guard: capacity_at_events + events=None → ConfigurationError, before any simulation.
+- Guard: capacity_at_events + events=None is refused with ConfigurationError when the
+  FinanceConfig is built, and finance run refuses such a scenario before any simulation (C6).
 - C1, C2: each simulated age, seed or bisection trial, books its own fleet's
   event income.
 - An event window the simulated period never enters warns once per projection.
-- B4:backward-compat / flat bit-identical regression.
+- B4: the flat model refuses an events configuration and prices the fleet
+  differently from the events model.
 - B5: solve-still-holds + I4 rate-independence.
 - ε: the finance report and the CLI render the capacity-at-events line.
 - α′ (PRD §9 C13): the events table's reliability and displaced-self-use rows,
@@ -22,10 +24,12 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from pathlib import Path
 from typing import Callable, NamedTuple
 
 import pandas as pd
 import pytest
+import yaml
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.config import ScenarioConfig
@@ -51,7 +55,7 @@ from solar_challenge.gridservices import (
 )
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
-from tests._cli_fleet_simulator import invoke_finance_run
+from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
@@ -174,13 +178,13 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
         finance_base,
         grid_services_model="capacity_at_events",
         grid_services_events=events_cfg,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in events model
+        grid_services_income_per_kw_per_year_gbp=0.0,  # the only rate the events model admits
     )
     finance_flat0 = dataclasses.replace(
         finance_base,
         grid_services_model="flat",
         grid_services_events=None,
-        grid_services_income_per_kw_per_year_gbp=0.0,  # irrelevant in flat model
+        grid_services_income_per_kw_per_year_gbp=0.0,  # flat at rate 0: no grid-services income
     )
 
     # Direct event-derived figure (the expected value for the delta)
@@ -215,26 +219,39 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_guard_capacity_at_events_with_events_none_raises_configuration_error() -> None:
-    """capacity_at_events + grid_services_events=None is refused before any simulation.
-
-    FinanceConfig still constructs the pair; project_multi_year refuses it with
-    ConfigurationError before it simulates a fleet, so the injected simulate
-    fails the test if it is called.
-    """
-    scenario, finance_base = board_econ_scenario()
-
-    def _simulate_must_not_run(fc, s, e):
-        pytest.fail("project_multi_year simulated a fleet before refusing the configuration")
-
-    finance_none = dataclasses.replace(
-        finance_base,
-        grid_services_model="capacity_at_events",
-        grid_services_events=None,
-    )
+def test_the_events_model_without_events_is_refused_at_construction() -> None:
+    """capacity_at_events + grid_services_events=None is refused when the FinanceConfig is built, so no projection can be asked of it."""
+    _scenario, finance_base = board_econ_scenario()
 
     with pytest.raises(ConfigurationError, match="grid_services_events"):
-        project_multi_year(scenario, finance_none, simulate=_simulate_must_not_run)
+        dataclasses.replace(
+            finance_base,
+            grid_services_model="capacity_at_events",
+            grid_services_events=None,
+        )
+
+
+def test_finance_run_refuses_the_events_model_without_events_before_simulating(
+    tmp_path: Path,
+) -> None:
+    """C6: finance run on the board scenario with its grid_services_events block deleted exits 1 naming the block, and simulates no fleet."""
+    document = yaml.safe_load(SCENARIO.read_text(encoding="utf-8"))
+    del document["finance"]["grid_services_events"]
+    path = tmp_path / SCENARIO.name
+    path.write_text(yaml.safe_dump(document), encoding="utf-8")
+    simulated: list[FleetConfig] = []
+
+    def _recording_simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
+        simulated.append(fleet_config)
+        return _synthetic_fleet_results_in_window(fleet_config.homes)
+
+    result = invoke_cli(["finance", "run", str(path)], _recording_simulate)
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "grid_services_events" in stderr
+    assert simulated == []
 
 
 # ---------------------------------------------------------------------------
@@ -405,17 +422,14 @@ def test_a_projection_shows_each_unobserved_window_warning_once() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
-    """B4 backward-compat regression: flat model YearPoint stream is bit-identical
-    whether or not grid_services_events is attached; flat ≠ capacity_at_events.
+def test_b4_the_flat_model_refuses_an_events_configuration_and_differs_from_the_events_model() -> None:
+    """B4: the flat model is FinanceConfig's default, refuses an events configuration it
+    would not read, and prices the same fleet differently from capacity_at_events.
 
     (1) FinanceConfig.grid_services_model default is "flat".
-    (2) Flat with events=None vs flat with events config attached → identical curves.
-        The event config is inert unless grid_services_model=='capacity_at_events'.
+    (2) Attaching grid_services_events under the flat model is refused at construction,
+        naming grid_services_events.
     (3) Flat curve ≠ capacity_at_events curve for the same fleet (teeth).
-
-    The single conditional on the model preserves the flat path char-for-char and
-    ignores grid_services_events when model is "flat".
     """
     scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
@@ -431,22 +445,16 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
         "FinanceConfig.grid_services_model field default must be 'flat'"
     )
 
-    # (2) flat: no events config vs attached events config → bit-identical
+    # (2) flat with an events configuration attached → refused
     # Build from an explicitly flat base (board YAML ships capacity_at_events after ε flip)
     finance_flat_base = dataclasses.replace(
         finance_base, grid_services_model="flat", grid_services_events=None
     )
-    finance_flat_no_events = finance_flat_base  # events already None
-    finance_flat_with_events = dataclasses.replace(
-        finance_flat_base,
-        grid_services_events=GridServicesEventsConfig(band="central"),
-    )
-    curve_no_events = project_multi_year(scenario, finance_flat_no_events, simulate=simulate)
-    curve_with_events = project_multi_year(scenario, finance_flat_with_events, simulate=simulate)
-    assert curve_no_events.points == curve_with_events.points, (
-        "Flat model must produce bit-identical YearPoint tuples with/without "
-        "grid_services_events attached — the event config is inert in flat mode."
-    )
+    with pytest.raises(ConfigurationError, match="grid_services_events"):
+        dataclasses.replace(
+            finance_flat_base,
+            grid_services_events=GridServicesEventsConfig(band="central"),
+        )
 
     # (3) flat ≠ capacity_at_events (teeth — confirms supersede is real)
     finance_events = dataclasses.replace(
@@ -455,9 +463,10 @@ def test_b4_flat_model_bit_identical_with_or_without_events_config() -> None:
         grid_services_events=GridServicesEventsConfig(band="central"),
         grid_services_income_per_kw_per_year_gbp=0.0,
     )
+    curve_flat = project_multi_year(scenario, finance_flat_base, simulate=simulate)
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
 
-    rev_flat = curve_no_events.points[0].fleet_revenue_gbp
+    rev_flat = curve_flat.points[0].fleet_revenue_gbp
     rev_events = curve_events.points[0].fleet_revenue_gbp
     assert rev_flat != rev_events, (
         f"Flat (£{rev_flat:.4f}) and capacity_at_events (£{rev_events:.4f}) "
