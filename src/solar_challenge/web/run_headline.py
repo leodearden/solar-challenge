@@ -45,20 +45,33 @@ class RunHeadline:
             value = getattr(self, figure.name)
             if value is None and figure.metadata.get(_MAY_BE_NONE, False):
                 continue
-            as_finite_real(value, f"RunHeadline.{figure.name}")
+            _read_figure(figure.name, value)
+
+
+def _read_figure(name: str, value: object) -> float:
+    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it; a refusal names the figure RunHeadline.<name>.
+
+    Raises:
+        ConfigurationError: *value* is not a finite number a float can hold, e.g. None, a text,
+            a bool, NaN, an infinity or an int too large for a float.
+    """
+    return as_finite_real(value, f"RunHeadline.{name}")
 
 
 def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
     """RunHeadline's *figure*: *kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
+
+    Both are read as floats before they are divided, so the share is a float whatever kind of
+    number a total is, a Fraction included.
 
     Raises:
         ConfigurationError: *generation_kwh* or *kwh* is not a finite number a float can hold,
             as as_finite_real refuses it, naming generation_kwh or *figure*, before anything is
             divided.
     """
-    as_finite_real(generation_kwh, "RunHeadline.generation_kwh")
-    as_finite_real(kwh, f"RunHeadline.{figure}")
-    return kwh / generation_kwh if generation_kwh > 0 else 0.0
+    generation = _read_figure("generation_kwh", generation_kwh)
+    share_kwh = _read_figure(figure, kwh)
+    return share_kwh / generation if generation > 0 else 0.0
 
 
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
