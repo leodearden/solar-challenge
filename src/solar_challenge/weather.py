@@ -254,7 +254,7 @@ class WeatherCache:
         except ValueError as e:
             raise ValueError(
                 f"Cannot read the weather cache entry {cache_file}: {e}. Delete the file, or call "
-                "WeatherCache.invalidate for the entry, to have it fetched afresh"
+                "WeatherCache.invalidate for the entry, so that get finds no entry"
             ) from e
 
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
@@ -362,11 +362,19 @@ class PvgisTmy:
                 or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
                 ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
             ValueError: From its cache's get, naming the entry's file, if the entry cached for location was cut
-                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched
+                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched. A
+                note on it says what removing the entry, by deleting the file or with WeatherCache.invalidate,
+                leads to: the next get fetches the TMY afresh and puts it
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)
-        cached = self.cache.get("tmy", location)
+        try:
+            cached = self.cache.get("tmy", location)
+        except ValueError as e:
+            e.add_note(
+                "Once the entry is removed, the next PvgisTmy.get fetches the TMY afresh from PVGIS and puts it"
+            )
+            raise
         if cached is not None:
             return cached
         tmy = _fetch_scaled_tmy(location)
