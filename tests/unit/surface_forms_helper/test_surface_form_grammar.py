@@ -45,6 +45,8 @@ from tests.unit.surface_forms_helper._fixtures import (
     Outer,
     Preset,
     imported_module,
+    made_not_bound_in,
+    make_dataclass_records,
 )
 
 
@@ -98,6 +100,28 @@ def test_an_optional_or_a_union_is_spelled_with_bars() -> None:
     def f(a: Optional[int], b: Union[int, str], c: int | None) -> None: ...
 
     assert surface_form(f) == "(a: int | None, b: int | str, c: int | None) -> None"
+
+
+def test_a_signature_is_spelled_alike_whether_its_module_imports_annotations_from_future_quotes_an_annotation_or_writes_optional_for_a_union_with_none(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = (
+        "from typing import Optional\n"
+        "\n"
+        "class A: ...\n"
+        "\n"
+        'def f(a: Optional[A], b: A | None, c: "Optional[A]"): ...\n'
+    )
+    unionspelling = imported_module(tmp_path, monkeypatch, "unionspelling", source)
+    futureunionspelling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "futureunionspelling",
+        "from __future__ import annotations\n" + source,
+    )
+
+    assert surface_form(unionspelling.f) == "(a: A | None, b: A | None, c: A | None)"
+    assert surface_form(futureunionspelling.f) == "(a: A | None, b: A | None, c: A | None)"
 
 
 def test_none_and_type_none_are_spelled_none() -> None:
@@ -155,16 +179,45 @@ def test_a_special_form_is_spelled_by_its_repr() -> None:
     assert surface_form(f) == "(a: typing.Self, b: typing.LiteralString) -> typing.Never"
 
 
-def test_a_string_annotation_is_spelled_verbatim_and_unquoted() -> None:
-    def f(a: "Optional[Foo]", b: "'Bar'", c: "Optional[int]") -> "Baz": ...  # noqa: F821
+def test_a_string_annotation_is_spelled_as_what_it_evaluates_to_in_the_module_that_spells_it() -> None:
+    def f(a: "Optional[Preset]", b: "'Preset'", c: "Optional[int]") -> "Preset": ...
 
-    assert surface_form(f) == "(a: Optional[Foo], b: 'Bar', c: Optional[int]) -> Baz"
+    assert surface_form(f) == "(a: Preset | None, b: Preset, c: int | None) -> Preset"
 
 
-def test_a_forward_reference_inside_an_alias_is_spelled_by_its_name() -> None:
-    def f(a: Optional["Foo"], b: List["Bar"], c: list["Baz"]) -> None: ...  # noqa: F821
+def test_a_forward_reference_inside_an_alias_is_spelled_as_what_it_evaluates_to() -> None:
+    def f(a: Optional["Preset"], b: List["pathlib.Path"], c: list["Optional[int]"]) -> None: ...
 
-    assert surface_form(f) == "(a: Foo | None, b: list[Bar], c: list[Baz]) -> None"
+    assert surface_form(f) == "(a: Preset | None, b: list[Path], c: list[int | None]) -> None"
+
+
+def test_a_string_annotation_naming_what_its_module_does_not_bind_raises_name_error() -> None:
+    def f(a: "Unbound") -> None: ...  # noqa: F821
+
+    with pytest.raises(NameError, match="Unbound"):
+        surface_form(f)
+
+
+def test_a_string_met_again_inside_its_own_evaluation_raises_a_type_error_naming_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spelledrecursion = imported_module(
+        tmp_path,
+        monkeypatch,
+        "spelledrecursion",
+        "from typing import Union\n"
+        "\n"
+        "JSON = Union[dict[str, 'JSON'], list['JSON'], str, None]\n"
+        "\n"
+        "def store(document: JSON) -> None: ...\n"
+        "\n"
+        "def send(document: 'JSON') -> None: ...\n",
+    )
+
+    with pytest.raises(TypeError, match=r"'JSON'"):
+        surface_form(spelledrecursion.store)
+    with pytest.raises(TypeError, match=r"'JSON'"):
+        surface_form(spelledrecursion.send)
 
 
 def test_any_is_spelled_by_its_name() -> None:
@@ -333,19 +386,29 @@ def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inhe
     assert surface_form(Scaled) == "dataclass[eq, frozen] (kwh: float) -> None"
 
 
-def test_a_dataclass_types_new_class_or_dataclasses_make_dataclass_makes_is_spelled_by_its_kind_then_its_constructor_signature_whatever_module_it_records(
+def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The class types.new_class makes records 'types' as its __module__ on every minor, and the one make_dataclass makes records it on 3.11 alone; surface_form spells each without looking up the module it records."""
     spellednewclassing = imported_module(
         tmp_path, monkeypatch, "spellednewclassing", NEW_CLASS_MADE_SOURCE
     )
+
+    with pytest.raises(LookupError, match=made_not_bound_in("types")):
+        surface_form(spellednewclassing.Made)
+
+
+def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_is_spelled_by_its_kind_then_its_constructor_signature_with_its_string_annotation_evaluated(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     spelledmaking = imported_module(
         tmp_path, monkeypatch, "spelledmaking", MAKE_DATACLASS_MADE_SOURCE
     )
 
-    assert surface_form(spellednewclassing.Made) == "dataclass[eq] (spare: Tap) -> None"
-    assert surface_form(spelledmaking.Made) == "dataclass[eq] (spare: Tap) -> None"
+    if make_dataclass_records("spelledmaking") == "types":
+        with pytest.raises(LookupError, match=made_not_bound_in("types")):
+            surface_form(spelledmaking.Made)
+    else:
+        assert surface_form(spelledmaking.Made) == "dataclass[eq] (spare: Decimal) -> None"
 
 
 def test_an_enum_form_is_its_members_in_definition_order() -> None:

@@ -155,7 +155,7 @@ def test_a_named_tuple_whose_fields_holder_holds_no_tuple_of_strings_raises_the_
         named_classes(Relabelled)
 
 
-def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
+def test_a_string_met_again_inside_its_own_evaluation_raises_a_type_error_naming_it(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     documents = imported_module(
@@ -175,9 +175,12 @@ def test_a_forward_reference_inside_its_own_evaluation_names_no_class_there(
         "def plant(tree: Tree) -> None: ...\n",
     )
 
-    assert named_classes(documents.store) == {dict, str, list}
-    assert named_classes(documents.send) == {dict, str, list}
-    assert named_classes(documents.plant) == {tuple, int, list}
+    with pytest.raises(TypeError, match=r"'JSON'"):
+        named_classes(documents.store)
+    with pytest.raises(TypeError, match=r"'JSON'"):
+        named_classes(documents.send)
+    with pytest.raises(TypeError, match=r"'Forest'"):
+        named_classes(documents.plant)
 
 
 def test_a_string_annotation_evaluating_to_an_annotation_no_construct_reads_raises_a_type_error_naming_that_annotation_and_its_type() -> None:

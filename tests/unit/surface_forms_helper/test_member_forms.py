@@ -196,6 +196,38 @@ def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_it
     }
 
 
+def test_a_string_attribute_annotation_or_a_forward_reference_in_one_is_spelled_as_what_it_evaluates_to_in_the_module_of_the_class_declaring_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = (
+        "from typing import Optional\n"
+        "\n"
+        "class A: ...\n"
+        "\n"
+        "class Held:\n"
+        "    x: Optional[A]\n"
+        "    y: A | None\n"
+        '    z: "Optional[A]"\n'
+        '    w: list["A"]\n'
+    )
+    attributespelling = imported_module(tmp_path, monkeypatch, "attributespelling", source)
+    futureattributespelling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "futureattributespelling",
+        "from __future__ import annotations\n" + source,
+    )
+    forms = {
+        "x": "attribute A | None",
+        "y": "attribute A | None",
+        "z": "attribute A | None",
+        "w": "attribute list[A]",
+    }
+
+    assert member_forms(attributespelling.Held) == forms
+    assert member_forms(futureattributespelling.Held) == forms
+
+
 def test_an_attribute_the_class_body_annotates_and_lists_in_its_slots_is_spelled_and_names_classes_by_its_annotation_not_its_slot() -> None:
     class Meter:
         __slots__ = ("site", "reading")
