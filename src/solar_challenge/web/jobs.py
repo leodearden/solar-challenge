@@ -114,11 +114,13 @@ def _random_id() -> str:
 
 
 def _message_of(error: BaseException) -> str:
-    """The message of a job that failed with *error*: str(error), or, when reading it raises an Exception, the error's type and that its message could not be read."""
+    """The message of a job that failed with *error*: the error's text, then each of its notes on a line of its own."""
     try:
-        return str(error)
+        text = str(error)
     except Exception:
-        return f"{type(error).__name__}, whose message could not be read"
+        text = f"{type(error).__name__}, whose message could not be read"
+    notes = getattr(error, "__notes__", ())
+    return "\n".join([text, *(str(note) for note in notes)])
 
 
 def live_managers() -> "frozenset[JobManager]":
