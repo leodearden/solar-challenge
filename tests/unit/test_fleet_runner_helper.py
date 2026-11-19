@@ -2,11 +2,12 @@
 """Unit tests for tests/_fleet_runner.py, the home simulators through which FleetRunner tests read back which homes started, or break a pool."""
 
 import concurrent.futures
+import multiprocessing
 import os
 import threading
 import time
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -113,5 +114,21 @@ def test_a_process_ending_simulator_refuses_to_run_in_the_process_that_built_it_
     with pytest.raises(RuntimeError) as caught:
         simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
 
-    assert "Held" in str(caught.value)
+    assert str(caught.value) == (
+        "Held: ProcessEndingHomeSimulator ends the process it runs in, so it runs only in a pool's "
+        "worker processes, never in the process that built it"
+    )
     assert started(tmp_path) == {}
+
+
+def test_a_process_ending_simulator_in_a_worker_process_runs_a_home_it_does_not_end_as_marking_does(
+    tmp_path: Path,
+) -> None:
+    simulator = ProcessEndingHomeSimulator(MarkingHomeSimulator(tmp_path), ending=frozenset({"Ended"}))
+
+    with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("forkserver")) as worker:
+        worker_pid = worker.submit(os.getpid).result()
+        results = worker.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY).result()
+
+    assert started(tmp_path) == {"Held": HomeStart(pid=worker_pid, locations=("Bristol, UK",))}
+    assert calculate_summary(results).total_self_consumption_kwh == pytest.approx(4.0)
