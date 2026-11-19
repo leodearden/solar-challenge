@@ -13,6 +13,7 @@ from flask import Blueprint, Response, jsonify, render_template
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
@@ -43,6 +44,7 @@ def builder() -> str:
         "scenarios/builder.html",
         fleet_components=FLEET_COMPONENTS,
         script_components=_script_components(),
+        location_presets=LOCATION_PRESETS,
     ))
 
 
@@ -70,6 +72,7 @@ def sweep() -> str:
         "scenarios/sweep.html",
         max_days=MAX_DAYS,
         sweep_max_steps=SWEEP_MAX_STEPS,
+        location_presets=LOCATION_PRESETS,
     ))
 
 

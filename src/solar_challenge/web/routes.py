@@ -11,6 +11,7 @@ from flask import (
     url_for,
 )
 
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
@@ -49,6 +50,7 @@ def simulate_home_page() -> str:
         seg_presets=SEG_PRESETS,
         default_system_losses=PVWATTS_DEFAULT_SYSTEM_LOSSES,
         default_run_name=RUN_KINDS["home"].default_name(()),
+        location_presets=LOCATION_PRESETS,
     ))
 
 
