@@ -110,7 +110,8 @@ default name, its summary decoding and its listing each have one implementation.
 | `web/field_tree.py` | the field-tree codec: `field_tree`, `read_field_tree`, `without_unknown_keys`, `FieldTreeRefused`, `UnknownKey` | none |
 | `web/stored_json.py` | `decoded_json`, the value of a store's JSON text, and `UndecodableJson`, its one refusal of text `json.loads` cannot decode: not JSON, or nested too deeply; `decoded_json_object`, the JSON object a store's JSON text holds, and `JsonObjectRefused`, its one refusal: that text, with `decoded_json`'s reason, or JSON that is not an object | none |
 | `web/stored_runs.py` (new) | the stored-run **format**: `RunType`, its documents' field trees, read and written through `field_tree`, `StoredHomeRun`/`StoredFleetRun`, `RUN_KINDS`, `RUN_DOCUMENT_STEPS` + `RUN_FORMAT_VERSION`, `StoredRunUnreadable` | none after ι but `field_tree` and `stored_json`, below it (no SQL, no Flask); between ε and ι it imports `RunType` from `database`, where the runs DDL still lives |
-| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`, `.summary_tree()`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunHeadline`/`run_headline`, `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, field_tree, stored_runs |
+| `web/run_headline.py` | the cross-type headline, `RunHeadline`/`run_headline`, the one mapping of `FleetSummary` names (D-S19-8) | none |
+| `web/storage.py` | the `runs` table: `RunStatus`, `RunRecord` (+ `.kind`, `.summary_tree()`), `RUNS_TABLE` derived from `RunRecord`, `RunStorage` (all `runs` SQL), `RunQuery`/`RunPage`/`RunTotals`, the runs-table migration functions | database, field_tree, run_headline, stored_runs |
 | `web/presets.py` | the `config_presets` table, `PresetType`, home presets and saved fleet (scenario) presets | database, stored_json |
 | `web/chat_messages.py` | the `chat_messages` table and its store: `ChatRole`, `CHAT_MESSAGES_TABLE` and its migration functions, `save_chat_message`/`get_chat_history` | database, stored_json |
 | `web/schema.py` (new) | `SCHEMA_VERSION` (derived), the ordered `MIGRATIONS`, `open_database`, `migrate_store`, `SchemaVersionMismatch`, `MigrationReport` | database, stored_runs, storage, presets, chat_messages |
@@ -418,6 +419,11 @@ class RunDocumentStep:
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...]                   # ascending versions
 RUN_FORMAT_VERSION: int = RUN_DOCUMENT_STEPS[-1].version
 
+# web/run_headline.py — the cross-type headline; a leaf below storage, which storage and charts import (task 1413)
+@dataclass(frozen=True)
+class RunHeadline: generation_kwh: float; self_consumption_ratio: float
+def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline: ...
+
 # web/storage.py — the runs table
 RunStatus = Literal["running", "completed", "failed"]
 @dataclass(frozen=True)
@@ -428,9 +434,6 @@ class RunRecord:                                   # one field per runs column; 
     def summary(self) -> SummaryStatistics | FleetSummary | None: ...      # raises StoredRunUnreadable
     def home_configs(self) -> tuple[HomeConfig, ...] | None: ...          # raises StoredRunUnreadable
 RUNS_TABLE: TableSchema                            # derived from fields(RunRecord)
-@dataclass(frozen=True)
-class RunHeadline: generation_kwh: float; self_consumption_ratio: float
-def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline: ...
 @dataclass(frozen=True)
 class RunQuery: run_type: RunType | None = None; text: str | None = None; created_from: date | None = None
                 created_to: date | None = None; sort: RunSort = "created_at"; descending: bool = True
@@ -515,10 +518,11 @@ class JobManager:
   reading as failed. Mid-simulation interruption is out of scope.
 - **D-S19-7 One `Database` value, not ambient config.** Every table owner takes the app's
   `Database`. The remedy's "`database.connect(db_path)`" is `Database(path).connect()`.
-- **D-S19-8 The cross-type summary headline is S19's.** `run_headline` in `storage` is the one place
-  the web maps fleet names to listing names. S21's comparison consumes it (and may widen
-  `RunHeadline`). If S25 needs the mapping in core, S25 re-homes it and `run_headline` delegates;
-  there is still one home (§8).
+- **D-S19-8 The cross-type summary headline is S19's.** `run_headline` in `web/run_headline.py`, a
+  leaf below `storage` that `storage` and `charts` import (task 1413), is the one place the web
+  maps fleet names to listing names. S21's comparison consumes it (and may widen `RunHeadline`).
+  If S25 needs the mapping in core, S25 re-homes it and `run_headline` delegates; there is still
+  one home (§8).
 - **D-S19-9 Unreadable-run answers.** Pages flash and redirect, as "Run not found" does today. JSON
   answers 409 with structured fields (heuristic 12). The dashboard totals skip the run with a logged
   warning, and the History list makes it visible (G7 note, §15).
