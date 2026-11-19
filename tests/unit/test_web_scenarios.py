@@ -812,8 +812,6 @@ class TestBuilderScenarioYaml:
     @pytest.mark.parametrize(
         "omitted",
         [
-            pytest.param(("latitude",), id="without latitude"),
-            pytest.param(("longitude",), id="without longitude"),
             pytest.param(("altitude",), id="without altitude"),
             pytest.param(("latitude", "longitude", "altitude"), id="without any coordinate"),
         ],
@@ -843,6 +841,33 @@ class TestBuilderScenarioYaml:
             parse_location_block(given)
         }
         assert validation == {"valid": True, "errors": []}
+
+    @pytest.mark.parametrize(
+        "omitted",
+        [
+            pytest.param("latitude", id="without latitude"),
+            pytest.param("longitude", id="without longitude"),
+        ],
+    )
+    def test_a_custom_location_without_one_coordinate_is_written_as_given_and_reported(
+        self, client: FlaskClient, omitted: str
+    ) -> None:
+        """A custom location the form sends without its latitude or its longitude is reported by the key it leaves out, not loaded as Bristol's.
+
+        The form sends the *omitted* coordinate as ''.  The preview writes the coordinates
+        given as the document's location: block, which the loader refuses by the missing
+        key's path.
+        """
+        coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
+        given = {key: value for key, value in coordinates.items() if key != omitted}
+        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, omitted: ""}
+
+        _, document = _preview_document(client, form)
+        validation = client.post("/api/scenarios/validate", json=form).get_json()
+
+        assert document["location"] == given
+        assert validation["valid"] is False
+        assert any(f"location.{omitted}" in error for error in validation["errors"]), validation
 
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""

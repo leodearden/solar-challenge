@@ -185,12 +185,7 @@ def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() 
             LOCATION_BLOCK,
             set(),
             (),
-            {
-                "latitude": _BRISTOL.latitude,
-                "longitude": _BRISTOL.longitude,
-                "timezone": _BRISTOL.timezone,
-                "altitude": _BRISTOL.altitude,
-            },
+            {"timezone": _BRISTOL.timezone, "altitude": _BRISTOL.altitude},
             id="Location",
         ),
     ],
@@ -374,15 +369,17 @@ _PUBLIC_READINGS: tuple[
     (LOAD_BLOCK, _home_component("load", "load_config"), {"annual_consumption_kwh": 3000.0}),
     (HEAT_PUMP_BLOCK, _home_component("heat_pump", "heat_pump_config"), {"heat_pump_type": "GSHP"}),
     (EV_BLOCK, _home_component("ev", "ev_config"), {"charger_type": "3.6kW"}),
-    (LOCATION_BLOCK, parse_location_block, {"name": "Clifton"}),
+    (LOCATION_BLOCK, parse_location_block, {"latitude": 51.46, "longitude": -2.6, "name": "Clifton"}),
 )
-"""Each table, the public reader of its blocks, and a block of it setting one key."""
+"""Each table, the public reader of its blocks, and a block of it that reader accepts, setting each key the block may not leave out."""
 
 _REQUIRED_KEY_PATHS: dict[tuple[type, str], str] = {
     (HeatPumpConfig, "heat_pump_type"): "home.heat_pump.heat_pump_type",
     (EVConfig, "charger_type"): "home.ev.charger_type",
+    (Location, "latitude"): "location.latitude",
+    (Location, "longitude"): "location.longitude",
 }
-"""The keys a block may not leave out, each by its path in a home: block."""
+"""The keys a block may not leave out, each by the path its public reader gives it in its file."""
 
 _EVERY_TABLE_KEY = [
     (block, read, base, key) for block, read, base in _PUBLIC_READINGS for key in block.keys
