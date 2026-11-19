@@ -12,7 +12,7 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass, fields as dc_fields, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Callable, Iterator, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Iterator, List, Mapping, Optional, Sequence
 
 from solar_challenge.battery import CAPACITY_SETTING_KWH, BatteryConfig, has_battery
 from solar_challenge.config import ScenarioConfig
@@ -23,15 +23,14 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetConfig, default_runner
+from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
 
 if TYPE_CHECKING:
-    import pandas as pd
     from solar_challenge.finance import CostRecoverySolution
-    from solar_challenge.fleet import FleetResults
+    from solar_challenge.fleet import FleetSimulate
 
 
 # ---------------------------------------------------------------------------
@@ -480,9 +479,7 @@ def sensitivity_panel(
     axes: "Mapping[str, Sequence[float]]",
     *,
     retained_cash_floor_gbp: Optional[float] = None,
-    simulate: Optional[
-        Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
-    ] = None,
+    simulate: FleetSimulate,
 ) -> SensitivityPanel:
     """Compute a one-at-a-time (OAT) sensitivity panel over the cost-recovery rank.
 
@@ -504,8 +501,8 @@ def sensitivity_panel(
             :data:`SENSITIVITY_BANDS`, or a subset of it, holds the board-facing values.
         retained_cash_floor_gbp: Optional panel-level floor override passed to
             every ``run_sweep`` call (baseline and non-floor axes).
-        simulate: Injected fleet simulator; if ``None`` the real fleet
-            simulator is called.
+        simulate: The fleet simulator every ``run_sweep`` call runs through,
+            such as a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
 
     Returns:
         :class:`SensitivityPanel` with one :class:`SensitivityAxis` per entry
@@ -842,7 +839,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
 def _age0_baseline_outlay(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
-    simulate: Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"],
+    simulate: FleetSimulate,
 ) -> float:
     """Compute representative householder outlay from an age-0 fleet simulation.
 
@@ -898,7 +895,7 @@ def _evaluate_config(
     point: ConfigPoint,
     scenario: ScenarioConfig,
     *,
-    simulate: Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"],
+    simulate: FleetSimulate,
     retained_cash_floor_gbp: Optional[float],
 ) -> ConfigResult:
     """Evaluate one (ConfigPoint, ScenarioConfig) pair with finance's cost-recovery functions.
@@ -967,9 +964,7 @@ def run_sweep(
     configs: List[tuple[ConfigPoint, ScenarioConfig]],
     *,
     retained_cash_floor_gbp: Optional[float] = None,
-    simulate: Optional[
-        Callable[["FleetConfig", "pd.Timestamp", "pd.Timestamp"], "FleetResults"]
-    ] = None,
+    simulate: FleetSimulate,
 ) -> RankedSweep:
     """Drive a cartesian config grid through cost-recovery evaluation and rank results.
 
@@ -998,8 +993,9 @@ def run_sweep(
             ``RankedSweep.retained_cash_floor_gbp`` comes from the **first**
             config's finance block; the caller is responsible for ensuring a
             homogeneous fleet when that field is used for reporting.
-        simulate: Optional injected fleet simulator for offline testing.
-            Defaults to ``default_runner().simulate`` (:func:`~solar_challenge.fleet.default_runner`).
+        simulate: The fleet simulator every config's solve, projection and
+            age-0 baseline run through, such as a
+            :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
 
     Returns:
         :class:`RankedSweep` with sorted feasible results, infeasible points,
@@ -1016,16 +1012,13 @@ def run_sweep(
         the solved rate), one explicit :func:`~solar_challenge.finance.project_multi_year`
         call at the baseline rate (15 p/kWh), and one age-0 baseline outlay
         simulation.  With the real :meth:`~solar_challenge.fleet.FleetRunner.simulate` (a process pool over
-        a 100-home fleet) this is substantial: size grids conservatively or use
-        an injected *simulate* for offline sweeps.
+        a 100-home fleet) this is substantial: size grids conservatively or pass
+        a stand-in *simulate* for offline sweeps.
     """
     if not configs:
         raise ValueError(
             "run_sweep: configs must be non-empty; received an empty list"
         )
-
-    if simulate is None:
-        simulate = default_runner().simulate
 
     # Evaluate all configs
     all_results: List[ConfigResult] = [
