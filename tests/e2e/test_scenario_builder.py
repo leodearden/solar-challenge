@@ -124,11 +124,16 @@ def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
     )
 
 
-def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
-    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+def _panel_of(page: Page, header: str) -> Locator:
+    """The element the accordion header named *header* names in aria-controls, i.e. that section's panel."""
     panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
     assert panel_id, f"the {header} header names no element in aria-controls"
-    panel = page.locator(f"id={panel_id}")
+    return page.locator(f"id={panel_id}")
+
+
+def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
+    """The sections of _ACCORDION_SECTIONS whose control lies, shown or hidden, in the element the header named *header* names in aria-controls."""
+    panel = _panel_of(page, header)
     return {
         section
         for section, (role, name) in _ACCORDION_SECTIONS.items()
@@ -187,9 +192,24 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
 # ── Form controls: each caption names its control ────────────────────
 
 
+_SHOWS_ALL_ITS_CONTENT = "panel => panel.scrollHeight <= panel.clientHeight"
+"""A panel laid out tall enough to show all of its content, as a panel is once it has finished opening."""
+
+
 def _open_section(page: Page, section: str) -> None:
     """Open the accordion section whose header button is named *section*, closing the open one; General is open when the page loads."""
     page.get_by_role("button", name=section, exact=True).click()
+
+
+def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
+    """When _open_section returns, the section it opened shows all of its panel and every other section's panel is hidden, so the next click meets no header or control still moving."""
+    page.goto(live_server + "/scenarios/builder")
+    _open_section(page, "Period")
+
+    shown = {section for section in _ACCORDION_SECTIONS if _panel_of(page, section).is_visible()}
+    whole = _panel_of(page, "Period").evaluate(_SHOWS_ALL_ITS_CONTENT)
+
+    assert (shown, whole) == ({"Period"}, True)
 
 
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
