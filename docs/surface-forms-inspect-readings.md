@@ -17,10 +17,13 @@ minor (§3), or raises `TypeError` naming what `inspect` reads that way and sayi
 do instead (§4). Both rest on the chain `inspect` follows from a routine, which is the same
 on every minor (§2). `named_classes`, which gives the classes a form names, reads each
 string annotation in the module that spells it, and raises `TypeError` where that module
-could differ by minor (4.2). It also raises `TypeError` for a constructor named as the
-dataclass decorator or `collections.namedtuple` names the one it writes, but written by a
-`def` statement, in a source file or in text given to `exec`, in a class whose module's
-source holds no class statement for it (3.5). `member_forms`, which spells the public
+could differ by minor (4.2). `surface_form` evaluates each string annotation where
+`named_classes` reads it and spells what it evaluates to, so each refusal this document
+gives `named_classes` for a string annotation is `surface_form`'s too. `named_classes`
+also raises `TypeError` for a constructor named as the dataclass decorator or
+`collections.namedtuple` names the one it writes, but written by a `def` statement, in a
+source file or in text given to `exec`, in a class whose module's source holds no class
+statement for it (3.5). `member_forms`, which spells the public
 members a class's own body defines, raises `TypeError` for one that is a
 `functools.partial` (4.4, 4.6). Both raise `TypeError` for a class whose metaclass shadows
 `__dict__` or overrides `type`'s `__getattribute__` (4.8). `member_forms` also raises
@@ -28,7 +31,8 @@ members a class's own body defines, raises `TypeError` for one that is a
 (4.9), though every minor reads such a class alike. On 3.11 alone, `named_classes`,
 `member_forms`, `undeclared_attributes` and `unset_attributes` raise `LookupError` for a
 class that `dataclasses.make_dataclass` makes in the module binding it, since 3.11 records
-`types` as its `__module__` (4.10). Each entry says how each minor reads its objects, and
+`types` as its `__module__`, and so does `surface_form` where that class's signature holds
+a string annotation (4.10). Each entry says how each minor reads its objects, and
 names the rule tests that pin what `surface_form`, `member_forms` and `named_classes` do,
 and what `undeclared_attributes`, `unset_attributes` and `signature_closure` do where it
 states their readings. Each `TypeError` also states its own case's reading.
@@ -1059,11 +1063,12 @@ raises `LookupError` for 3.11's class as it does on every minor for one that
 class as `types.Made`, the module `types` by its file, and that this module binds nothing
 under the class's qualified name. `member_forms`, `undeclared_attributes` and
 `unset_attributes` look the class's module up the same way and raise the same error.
-`surface_form` spells the class alike on every minor, as
-`dataclass[eq] (spare: Tap) -> None`, and spells the one `dataclass(types.new_class(...))`
-makes the same way. From 3.12 the class records the `__module__` and
+`surface_form` looks it up the same way once it reads the string `'Tap'`, so it raises the
+same error for 3.11's class and, on every minor, for the one
+`dataclass(types.new_class(...))` makes. From 3.12 the class records the `__module__` and
 globals that one `dataclass(type(...))` makes in the calling module records, and reads as
-that one does (3.5): `named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
+that one does (3.5): `surface_form` spells it `dataclass[eq] (spare: Decimal) -> None`,
+`named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
 `undeclared_attributes` and `unset_attributes` raise `TypeError`, as for any class with no
 class statement to scan. Called from a function of another module, `make_dataclass`
 records `types` on 3.11 and that other module's name from 3.12, so where that module does
