@@ -42,6 +42,17 @@ def _days_lasted(row_count: int, cadence: timedelta) -> float:
     return row_count * cadence / timedelta(days=1)
 
 
+def _extrapolation_notice(window: Optional[SimulationWindow]) -> str:
+    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* is None or runs from 1 January to 31 December."""
+    if window is None or not window.extrapolated:
+        return ""
+    return (
+        f"*Yearly figures are extrapolated ×{window.annualisation_scale:.3f} from a "
+        f"{window.days}-day window ({window.first_day.isoformat()} to {window.last_day.isoformat()}), "
+        "not whole calendar years.*\n\n"
+    )
+
+
 def export_to_csv(
     results: SimulationResults,
     filepath: Union[str, Path],
@@ -458,6 +469,10 @@ def generate_finance_report(
     When ``bill_spreadsheet`` is provided the report includes side-by-side
     Physics vs Spreadsheet columns (the ``--assumptions both`` surface).
 
+    When ``bill_physics.annualised_from`` is not whole calendar years, the
+    report opens, under its title, with a notice that its yearly figures are
+    extrapolated from that window.
+
     Args:
         bill_physics: BillDistribution from the physics self-consumption path.
         bill_spreadsheet: Optional BillDistribution from the spreadsheet
@@ -503,12 +518,13 @@ def generate_finance_report(
     )
 
     rep = bill_physics.representative
+    notice = _extrapolation_notice(bill_physics.annualised_from)
 
     if bill_spreadsheet is None:
         # ---- Physics-only path (own-use payment + total outlay; no SEG) --
         report = f"""{title}
 
-## Householder Bill (Physics Assumptions)
+{notice}## Householder Bill (Physics Assumptions)
 
 | Line Item | Value |
 |-----------|-------|
@@ -536,7 +552,7 @@ def generate_finance_report(
         rep_s = bill_spreadsheet.representative
         report = f"""{title}
 
-## Householder Bill — Physics vs Spreadsheet Assumptions
+{notice}## Householder Bill — Physics vs Spreadsheet Assumptions
 
 | Line Item | Physics | Spreadsheet |
 |-----------|---------|-------------|
@@ -725,6 +741,11 @@ def generate_config_ranking_report(
     - **Sensitivity section** (rendered only when ``panel`` is not ``None``):
       per-axis sub-tables and the panel-level ``rank_stability``.
 
+    When the feasible configs' bills are annualised from a window that is not
+    whole calendar years (``results[0].solution.outlay.annualised_from``), the
+    report opens, under its first heading, with a notice that its yearly figures
+    are extrapolated from that window.
+
     Args:
         ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
         panel: Optional OAT sensitivity panel from
@@ -740,6 +761,7 @@ def generate_config_ranking_report(
     if not ranked.results:
         report += "*No feasible configurations found.*\n"
     else:
+        report += _extrapolation_notice(ranked.results[0].solution.outlay.annualised_from)
         report += (
             "| Config | Solved Rate (p/kWh) | Rep Outlay (£) | "
             "Min/Mean/Median/Max (£) | CBS Surplus (£/home/yr) | "
