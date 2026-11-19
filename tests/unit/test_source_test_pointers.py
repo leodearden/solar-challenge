@@ -601,18 +601,25 @@ def project(tmp_path: Path) -> Path:
     )
 
 
-def test_scans_every_file_git_lists_outside_the_records(project: Path) -> None:
+def test_scans_every_file_git_lists_outside_the_records_and_the_briefing(project: Path) -> None:
     scanned = {
         "CLAUDE.md",
         "docs/guide.md",
         "pyproject.toml",
+        "review/briefing.yaml",
         "scenarios/fleet.yaml",
         "scripts/measure.py",
         "src/pkg/module.py",
         "tests/fixtures/schema.sql",
         "tests/unit/test_module.py",
     }
-    unscanned = ["docs/prds/record.md", "docs/research/survey.md", "plans/plan.md", "review/briefing.yaml"]
+    unscanned = [
+        "docs/prds/record.md",
+        "docs/research/survey.md",
+        "plans/plan.md",
+        "review/gap-register.md",
+        "review/reports/report.md",
+    ]
     for source in [*scanned, *unscanned]:
         write_file(project, source, "")
     project_fixture_files = ["tests/unit/notes.txt", "tests/unit/test_pointed_at.py"]
@@ -1016,6 +1023,66 @@ def test_reads_a_file_under_tests_that_is_not_python_whole(project: Path) -> Non
         "tests/fixtures/schema.sql:1: tests/unit/test_absent_g.py:"
         " tests/unit/test_absent_g.py does not exist, or git ignores it"
     ]
+
+
+def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None:
+    briefing = write_file(
+        project,
+        "review/briefing.yaml",
+        "# tests/unit/test_absent_a.py in a comment.\n"
+        "project: pkg  # tests/unit/test_absent_b.py\n"
+        "conventions:\n"
+        '  - rule: "A rule pinned by tests/unit/test_absent_c.py and by tests/unit/test_pointed_at.py::test_top"\n'
+        "    why: >\n"
+        "      A why naming tests/unit/test_absent_d.py and a placeholder,\n"
+        "      tests/fixtures/databases/schema_v<N>.sql.\n"
+        "  - rule: >\n"
+        "      A folded rule\n"
+        "      pinned by test_top and by\n"
+        "      tests/unit/test_absent_e.py.\n"
+        '    why: "test_member in a why."\n'
+        "subprojects:\n"
+        "  core:\n"
+        "    key_decisions:\n"
+        '      - decision: "Pinned by tests/unit/test_absent_f.py."\n'
+        '        why: "and by test_member"\n',
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [briefing])) == [
+        "review/briefing.yaml:4: tests/unit/test_absent_c.py:"
+        " tests/unit/test_absent_c.py does not exist, or git ignores it",
+        "review/briefing.yaml:10: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
+        "review/briefing.yaml:11: tests/unit/test_absent_e.py:"
+        " tests/unit/test_absent_e.py does not exist, or git ignores it",
+    ]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "project: pkg\n",
+        "conventions: none\n",
+        "conventions: []\n",
+        "conventions:\n  - why: x\n",
+        "conventions:\n  - rule: [a, b]\n",
+        "conventions: [rule\n",
+    ],
+    ids=[
+        "no-conventions",
+        "conventions-not-a-sequence",
+        "empty-conventions",
+        "entry-without-a-rule",
+        "rule-not-text",
+        "does-not-parse",
+    ],
+)
+def test_refuses_a_briefing_whose_conventions_rules_cannot_be_read(project: Path, text: str) -> None:
+    briefing = write_file(project, "review/briefing.yaml", text)
+    checkout = _Checkout(project)
+
+    with pytest.raises(ValueError, match=r"^review/briefing\.yaml"):
+        _pointers(checkout, [briefing])
 
 
 def test_a_test_module_names_tests_of_its_own_and_of_its_throwaway_projects_freely(project: Path) -> None:
