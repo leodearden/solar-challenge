@@ -565,6 +565,32 @@ class TestPvgisTmy:
         pvgis_requests.tmy.assert_not_called()
         pvgis_requests.hourly.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "remove",
+        [
+            pytest.param(lambda cache, entry: entry.unlink(), id="the file deleted"),
+            pytest.param(
+                lambda cache, entry: cache.invalidate("tmy", Location.bristol()), id="WeatherCache.invalidate"
+            ),
+        ],
+    )
+    def test_once_an_entry_it_cannot_read_is_removed_get_fetches_it_afresh(
+        self, seeded_cache, pvgis_requests, remove
+    ):
+        """Once the entry its cache refused is removed, by deleting the file or with WeatherCache.invalidate, get
+        fetches the scaled TMY afresh from PVGIS, once, and puts it, so the cache holds a readable entry again."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.write_bytes(b"garbage")
+        with pytest.raises(ValueError):
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        remove(seeded_cache, entry)
+        fetched = PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        pd.testing.assert_frame_equal(seeded_cache.get("tmy", Location.bristol()), fetched, check_exact=True)
+
     def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
         self, tmp_path, weather_cache, pvgis_requests
     ):
