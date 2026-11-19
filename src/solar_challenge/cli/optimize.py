@@ -23,6 +23,8 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig, grid_services_model_of
+from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
     enumerate_configs,
@@ -43,6 +45,15 @@ _SENSITIVITY_ALIAS_MAP: dict[str, str] = {
     "pv_cost": "pv_cost_per_kwp_gbp",
     "inverter_cost": "inverter_cost_per_kw_gbp",
 }
+
+# The --sensitivity aliases swept when the flag is not given, in report order.
+_DEFAULT_SENSITIVITY_ALIASES: tuple[str, ...] = ("retained_floor", "grid_services")
+
+# Why --grid-services-kw and the grid_services axis have nothing to set under the events model.
+_FLAT_RATE_UNREAD_UNDER_EVENTS = (
+    "the flat grid-services rate, grid_services_income_per_kw_per_year_gbp, "
+    "which grid_services_model='capacity_at_events' does not read"
+)
 
 
 def _parse_float_list(raw: str, flag: str) -> list[float]:
@@ -67,6 +78,68 @@ def _parse_float_list(raw: str, flag: str) -> list[float]:
         raise ValueError(
             f"--{flag} contains a non-numeric value: {raw!r}"
         ) from None
+
+
+def _parse_sensitivity_aliases(raw: str) -> tuple[str, ...]:
+    """The --sensitivity aliases the comma-separated *raw* names, in order; '' names none.
+
+    Raises:
+        ValueError: If an alias is not one of _SENSITIVITY_ALIAS_MAP's.
+    """
+    aliases = tuple(alias.strip() for alias in raw.split(",") if alias.strip())
+    for alias in aliases:
+        if alias not in _SENSITIVITY_ALIAS_MAP:
+            known = ", ".join(sorted(_SENSITIVITY_ALIAS_MAP))
+            raise ValueError(f"Unknown sensitivity alias '{alias}'. Known aliases: {known}")
+    return aliases
+
+
+def _sensitivity_aliases(
+    requested: Optional[tuple[str, ...]], pricing: GridServicesModel
+) -> tuple[str, ...]:
+    """The sensitivity axes to sweep: *requested*, or the default for *pricing* when None.
+
+    The default is _DEFAULT_SENSITIVITY_ALIASES, less grid_services, with a note
+    on stderr, when *pricing* is an events configuration.
+
+    Raises:
+        ConfigurationError: If *requested* names grid_services and *pricing* is
+            an events configuration.
+    """
+    under_events = isinstance(pricing, GridServicesEventsConfig)
+    if requested is None:
+        if not under_events:
+            return _DEFAULT_SENSITIVITY_ALIASES
+        print_info(
+            f"Sensitivity axis grid_services omitted from the default: it sweeps "
+            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
+        )
+        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias != "grid_services")
+    if under_events and "grid_services" in requested:
+        raise ConfigurationError(
+            f"--sensitivity names grid_services, which sweeps {_FLAT_RATE_UNREAD_UNDER_EVENTS}; "
+            "drop it from --sensitivity"
+        )
+    return requested
+
+
+def _with_grid_services_kw(
+    finance: FinanceConfig, grid_services_kw: Optional[float], pricing: GridServicesModel
+) -> FinanceConfig:
+    """*finance* with *grid_services_kw* as its flat grid-services rate, or *finance* itself when it is None.
+
+    Raises:
+        ConfigurationError: If *grid_services_kw*, whatever its value, is given
+            and *pricing* is an events configuration.
+    """
+    if grid_services_kw is None:
+        return finance
+    if isinstance(pricing, GridServicesEventsConfig):
+        raise ConfigurationError(
+            f"--grid-services-kw sets {_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop the flag or "
+            "select grid_services_model: flat in the scenario's finance block"
+        )
+    return dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=grid_services_kw)
 
 
 @app.command()
@@ -119,22 +192,26 @@ def configs(
         typer.Option(
             "--grid-services-kw",
             help=(
-                "Override grid-services income (£/kW/yr) baked into the base finance "
-                "config before enumeration."
+                "Override the flat grid-services income (£/kW/yr) baked into the base "
+                "finance config before enumeration.  Refused under grid_services_model: "
+                "capacity_at_events, which reads no flat rate."
             ),
         ),
     ] = None,
     sensitivity: Annotated[
-        str,
+        Optional[str],
         typer.Option(
             "--sensitivity",
             help=(
                 "Comma-separated short alias names of OAT sensitivity axes to sweep "
-                "(e.g. 'retained_floor,grid_services').  Use '' to skip sensitivity. "
+                "(e.g. 'retained_floor,grid_services').  Defaults to "
+                "retained_floor,grid_services, or to retained_floor alone under "
+                "grid_services_model: capacity_at_events, which refuses grid_services.  "
+                "Use '' to skip sensitivity.  "
                 "Supported aliases: " + ", ".join(sorted(_SENSITIVITY_ALIAS_MAP))
             ),
         ),
-    ] = "retained_floor,grid_services",
+    ] = None,
     start: Annotated[
         Optional[str],
         typer.Option(
@@ -163,10 +240,14 @@ def configs(
     for each config, ranks by householder outlay, and renders a two-table
     markdown report (cost-recovery rank + fixed-15p trade-off).
 
-    When --sensitivity is non-empty, a one-at-a-time (OAT) sensitivity panel
-    is appended showing which cost assumptions most affect the top-ranked config.
-    The panel is skipped, with a note on stderr, when the sweep yields no
-    feasible config.
+    When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
+    panel is appended showing which cost assumptions most affect the top-ranked
+    config.  --sensitivity defaults to retained_floor,grid_services, or to
+    retained_floor alone, with a note on stderr, when the finance block selects
+    grid_services_model: capacity_at_events, which reads no flat rate for the
+    grid_services axis to sweep; there an explicit grid_services axis is
+    refused, as is --grid-services-kw, before any simulation.  The panel is
+    skipped, with a note on stderr, when the sweep yields no feasible config.
 
     Example::
 
@@ -181,15 +262,7 @@ def configs(
     inverter_list = _parse_float_list(inverter, "inverter")
 
     # ---- Parse sensitivity aliases -----------------------------------------
-    sensitivity_axes: list[str] = []
-    if sensitivity.strip():
-        for alias in [a.strip() for a in sensitivity.split(",") if a.strip()]:
-            if alias not in _SENSITIVITY_ALIAS_MAP:
-                known = ", ".join(sorted(_SENSITIVITY_ALIAS_MAP))
-                raise ValueError(
-                    f"Unknown sensitivity alias '{alias}'. Known aliases: {known}"
-                )
-            sensitivity_axes.append(alias)
+    requested_sensitivity = None if sensitivity is None else _parse_sensitivity_aliases(sensitivity)
 
     # ---- Load raw config + finance block ------------------------------------
     raw = load_config(scenario)
@@ -200,12 +273,9 @@ def configs(
             "Add a finance: block with at least standing_charge_pence_per_day."
         )
 
-    # ---- Apply --grid-services-kw override onto finance --------------------
-    if grid_services_kw is not None:
-        finance = dataclasses.replace(
-            finance,
-            grid_services_income_per_kw_per_year_gbp=grid_services_kw,
-        )
+    pricing = grid_services_model_of(finance)
+    finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
+    sensitivity_axes = _sensitivity_aliases(requested_sensitivity, pricing)
 
     # ---- Load fleet config --------------------------------------------------
     fleet_config = load_fleet_config(scenario)
@@ -292,7 +362,7 @@ def configs(
     if sensitivity_axes and ranked.cheapest_feasible is not None:
         knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
         axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
-        print_info(f"Computing sensitivity panel for axes: {sensitivity_axes}…")
+        print_info(f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
         panel = sensitivity_panel(
             all_configs,
             axes_map,
