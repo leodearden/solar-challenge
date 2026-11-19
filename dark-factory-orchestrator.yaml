@@ -30,7 +30,7 @@ verify_use_cgroup_scope: true
 # Warm per-command verify timeout; restart tier.
 verify_command_timeout_secs: 3600
 
-# Merge-verify runners: docs/laptop-merge-verify.md.
+# Remote verify runners and how merge verifies use them: docs/laptop-merge-verify.md.
 verify_runners:
   - name: laptop
     ssh_host: leo-laptop
@@ -50,6 +50,11 @@ verify_env_probes:
     argv: ["uv", "run", "--directory", *project_root, "--no-project", "--isolated", "--no-python-downloads", "python", "-c", "import sqlite3, sys; print(sys.version.split()[0], sqlite3.sqlite_version)"]
   - key: git
     argv: ["git", "--version"]
+
+# Task verifies may run on leo-laptop too (task 1271, 2026-11-19; Leo's ruling of 2026-11-03): docs/laptop-merge-verify.md.
+verify_task_host_policy: remote_all
+verify_task_remote_red_confirms_locally: true
+verify_task_remote_cross_check_every_n: 5
 
 # Branch layout and the offline lane, whose jobs never gate a merge.
 git:

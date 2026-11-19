@@ -82,13 +82,15 @@ The flag is restart-tier; the weights are hot-reloadable.
 
 Source: dark-factory `plans/verify-rate-improvement-2026-10-09/MEMO.md`, item 14.
 
-## 7. Merge-Verify Runners
+## 7. Remote Verify Runners
 
 `verify_runners`, `verify_host_policy`, `verify_drift_check_every_n_lands`,
-`verify_cross_check_remote_green` and `verify_env_probes` are explained in
-`docs/laptop-merge-verify.md`: why merge verifies run on `leo-laptop` first and here when the
-laptop is busy, benched or unreachable, what lives on the laptop, what the env probes compare,
-which keys take effect when, and how to roll back.
+`verify_cross_check_remote_green`, `verify_env_probes`, `verify_task_host_policy`,
+`verify_task_remote_red_confirms_locally` and `verify_task_remote_cross_check_every_n` are
+explained in `docs/laptop-merge-verify.md`: why merge verifies run on `leo-laptop` first and
+here when the laptop is busy, benched or unreachable, which task verifies may run on the laptop
+and how their laptop verdicts are checked here, what lives on the laptop, what the env probes
+compare, which keys take effect when, and how to roll back.
 
 ## 8. `git` and the Offline Lane
 
