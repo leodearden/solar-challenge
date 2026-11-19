@@ -1,16 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, and its location resolver."""
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 
 pytest.importorskip("flask")
 
 from flask import Flask
 
-from solar_challenge.location import Location
+from solar_challenge.config import parse_location_block
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import Location, parse_location
 from solar_challenge.web.request_boundary import (
     LOCATION_PRESETS,
     NotAJsonObject,
+    read_location,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
     request_json_object,
@@ -248,3 +254,74 @@ class TestResolveLocation:
         with pytest.raises(ValueError) as refusal:
             resolve_location(text)
         assert str(refusal.value) == str(location_refusal.value)
+
+
+class TestReadLocation:
+    """read_location reads a string as location.parse_location reads it and a JSON object as config.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            pytest.param("London ", id="preset"),
+            pytest.param("51.5,-0.1", id="lat-lon"),
+            pytest.param("51.5,-0.1,11", id="lat-lon-alt"),
+        ],
+    )
+    def test_a_string_is_the_location_parse_location_reads(self, text: str) -> None:
+        """A string of each form the location grammar accepts is the whole Location parse_location reads from it."""
+        assert read_location(text) == parse_location(text)
+
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"latitude": 51.5, "longitude": -0.1}, id="coordinates"),
+            pytest.param({}, id="empty"),
+        ],
+    )
+    def test_a_json_object_is_the_location_parse_location_block_reads(
+        self, block: dict[str, Any]
+    ) -> None:
+        """A JSON object is the whole Location parse_location_block reads from it as a location: block."""
+        assert read_location(block) == parse_location_block(block)
+
+    @pytest.mark.parametrize(
+        ("value", "grammar", "named"),
+        [
+            pytest.param("londn", parse_location, "'londn'", id="unknown-place"),
+            pytest.param("95,0", parse_location, "latitude", id="latitude-above-90"),
+            pytest.param(
+                {"latitude": 50}, parse_location_block, "location.longitude", id="object-without-longitude"
+            ),
+        ],
+    )
+    def test_a_value_its_grammar_refuses_is_refused_with_that_grammars_refusal(
+        self, value: object, grammar: Callable[[Any], Location], named: str
+    ) -> None:
+        """A value the grammar for its type refuses is refused with that grammar's own ConfigurationError, carried verbatim."""
+        with pytest.raises(ConfigurationError) as expected:
+            grammar(value)
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(value)
+
+        assert str(refusal.value) == str(expected.value)
+        assert named in str(refusal.value)
+
+    @pytest.mark.parametrize(
+        ("value", "type_name"),
+        [
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param(5, "int", id="integer"),
+            pytest.param(51.5, "float", id="float"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param([51.5, -0.1], "list", id="array"),
+        ],
+    )
+    def test_any_other_json_value_is_refused_naming_location_and_its_type(
+        self, value: object, type_name: str
+    ) -> None:
+        """A JSON value that is neither a string nor an object is refused naming location and its JSON type."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(value)
+
+        assert str(refusal.value).startswith("location")
+        assert str(refusal.value).endswith(f"got {type_name}")
