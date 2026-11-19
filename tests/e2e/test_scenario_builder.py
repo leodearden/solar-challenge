@@ -198,13 +198,18 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
 # ── Form controls: each caption names its control ────────────────────
 
 
-_ACCORDION_IS_AT_REST = """({ opened, closed }) => {
+_ACCORDION_STATE = """({ opened, closed }) => {
     const panel = (id) => document.getElementById(id);
-    const isDisplayed = (id) => panel(id).checkVisibility();
     const { scrollHeight, clientHeight } = panel(opened);
-    return isDisplayed(opened) && scrollHeight <= clientHeight && !closed.some(isDisplayed);
+    return { displayed: [opened, ...closed].filter((id) => panel(id).checkVisibility()), scrollHeight, clientHeight };
 }"""
-"""Whether the accordion is at rest with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the open panel is displayed and tall enough to show all of its content, as a panel is once it has finished opening, and no closed panel is displayed, as a panel is once it has finished closing."""
+"""The state of the accordion with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the ids of those panels that are displayed (checkVisibility()), *opened* first and then *closed* in its order, and the opened panel's scrollHeight and clientHeight."""
+
+_ACCORDION_IS_AT_REST = f"""(accordion) => {{
+    const {{ displayed, scrollHeight, clientHeight }} = ({_ACCORDION_STATE})(accordion);
+    return displayed.length === 1 && displayed[0] === accordion.opened && scrollHeight <= clientHeight;
+}}"""
+"""Whether the accordion is at rest, judged on the state _ACCORDION_STATE reads: the opened panel alone is displayed, no closed panel being displayed, as a panel is once it has finished closing, and the opened panel is tall enough to show all of its content, as a panel is once it has finished opening."""
 
 
 def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]:
