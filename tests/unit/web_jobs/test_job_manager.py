@@ -891,6 +891,23 @@ class TestJobManagerEscapedErrors:
         assert type(records[0].exc_info[1]) is _AnErrorWhoseMessageCannotBeRead
 
 
+def _assert_a_job_raising_is_reported_failed_with(
+    storage: RunStorage, error: Callable[[], BaseException], message: str
+) -> None:
+    """Run one home job whose simulation raises error(), then assert that its state and its run's row both report it failed with *message*."""
+    manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_raising(error))
+
+    with _errors_logged_by_jobs_py_kept_out_of_the_report():
+        job_id = _submit_home_job(manager)
+        assert manager.wait_until_idle(timeout=30)
+
+    state = manager.job_state(job_id)
+    assert state is not None
+    assert (state.status, state.message) == ("failed", message)
+    run = _run_of_job(manager, job_id, storage)
+    assert (run.status, run.error_message) == ("failed", message)
+
+
 class TestJobManagerFailureNotes:
     """A failed job's message is its error's text, then each of the error's notes on a line of its own."""
 
@@ -912,39 +929,16 @@ class TestJobManagerFailureNotes:
     def test_a_job_whose_error_carries_notes_is_reported_failed_with_its_message_then_each_note_on_a_line_of_its_own(
         self, storage: RunStorage, error: Callable[[], BaseException], expected: str
     ) -> None:
-        manager = JobManager(storage, max_workers=1, simulate_home=_a_simulation_raising(error))
-
-        with _errors_logged_by_jobs_py_kept_out_of_the_report():
-            job_id = _submit_home_job(manager)
-            assert manager.wait_until_idle(timeout=30)
-
-        state = manager.job_state(job_id)
-        assert state is not None
-        assert (state.status, state.message) == ("failed", expected)
-        run = _run_of_job(manager, job_id, storage)
-        assert (run.status, run.error_message) == ("failed", expected)
+        _assert_a_job_raising_is_reported_failed_with(storage, error, expected)
 
     def test_a_note_whose_text_cannot_be_read_is_named_unreadable_in_its_place_and_the_other_notes_still_read(
         self, storage: RunStorage
     ) -> None:
-        manager = JobManager(
+        _assert_a_job_raising_is_reported_failed_with(
             storage,
-            max_workers=1,
-            simulate_home=_a_simulation_raising(
-                lambda: _with_notes(RuntimeError("the simulation failed"), _AnUnreadableNote("hidden"), "a readable note")
-            ),
+            lambda: _with_notes(RuntimeError("the simulation failed"), _AnUnreadableNote("hidden"), "a readable note"),
+            "the simulation failed\nA note whose text could not be read\na readable note",
         )
-        message = "the simulation failed\nA note whose text could not be read\na readable note"
-
-        with _errors_logged_by_jobs_py_kept_out_of_the_report():
-            job_id = _submit_home_job(manager)
-            assert manager.wait_until_idle(timeout=30)
-
-        state = manager.job_state(job_id)
-        assert state is not None
-        assert (state.status, state.message) == ("failed", message)
-        run = _run_of_job(manager, job_id, storage)
-        assert (run.status, run.error_message) == ("failed", message)
 
     @pytest.mark.parametrize(
         "error_type", [RuntimeError, SystemExit], ids=["an exception", "an error that is not an exception"]
@@ -964,24 +958,11 @@ class TestJobManagerFailureNotes:
     def test_a_job_whose_error_has_notes_that_are_not_a_sequence_of_notes_is_reported_failed_with_them_as_one_line_as_the_traceback_shows_them(
         self, storage: RunStorage, error_type: type[BaseException], notes: object, shown: str
     ) -> None:
-        manager = JobManager(
+        _assert_a_job_raising_is_reported_failed_with(
             storage,
-            max_workers=1,
-            simulate_home=_a_simulation_raising(
-                lambda: _with_notes_assigned(error_type("the simulation failed"), notes)
-            ),
+            lambda: _with_notes_assigned(error_type("the simulation failed"), notes),
+            f"the simulation failed\n{shown}",
         )
-        message = f"the simulation failed\n{shown}"
-
-        with _errors_logged_by_jobs_py_kept_out_of_the_report():
-            job_id = _submit_home_job(manager)
-            assert manager.wait_until_idle(timeout=30)
-
-        state = manager.job_state(job_id)
-        assert state is not None
-        assert (state.status, state.message) == ("failed", message)
-        run = _run_of_job(manager, job_id, storage)
-        assert (run.status, run.error_message) == ("failed", message)
 
 
 class TestJobManagerCancelRun:
