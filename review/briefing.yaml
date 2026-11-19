@@ -97,7 +97,7 @@ conventions:
       added later never reached an existing store, and the policy was to delete the database
       (D19; fk-1070454e4c6e). A migrated store's sqlite_master equals a new one's (contract C3),
       and a DDL change ships as a new migration step with its version's snapshot,
-      tests/fixtures/databases/schema_v<N>.sql (D27 invariant 7;
+      schema_v<N>.sql in tests/fixtures/databases (D27 invariant 7;
       docs/prds/run-store-one-owner.md §3.9).
 
   - rule: "A stored run names the format version that wrote it (format.json, stored_runs.RUN_FORMAT_VERSION), and a loader refuses a run it cannot rebuild with StoredRunUnreadable naming the run id, the document and the field (tests/unit/test_web_stored_run_format.py)"
