@@ -30,7 +30,7 @@ verify_use_cgroup_scope: true
 # Warm per-command verify timeout; restart tier.
 verify_command_timeout_secs: 3600
 
-# Merge-verify runners: docs/laptop-merge-verify.md.
+# Remote verify runners and how merge verifies use them: docs/laptop-merge-verify.md.
 verify_runners:
   - name: laptop
     ssh_host: leo-laptop
