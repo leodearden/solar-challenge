@@ -1607,6 +1607,18 @@ class TestUnobservedEventWindowWarns:
         assert result.annual_income_gbp == pytest.approx(result.per_window_income_gbp[1])
         assert result.annual_income_gbp > 0.0
 
+    def test_each_pricing_attributes_the_warning_to_its_caller(self) -> None:
+        fleet = _june_only_battery_fleet()
+        cfg = GridServicesEventsConfig()
+
+        with pytest.warns(UserWarning) as breakdown:
+            compute_grid_services_at_events(fleet, cfg)
+        with pytest.warns(UserWarning) as income:
+            cfg.annual_income_gbp(fleet)
+
+        assert [w.filename for w in breakdown.list] == [__file__]
+        assert [w.filename for w in income.list] == [__file__]
+
 
 
 # ---------------------------------------------------------------------------
