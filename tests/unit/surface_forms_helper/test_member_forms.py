@@ -14,7 +14,7 @@ import re
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import ClassVar, NamedTuple, Optional
+from typing import ClassVar, NamedTuple, Optional, Self
 
 import pytest
 
@@ -65,13 +65,13 @@ def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
 def test_a_classmethod_or_staticmethod_member_is_spelled_by_its_kind_then_its_function() -> None:
     class Meter:
         @classmethod
-        def default(cls) -> "Meter": ...
+        def default(cls) -> Self: ...
 
         @staticmethod
         def scale(kwh: float) -> float: ...
 
     assert member_forms(Meter) == {
-        "default": "classmethod (cls) -> Meter",
+        "default": "classmethod (cls) -> typing.Self",
         "scale": "staticmethod (kwh: float) -> float",
     }
 
@@ -144,14 +144,14 @@ def test_an_abstract_member_form_begins_with_abstract() -> None:
 
         @classmethod
         @abc.abstractmethod
-        def default(cls) -> "Strategy": ...
+        def default(cls) -> Self: ...
 
         def describe(self) -> str: ...
 
     assert member_forms(Strategy) == {
         "decide": "abstract (self, demand_kw: float) -> str",
         "name": "abstract property (self) -> str",
-        "default": "abstract classmethod (cls) -> Strategy",
+        "default": "abstract classmethod (cls) -> typing.Self",
         "describe": "(self) -> str",
     }
 

@@ -18,7 +18,7 @@ import operator
 import re
 import types
 import warnings
-from typing import Callable
+from typing import Callable, Self
 
 import pytest
 
@@ -165,15 +165,15 @@ def test_a_class_that_carries_a_signature_is_spelled_by_that_signature_whatever_
 
 def test_a_constructor_that_wraps_one_defined_with_def_is_spelled_by_the_one_it_wraps() -> None:
     class Based:
-        def __new__(cls, rate: int) -> "Based":
+        def __new__(cls, rate: int) -> Self:
             return object.__new__(cls)
 
     class Rebased(Based):
         @functools.wraps(Based.__new__)
-        def __new__(cls, *args: object, **kwargs: object) -> "Rebased":
+        def __new__(cls, *args: object, **kwargs: object) -> Self:
             return Based.__new__(cls, *args, **kwargs)
 
-    assert surface_form(Rebased) == "(rate: int) -> Based"
+    assert surface_form(Rebased) == "(rate: int) -> typing.Self"
 
 
 def test_a_class_whose_metaclass_call_is_a_partial_raises_a_type_error_naming_it_and_that_call() -> None:
