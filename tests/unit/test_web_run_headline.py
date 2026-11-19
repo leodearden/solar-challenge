@@ -5,6 +5,10 @@ run_headline maps a summary of either kind to the figures the web shows for its 
 energy totals, the self-consumption, grid dependency and export ratios, and the share of the
 generation the battery stored from PV, which a fleet run has none of. It refuses a summary
 whose figure for any of them is not a finite number.
+
+web/run_headline.py is a leaf below the run store, so the run store and the charts both import
+it from below (task 1413): importing it, in a fresh ``python -I`` interpreter, loads no
+solar_challenge.web module but the package and itself.
 """
 
 import dataclasses
@@ -16,7 +20,15 @@ from solar_challenge.fleet import FleetSummary, calculate_fleet_summary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.web.run_headline import RunHeadline, run_headline
 from tests._finance_builders import make_fleet_results
+from tests._modules_loaded_by_importing import web_modules_loaded_by_importing
 from tests._run_summaries import fleet_summary, home_summary
+
+
+def test_importing_run_headline_loads_no_other_web_module() -> None:
+    assert web_modules_loaded_by_importing("solar_challenge.web.run_headline") == {
+        "solar_challenge.web",
+        "solar_challenge.web.run_headline",
+    }
 
 
 class TestRunHeadline:
