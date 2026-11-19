@@ -7,6 +7,9 @@ boolean_fields and whole_numbers, so any module can import it.
 
 An integer field reads through as_whole_number, so a fraction or a boolean is refused, not
 truncated or read as 1.
+
+A value its consumer keeps as given, rather than the float read from it, reads through
+as_finite_real, so text that float() reads as a number is refused, not read as that number.
 """
 
 import math
@@ -72,6 +75,8 @@ NON_NEGATIVE: Final = Interval(0, math.inf)
 FRACTION: Final = Interval(0, 1, low_open=True)
 UNIT_INTERVAL: Final = Interval(0, 1)
 
+_A_FINITE_NUMBER: Final = "a finite number"
+
 
 def as_finite_float(value: Any, field: str, within: Interval = Interval()) -> float:
     """Return *value* read as float() reads it, refusing a boolean, one that is not a finite number, or one *within* does not admit.
@@ -86,10 +91,23 @@ def as_finite_float(value: Any, field: str, within: Interval = Interval()) -> fl
     try:
         number = float(value)
     except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError.must_be(field, "a finite number", got=value) from exc
+        raise ConfigurationError.must_be(field, _A_FINITE_NUMBER, got=value) from exc
     if is_boolean(value) or not math.isfinite(number):
-        raise ConfigurationError.must_be(field, "a finite number", got=value)
+        raise ConfigurationError.must_be(field, _A_FINITE_NUMBER, got=value)
     return _admitted(number, within, field, value)
+
+
+def as_finite_real(value: object, field: str, within: Interval = Interval()) -> float:
+    """Return *value*, a numbers.Real, read by :func:`as_finite_float`, refusing a value that is not one, text that float() reads as a number included.
+
+    Raises:
+        ConfigurationError: If *value* is not a numbers.Real (text, bytes, a Decimal, None),
+            with :func:`as_finite_float`'s refusal of a value that is not a finite number;
+            or if :func:`as_finite_float` refuses it.
+    """
+    if not isinstance(value, numbers.Real):
+        raise ConfigurationError.must_be(field, _A_FINITE_NUMBER, got=value)
+    return as_finite_float(value, field, within)
 
 
 def as_whole_number(value: Any, field: str, within: Interval = Interval()) -> int:
