@@ -32,6 +32,11 @@ and task 1271 for task verifies: `git log --grep='(606)'` and `git log --grep='(
   Neither file sets it, so Dark Factory's default applies to both.
 - Task and merge verifies do not arbitrate, on the laptop as here: a task verify takes no merge slot, and the only
   priority between them is Dark Factory's `verify_cgroup_cpu_weight_*` settings, which favour merges.
+- They share the laptop's health, though. A task verify whose laptop run ends in `runner_unavailable` or
+  `infra_transient` (§4) benches the laptop for merge verifies too, as a bench on the merge lane does for task
+  verifies. Only the merge lane's reprobe, or `mcp__escalation__clear_verify_host_quarantine`, readmits it
+  (dark-factory `OPERATIONS.md` §"Remote task verifies"). So merge verifies that move back here while the laptop
+  answers may trace to a task's dispatch record with either reason.
 - Both parity knobs are on for this project's first window of remote task verifies:
   - A laptop red re-runs here, and the local verdict is the one returned (`verify_task_remote_red_confirms_locally`).
   - Every 5th verify that returns a laptop verdict, green or red, also runs here, and the local verdict is
@@ -129,10 +134,16 @@ on the laptop instead, and the warm-up must move into it.
   - `cross_check` and `red_confirm`: a parity knob re-ran a laptop verdict here (§1). The record's `cross_check`
     holds both verdicts and whether they `agree`; its `red_confirmed_locally` holds this workstation's verdict on a
     laptop red.
+- The laptop is no slower: once the laptop claims a task verify, its local call is withdrawn, so a loaded laptop can
+  leave a task waiting longer than it would have here. Compare a laptop verify's `remote_wait_secs` (arrival to the
+  laptop's turn) plus `remote_wall_secs` (its run there), from the dispatch records whose `reason` is `remote`, with a
+  local one's `data.slot_wait_secs` plus `data.duration_ms`, from the `workflow_verify` rows whose `data.runner` is
+  `local`. If the laptop is consistently slower, roll task verifies back (§6).
 - Drift outcomes, in the same database:
   - `verdict_parity_ok` when the hosts agree.
   - A verdict split is an L1 of category `verify_drift_divergence`, and it quarantines the laptop. Clear that with
-    `mcp__escalation__clear_verify_host_quarantine` once parity is restored.
+    `mcp__escalation__clear_verify_host_quarantine` once parity is restored. A task verify can bench the laptop too,
+    with no split (§1).
   - `drift_check_deferred` when the check could not get both hosts.
   - `verify_env_parity_ok` or `verify_env_divergence`. A divergence files one deduped L1 and never quarantines. Every
     probe printed the same on both hosts when the runner was enabled, so a divergence means a tool has changed on one
