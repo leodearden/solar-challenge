@@ -43,6 +43,7 @@ from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.gridservices import (
     DEFAULT_EVENT_WINDOWS,
+    GRID_SERVICES_RATE_BANDS,
     EventWindow,
     GridServicesAtEvents,
     GridServicesEventsConfig,
@@ -196,7 +197,7 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
     )
 
     # Teeth: event figure ≠ flat term for a non-zero flat rate
-    flat_rate = finance_base.grid_services_income_per_kw_per_year_gbp
+    flat_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     sigma = sum(
         h.battery_config.max_discharge_kw
         for h in homes
@@ -676,7 +677,7 @@ def test_epsilon_finance_run_cli_emits_event_derived_grid_services_line() -> Non
         f"{SCENARIO} (grid_services_model={finance.grid_services_model!r}) has no "
         "grid_services_events block, so the supersede inequality cannot be checked"
     )
-    flat_rate = finance.grid_services_income_per_kw_per_year_gbp
+    flat_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
     sigma = sum(
         h.battery_config.max_discharge_kw
         for h in homes if h.battery_config is not None

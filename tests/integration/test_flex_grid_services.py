@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
-"""Integration tests: W2 seam gate — grid-services band fills board scenario finance (task/55 δ).
+"""Integration tests: W2 seam gate — a grid-services band's flat rate reaches board project surplus (task/55 δ).
 
 Tests the cross-task seam: board scenario YAML → parse_finance_config →
 project_multi_year → project_economics.mean_fleet_surplus_per_year_gbp.
 
-Field-fill assertion on the YAML literal, then seam verification that the consuming math
-(W2-CR2, project_multi_year._simulate_age) propagates the band value into project surplus.
+The board scenario's own grid-services choice (the events model in its flex band, and
+no flat rate), then seam verification that the consuming math (W2-CR2,
+project_multi_year._simulate_age) propagates a band's flat rate into project surplus,
+on the board fleet pinned to the flat model at the central band's flat rate.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from solar_challenge.config import (
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS
+from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -34,33 +36,21 @@ from tests.integration._helpers import SCENARIO, board_econ_scenario
 
 
 # ---------------------------------------------------------------------------
-# Field-fill assertion
+# The board scenario's grid-services choice
 # ---------------------------------------------------------------------------
 
 
-def test_board_scenario_grid_services_filled_from_central_band() -> None:
-    """Board scenario finance.grid_services_income_per_kw_per_year_gbp must equal
-    GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year == £12.0/kW.
-
-    The YAML writes 12.0 directly, with a provenance comment.
-
-    Also asserts the scenario's flex_band key lowers to "central" to document
-    provenance: the value derives from this band.
-    """
+def test_the_board_scenario_prices_grid_services_at_events_in_its_flex_band() -> None:
+    """The board scenario selects the capacity-at-events model, prices its events in the scenario's flex band, and sets no flat rate, which that model does not read."""
     cfg = load_config(SCENARIO)
-
-    # Provenance: the YAML's flex_band must be "central"
-    assert cfg["flex_band"].lower() == "central"
-
-    # The finance field must match the resolved central band value (no magic numbers)
     finance = parse_finance_config(cfg.get("finance"))
     assert finance is not None
-    central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
-    assert finance.grid_services_income_per_kw_per_year_gbp == pytest.approx(central_rate), (
-        f"Expected grid_services_income_per_kw_per_year_gbp == "
-        f"GRID_SERVICES_RATE_BANDS.resolve('central').flat_gbp_per_kw_per_year == {central_rate}, "
-        f"got {finance.grid_services_income_per_kw_per_year_gbp}"
-    )
+
+    assert finance.grid_services_model == "capacity_at_events"
+    assert isinstance(finance.grid_services_events, GridServicesEventsConfig)
+    assert finance.grid_services_events.band == cfg["flex_band"].lower() == "central"
+    assert "grid_services_income_per_kw_per_year_gbp" not in cfg["finance"]
+    assert finance.grid_services_income_per_kw_per_year_gbp == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -114,13 +104,20 @@ def _constant_simulate(
 
 
 def _board_scenario_on_the_flat_model() -> tuple[ScenarioConfig, FinanceConfig]:
-    """board_econ_scenario's scenario and finance, the finance pinned to the flat grid-services model.
+    """board_econ_scenario's scenario and finance, the finance pinned to the flat grid-services model at the central band's flat rate.
 
-    The board YAML selects capacity_at_events, and these seam tests check the flat per-kW
-    arithmetic.
+    The board YAML selects capacity_at_events and sets no flat rate, and these seam
+    tests check the flat per-kW arithmetic.
     """
     scenario, finance = board_econ_scenario()
-    return scenario, dataclasses.replace(finance, grid_services_model="flat", grid_services_events=None)
+    return scenario, dataclasses.replace(
+        finance,
+        grid_services_model="flat",
+        grid_services_events=None,
+        grid_services_income_per_kw_per_year_gbp=GRID_SERVICES_RATE_BANDS.resolve(
+            "central"
+        ).flat_gbp_per_kw_per_year,
+    )
 
 
 def _surplus_at(
@@ -139,7 +136,8 @@ def _surplus_at(
 
 
 def test_loaded_board_surplus_carries_central_increment() -> None:
-    """Board-as-shipped surplus minus (same with grid_services=0.0) equals
+    """The board fleet's surplus on the flat model at the central band's flat rate, minus
+    the same with grid_services=0.0, equals
     GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year × Σ max_discharge_kw (== £3000).
 
     Uses constant simulate (PVGIS-free, age-independent) → exact delta to rel=1e-9.
@@ -158,7 +156,7 @@ def test_loaded_board_surplus_carries_central_increment() -> None:
     )
     assert sigma == pytest.approx(250.0), f"Expected Σ=250 kW, got {sigma}"
 
-    # Surplus difference: loaded (12.0) vs zeroed (0.0)
+    # Surplus difference: the central band's flat rate vs zeroed (0.0)
     finance_zeroed = dataclasses.replace(
         finance_loaded,
         grid_services_income_per_kw_per_year_gbp=0.0,
@@ -240,22 +238,25 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     Encodes the seam's θ-safe contract: the additive default is a true no-op,
     so existing non-flex economics and the θ calibration are unperturbed.
 
-    Non-tautological: finance_base (from the board YAML) carries 12.0, so the
-    two omitted-path configs (finance_omitted, finance_dataclass_default) must
-    resolve to 0.0 — not 12.0 — to pass.  parse_finance_config leaves an omitted
-    key to FinanceConfig's declared default, so a future change that shifts
-    FinanceConfig's grid_services_income_per_kw_per_year_gbp field default away
-    from 0.0, or that has the parser supply its own value for an omitted key,
-    would be caught here.
+    Non-tautological: finance_base (the board's finance) is pinned to the central
+    band's flat rate, so the two omitted-path configs (finance_omitted,
+    finance_dataclass_default) must resolve to 0.0, not that rate, to pass.
+    parse_finance_config leaves an omitted key to FinanceConfig's declared
+    default, so a future change that shifts FinanceConfig's
+    grid_services_income_per_kw_per_year_gbp field default away from 0.0, or
+    that has the parser supply its own value for an omitted key, would be
+    caught here.
     """
     scenario, finance_base = _board_scenario_on_the_flat_model()
     homes = scenario.homes
     fr = _synthetic_fleet_results(homes)
     simulate = _constant_simulate(fr)
 
-    # Sanity: finance_base (board YAML) carries 12.0, not 0.0 — confirms the
+    # Sanity: finance_base is pinned to the central band's flat rate, not 0.0, so the
     # omitted paths below are genuinely different from finance_base.
-    assert finance_base.grid_services_income_per_kw_per_year_gbp == pytest.approx(12.0)
+    central_rate = GRID_SERVICES_RATE_BANDS.resolve("central").flat_gbp_per_kw_per_year
+    assert central_rate > 0.0
+    assert finance_base.grid_services_income_per_kw_per_year_gbp == pytest.approx(central_rate)
 
     # Baseline: explicit 0.0 via dataclasses.replace.
     finance_explicit_zero = dataclasses.replace(
@@ -267,7 +268,7 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     # so parse_finance_config leaves it to FinanceConfig's declared default.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
-    finance_dict.pop("grid_services_income_per_kw_per_year_gbp")
+    finance_dict.pop("grid_services_income_per_kw_per_year_gbp", None)
     # Also remove event-model keys so FinanceConfig's declared default, the flat
     # model, applies.
     # No-op before task-76 ε flip (board YAML is flat); preserves the
