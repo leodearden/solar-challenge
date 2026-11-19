@@ -6,7 +6,6 @@ import math
 import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from numbers import Real
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -25,6 +24,7 @@ from solar_challenge.number_fields import (
     UNIT_INTERVAL,
     Interval,
     as_finite_float,
+    as_finite_real,
     read_field,
 )
 
@@ -726,10 +726,7 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
             "module, nor an STC rating, so the modules cannot be counted; add STC, the "
             "module's DC power in W at standard test conditions"
         )
-    field, rating = f"Module parameter {key}", module_params[key]
-    if not isinstance(rating, Real):
-        raise ConfigurationError.must_be(field, "a finite number", got=rating)
-    return as_finite_float(rating, field, POSITIVE)
+    return as_finite_real(module_params[key], f"Module parameter {key}", POSITIVE)
 
 
 _NOCT_TEST_AIR_C = 20.0
