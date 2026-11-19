@@ -11,22 +11,13 @@ cannot hide what the import loads.
 
 import pytest
 
-from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
+from tests._modules_loaded_by_importing import web_modules_loaded_by_importing
 
 pytest.importorskip("flask")
 
 _SERVICE_MODULES = frozenset(
     {"solar_challenge.web.database", "solar_challenge.web.jobs", "solar_challenge.web.storage"}
 )
-
-
-def _web_modules_loaded_by_importing(module: str) -> set[str]:
-    """The solar_challenge.web modules a fresh interpreter has loaded once it has imported *module*."""
-    return {
-        name
-        for name in package_modules_loaded_by_importing(module)
-        if name == "solar_challenge.web" or name.startswith("solar_challenge.web.")
-    }
 
 
 @pytest.mark.parametrize(
@@ -38,7 +29,7 @@ def _web_modules_loaded_by_importing(module: str) -> set[str]:
     ],
 )
 def test_importing_a_request_reader_loads_no_service_module(reader: str) -> None:
-    loaded = _web_modules_loaded_by_importing(reader)
+    loaded = web_modules_loaded_by_importing(reader)
 
     assert _SERVICE_MODULES.isdisjoint(loaded), (
         f"importing {reader} loaded the services {sorted(_SERVICE_MODULES & loaded)}"
@@ -46,7 +37,7 @@ def test_importing_a_request_reader_loads_no_service_module(reader: str) -> None
 
 
 def test_importing_request_boundary_loads_no_other_web_module() -> None:
-    assert _web_modules_loaded_by_importing("solar_challenge.web.request_boundary") == {
+    assert web_modules_loaded_by_importing("solar_challenge.web.request_boundary") == {
         "solar_challenge.web",
         "solar_challenge.web.request_boundary",
     }
