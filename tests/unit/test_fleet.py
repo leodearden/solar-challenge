@@ -865,7 +865,7 @@ def _raising_at_the_second_home_once_a_third_has_started(raised: BaseException, 
 
     def homes_done(done: int, total: int) -> None:
         if done == 2:
-            wait_until_started(marker_dir, 3, within=10)
+            wait_until_started(marker_dir, at_least=3, within=10)
             raise raised
 
     return homes_done
@@ -894,6 +894,7 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
                 ("Home 1", start_marker(tmp_path, "Home 2")),
                 ("Home 2", finish_marker(tmp_path, "Home 1")),
             ),
+            hold_limit_seconds=10,
         )
         runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=2)
 
@@ -1060,7 +1061,7 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
         each = runner.simulate_each(fleets, *_JUNE_DAYS.window())
 
         index, results = next(each)
-        wait_until_started(tmp_path, 2, within=10)
+        wait_until_started(tmp_path, at_least=2, within=10)
         each.close()
 
         assert index == 0

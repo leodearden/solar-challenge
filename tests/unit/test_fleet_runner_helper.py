@@ -95,7 +95,7 @@ def test_a_home_named_in_held_until_is_marked_started_then_waits_until_its_relea
         held = holding.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
         with pytest.raises(concurrent.futures.TimeoutError):
             held.result(timeout=0.2)
-        marked_while_held = set(wait_until_started(tmp_path, 1, within=10))
+        marked_while_held = set(wait_until_started(tmp_path, at_least=1, within=10))
         finished_while_held = finished(tmp_path)
         release.touch()
         results = held.result(timeout=10)
@@ -136,27 +136,33 @@ def test_a_home_held_until_another_homes_marker_is_released_once_that_home_write
 def test_wait_until_started_returns_started_once_it_names_at_least_the_homes_asked_for(tmp_path: Path) -> None:
     _mark_each(MarkingHomeSimulator(tmp_path), [_HELD, _OTHER])
 
-    assert wait_until_started(tmp_path, 1, within=0) == started(tmp_path)
-    assert wait_until_started(tmp_path, 2, within=0) == started(tmp_path)
+    assert wait_until_started(tmp_path, at_least=1, within=0) == started(tmp_path)
+    assert wait_until_started(tmp_path, at_least=2, within=0) == started(tmp_path)
+
+
+def test_wait_until_started_keeps_polling_until_a_home_starts_after_the_call_and_returns_it(tmp_path: Path) -> None:
+    with ThreadPoolExecutor(max_workers=1) as polling:
+        waiting = polling.submit(wait_until_started, tmp_path, at_least=1, within=10)
+        done_before_any_home_started = concurrent.futures.wait([waiting], timeout=0.2).done
+        _mark_each(MarkingHomeSimulator(tmp_path), [_HELD])
+
+    assert done_before_any_home_started == set()
+    assert waiting.result() == {"Held": HomeStart(pid=os.getpid(), locations=("Bristol, UK",))}
 
 
 def test_wait_until_started_raises_timeout_error_naming_the_homes_asked_for_and_those_started(tmp_path: Path) -> None:
     _mark_each(MarkingHomeSimulator(tmp_path), [_HELD])
 
     with pytest.raises(TimeoutError) as caught:
-        wait_until_started(tmp_path, 2, within=0.05)
+        wait_until_started(tmp_path, at_least=2, within=0.05)
 
     assert str(caught.value) == f"2 homes had not started in {tmp_path} within 0.05 s; those started: ['Held']"
 
 
-@pytest.mark.parametrize("failing", [frozenset(), frozenset({"Held"})], ids=["returns", "refused"])
-def test_a_refused_home_is_marked_finished_as_a_home_that_returns_is(tmp_path: Path, failing: frozenset[str]) -> None:
-    simulator = MarkingHomeSimulator(tmp_path, failing=failing)
+def test_a_refused_home_raises_value_error_naming_it_and_is_marked_finished(tmp_path: Path) -> None:
+    simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Held"}))
 
-    if failing:
-        with pytest.raises(ValueError, match="Held cannot be simulated"):
-            simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
-    else:
+    with pytest.raises(ValueError, match="Held cannot be simulated"):
         simulator(_HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
 
     assert finished(tmp_path) == {"Held"}
