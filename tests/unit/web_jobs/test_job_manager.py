@@ -44,19 +44,16 @@ from tests.unit.web_jobs._fakes import (
 )
 
 
-_A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)
+_A_MESSAGE_SQLITE_CANNOT_STORE = "the simulation failed on " + chr(0xDCFF)  # a lone surrogate, which sqlite3 cannot bind
 
 
-def _a_simulation_failing_with_a_message_sqlite_cannot_store(
-    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
-) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs fails with a message holding a lone surrogate, which sqlite3 cannot bind."""
-    raise RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
+def _a_simulation_raising(error: Callable[[], BaseException]) -> HomeSimulator:
+    """Stands in for simulate_home: every job it runs raises error(), built anew for each call so no notes are shared between jobs."""
 
+    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+        raise error()
 
-def _a_simulation_that_exits(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs raises SystemExit, an error that is not an Exception."""
-    raise SystemExit("the simulation exited")
+    return simulate
 
 
 class _AnErrorWhoseMessageCannotBeRead(BaseException):
@@ -66,11 +63,11 @@ class _AnErrorWhoseMessageCannotBeRead(BaseException):
         raise RuntimeError("the message of this error cannot be read")
 
 
-def _a_simulation_raising_an_error_whose_message_cannot_be_read(
-    config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp
-) -> SimulationResults:
-    """Stands in for simulate_home: every job it runs raises an error whose message cannot be read."""
-    raise _AnErrorWhoseMessageCannotBeRead()
+_a_simulation_failing_with_a_message_sqlite_cannot_store = _a_simulation_raising(
+    lambda: RuntimeError(_A_MESSAGE_SQLITE_CANNOT_STORE)
+)
+_a_simulation_that_exits = _a_simulation_raising(lambda: SystemExit("the simulation exited"))
+_a_simulation_raising_an_error_whose_message_cannot_be_read = _a_simulation_raising(_AnErrorWhoseMessageCannotBeRead)
 
 
 class _AnUnreadableNote(str):
@@ -103,15 +100,6 @@ def _released_then_raising(blocking_simulation: BlockingSimulation, error: Calla
 
     def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
         blocking_simulation(config, start_date, end_date)
-        raise error()
-
-    return simulate
-
-
-def _a_simulation_raising(error: Callable[[], BaseException]) -> HomeSimulator:
-    """Stands in for simulate_home: every job it runs raises error(), built anew for each call so no notes are shared between jobs."""
-
-    def simulate(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
         raise error()
 
     return simulate
