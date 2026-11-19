@@ -5,7 +5,6 @@ import concurrent.futures
 import multiprocessing
 import os
 import threading
-import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
@@ -26,6 +25,7 @@ from tests._fleet_runner import (
     finished,
     start_marker,
     started,
+    wait_until_started,
 )
 
 _DAY = pd.Timestamp("2024-06-21")
@@ -85,14 +85,6 @@ def test_started_and_finished_read_while_other_threads_re_mark_the_homes_see_eac
     )
 
 
-def _started_once_a_home_is_marked(marker_dir: Path, *, within: float) -> dict[str, HomeStart]:
-    """started(*marker_dir*) as soon as it names a home, polling it, or once *within* seconds pass with none, whichever comes first."""
-    deadline = time.monotonic() + within
-    while not (starts := started(marker_dir)) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    return starts
-
-
 def test_a_home_named_in_held_until_is_marked_started_then_waits_until_its_release_exists_to_finish(
     tmp_path: Path,
 ) -> None:
@@ -103,7 +95,7 @@ def test_a_home_named_in_held_until_is_marked_started_then_waits_until_its_relea
         held = holding.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
         with pytest.raises(concurrent.futures.TimeoutError):
             held.result(timeout=0.2)
-        marked_while_held = set(_started_once_a_home_is_marked(tmp_path, within=10))
+        marked_while_held = set(wait_until_started(tmp_path, 1, within=10))
         finished_while_held = finished(tmp_path)
         release.touch()
         results = held.result(timeout=10)
@@ -139,6 +131,22 @@ def test_a_home_held_until_another_homes_marker_is_released_once_that_home_write
         results = held.result(timeout=10)
 
     assert calculate_summary(results).total_self_consumption_kwh == pytest.approx(4.0)
+
+
+def test_wait_until_started_returns_started_once_it_names_at_least_the_homes_asked_for(tmp_path: Path) -> None:
+    _mark_each(MarkingHomeSimulator(tmp_path), [_HELD, _OTHER])
+
+    assert wait_until_started(tmp_path, 1, within=0) == started(tmp_path)
+    assert wait_until_started(tmp_path, 2, within=0) == started(tmp_path)
+
+
+def test_wait_until_started_raises_timeout_error_naming_the_homes_asked_for_and_those_started(tmp_path: Path) -> None:
+    _mark_each(MarkingHomeSimulator(tmp_path), [_HELD])
+
+    with pytest.raises(TimeoutError) as caught:
+        wait_until_started(tmp_path, 2, within=0.05)
+
+    assert str(caught.value) == f"2 homes had not started in {tmp_path} within 0.05 s; those started: ['Held']"
 
 
 @pytest.mark.parametrize("failing", [frozenset(), frozenset({"Held"})], ids=["returns", "refused"])
