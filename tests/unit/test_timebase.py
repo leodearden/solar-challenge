@@ -4,7 +4,7 @@
 import math
 import re
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -88,6 +88,39 @@ def test_a_window_refuses_a_cadence_that_is_not_positive_naming_it(cadence: time
 
     assert "cadence" in str(refusal.value)
     assert repr(cadence) in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("first_day", pd.Timestamp("2024-06-01"), id="a-pd-timestamp-first-day"),
+        pytest.param("first_day", datetime(2024, 6, 1), id="a-datetime-first-day"),
+        pytest.param("first_day", "2024-06-01", id="a-str-first-day"),
+        pytest.param("last_day", pd.Timestamp("2024-06-02"), id="a-pd-timestamp-last-day"),
+        pytest.param("last_day", datetime(2024, 6, 2), id="a-datetime-last-day"),
+        pytest.param("last_day", None, id="a-none-last-day"),
+        pytest.param("cadence", pd.Timedelta(minutes=1), id="a-pd-timedelta-cadence"),
+        pytest.param("cadence", 60, id="an-int-cadence"),
+        pytest.param("cadence", np.timedelta64(1, "m"), id="a-numpy-timedelta64-cadence"),
+        pytest.param("cadence", pd.offsets.Minute(1), id="a-pandas-tick-offset-cadence"),
+    ],
+)
+def test_a_window_refuses_a_day_that_is_not_exactly_a_date_or_a_cadence_that_is_not_exactly_a_timedelta_naming_the_field_and_value(
+    field: str, value: object
+) -> None:
+    """A datetime and pandas' Timestamp subclass date, and pandas' Timedelta subclasses timedelta, so the window checks the exact type, as test_one_minute_is_a_standard_library_minute does. Values of unrelated types are refused too, among them a NumPy timedelta64 and a pandas tick offset, which compare with a timedelta and so pass the positive-cadence check."""
+    valid: dict[str, object] = {
+        "first_day": date(2024, 6, 1),
+        "last_day": date(2024, 6, 2),
+        "cadence": ONE_MINUTE,
+        "timezone": "Europe/London",
+    }
+
+    with pytest.raises(ValueError) as refusal:
+        SimulationWindow(**{**valid, field: value})
+
+    assert field in str(refusal.value)
+    assert repr(value) in str(refusal.value)
 
 
 @pytest.mark.parametrize(

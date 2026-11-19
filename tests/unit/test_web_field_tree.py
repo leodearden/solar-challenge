@@ -207,7 +207,7 @@ def test_field_tree_refuses_a_value_that_is_no_dataclass() -> None:
 def test_json_refuses_the_field_tree_of_a_date_or_timedelta_subclass(name: str, value: Any) -> None:
     """The writer turns into text only the types the reader reads back as themselves, so json.dumps refuses such a value at its save, not the strict reader at a load.
 
-    A pd.Timestamp in a date field is not covered: the writer turns it into datetime text, which the reader refuses as no date.
+    A pd.Timestamp in a date field is not covered: the writer turns it into datetime text, which the reader refuses as no date. SimulationWindow, the stored class whose fields are a date and a timedelta, refuses a pd.Timestamp, a datetime or a pd.Timedelta when it is built (tests/unit/test_timebase.py), so no stored window holds one.
     """
     with pytest.raises(TypeError, match=f"Object of type {type(value).__name__} is not JSON serializable"):
         json.dumps(field_tree(replace(_EVERY, **{name: value})))
