@@ -137,8 +137,13 @@ on the laptop instead, and the warm-up must move into it.
 - The laptop is no slower: once the laptop claims a task verify, its local call is withdrawn, so a loaded laptop can
   leave a task waiting longer than it would have here. Compare a laptop verify's `remote_wait_secs` (arrival to the
   laptop's turn) plus `remote_wall_secs` (its run there), from the dispatch records whose `reason` is `remote`, with a
-  local one's `data.slot_wait_secs` plus `data.duration_ms`, from the `workflow_verify` rows whose `data.runner` is
-  `local`. If the laptop is consistently slower, roll task verifies back (§6).
+  local one's `data.slot_wait_secs` plus `data.duration_ms` / 1000, from the `workflow_verify` rows whose
+  `data.runner` is `local`. `duration_ms` is milliseconds and the three other figures are seconds. Take only the rows
+  whose dispatch record reads `reason: local_granted_first`, matched by task and `tip_sha`: only that run is the local
+  call that queued with the laptop's attempt, so its wait runs from the same arrival as `remote_wait_secs`. A fallback
+  re-run (`dirty_tree`, `runner_unavailable`, `infra_transient`) starts its wait over after the laptop's turn, and a
+  parity re-run (`cross_check`, `red_confirm`) arrives afresh, so both leave out the laptop time before them and
+  neither is like for like. If the laptop is consistently slower, roll task verifies back (§6).
 - Drift outcomes, in the same database:
   - `verdict_parity_ok` when the hosts agree.
   - A verdict split is an L1 of category `verify_drift_divergence`, and it quarantines the laptop. Clear that with
