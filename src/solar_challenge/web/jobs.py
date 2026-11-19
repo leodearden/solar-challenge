@@ -113,14 +113,26 @@ def _random_id() -> str:
     return str(uuid.uuid4())
 
 
-def _message_of(error: BaseException) -> str:
-    """The message of a job that failed with *error*: the error's text, then each of its notes on a line of its own."""
+def _text_or(value: object, unreadable: str) -> str:
+    """str(*value*), or *unreadable* when reading it raises an Exception."""
     try:
-        text = str(error)
+        return str(value)
     except Exception:
-        text = f"{type(error).__name__}, whose message could not be read"
+        return unreadable
+
+
+def _message_of(error: BaseException) -> str:
+    """The message of a job that failed with *error*: the error's text, then each of its notes on a line of its own.
+
+    A text that cannot be read, the error's or a note's, is named as unreadable in its place.
+    """
     notes = getattr(error, "__notes__", ())
-    return "\n".join([text, *(str(note) for note in notes)])
+    return "\n".join(
+        [
+            _text_or(error, f"{type(error).__name__}, whose message could not be read"),
+            *(_text_or(note, "A note whose text could not be read") for note in notes),
+        ]
+    )
 
 
 def live_managers() -> "frozenset[JobManager]":
