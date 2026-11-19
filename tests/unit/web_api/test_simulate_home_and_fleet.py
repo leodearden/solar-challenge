@@ -10,8 +10,11 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
+from solar_challenge.config import parse_location_block
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import parse_location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
+from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
@@ -675,13 +678,13 @@ class TestParseHomeConfigErrorPaths:
         body: Callable[[str], dict[str, object]],
         location: str,
     ) -> None:
-        """A location resolve_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
+        """A location read_location refuses is a 400 carrying its refusal, never a run at Bristol; nothing is submitted."""
         resp = client.post(url, json=body(location))
         assert resp.status_code == 400
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(location)
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(location)
         assert str(refusal.value) in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
@@ -799,6 +802,51 @@ class TestParseHomeConfigPVAge:
             json={**VALID_HOME_PAYLOAD, "degradation_rate_per_year": 1.5},
         )
         assert resp.status_code == 400
+
+
+class TestSimulateHomeLocation:
+    """A home body's location reaches the submitted home as read_location reads it, a 'lat,lon,alt' string or a location: block; a location it refuses is a 400 naming it, and nothing is submitted."""
+
+    def test_coordinates_with_an_altitude_reach_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with location '51.5,-0.1,11' returns 201, and the submitted home is at the location parse_location reads, 11 m up."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": "51.5,-0.1,11"})
+        assert resp.status_code == 201, resp.get_json()
+        location = mock_job_manager.submit_home_job.call_args.kwargs["config"].location
+        assert location == parse_location("51.5,-0.1,11")
+        assert location.altitude == 11.0
+
+    def test_a_location_block_reaches_the_submitted_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """POST with a location: block of latitude and longitude returns 201, and the submitted home is at the location parse_location_block reads."""
+        block = {"latitude": 51.5, "longitude": -0.1}
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": block})
+        assert resp.status_code == 201, resp.get_json()
+        config = mock_job_manager.submit_home_job.call_args.kwargs["config"]
+        assert config.location == parse_location_block(block)
+
+    @pytest.mark.parametrize(
+        ("location", "named"),
+        [
+            pytest.param({"latitude": 50}, ("location.longitude",), id="block-without-longitude"),
+            pytest.param(5, ("location", "int"), id="number"),
+        ],
+    )
+    def test_a_location_read_location_refuses_returns_400_naming_it_and_submits_nothing(
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        location: object,
+        named: tuple[str, ...],
+    ) -> None:
+        """POST with a location: block missing its longitude, or a location that is a number, is a 400 whose error names what is wrong; nothing is submitted."""
+        resp = client.post("/api/simulate/home", json={**VALID_HOME_PAYLOAD, "location": location})
+        assert resp.status_code == 400
+        error = resp.get_json()["error"]
+        assert all(piece in error for piece in named), error
+        mock_job_manager.submit_home_job.assert_not_called()
 
 
 class TestSimulateHomeSystemLosses:
