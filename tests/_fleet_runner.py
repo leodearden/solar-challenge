@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Home simulators for FleetRunner tests: one marks each home it starts, so a test reads back which homes started, in which process, on which weather; one ends its worker process at named homes, to break a pool.
+"""Home simulators for FleetRunner tests: one marks each home as it starts and as it finishes, so a test reads back which homes started, in which process, on which weather, and which finished; one ends its worker process at named homes, to break a pool.
 
 A FleetRunner's pool pickles its home simulator into each job, so a spawn or forkserver
 worker imports this module to unpickle it. That is why each simulator is a top-level class
@@ -7,12 +7,13 @@ of a helper module rather than one defined in a test.
 
 Usage::
 
-    from tests._fleet_runner import MarkingHomeSimulator, ProcessEndingHomeSimulator, started
+    from tests._fleet_runner import MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, started
 
     runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"})))
     with pytest.raises(ValueError, match="Home 1 cannot be simulated"):
         runner.simulate(fleet, start, end)
     assert len(started(tmp_path)) < len(fleet.homes)
+    assert finished(tmp_path) == set(started(tmp_path))
 
     breaking = ProcessEndingHomeSimulator(MarkingHomeSimulator(tmp_path), ending=frozenset({"Home 2"}))
     with pytest.raises(BrokenProcessPool):
@@ -45,11 +46,13 @@ class HomeStart:
 
 @dataclass(frozen=True)
 class MarkingHomeSimulator:
-    """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, then refuses each home named in *failing*.
+    """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, refuses each home named in *failing*, and marks the home finished once its call ends, whether it returns or raises.
 
-    A marker appears at its name, <home name>.json, only once whole: it is written under a temporary
-    name that carries the writer's process id and thread id, since two pool workers, or two threads
-    of one process, can mark homes of one name at once, and then renamed.
+    A home's start marker, <home name>.json, and its finish marker, <home name>.finished, each appear
+    at that name only once whole: each is written under a temporary name that carries the writer's
+    process id and thread id, since two pool workers, or two threads of one process, can mark homes of
+    one name at once, and then renamed. The finish marker is written before the home's results or
+    exception leave the call, so before a pool worker sends them back.
 
     Each (name, path) pair in *held_until* holds the home of that name: it is marked, then waits until
     the path exists; if the path has not appeared within *hold_limit_seconds*, it raises TimeoutError
@@ -68,19 +71,26 @@ class MarkingHomeSimulator:
     def __call__(
         self, config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
     ) -> SimulationResults:
-        """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results."""
+        """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results; either way, mark the home finished as the call ends."""
         locations = [location.name for location in weather.frames] if isinstance(weather, PrefetchedWeather) else None
-        marker = self.marker_dir / f"{config.name}.json"
-        partial = marker.with_name(f"{marker.name}.{os.getpid()}.{threading.get_ident()}.partial")
-        partial.write_text(json.dumps({"pid": os.getpid(), "locations": locations}), encoding="utf-8")
-        partial.replace(marker)
-        release = dict(self.held_until).get(config.name)
-        if release is not None:
-            _wait_until_exists(release, config.name, self.hold_limit_seconds)
-        time.sleep(self.seconds)
-        if config.name in self.failing:
-            raise ValueError(f"{config.name} cannot be simulated")
-        return make_sim_results(self_kwh=config.pv_config.capacity_kw, days=1)
+        _write_whole(self.marker_dir / f"{config.name}.json", json.dumps({"pid": os.getpid(), "locations": locations}))
+        try:
+            release = dict(self.held_until).get(config.name)
+            if release is not None:
+                _wait_until_exists(release, config.name, self.hold_limit_seconds)
+            time.sleep(self.seconds)
+            if config.name in self.failing:
+                raise ValueError(f"{config.name} cannot be simulated")
+            return make_sim_results(self_kwh=config.pv_config.capacity_kw, days=1)
+        finally:
+            _write_whole(self.marker_dir / f"{config.name}.finished", "")
+
+
+def _write_whole(path: Path, text: str) -> None:
+    """Write *text* to *path*, which appears only once whole: written under a temporary name carrying this process's and thread's ids, then renamed onto *path*."""
+    partial = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.partial")
+    partial.write_text(text, encoding="utf-8")
+    partial.replace(path)
 
 
 def _wait_until_exists(release: Path, home_name: str, limit: float) -> None:
@@ -104,6 +114,15 @@ def started(marker_dir: Path) -> dict[str, HomeStart]:
         locations = recorded["locations"]
         starts[marker.stem] = HomeStart(pid=recorded["pid"], locations=None if locations is None else tuple(locations))
     return starts
+
+
+def finished(marker_dir: Path) -> frozenset[str]:
+    """The name of each home a MarkingHomeSimulator over *marker_dir* has finished, whether it returned or raised.
+
+    It is safe to call while a MarkingHomeSimulator is still marking homes, for the same reason
+    started() is.
+    """
+    return frozenset(marker.name.removesuffix(".finished") for marker in marker_dir.glob("*.finished"))
 
 
 @dataclass(frozen=True)
