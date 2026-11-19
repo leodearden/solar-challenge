@@ -241,7 +241,7 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
         {
             "name": _read_name(scenario.get("name")),
             "period": _read_period(scenario.get("period")),
-            "location": _read_location(scenario.get("location")),
+            "location": _read_location_block(scenario.get("location")),
             "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
@@ -382,7 +382,7 @@ def _read_day(value: Any, path: str) -> date:
     return read_iso_date(value, path)
 
 
-def _read_location(location: Any) -> _BlockRead:
+def _read_location_block(location: Any) -> _BlockRead:
     """Nothing of the fleet form, which has no location control: a location other than the one it runs at is not loaded."""
     if parse_location_block(location) == _fleet_form_location({}):
         return {}, ()
