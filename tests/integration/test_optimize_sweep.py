@@ -618,17 +618,17 @@ class TestRetainedCashFloorOverride:
 
 
 # ---------------------------------------------------------------------------
-# step-15/16 — guards: ValueError for empty configs and None finance
+# step-15/16 — guards: TypeError for no simulator, ValueError for empty configs and None finance
 # ---------------------------------------------------------------------------
 
 
 class TestRunSweepGuards:
-    """Guards: ValueError for empty configs and None finance."""
+    """Guards: TypeError for a call passing no simulator, ValueError for empty configs and None finance."""
 
     def test_raises_value_error_on_empty_configs(self) -> None:
         """run_sweep raises ValueError when configs list is empty."""
         with pytest.raises(ValueError, match="(?i)empty|no config"):
-            run_sweep([])
+            run_sweep([], simulate=lambda fc, s, e: _make_fleet_results())
 
     def test_raises_value_error_when_finance_is_none(self) -> None:
         """run_sweep raises ValueError when any scenario.finance is None."""
@@ -643,6 +643,15 @@ class TestRunSweepGuards:
 
         with pytest.raises(ValueError, match="(?i)finance"):
             run_sweep(configs, simulate=simulate)
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        """run_sweep runs only the simulator its caller passes: a call passing none is refused by name."""
+        n_homes = 3
+        pt = ConfigPoint(pv_kwp=4.0, battery_kwh=6.0, inverter_kw=3.6)
+        configs = [(pt, _make_scenario(n_homes=n_homes, finance=_interior_finance(n_homes=n_homes)))]
+
+        with pytest.raises(TypeError, match="simulate"):
+            run_sweep(configs)
 
 
 # ---------------------------------------------------------------------------
