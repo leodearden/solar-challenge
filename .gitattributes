@@ -1,2 +1,3 @@
-# A weather-cache entry is a year of PVGIS data, not text to review: git diff and numstat show it as binary.
-tests/fixtures/weather_cache/*.csv -diff
+# A weather-cache entry is sealed byte for byte, its first line holding the SHA-256 of the bytes after it, so git must never rewrite them, as a CRLF checkout would: tests/unit/test_gitattributes.py checks it.
+# binary also keeps git diff and numstat from showing the entry, a year of PVGIS data, as lines to review.
+tests/fixtures/weather_cache/*.csv binary
