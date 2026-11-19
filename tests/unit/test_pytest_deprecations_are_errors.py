@@ -87,7 +87,7 @@ def test_a_pytest_deprecation_fails_the_collection_that_meets_it(
         ),
     ],
 )
-def test_a_class_scoped_fixture_defined_as_an_instance_method_fails_its_test(
+def test_a_class_scoped_fixture_errors_its_test_only_when_defined_as_an_instance_method(
     pytester_under_root_conftest: pytest.Pytester, project_root: Path, module_source: str, outcomes: dict[str, int]
 ) -> None:
     """A class-scoped fixture defined as an instance method errors its test, and the same fixture as a classmethod passes.
