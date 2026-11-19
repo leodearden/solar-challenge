@@ -23,10 +23,10 @@ type, text and creation date and sorted by one column, with the count of every r
 query matches; RunQuery refuses a query no page answers.
 
 headline_figures is a run list row's figures for a run's record, named as the run lists
-name them. A run has no figures while it has no summary, and none, with a warning naming the
-run, when its summary is damaged: it cannot be read, its refusal then being the row's
-unreadable, or run_headline refuses it. RunStorage.totals counts the completed runs and their
-homes and sums the generation of those whose headline reads.
+name them. A run has no figures while it has no summary, and none when its summary cannot be
+read or holds a figure its headline cannot show: the refusal RunRecord.headline() raises is
+then the row's unreadable, and a warning names the run. RunStorage.totals counts the
+completed runs and their homes and sums the generation of those whose headline reads.
 """
 
 import dataclasses
@@ -762,17 +762,27 @@ class TestHeadlineFigures:
                 "total_generation_kwh",
                 id="generation-no-float-can-hold",
             ),
+            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), None, id="generation-nan"),
+            pytest.param(
+                summary_json(home_summary(export_ratio=math.nan)), None, id="export-ratio-nan-a-figure-no-run-list-shows"
+            ),
         ],
     )
-    def test_a_run_whose_summary_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
+    def test_a_run_whose_headline_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
         self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str, field: str | None
     ) -> None:
-        """A run list shows the run without figures and says why (the G7 waiver in docs/prds/run-store-one-owner.md §15)."""
+        """The row's unreadable is the refusal RunRecord.headline() raises, the message the compare page flashes.
+
+        A run list shows the run without figures and says why: the G7 waiver in
+        docs/prds/run-store-one-owner.md §15 requires the run to be visible in History with its
+        reason. NaN is a number, so a summary holding it reads, and its headline is refused all
+        the same, even for the export ratio, a figure no run list shows.
+        """
         _store_a_home_run(storage, "damaged-run")
         _damage_summary(storage, "damaged-run", damaged_summary_json)
         damaged = _record(storage, "damaged-run")
         with pytest.raises(StoredRunUnreadable) as refusal:
-            damaged.summary()
+            damaged.headline()
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         figures = headline_figures(damaged)
@@ -785,31 +795,6 @@ class TestHeadlineFigures:
         )
         warnings = _storage_warnings(caplog)
         assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
-
-    @pytest.mark.parametrize(
-        "damaged_summary_json",
-        [
-            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), id="generation-nan"),
-            pytest.param(summary_json(home_summary(export_ratio=math.nan)), id="export-ratio-nan-a-figure-no-run-list-shows"),
-        ],
-    )
-    def test_a_run_whose_headline_figure_is_not_a_finite_number_has_neither_figure_and_a_warning_names_it_though_it_reads(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
-    ) -> None:
-        """NaN is a number, so the summary reads; run_headline refuses it, and no document is unreadable.
-
-        The export ratio is a headline figure that no run list shows, and a summary holding it
-        NaN is damaged all the same.
-        """
-        _store_a_home_run(storage, "nan-run")
-        _damage_summary(storage, "nan-run", damaged_summary_json)
-        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
-
-        figures = headline_figures(_record(storage, "nan-run"))
-
-        assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": None}
-        warnings = _storage_warnings(caplog)
-        assert len(warnings) == 1 and "nan-run" in warnings[0], warnings
 
 
 class TestRunTotals:
@@ -849,6 +834,7 @@ class TestRunTotals:
             pytest.param(summary_json(fleet_summary(total_generation_kwh=None)), id="generation-null"),
             pytest.param(_with_a_retired_key(summary_json(fleet_summary())), id="summary-with-a-key-no-field-has"),
             pytest.param(summary_json(fleet_summary(total_generation_kwh=10**400)), id="generation-no-float-can-hold"),
+            pytest.param(summary_json(fleet_summary(total_generation_kwh=math.nan)), id="generation-nan"),
         ],
     )
     def test_a_completed_run_whose_summary_is_damaged_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(
