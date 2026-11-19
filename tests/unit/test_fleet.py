@@ -3,6 +3,7 @@
 import multiprocessing
 import os
 from collections.abc import Iterator
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherCache, default_weather
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_sim_results
-from tests._fleet_runner import HomeStart, MarkingHomeSimulator, started
+from tests._fleet_runner import HomeStart, MarkingHomeSimulator, ProcessEndingHomeSimulator, started
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -844,7 +845,7 @@ def _raising_at_the_second_home(raised: BaseException) -> HomesDone:
 
 
 class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
-    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start."""
+    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start; a pool that a worker process broke names a home only as one left unfinished."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
     def test_in_parallel_a_failed_home_is_named_on_its_own_exception_and_the_homes_still_pending_are_cancelled(
@@ -864,6 +865,27 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
             "when Home 1 failed, the one worker had started at most it, the home it took next and the two "
             "queued behind that one, so the fifth home was cancelled"
         )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_a_pool_a_worker_process_broke_names_a_home_only_as_unfinished(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = _uniform_fleet(4, "Four")
+        home_simulator = ProcessEndingHomeSimulator(
+            MarkingHomeSimulator(tmp_path, seconds=0.2), ending=frozenset({"Home 2"})
+        )
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=2)
+
+        with pytest.raises(BrokenProcessPool) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert type(caught.value) is BrokenProcessPool
+        (note,) = caught.value.__notes__
+        assert note in {
+            f"the process pool broke before home {index} ({home.name!r}) of fleet 0 ('Four') finished; "
+            "the process that ended may have been simulating another home"
+            for index, home in enumerate(fleet.homes)
+        }
 
     def test_in_turn_a_failed_home_is_named_on_its_own_exception_and_no_later_home_starts(self, tmp_path: Path) -> None:
         fleet = _uniform_fleet(5, "Five")
