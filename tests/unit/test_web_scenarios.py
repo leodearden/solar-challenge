@@ -38,6 +38,7 @@ from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_na
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
+from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -109,13 +110,13 @@ class TestScenarioBuilderRoute:
     def test_builder_offers_each_location_preset_labelled_with_its_name(
         self, client: FlaskClient
     ) -> None:
-        """GET /scenarios/builder offers one option per LOCATION_PRESETS key and one for a custom location, each preset labelled with its Location's name."""
+        """GET /scenarios/builder's location select offers each LOCATION_PRESETS key labelled with its Location's name, and a custom location."""
         page = client.get("/scenarios/builder").get_data(as_text=True)
-        values = (*LOCATION_PRESETS, "custom")
-        names = tuple(preset.name for preset in LOCATION_PRESETS.values())
 
-        assert {value: element_count(page, "option", {"value": value}) for value in values} == dict.fromkeys(values, 1)
-        assert counts_of(texts(page), names) == dict.fromkeys(names, 1)
+        assert option_texts(page, {"x-model": "location_preset"}) == {
+            **{key: preset.name for key, preset in LOCATION_PRESETS.items()},
+            "custom": "Custom Location",
+        }
 
 
 class TestSweepRoute:
@@ -135,12 +136,12 @@ class TestSweepRoute:
     def test_sweep_page_offers_each_location_preset_labelled_with_its_name(
         self, client: FlaskClient
     ) -> None:
-        """GET /scenarios/sweep offers one option per LOCATION_PRESETS key, each labelled with its Location's name."""
+        """GET /scenarios/sweep's location select offers each LOCATION_PRESETS key, labelled with its Location's name."""
         page = client.get("/scenarios/sweep").get_data(as_text=True)
-        names = tuple(preset.name for preset in LOCATION_PRESETS.values())
 
-        assert {key: element_count(page, "option", {"value": key}) for key in LOCATION_PRESETS} == dict.fromkeys(LOCATION_PRESETS, 1)
-        assert counts_of(texts(page), names) == dict.fromkeys(names, 1)
+        assert option_texts(page, {"x-model": "baseConfig.location"}) == {
+            key: preset.name for key, preset in LOCATION_PRESETS.items()
+        }
 
     def test_sweep_page_contains_mode_options(self, client: FlaskClient) -> None:
         """GET /scenarios/sweep offers the Linear and Geometric modes, in that order, after the Sweep Mode label."""

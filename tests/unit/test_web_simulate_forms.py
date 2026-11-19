@@ -12,7 +12,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
@@ -27,6 +27,7 @@ from tests._html_page import (
     texts,
     texts_after,
 )
+from tests._html_select_options import option_texts
 from tests._web_job_days import web_job_days
 
 _JOB_DAYS = web_job_days(count=1)
@@ -54,6 +55,13 @@ def _fixed_value_bounds(page: str) -> list[tuple[str | None, str | None]]:
     ]
     assert bounds, "the page has no input bound to dist.fixed, so there is no Fixed Value bound to compare"
     return bounds
+
+
+def _name_and_coordinates(preset: Location) -> str:
+    """*preset*'s name, then its latitude and longitude in degrees to two places, each with the letter of its hemisphere."""
+    latitude = f"{abs(preset.latitude):.2f}°{'N' if preset.latitude >= 0 else 'S'}"
+    longitude = f"{abs(preset.longitude):.2f}°{'E' if preset.longitude >= 0 else 'W'}"
+    return f"{preset.name} ({latitude}, {longitude})"
 
 
 class TestSimulateHomeRoute:
@@ -212,18 +220,13 @@ class TestHomeFormRender:
     def test_home_form_offers_each_location_preset_labelled_with_its_name_and_coordinates(
         self, client: FlaskClient
     ) -> None:
-        """GET /simulate/home offers one option per LOCATION_PRESETS key and one for custom coordinates; each preset's label is its Location's name, then its coordinates.
-
-        The custom location option is found by its label: the SEG rate's own 'custom' option shares its value.
-        """
+        """GET /simulate/home's location select offers each LOCATION_PRESETS key and custom coordinates; each preset's label is its Location's name, then its latitude and longitude with their hemispheres."""
         page = client.get("/simulate/home").get_data(as_text=True)
 
-        assert {key: element_count(page, "option", {"value": key}) for key in LOCATION_PRESETS} == dict.fromkeys(LOCATION_PRESETS, 1)
-        assert counts_of(texts(page), ("Custom coordinates...",)) == {"Custom coordinates...": 1}
-        for preset in LOCATION_PRESETS.values():
-            [label] = [text for text in texts(page) if text.startswith(preset.name)]
-            assert f"{abs(preset.latitude):.2f}" in label
-            assert f"{abs(preset.longitude):.2f}" in label
+        assert option_texts(page, {"x-model": "formData.location"}) == {
+            **{key: _name_and_coordinates(preset) for key, preset in LOCATION_PRESETS.items()},
+            "custom": "Custom coordinates...",
+        }
 
 
 class TestFleetConfigRoute:
