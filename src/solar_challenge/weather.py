@@ -254,7 +254,7 @@ class WeatherCache:
         except ValueError as e:
             raise ValueError(
                 f"Cannot read the weather cache entry {cache_file}: {e}. Delete the file, or call "
-                "WeatherCache.invalidate for the entry, to have it fetched afresh"
+                "WeatherCache.invalidate for the entry, so that get finds no entry"
             ) from e
 
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
