@@ -14,6 +14,7 @@ Tests the full stack:
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 from pathlib import Path
 
@@ -871,10 +872,12 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         """The positive control, without which the test above could pass on a simulator `fleet run` never calls.
 
         It asserts only on the marks: the simulator's stand-in results need not suit the rest of the run.
+        It also asserts that every home ran in this process, where `_fleet_run_in_process`'s --sequential keeps the simulator.
         """
         _fleet_run_in_process(SCENARIO, "--start", "2024-01-15", "--end", "2024-01-15")
 
         assert set(started(marker_dir)) == {home.name for home in load_fleet_config(SCENARIO).homes}
+        assert {start.pid for start in started(marker_dir).values()} == {os.getpid()}
 
 
 # ---------------------------------------------------------------------------
