@@ -421,7 +421,8 @@ RUN_FORMAT_VERSION: int = RUN_DOCUMENT_STEPS[-1].version
 
 # web/run_headline.py — the cross-type headline; a leaf below storage, which storage and charts import (task 1413)
 @dataclass(frozen=True)
-class RunHeadline: generation_kwh: float; self_consumption_ratio: float
+class RunHeadline: ...                             # its fields: chart-panels-and-theme-tokens.md §Contract, where S21 ζ
+                                                   # widened γ's generation_kwh and self_consumption_ratio to nine (D-S19-8)
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline: ...
 
 # web/storage.py — the runs table
