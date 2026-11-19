@@ -112,13 +112,13 @@ class TestRunHeadline:
         with pytest.raises(ValueError) as refusal:
             dataclasses.replace(run_headline(home_summary()), **{figure: None})
 
-        assert f"{figure} is None" in str(refusal.value)
+        assert f"RunHeadline.{figure} must be a finite number, got None" in str(refusal.value)
 
     def test_a_headline_whose_pv_stored_share_is_not_a_finite_number_is_refused_naming_it_and_its_value(self) -> None:
         with pytest.raises(ValueError) as refusal:
             dataclasses.replace(run_headline(home_summary()), pv_stored_share=math.nan)
 
-        assert "pv_stored_share is nan" in str(refusal.value)
+        assert "RunHeadline.pv_stored_share must be a finite number, got nan" in str(refusal.value)
 
     @pytest.mark.parametrize(
         ("summary", "figure", "value"),
@@ -170,7 +170,7 @@ class TestRunHeadline:
         with pytest.raises(ValueError) as refusal:
             run_headline(summary)
 
-        assert f"{figure} is {value!r}" in str(refusal.value)
+        assert f"RunHeadline.{figure} must be a finite number, got {value!r}" in str(refusal.value)
 
     def test_a_figure_a_summary_holds_as_a_whole_number_is_a_headline_figure(self) -> None:
         """A stored summary's JSON may hold a figure as a whole number, 100 rather than 100.0, which decodes as an int."""
