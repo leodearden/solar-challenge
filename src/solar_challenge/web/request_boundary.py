@@ -10,7 +10,9 @@ from typing import Any
 
 from flask import request
 
-from solar_challenge.location import Location
+from solar_challenge.config import parse_location_block
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import Location, parse_location
 
 
 class NotAJsonObject(ValueError):
@@ -87,6 +89,20 @@ def refuse_unencodable_text(value: object, what: str) -> None:
     """
     if isinstance(value, str):
         require_encodable_text(value, what)
+
+
+def read_location(value: object) -> Location:
+    """The Location a request's location *value* names: a string as location.parse_location reads it, a JSON object as config.parse_location_block reads a scenario's location: block.
+
+    Raises:
+        ConfigurationError: From parse_location or parse_location_block, for a value they
+            refuse; for any other value, naming location and its type.
+    """
+    if isinstance(value, str):
+        return parse_location(value)
+    if isinstance(value, dict):
+        return parse_location_block(value)
+    raise ConfigurationError(f"location must be a string or a JSON object, got {type(value).__name__}")
 
 
 LOCATION_PRESETS: dict[str, Location] = {
