@@ -9,23 +9,23 @@ enforces them; the rest of its text is left unread as a record.
 A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
 names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for in a file's whole text, comments,
 docstrings and code alike, but a Python file under tests/ is read only in its comments and the strings it writes as
-statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A
-file that is not UTF-8 text holds none. A briefing that does not parse, or whose conventions are not a sequence of one
-or more entries that each have a scalar rule, is reported rather than read as holding none. The path is looked up in
-the files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its names are
-looked up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not UTF-8
-text, or that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds, is
-written from that tree's name, as in
-reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path names its test file up
-to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in test_<name>.py.<Class>, each word
-after the .py then being a name, up to a hyphen that joins one that is not, as in <Class>-based; otherwise it names its
-file whole, so a backup's test_<name>.py.bak names the backup. A path rooted at tests/ is read so only where git lists
-its test file and the tree holds nothing by the whole path, as in tests/<file>.py.<Class>, and is then refused, naming
-the node-id to write. A path not rooted at tests/ whose file ends a test file tests/ holds, as test_<name>.py or
-<dir>/test_<name>.py does, is refused the same way. One whose file ends no file of tests/ is assumed to name another
-tree's or a throwaway project's file, so it is no pointer, but each test_<name> or Test<Name> after its .py, as in
-test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name given alone, as below. A path rooted at tests/ that
-the tree holds nothing by is refused as missing, however its names are joined, unless it is read at a test file's .py.
+statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A file
+that is not UTF-8 text holds none. A briefing that does not parse, or whose conventions are not a sequence of one or
+more entries that each have a scalar rule, is reported rather than read as holding none. The path is looked up in the
+files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its names are looked
+up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not UTF-8 text, or
+that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds, is written
+from that tree's name, as in reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A
+path names its test file up to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in
+test_<name>.py.<Class>, each word after the .py then being a name, up to a hyphen that joins one that is not, as in
+<Class>-based; otherwise it names its file whole, so a backup's test_<name>.py.bak names the backup. A path rooted at
+tests/ is read so only where git lists its test file and the tree holds nothing by the whole path, as in
+tests/<file>.py.<Class>, and is then refused, naming the node-id to write. A path not rooted at tests/ whose file ends a
+test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py does, is refused the same way. One whose file ends no
+file of tests/ is assumed to name another tree's or a throwaway project's file, so it is no pointer, but each
+test_<name> or Test<Name> after its .py, as in test_<name>.py::<Class> or test_<name>.py.<Class>, is read as a name
+given alone, as below. A path rooted at tests/ that the tree holds nothing by is refused as missing, however its names
+are joined, unless it is read at a test file's .py.
 
 A test, test class or test file named any other way is refused, and the refusal names each node-id to write: a test or
 test class as test_<name> or Test<Name>, alone or next to its file in prose, or joined other than with :: to a node-id's
@@ -640,8 +640,8 @@ def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: 
     pointers = _pointers(checkout, _sources(project_root))
     records = ", ".join(f"{directory}/" for directory in RECORD_DIRECTORIES)
     assert pointers, (
-        f"found no pointer into tests/ in any file git lists outside the records ({records}), so this gate would pass"
-        " vacuously; fix the listing or the grammar"
+        f"found no pointer into tests/ in any file git lists outside the records ({records}), nor in the briefing's"
+        " conventions rules, so this gate would pass vacuously; fix the listing or the grammar"
     )
 
     dangling = _dangling(checkout, pointers)
@@ -700,6 +700,13 @@ def test_scans_every_file_git_lists_outside_the_records_and_the_briefing(project
     project_fixture_files = ["tests/unit/notes.txt", "tests/unit/test_pointed_at.py"]
 
     assert set(_sources(project)) == {PurePosixPath(source) for source in [*scanned, *project_fixture_files]}
+
+
+def test_does_not_scan_a_briefing_that_git_ignores(project: Path) -> None:
+    write_file(project, ".gitignore", "review/briefing.yaml\n")
+    write_file(project, "review/briefing.yaml", "")
+
+    assert PurePosixPath("review/briefing.yaml") not in _sources(project)
 
 
 def test_pointers_to_existing_files_directories_and_tests_resolve(project: Path) -> None:
@@ -1134,14 +1141,15 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "refusal"),
     [
-        "project: pkg\n",
-        "conventions: none\n",
-        "conventions: []\n",
-        "conventions:\n  - why: x\n",
-        "conventions:\n  - rule: [a, b]\n",
-        "conventions: [rule\n",
+        ("project: pkg\n", "review/briefing.yaml has no conventions sequence"),
+        ("conventions: none\n", "review/briefing.yaml has no conventions sequence"),
+        ("conventions: []\n", "review/briefing.yaml has no conventions sequence"),
+        ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
+        ("conventions:\n  - rule: [a, b]\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
+        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:3: a conventions entry has no scalar rule"),
+        ("conventions: [rule\n", "review/briefing.yaml does not parse"),
     ],
     ids=[
         "no-conventions",
@@ -1149,14 +1157,15 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         "empty-conventions",
         "entry-without-a-rule",
         "rule-not-text",
+        "second-entry-without-a-rule",
         "does-not-parse",
     ],
 )
-def test_refuses_a_briefing_whose_conventions_rules_cannot_be_read(project: Path, text: str) -> None:
+def test_refuses_a_briefing_whose_conventions_rules_cannot_be_read(project: Path, text: str, refusal: str) -> None:
     briefing = write_file(project, "review/briefing.yaml", text)
     checkout = _Checkout(project)
 
-    with pytest.raises(ValueError, match=r"^review/briefing\.yaml"):
+    with pytest.raises(ValueError, match=f"^{re.escape(refusal)}"):
         _pointers(checkout, [briefing])
 
 
