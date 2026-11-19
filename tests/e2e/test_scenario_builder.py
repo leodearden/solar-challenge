@@ -8,6 +8,7 @@ from typing import Any, NamedTuple
 import pytest
 import yaml
 from playwright.sync_api import FloatRect, Locator, Page, Response, ViewportSize, expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from pytest_playwright import CreateContextCallback
 
 from solar_challenge.config import load_fleet_config
@@ -124,11 +125,16 @@ def test_the_section_the_builder_shows_before_alpine_starts_is_the_one_it_opens(
     )
 
 
-def _panel_of(page: Page, header: str) -> Locator:
-    """The element the accordion header named *header* names in aria-controls, i.e. that section's panel."""
+def _panel_id_of(page: Page, header: str) -> str:
+    """The id the accordion header named *header* names in aria-controls, i.e. the id of that section's panel."""
     panel_id = page.get_by_role("button", name=header, exact=True).get_attribute("aria-controls")
     assert panel_id, f"the {header} header names no element in aria-controls"
-    return page.locator(f"id={panel_id}")
+    return panel_id
+
+
+def _panel_of(page: Page, header: str) -> Locator:
+    """The element the accordion header named *header* names in aria-controls, i.e. that section's panel."""
+    return page.locator(f"id={_panel_id_of(page, header)}")
 
 
 def _sections_whose_control_the_panel_holds(page: Page, header: str) -> set[str]:
@@ -192,33 +198,54 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
 # ── Form controls: each caption names its control ────────────────────
 
 
-_SHOWS_ALL_ITS_CONTENT = "panel => panel.scrollHeight <= panel.clientHeight"
-"""A panel laid out tall enough to show all of its content, as a panel is once it has finished opening."""
+_ACCORDION_IS_AT_REST = """({ opened, closed }) => {
+    const panel = (id) => document.getElementById(id);
+    const isDisplayed = (id) => panel(id).checkVisibility();
+    const { scrollHeight, clientHeight } = panel(opened);
+    return isDisplayed(opened) && scrollHeight <= clientHeight && !closed.some(isDisplayed);
+}"""
+"""Whether the accordion is at rest with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the open panel is displayed and tall enough to show all of its content, as a panel is once it has finished opening, and no closed panel is displayed, as a panel is once it has finished closing."""
+
+
+def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]:
+    """The argument of _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
+    return {
+        "opened": _panel_id_of(page, section),
+        "closed": [_panel_id_of(page, other) for other in _ACCORDION_SECTIONS if other != section],
+    }
 
 
 def _open_section(page: Page, section: str) -> None:
     """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
 
-    General is open when the page loads. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
+    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
     """
-    page.get_by_role("button", name=section, exact=True).click()
-    opened = _panel_of(page, section)
-    expect(opened).to_be_visible()
-    page.wait_for_function(_SHOWS_ALL_ITS_CONTENT, arg=opened.element_handle())
-    for other in _ACCORDION_SECTIONS:
-        if other != section:
-            expect(_panel_of(page, other)).to_be_hidden()
+    header = page.get_by_role("button", name=section, exact=True, expanded=False)
+    expect(header, f"the {section} section is open, so a click on its header would close it").to_be_visible()
+    accordion = _accordion_with_open(page, section)
+    header.click()
+    try:
+        page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion)
+    except PlaywrightTimeoutError as timeout:
+        displayed = [
+            other for other in _ACCORDION_SECTIONS if _panel_of(page, other).evaluate("panel => panel.checkVisibility()")
+        ]
+        scroll_height, client_height = _panel_of(page, section).evaluate("panel => [panel.scrollHeight, panel.clientHeight]")
+        raise AssertionError(
+            f"the accordion did not come to rest after opening {section}: the panels displayed are {displayed}, "
+            f"and the {section} panel's scrollHeight is {scroll_height} against its clientHeight {client_height}"
+        ) from timeout
 
 
 def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
-    """When _open_section returns, the section it opened shows all of its panel and every other section's panel is hidden, so the next click meets no header or control still moving."""
+    """When _open_section returns, the accordion is at rest with the section it opened open, and not with another section open, so the next click meets no header or control still moving."""
     page.goto(live_server + "/scenarios/builder")
     _open_section(page, "Period")
 
-    shown = {section for section in _ACCORDION_SECTIONS if _panel_of(page, section).is_visible()}
-    whole = _panel_of(page, "Period").evaluate(_SHOWS_ALL_ITS_CONTENT)
+    at_rest_with_period_open = page.evaluate(_ACCORDION_IS_AT_REST, _accordion_with_open(page, "Period"))
+    at_rest_with_location_open = page.evaluate(_ACCORDION_IS_AT_REST, _accordion_with_open(page, "Location"))
 
-    assert (shown, whole) == ({"Period"}, True)
+    assert (at_rest_with_period_open, at_rest_with_location_open) == (True, False)
 
 
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
