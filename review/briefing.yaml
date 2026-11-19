@@ -130,7 +130,7 @@ conventions:
       times, the nominal capacity_kwh among them; reading only the Battery's answers keeps one
       definition of each limit and basis (docs/prds/dispatch-configuration-below-config.md §4).
 
-  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution refuse a simulation_days other than their summaries', and bill_distribution summaries over different windows, naming both (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn)"
+  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution refuse a simulation_days other than their summaries' (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn), and bill_distribution summaries over different windows, naming both (tests/unit/test_finance_window.py::TestOneWindowPerDistribution)"
     why: >
       householder_bill and bill_distribution used to take the day count as an argument nobody
       checked against the summaries, and cli/finance.run computed it from tz-aware midnights,
