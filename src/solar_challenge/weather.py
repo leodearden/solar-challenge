@@ -362,7 +362,9 @@ class PvgisTmy:
                 or repeats hours of a climate year, or scale_tmy_to_annual_ghi refuses what PVGIS returned, its
                 ValueError then being the cause; nothing is then put. A WeatherDataError is a RuntimeError
             ValueError: From its cache's get, naming the entry's file, if the entry cached for location was cut
-                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched
+                short or changed after put wrote it, or is not in the form put writes; nothing is then fetched; once
+                the file is deleted, or the entry removed with WeatherCache.invalidate, the next get fetches the TMY
+                afresh and puts it
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)
