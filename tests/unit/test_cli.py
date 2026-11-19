@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable
+from datetime import date, timedelta
 from pathlib import Path
 from typing import NoReturn
 from unittest.mock import Mock
@@ -36,13 +37,18 @@ from solar_challenge.cli.utils import (
     print_warning,
     status_console,
 )
+from solar_challenge.config import load_config, parse_finance_config
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.home import HomeConfig
+from solar_challenge.finance import FinanceConfig, bill_distribution
+from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
 from solar_challenge.location import parse_location
+from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError
-from tests._cli_fleet_simulator import invoke_cli
+from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
 from tests._cli_table_text import table_text
+from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
@@ -984,6 +990,128 @@ def test_home_run_counts_the_calendar_days_of_a_run_crossing_the_october_clock_c
 
     assert result.exit_code == 0
     assert re.search(r"\bSimulation Days 2\b", table_text(result.stdout))
+
+
+# The clocks go forward on 31 March 2024, so these two calendar days last 47 hours.
+_SPRING_FORWARD_FIRST, _SPRING_FORWARD_LAST = "2024-03-31", "2024-04-01"
+
+
+class _ReachedTheSweep(Exception):
+    """Raised by _simulate_reaching_the_sweep, the sign that a command got as far as its first fleet simulation."""
+
+
+def _simulate_reaching_the_sweep(fleet_config: object, start: object, end: object) -> NoReturn:
+    """A fleet simulator that stops the command at its first fleet simulation, raising _ReachedTheSweep."""
+    raise _ReachedTheSweep
+
+
+def _finance_run_over(first_day: date, days: int) -> tuple[Result, list[SummaryStatistics], FinanceConfig]:
+    """Run `finance run` over *days* days from *first_day* on _write_scenario's scenario, named Bristol, every fleet simulation answered by one home's minute results over those days; with those results' summaries and the scenario's finance."""
+    _write_scenario("Bristol")
+    fleet = make_fleet_results_of([make_sim_results(days=days, first_day=first_day, cadence=ONE_MINUTE)])
+    last_day = first_day + timedelta(days=days - 1)
+
+    result = invoke_finance_run(
+        ["scenario.yaml", "--start", first_day.isoformat(), "--end", last_day.isoformat()], fleet
+    )
+
+    finance = parse_finance_config(load_config(Path("scenario.yaml"))["finance"])
+    assert finance is not None
+    return result, [calculate_summary(r) for r in fleet.per_home_results], finance
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestCommandsCountTheCalendarDaysOfTheirRun:
+    """Tests that each command counts the calendar days its run covers, the local dates from --start to --end, however many hours the clocks make them."""
+
+    def test_home_run_counts_the_two_days_across_the_spring_forward(self) -> None:
+        """31 March and 1 April 2024 are two calendar days, though only 23 hours separate their midnights once the clocks have gone forward."""
+        result = _run_home_named("Bristol", start=_SPRING_FORWARD_FIRST, end=_SPRING_FORWARD_LAST)
+
+        assert result.exit_code == 0
+        assert f"Simulating 2 days from {_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST}" in " ".join(
+            result.stderr.split()
+        )
+
+    def test_fleet_run_counts_the_two_days_across_the_spring_forward(self) -> None:
+        """The fleet's status line counts 31 March and 1 April 2024 as two days."""
+        _write_scenario("Bristol")
+
+        result = runner.invoke(
+            app,
+            [
+                "fleet", "run", "scenario.yaml",
+                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST, "--sequential",
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0
+        assert "Simulating fleet of 1 homes for 2 days" in " ".join(result.stderr.split())
+
+    def test_finance_run_across_the_spring_forward_bills_its_two_days_and_says_they_are_extrapolated(self) -> None:
+        """A run over 31 March and 1 April 2024, whose minute rows last 47 hours, bills those two days, says its yearly figures are extrapolated from them, and counts them in its status line."""
+        result, summaries, finance = _finance_run_over(date.fromisoformat(_SPRING_FORWARD_FIRST), 2)
+
+        assert result.exit_code == 0
+        window = summaries[0].window
+        assert window is not None and len(window.rows()) == (23 + 24) * 60
+        assert generate_finance_report(bill_distribution(summaries, finance, 2), scenario_name="Bristol") in result.stdout
+        assert f"×183.000 from a 2-day window ({_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST})" in result.stdout
+        assert summaries[0].simulation_days == 2
+        assert f"Simulating fleet of 1 homes for {summaries[0].simulation_days} days…" in " ".join(
+            result.stderr.split()
+        )
+
+    def test_finance_run_over_calendar_year_2023_bills_its_365_days_with_no_notice(self) -> None:
+        """A run over the whole of 2023 bills its 365 days, whose yearly figures are not extrapolated."""
+        result, summaries, finance = _finance_run_over(date(2023, 1, 1), 365)
+
+        assert result.exit_code == 0
+        assert generate_finance_report(bill_distribution(summaries, finance, 365), scenario_name="Bristol") in result.stdout
+        assert "extrapolated" not in result.stdout
+        assert "Simulating fleet of 1 homes for 365 days…" in " ".join(result.stderr.split())
+
+    def test_optimize_configs_over_a_30_day_window_counts_its_days_and_says_they_are_extrapolated(self) -> None:
+        """15 March to 13 April 2024 are 30 calendar days across the spring forward: the sweep's status line counts them, and its report says its yearly figures are extrapolated from them."""
+        _write_scenario("Bristol")
+        fleet = make_fleet_results_of(
+            [make_sim_results(days=30, first_day=date(2024, 3, 15), self_kwh=200.0, export_kwh=80.0, import_kwh=120.0)]
+        )
+
+        result = invoke_cli(
+            [
+                "optimize", "configs", "scenario.yaml",
+                "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
+                "--start", "2024-03-15", "--end", "2024-04-13",
+            ],
+            lambda fleet_config, start, end: fleet,
+        )
+
+        assert result.exit_code == 0
+        status = " ".join(result.stderr.split())
+        assert "Sweep complete: 1 feasible config(s)" in status
+        assert "over 1 homes for 30 days…" in status
+        assert "×12.200 from a 30-day window (2024-03-15 to 2024-04-13)" in result.stdout
+
+    def test_optimize_configs_warns_of_a_large_sweep_by_its_calendar_days(self) -> None:
+        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward: 550 configs over one home for 182 days are 100,100 home-days, over the 100,000 that warrant the warning, where 181 days would be 99,550."""
+        _write_scenario("Bristol")
+
+        result = invoke_cli(
+            [
+                "optimize", "configs", "scenario.yaml",
+                "--pv", "1,2,3,4,5,6,7,8,9,10",
+                "--battery", "0,1,2,3,4,5,6,7,8,9,10",
+                "--inverter", "3,4,5,6,7",
+                "--sensitivity", "",
+                "--start", "2024-01-01", "--end", "2024-06-30",
+            ],
+            _simulate_reaching_the_sweep,
+        )
+
+        assert isinstance(result.exception, _ReachedTheSweep)
+        assert "550 config(s) × 1 home(s) × 182 day(s) ≈ 100,100 home-days" in " ".join(result.stderr.split())
 
 
 _ECONOMY_7_TARIFF = {
