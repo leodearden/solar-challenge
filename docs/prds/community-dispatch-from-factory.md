@@ -83,7 +83,7 @@ def _battery_strategy(
 
 ### 5.2 Half-specified billing (α)
 
-- When `config.billing` is not `None` and either of its inputs is `None`, `simulate_community` emits one `UserWarning` (`stacklevel=2`). The warning names each missing input as `billing.tariff` or `billing.seg_rate_pence_per_kwh`, and names the three result fields that stay `None`. It emits nothing when billing is absent or complete. One warning per call, matching `simulate_home`'s tariff-without-SEG precedent.
+- When `config.billing` is not `None` and either of its inputs is `None`, `simulate_community` emits one `UserWarning`, attributed to `simulate_community`'s caller. The warning names each missing input as `billing.tariff` or `billing.seg_rate_pence_per_kwh`, and names the three result fields that stay `None`. It emits nothing when billing is absent or complete. One warning per call, matching `simulate_home`'s tariff-without-SEG precedent.
 - A tariff-only billing block is legitimate configuration: its tariff drives the battery's dispatch (§5.1). So it is warned about, not refused. The program row's remedy ("warns once naming the missing inputs") is followed, not the finding's alternatives (refuse, or price the import leg alone).
 
 ### 5.3 Frozen values (β)
