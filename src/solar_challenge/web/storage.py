@@ -150,18 +150,7 @@ class RunRecord:
                 a figure that is not a finite number. Then the document is runs.summary_json, the
                 field None, and the cause run_headline's ValueError.
         """
-        summary = self.summary()
-        if summary is None:
-            return None
-        try:
-            return run_headline(summary)
-        except ValueError as refusal:
-            raise StoredRunUnreadable(
-                self.id,
-                _row_document_name("summary_json"),
-                None,
-                f"holds a figure the run's headline cannot show: {refusal}",
-            ) from refusal
+        return _stored_headline(self.id, self.type, self.summary_json)
 
     def home_configs(self) -> tuple[HomeConfig, ...] | None:
         """Each home's HomeConfig, in order, read from config_json as the run's kind reads it; None while the run has none.
@@ -209,7 +198,29 @@ def _run_summary(
     return _run_kind(run_id, run_type).summary(_row_document(run_id, "summary_json", summary_json))
 
 
-_DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
+def _stored_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> "RunHeadline | None":
+    """Run *run_id*'s headline: run_headline of the summary _run_summary reads from its *summary_json*; None while it has none.
+
+    Raises:
+        StoredRunUnreadable: As _run_summary raises, or when run_headline refuses the summary for
+            a figure that is not a finite number. Then the document is runs.summary_json, the
+            field None, and the cause run_headline's ValueError.
+    """
+    summary = _run_summary(run_id, run_type, summary_json)
+    if summary is None:
+        return None
+    try:
+        return run_headline(summary)
+    except ValueError as refusal:
+        raise StoredRunUnreadable(
+            run_id,
+            _row_document_name("summary_json"),
+            None,
+            f"holds a figure the run's headline cannot show: {refusal}",
+        ) from refusal
+
+
+_DocumentColumn =Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
 
 
 def _row_document_name(column: _DocumentColumn) -> str:
@@ -703,33 +714,27 @@ def _read_headline(
 ) -> RunHeadline | StoredRunUnreadable | None:
     """What a run list reads of run *run_id* from the only columns of its row it needs, its type and its summary_json.
 
-    That is the run's headline; the refusal of its summary, when that cannot be read; or None,
-    while it has no summary, or when run_headline refuses it for a figure that is not a finite
-    number. A summary that cannot be read or that run_headline refuses is damaged, and is logged
-    as a warning naming the run, which the run lists then show without figures and the
+    That is the run's headline, as _stored_headline reads it; None while it has no summary; or
+    the refusal _stored_headline raises when the summary is damaged: it cannot be read, or holds
+    a figure its headline cannot show. That refusal is returned and logged as a warning naming
+    the run, so the run lists show the run without figures but with its reason, and the
     dashboard's totals without its generation, rather than fail for one damaged run (the G7
     waiver in docs/prds/run-store-one-owner.md §15, D-S19-9).
     """
     try:
-        summary = _run_summary(run_id, run_type, summary_json)
+        return _stored_headline(run_id, run_type, summary_json)
     except StoredRunUnreadable as unreadable:
-        logger.warning("Run %r shows no figures, as its summary cannot be read: %s", run_id, unreadable)
+        logger.warning("Run %r shows no figures: %s", run_id, unreadable)
         return unreadable
-    if summary is None:
-        return None
-    try:
-        return run_headline(summary)
-    except ValueError as refusal:
-        logger.warning("Run %r shows no figures, as its summary's headline is damaged: %s", run_id, refusal)
-        return None
 
 
 class HeadlineFigures(TypedDict):
     """The figures a run list's row shows for a run, under the names the History list and the assistant's run list give them; None where it has none.
 
-    unreadable is the message of the StoredRunUnreadable refusing the run's summary, naming the
-    run, the document and the field, when the summary cannot be read; None when it can be, or
-    the run has none.
+    unreadable is the message of the StoredRunUnreadable refusing the run's headline, as
+    RunRecord.headline() refuses it, naming the run, the document and the field, when the
+    summary cannot be read or holds a figure the headline cannot show; None when the headline
+    reads, or the run has no summary.
     """
 
     total_generation_kwh: float | None
@@ -738,7 +743,7 @@ class HeadlineFigures(TypedDict):
 
 
 def headline_figures(record: RunRecord) -> HeadlineFigures:
-    """The figures a run list's row shows for *record*'s run: its headline's figures, each None when _read_headline reads it no headline, and why its summary cannot be read, if it cannot."""
+    """The figures a run list's row shows for *record*'s run: its headline's figures, each None when _read_headline reads it no headline, and why its headline cannot be read, if it cannot."""
     headline = _read_headline(record.id, record.type, record.summary_json)
     match headline:
         case RunHeadline():
