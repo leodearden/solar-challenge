@@ -31,6 +31,7 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.seg import SEGTariff
+from solar_challenge.timebase import covered_days
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -227,7 +228,7 @@ def configs(
     _end_str = end or _scenario_period.get("end_date", "2024-12-31")
     start_date = pd.Timestamp(_start_str, tz=loc.timezone)
     end_date = pd.Timestamp(_end_str, tz=loc.timezone)
-    days = (end_date - start_date).days + 1
+    days = covered_days(start_date.date(), end_date.date())
     n_homes = len(fleet_config.homes)
 
     n_configs = len(pv_list) * len(battery_list) * len(inverter_list)

@@ -42,6 +42,7 @@ from solar_challenge.gridservices import (
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEGTariff
+from solar_challenge.timebase import covered_days
 
 app = typer.Typer(help="Financial analysis commands")
 
@@ -231,7 +232,7 @@ def run(
     loc = fleet_config.homes[0].location
     start_date = pd.Timestamp(start, tz=loc.timezone)
     end_date = pd.Timestamp(end, tz=loc.timezone)
-    days = (end_date - start_date).days + 1
+    days = covered_days(start_date.date(), end_date.date())
 
     print_info(f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
     simulator = ctx.ensure_object(CliFleetSimulator)

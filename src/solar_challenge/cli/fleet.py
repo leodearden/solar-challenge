@@ -45,6 +45,7 @@ from solar_challenge.fleet import (
     default_runner,
 )
 from solar_challenge.output import compute_community_metrics, generate_community_report
+from solar_challenge.timebase import covered_days
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -185,7 +186,7 @@ def run(
 
     start_date, end_date = _period_in_fleet_timezone(fleet_config, start, end)
 
-    days = (end_date - start_date).days + 1
+    days = covered_days(start_date.date(), end_date.date())
     print_info(f"Simulating fleet of {n_homes} homes for {days} days")
 
     with create_fleet_progress() as progress:

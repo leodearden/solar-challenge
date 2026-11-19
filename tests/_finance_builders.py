@@ -24,8 +24,8 @@ A fleet of homes whose results differ is
 ``make_fleet_results_of([make_sim_results(...), make_sim_results(...)])``, each
 result on a default home unless ``homes=`` is given.
 
-The window a result covers is ``make_window(days=..., first_day=...)`` of the
-same arguments, which a hand-built ``SummaryStatistics`` names as its window.
+The window a result covers is ``make_window(days=..., first_day=..., cadence=...)``
+of the same arguments, which a hand-built ``SummaryStatistics`` names as its window.
 make_scenario's period is ``make_period()``, the default window's dates, so a
 builder scenario's ``simulate`` is asked for the window its default results cover.
 
@@ -99,15 +99,17 @@ def make_sized_home(
 # 2021 is not a leap year, so the default window's 365 days are its whole calendar year.
 _DEFAULT_WINDOW_FIRST_DAY = date(2021, 1, 1)
 _DEFAULT_WINDOW_DAYS = 365
+_DEFAULT_WINDOW_CADENCE = timedelta(hours=1)
 
 
 def make_window(
     *,
     days: int = _DEFAULT_WINDOW_DAYS,
     first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
+    cadence: timedelta = _DEFAULT_WINDOW_CADENCE,
 ) -> SimulationWindow:
-    """The hourly Europe/London window over *days* local dates from *first_day*, both counted."""
-    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), timedelta(hours=1), "Europe/London")
+    """The Europe/London window over *days* local dates from *first_day*, both counted, its rows *cadence* apart, hourly by default."""
+    return SimulationWindow(first_day, first_day + timedelta(days=days - 1), cadence, "Europe/London")
 
 
 def make_period() -> SimulationPeriod:
@@ -173,6 +175,7 @@ def make_sim_results(
     export_revenue_gbp: float = 0.0,
     days: int = _DEFAULT_WINDOW_DAYS,
     first_day: date = _DEFAULT_WINDOW_FIRST_DAY,
+    cadence: timedelta = _DEFAULT_WINDOW_CADENCE,
 ) -> SimulationResults:
     """Constant-power SimulationResults for one home over *days* local dates from *first_day*.
 
@@ -180,20 +183,24 @@ def make_sim_results(
     self-consumption, export, import and battery discharge, and the £ of export
     revenue, the physics SEG income.  Generation is self + export, demand is
     self + import - discharge, ``simulation_days`` is *days*, and the window is
-    ``make_window(days=days, first_day=first_day)``.  By default that is
-    make_window()'s window, one whole calendar year: annualisation scale 1, a
-    whole year's standing charge.
+    ``make_window(days=days, first_day=first_day, cadence=cadence)``.  By default
+    that is make_window()'s window, one whole calendar year: annualisation scale 1,
+    a whole year's standing charge.
 
-    Hourly steps suffice because ``calculate_summary`` integrates each row over
-    the hour it lasts: the rows are the window's, 23 or 25 of them on a day the
-    clocks change, and each total is spread over them as kW = kWh / rows.
+    The rows are *cadence* apart, hourly by default, which suffices because
+    ``calculate_summary`` integrates each row over the time it lasts.  The rows
+    are the window's, fewer or more of them on a day the clocks change: each kWh
+    total is spread over the window's hours as a constant kW = kWh / hours, and
+    each row holds an equal share of the £ of export revenue.
     """
-    idx = make_window(days=days, first_day=first_day).rows()
+    window = make_window(days=days, first_day=first_day, cadence=cadence)
+    idx = window.rows()
     n_steps = len(idx)
-    sc_kw = self_kwh / n_steps
-    exp_kw = export_kwh / n_steps
-    imp_kw = import_kwh / n_steps
-    dis_kw = discharge_kwh / n_steps
+    hours = n_steps * window.step_hours
+    sc_kw = self_kwh / hours
+    exp_kw = export_kwh / hours
+    imp_kw = import_kwh / hours
+    dis_kw = discharge_kwh / hours
     gen_kw = sc_kw + exp_kw
     demand_kw = sc_kw + imp_kw - dis_kw
 
