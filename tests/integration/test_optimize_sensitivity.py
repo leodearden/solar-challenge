@@ -638,12 +638,14 @@ class TestSegAxis:
 
 
 # ---------------------------------------------------------------------------
-# TestSensitivityPanelGuards — ValueError on bad inputs
+# TestSensitivityPanelGuards — TypeError without a simulator, ValueError on bad inputs
 # ---------------------------------------------------------------------------
 
 
 class TestSensitivityPanelGuards:
-    """sensitivity_panel raises ValueError on empty inputs and all-infeasible baseline."""
+    """sensitivity_panel raises TypeError when passed no simulator, and ValueError on
+    empty inputs and an all-infeasible baseline.
+    """
 
     def _base_configs(self):  # type: ignore[no-untyped-def]
         """Return a valid minimal base_configs list (one no-battery config)."""
@@ -702,6 +704,11 @@ class TestSensitivityPanelGuards:
                 axes={"completely_unknown_knob_xyz": [1.0, 2.0]},
                 simulate=_const_simulate,
             )
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        """sensitivity_panel runs only the simulator its caller passes: a call passing none is refused by name."""
+        with pytest.raises(TypeError, match="simulate"):
+            sensitivity_panel(self._base_configs(), axes={"battery_cost_per_kwh_gbp": [250.0]})
 
 
 # ---------------------------------------------------------------------------

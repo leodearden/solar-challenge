@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Unit tests for project_multi_year's curve shape, fleet energy aggregation,
-and its refusal of a simulated age whose aggregates are not all finite.
+its refusal of a simulated age whose aggregates are not all finite, and its
+refusal of a call that passes no simulator.
 
 The projection runs on an injected synthetic simulate, with no PVGIS or network.
 """
@@ -118,6 +119,17 @@ class TestProjectMultiYearShape:
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
         assert curve.points[0].fleet_import_kwh == pytest.approx(expected_import, rel=1e-4)
+
+
+class TestProjectMultiYearRequiresASimulator:
+    """project_multi_year runs only the simulator its caller passes, never one of its own."""
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        """A call that passes no simulator is refused by name, and no fleet is simulated."""
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+
+        with pytest.raises(TypeError, match="simulate"):
+            project_multi_year(scenario, finance)
 
 
 class TestProjectMultiYearRefusesNonFiniteAggregates:
