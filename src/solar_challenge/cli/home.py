@@ -27,6 +27,7 @@ from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
+from solar_challenge.timebase import covered_days
 from solar_challenge.weather import default_weather
 
 app = typer.Typer(help="Single home simulation commands")
@@ -162,8 +163,7 @@ def run(
     start_date = pd.Timestamp(start, tz=home_config.location.timezone)
     end_date = pd.Timestamp(end, tz=home_config.location.timezone)
 
-    # Calculate simulation duration for progress display
-    days_count = (end_date - start_date).days + 1
+    days_count = covered_days(start_date.date(), end_date.date())
     print_info(f"Simulating {days_count} days from {start} to {end}")
 
     # Run simulation with progress
