@@ -257,6 +257,19 @@ def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_s
     assert (at_rest_with_period_open, at_rest_with_location_open) == (True, False)
 
 
+def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: Page, live_server: str) -> None:
+    """When the accordion does not come to rest, here because General's panel is kept displayed after Period opens, _open_section fails reporting the state _ACCORDION_STATE reads, the state _ACCORDION_IS_AT_REST judged."""
+    page.goto(live_server + "/scenarios/builder")
+    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
+    page.set_default_timeout(5000)
+
+    with pytest.raises(AssertionError) as failure:
+        _open_section(page, "Period")
+
+    state = page.evaluate(_ACCORDION_STATE, _accordion_with_open(page, "Period"))
+    assert str(state) in str(failure.value)
+
+
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
     """Click Validate and return the form the builder sends to /api/scenarios/validate."""
     with page.expect_response("**/api/scenarios/validate") as validated:
