@@ -1026,8 +1026,9 @@ def parse_location_block(
 ) -> Location:
     """Parse a ``location:`` block into a Location, as LOCATION_BLOCK reads it.
 
-    A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise each
-    key it leaves out takes Bristol's value, but an omitted name stays empty.
+    A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise it
+    must set latitude and longitude: a block that leaves either out is refused, naming it by its
+    path. An omitted timezone or altitude takes Bristol's, and an omitted name stays empty.
     """
     if data is None:
         return Location.bristol()
@@ -1296,7 +1297,11 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
     outside_grammar=MappingProxyType({}),
     sub_blocks=MappingProxyType({}),
     when_omitted=MappingProxyType(
-        {key: value for key, value in asdict(Location.bristol()).items() if key != "name"}
+        {
+            key: value
+            for key, value in asdict(Location.bristol()).items()
+            if key in ("timezone", "altitude")
+        }
     ),
     fleet=MappingProxyType({}),
     not_in_fleet=MappingProxyType(

@@ -556,7 +556,7 @@ class TestLoadHomeConfig:
                 id="load",
             ),
             pytest.param(
-                'location:\n  latitude: "51.5"\nhome: {}\n',
+                'location:\n  latitude: "51.5"\n  longitude: -2.58\nhome: {}\n',
                 lambda home: home.location.latitude,
                 51.5,
                 id="location",

@@ -682,13 +682,15 @@ home:
         ("document", "field", "value_repr"),
         [
             pytest.param(
-                "location: {altitude: .nan}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "location: {latitude: 51.45, longitude: -2.58, altitude: .nan}\n"
+                "home:\n  pv: {capacity_kw: 4.0}\n",
                 "altitude",
                 "nan",
                 id="location-altitude-nan",
             ),
             pytest.param(
-                "location: {timezone: Europe/Londn}\nhome:\n  pv: {capacity_kw: 4.0}\n",
+                "location: {latitude: 51.45, longitude: -2.58, timezone: Europe/Londn}\n"
+                "home:\n  pv: {capacity_kw: 4.0}\n",
                 "timezone",
                 "'Europe/Londn'",
                 id="location-unknown-time-zone",
