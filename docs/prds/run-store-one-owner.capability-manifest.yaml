@@ -108,7 +108,7 @@ tasks:
         delivered_check:
           kind: grep
           pattern: "class RunHeadline"
-          paths: ["src/solar_challenge/web/storage.py"]
+          paths: ["src/solar_challenge/web/run_headline.py"]
           expect: present
       - name: "no-runs-sql-in-api-assistant-routes"
         binding: "grep:web/api.py history_list_runs, web/assistant.py list_recent_runs, web/routes.py _get_aggregate_stats (moved into RunStorage)"

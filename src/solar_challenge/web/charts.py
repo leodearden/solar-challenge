@@ -9,7 +9,7 @@ and sweep_panels one per SweepMetric, each marking its best point by the metric'
 Each page's assembler, home_results_tabs, fleet_results_tabs or comparison_tabs, groups the panels
 of the charts that apply to its run into ChartTabs; a chart whose subject the run lacks, a battery
 or a heat-pump load, is not listed. The comparison charts draw each ComparedRun from its
-RunHeadline, the figures web/storage.py's run_headline reads from a run's summary of either
+RunHeadline, the figures web/run_headline.py's run_headline reads from a run's summary of either
 kind. ChartPanel, ChartAbsence, ChartTab and ComparedRun each refuse at construction, naming the
 field and the value, what no page can draw.
 Charts share layout defaults. COLOUR_PALETTE maps each chart role to its colour, loaded when
@@ -44,7 +44,7 @@ from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
-from solar_challenge.web.storage import RunHeadline
+from solar_challenge.web.run_headline import RunHeadline
 from solar_challenge.web.theme_tokens import chart_colour_palette, is_rrggbb
 
 _THEME_TOKENS_FILE = Path(__file__).parent / "static" / "src" / "theme-tokens.json"

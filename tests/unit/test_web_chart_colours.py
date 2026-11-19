@@ -45,7 +45,7 @@ from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
-from solar_challenge.web.storage import run_headline
+from solar_challenge.web.run_headline import run_headline
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces

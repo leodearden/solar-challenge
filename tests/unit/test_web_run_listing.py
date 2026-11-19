@@ -9,24 +9,20 @@ StoredRunUnreadable naming the run, the column, e.g. runs.summary_json, and the 
 each document of a record with no type, naming runs.type. RunRecord.summary_tree() answers
 the field tree of the summary RunRecord.summary() reads, {} while the run has none, and
 refuses a summary as RunRecord.summary() refuses it; unlike the stored text, that tree holds
-a field with a default that the text lacks. run_headline maps a summary of
-either kind to the figures the web shows for its run: the five energy totals, the
-self-consumption, grid dependency and export ratios, and the share of the generation the
-battery stored from PV, which a fleet run has none of. It refuses a summary whose figure for
-any of them is not a finite number. RunRecord.headline() is run_headline of the summary
-RunRecord.summary() reads, None while the run has none; a summary run_headline refuses is
-refused as one RunRecord.summary() cannot read is, with a StoredRunUnreadable naming the run
-and runs.summary_json.
+a field with a default that the text lacks. RunRecord.headline() is run_headline of the
+summary RunRecord.summary() reads, None while the run has none; a summary run_headline refuses
+is refused as one RunRecord.summary() cannot read is, with a StoredRunUnreadable naming the
+run and runs.summary_json. run_headline itself is pinned in tests/unit/test_web_run_headline.py.
 
 RunStorage.page_runs answers one page of the run list a RunQuery asks for, filtered by
 type, text and creation date and sorted by one column, with the count of every run the
 query matches; RunQuery refuses a query no page answers.
 
 headline_figures is a run list row's figures for a run's record, named as the run lists
-name them. A run has no figures while it has no summary, and none, with a warning naming the
-run, when its summary is damaged: it cannot be read, its refusal then being the row's
-unreadable, or run_headline refuses it. RunStorage.totals counts the completed runs and their
-homes and sums the generation of those whose headline reads.
+name them. A run has no figures while it has no summary, and none when its summary cannot be
+read or holds a figure its headline cannot show: the refusal RunRecord.headline() raises is
+then the row's unreadable, and a warning names the run. RunStorage.totals counts the
+completed runs and their homes and sums the generation of those whose headline reads.
 """
 
 import dataclasses
@@ -43,12 +39,12 @@ import pytest
 pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.fleet import FleetResults, FleetSummary, calculate_fleet_summary
-from solar_challenge.home import SummaryStatistics, calculate_summary
+from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+from solar_challenge.home import calculate_summary
 from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.run_headline import run_headline
 from solar_challenge.web.storage import (
     RUN_SORTS,
-    RunHeadline,
     RunPage,
     RunQuery,
     RunRecord,
@@ -56,7 +52,6 @@ from solar_challenge.web.storage import (
     RunStorage,
     RunTotals,
     headline_figures,
-    run_headline,
 )
 from solar_challenge.web.stored_runs import RUN_TYPES, StoredRunUnreadable
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
@@ -341,175 +336,6 @@ class TestRunRecordHeadline:
         assert isinstance(refusal.value.__cause__, ValueError)
 
 
-class TestRunHeadline:
-    """run_headline: the figures the web shows for a run's summary, its energy totals and ratios and the share of its generation the battery stored from PV.
-
-    Each figure a headline reads from a summary is one no other field of that summary holds,
-    so a headline read from the wrong field shows.
-    """
-
-    def test_a_home_run_s_headline_is_its_totals_its_ratios_and_the_share_of_its_generation_it_stored_from_pv(
-        self,
-    ) -> None:
-        """The battery stored 4 of its 10 kWh from the grid, so a share read from its whole charge shows."""
-        summary = home_summary(total_generation_kwh=987.65, self_consumption_ratio=0.37, total_grid_charge_kwh=4.0)
-
-        assert run_headline(summary) == RunHeadline(
-            generation_kwh=summary.total_generation_kwh,
-            demand_kwh=summary.total_demand_kwh,
-            self_consumption_kwh=summary.total_self_consumption_kwh,
-            grid_import_kwh=summary.total_grid_import_kwh,
-            grid_export_kwh=summary.total_grid_export_kwh,
-            self_consumption_ratio=summary.self_consumption_ratio,
-            grid_dependency_ratio=summary.grid_dependency_ratio,
-            export_ratio=summary.export_ratio,
-            pv_stored_share=summary.total_pv_charge_kwh / summary.total_generation_kwh,
-        )
-
-    def test_a_fleet_run_s_headline_is_its_totals_its_fleet_ratios_and_its_export_over_its_generation_and_no_pv_share(
-        self,
-    ) -> None:
-        """A fleet summary holds no export ratio and no battery totals."""
-        summary = fleet_summary(total_generation_kwh=1975.3, fleet_self_consumption_ratio=0.43, total_grid_export_kwh=70.0)
-
-        assert run_headline(summary) == RunHeadline(
-            generation_kwh=summary.total_generation_kwh,
-            demand_kwh=summary.total_demand_kwh,
-            self_consumption_kwh=summary.total_self_consumption_kwh,
-            grid_import_kwh=summary.total_grid_import_kwh,
-            grid_export_kwh=summary.total_grid_export_kwh,
-            self_consumption_ratio=summary.fleet_self_consumption_ratio,
-            grid_dependency_ratio=summary.fleet_grid_dependency_ratio,
-            export_ratio=summary.total_grid_export_kwh / summary.total_generation_kwh,
-            pv_stored_share=None,
-        )
-
-    def test_a_simulated_fleet_s_headline_holds_its_own_ratios_and_no_pv_stored_share(self) -> None:
-        """B11: each of two homes self-consumes 18 and exports 54 of the 72 kWh it generates, and imports 27 of the 45 it uses."""
-        fleet = make_fleet_results(n_homes=2, self_kwh=18.0, export_kwh=54.0, import_kwh=27.0, days=1)
-
-        headline = run_headline(calculate_fleet_summary(fleet))
-
-        assert (headline.self_consumption_ratio, headline.grid_dependency_ratio, headline.export_ratio) == pytest.approx(
-            (0.25, 0.6, 0.75)
-        )
-        assert headline.pv_stored_share is None
-
-    def test_a_share_of_a_generation_of_nothing_is_nothing_as_calculate_summary_s_export_ratio_is(self) -> None:
-        assert run_headline(home_summary(total_generation_kwh=0.0)).pv_stored_share == 0.0
-        assert run_headline(fleet_summary(total_generation_kwh=0.0)).export_ratio == 0.0
-
-    def test_a_headline_with_no_pv_stored_share_is_a_headline(self) -> None:
-        headline = dataclasses.replace(run_headline(home_summary()), pv_stored_share=None)
-
-        assert headline.pv_stored_share is None
-
-    @pytest.mark.parametrize(
-        "figure",
-        [
-            "generation_kwh",
-            "demand_kwh",
-            "self_consumption_kwh",
-            "grid_import_kwh",
-            "grid_export_kwh",
-            "self_consumption_ratio",
-            "grid_dependency_ratio",
-            "export_ratio",
-        ],
-    )
-    def test_a_headline_with_no_value_for_a_figure_every_run_has_is_refused_naming_it(self, figure: str) -> None:
-        """Only pv_stored_share, which a fleet run has none of, may be None."""
-        with pytest.raises(ValueError) as refusal:
-            dataclasses.replace(run_headline(home_summary()), **{figure: None})
-
-        assert f"{figure} is None" in str(refusal.value)
-
-    def test_a_headline_whose_pv_stored_share_is_not_a_finite_number_is_refused_naming_it_and_its_value(self) -> None:
-        with pytest.raises(ValueError) as refusal:
-            dataclasses.replace(run_headline(home_summary()), pv_stored_share=math.nan)
-
-        assert "pv_stored_share is nan" in str(refusal.value)
-
-    @pytest.mark.parametrize(
-        ("summary", "figure", "value"),
-        [
-            pytest.param(home_summary(total_generation_kwh=None), "generation_kwh", None, id="home-generation-null"),
-            pytest.param(home_summary(self_consumption_ratio="0.6"), "self_consumption_ratio", "0.6", id="home-ratio-text"),
-            pytest.param(fleet_summary(total_generation_kwh=math.nan), "generation_kwh", math.nan, id="fleet-generation-nan"),
-            pytest.param(fleet_summary(total_generation_kwh=math.inf), "generation_kwh", math.inf, id="fleet-generation-inf"),
-            pytest.param(
-                fleet_summary(fleet_self_consumption_ratio=True), "self_consumption_ratio", True, id="fleet-ratio-bool"
-            ),
-            pytest.param(
-                home_summary(total_generation_kwh=10**400),
-                "generation_kwh",
-                10**400,
-                id="home-generation-too-large-for-a-float",
-            ),
-            pytest.param(
-                fleet_summary(fleet_self_consumption_ratio=-(10**400)),
-                "self_consumption_ratio",
-                -(10**400),
-                id="fleet-ratio-below-every-float",
-            ),
-            pytest.param(home_summary(total_demand_kwh=math.nan), "demand_kwh", math.nan, id="home-demand-nan"),
-            pytest.param(home_summary(export_ratio=math.inf), "export_ratio", math.inf, id="home-export-ratio-inf"),
-            pytest.param(
-                fleet_summary(fleet_grid_dependency_ratio="0.25"),
-                "grid_dependency_ratio",
-                "0.25",
-                id="fleet-grid-dependency-ratio-text",
-            ),
-            pytest.param(
-                fleet_summary(total_grid_export_kwh=None),
-                "export_ratio",
-                None,
-                id="fleet-export-null-so-its-export-ratio",
-            ),
-            pytest.param(
-                home_summary(total_battery_charge_kwh=math.inf),
-                "pv_stored_share",
-                math.inf,
-                id="home-battery-charge-inf-so-its-pv-stored-share",
-            ),
-        ],
-    )
-    def test_a_summary_whose_headline_figure_is_not_a_finite_number_is_refused_naming_the_figure_and_its_value(
-        self, summary: SummaryStatistics | FleetSummary, figure: str, value: object
-    ) -> None:
-        with pytest.raises(ValueError) as refusal:
-            run_headline(summary)
-
-        assert f"{figure} is {value!r}" in str(refusal.value)
-
-    def test_a_figure_a_summary_holds_as_a_whole_number_is_a_headline_figure(self) -> None:
-        """A stored summary's JSON may hold a figure as a whole number, 100 rather than 100.0, which decodes as an int."""
-        summary = home_summary(
-            total_generation_kwh=100,
-            total_demand_kwh=80,
-            total_self_consumption_kwh=60,
-            total_grid_import_kwh=20,
-            total_grid_export_kwh=40,
-            total_battery_charge_kwh=10,
-            total_grid_charge_kwh=0,
-            self_consumption_ratio=0,
-            grid_dependency_ratio=0,
-            export_ratio=1,
-        )
-
-        assert run_headline(summary) == RunHeadline(
-            generation_kwh=100,
-            demand_kwh=80,
-            self_consumption_kwh=60,
-            grid_import_kwh=20,
-            grid_export_kwh=40,
-            self_consumption_ratio=0,
-            grid_dependency_ratio=0,
-            export_ratio=1,
-            pv_stored_share=0.1,
-        )
-
-
 def _ids(page: RunPage) -> list[str]:
     """The id of each run *page* lists, in its order."""
     return [record.id for record in page.records]
@@ -749,35 +575,64 @@ class TestHeadlineFigures:
         }
 
     @pytest.mark.parametrize(
-        ("damaged_summary_json", "field"),
+        ("damaged_summary_json", "field", "named"),
         [
-            pytest.param("{not json", None, id="summary-not-json"),
-            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, id="summary-nested-too-deeply"),
+            pytest.param("{not json", None, "runs.summary_json", id="summary-not-json"),
+            pytest.param(JSON_NESTED_TOO_DEEPLY_TO_DECODE, None, "runs.summary_json", id="summary-nested-too-deeply"),
             pytest.param(
-                summary_json(home_summary(total_generation_kwh=None)), "total_generation_kwh", id="generation-null"
+                summary_json(home_summary(total_generation_kwh=None)),
+                "total_generation_kwh",
+                "total_generation_kwh",
+                id="generation-null",
             ),
-            pytest.param(_with_a_retired_key(summary_json(home_summary())), "retired", id="summary-with-a-key-no-field-has"),
+            pytest.param(
+                _with_a_retired_key(summary_json(home_summary())), "retired", "retired", id="summary-with-a-key-no-field-has"
+            ),
             pytest.param(
                 summary_json(home_summary(total_generation_kwh=10**400)),
                 "total_generation_kwh",
+                "total_generation_kwh",
                 id="generation-no-float-can-hold",
+            ),
+            pytest.param(
+                summary_json(home_summary(total_generation_kwh=math.nan)), None, "generation_kwh", id="generation-nan"
+            ),
+            pytest.param(
+                summary_json(home_summary(export_ratio=math.nan)),
+                None,
+                "export_ratio",
+                id="export-ratio-nan-a-figure-no-run-list-shows",
             ),
         ],
     )
-    def test_a_run_whose_summary_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str, field: str | None
+    def test_a_run_whose_headline_cannot_be_read_has_neither_figure_and_its_refusal_as_unreadable_and_a_warning_names_it(
+        self,
+        storage: RunStorage,
+        caplog: pytest.LogCaptureFixture,
+        damaged_summary_json: str,
+        field: str | None,
+        named: str,
     ) -> None:
-        """A run list shows the run without figures and says why (the G7 waiver in docs/prds/run-store-one-owner.md §15)."""
+        """The row's unreadable is the refusal RunRecord.headline() raises, the message the compare page flashes.
+
+        A run list shows the run without figures and says why: the G7 waiver in
+        docs/prds/run-store-one-owner.md §15 requires the run to be visible in History with its
+        reason. NaN is a number, so a summary holding it reads, and its headline is refused all
+        the same, even for the export ratio, a figure no run list shows. The reason names the
+        part of the summary at fault, *named*: the column when its text does not decode, else
+        the field or the headline's figure.
+        """
         _store_a_home_run(storage, "damaged-run")
         _damage_summary(storage, "damaged-run", damaged_summary_json)
         damaged = _record(storage, "damaged-run")
         with pytest.raises(StoredRunUnreadable) as refusal:
-            damaged.summary()
+            damaged.headline()
         caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
 
         figures = headline_figures(damaged)
 
         assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": str(refusal.value)}
+        assert named in figures["unreadable"], figures["unreadable"]
         assert (refusal.value.run_id, refusal.value.document, refusal.value.field) == (
             "damaged-run",
             "runs.summary_json",
@@ -785,31 +640,6 @@ class TestHeadlineFigures:
         )
         warnings = _storage_warnings(caplog)
         assert len(warnings) == 1 and "damaged-run" in warnings[0], warnings
-
-    @pytest.mark.parametrize(
-        "damaged_summary_json",
-        [
-            pytest.param(summary_json(home_summary(total_generation_kwh=math.nan)), id="generation-nan"),
-            pytest.param(summary_json(home_summary(export_ratio=math.nan)), id="export-ratio-nan-a-figure-no-run-list-shows"),
-        ],
-    )
-    def test_a_run_whose_headline_figure_is_not_a_finite_number_has_neither_figure_and_a_warning_names_it_though_it_reads(
-        self, storage: RunStorage, caplog: pytest.LogCaptureFixture, damaged_summary_json: str
-    ) -> None:
-        """NaN is a number, so the summary reads; run_headline refuses it, and no document is unreadable.
-
-        The export ratio is a headline figure that no run list shows, and a summary holding it
-        NaN is damaged all the same.
-        """
-        _store_a_home_run(storage, "nan-run")
-        _damage_summary(storage, "nan-run", damaged_summary_json)
-        caplog.set_level(logging.WARNING, logger="solar_challenge.web.storage")
-
-        figures = headline_figures(_record(storage, "nan-run"))
-
-        assert figures == {"total_generation_kwh": None, "self_consumption_ratio": None, "unreadable": None}
-        warnings = _storage_warnings(caplog)
-        assert len(warnings) == 1 and "nan-run" in warnings[0], warnings
 
 
 class TestRunTotals:
@@ -849,6 +679,7 @@ class TestRunTotals:
             pytest.param(summary_json(fleet_summary(total_generation_kwh=None)), id="generation-null"),
             pytest.param(_with_a_retired_key(summary_json(fleet_summary())), id="summary-with-a-key-no-field-has"),
             pytest.param(summary_json(fleet_summary(total_generation_kwh=10**400)), id="generation-no-float-can-hold"),
+            pytest.param(summary_json(fleet_summary(total_generation_kwh=math.nan)), id="generation-nan"),
         ],
     )
     def test_a_completed_run_whose_summary_is_damaged_counts_with_its_homes_adds_no_generation_and_a_warning_names_it(

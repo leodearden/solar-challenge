@@ -125,7 +125,7 @@ Heuristics served: 11 (SPOT: colours, chart descriptions, flow identities, cards
     - a tariff: no note, as today.
 
     The "cannot tell an SEG run that exported nothing" caveat and the series inference go. No engine field and no stored-format change are needed. The SOC chart keeps reading the limits from `Battery(battery_config)`, the authority on SoH-derated limits. The route's double `has_battery` guard goes, because the assembler decides applicability once.
-11. **Comparison input is S19's headline, widened.** D-S19-8 makes `storage.run_headline` the one place the web maps `FleetSummary` names. ζ widens `RunHeadline` with the five energy totals and three ratios, plus `pv_stored_share: float | None`. Export ratio for a fleet is `total_grid_export_kwh / total_generation_kwh`. The PV stored share is None for a fleet run, because `FleetSummary` carries no battery totals. The radar draws the axes every compared run has, and when one is left out the panel's figure carries a note naming the run and the metric. Mixed home and fleet comparisons are allowed.
+11. **Comparison input is S19's headline, widened.** D-S19-8 makes `run_headline` (in `web/run_headline.py` since task 1413) the one place the web maps `FleetSummary` names. ζ widens `RunHeadline` with the five energy totals and three ratios, plus `pv_stored_share: float | None`. Export ratio for a fleet is `total_grid_export_kwh / total_generation_kwh`. The PV stored share is None for a fleet run, because `FleetSummary` carries no battery totals. The radar draws the axes every compared run has, and when one is left out the panel's figure carries a note naming the run and the metric. Mixed home and fleet comparisons are allowed.
 12. **Chart errors are not swallowed.** `history.compare_page`'s broad `except Exception` and the function-local chart imports in `routes.py` and `history.py` go. This is the position of task 454, whose architect measured plotly at 1.4–5.4 % of app import. An unreadable stored summary is S19's `StoredRunUnreadable` (flash and redirect). Task 153's "keep the charts deferral" item is superseded (cross-reference). If 775 (S1's import-structure test) has landed, δ deletes the `web.routes → web.charts` and `web.history → web.charts` allow-list entries in the same change.
 13. **The sweep chart is server-built and posted, not encoded in a URL.** `POST /scenarios/sweep/chart` takes JSON `{parameter_label, points: [{value, run_id}]}` and answers the HTML of the sweep panels, rendered by `chart_panel`. It loads each point's summary through S19's `RunRecord.summary()`, and refuses a missing or non-home run with 400 naming the run id. A `SweepMetric` enum carries each metric's label, its summary reader and its direction (`higher` or `lower` is better). Its members are generation, self-consumption ratio and grid import, and `sweep_parameter_chart` marks the best point by that direction. The swept values come from the page that submitted them. S26's knob registry may later read them back from the runs (cross-reference). chart-renderer.js observes the document for containers added or re-filled after load (`MutationObserver` on `data-chart-figure`), so the sweep page needs no renderer API.
 14. **One Plotly loader.** `components/macros.html::chart_scripts()` emits the Plotly CDN tag and chart-renderer.js. Every chart page calls it, including the sweep page. This supersedes task 129. Vendoring Plotly (task 250) then edits one place.
@@ -199,7 +199,7 @@ class SummaryStatistics:
     @property
     def total_grid_to_demand_kwh(self) -> float: ...            # grid import less grid charge
 
-# src/solar_challenge/web/storage.py  (ζ widens S19 γ's type; S19 owns the name and the mapping)
+# src/solar_challenge/web/run_headline.py  (ζ widens S19 γ's type; S19 owns the name and the mapping)
 @dataclass(frozen=True)
 class RunHeadline:
     generation_kwh: float; demand_kwh: float; self_consumption_kwh: float
@@ -245,7 +245,7 @@ Invariants and where each is enforced:
 | A chart that applies is drawn or says why not. | `ChartPanel.__post_init__` | assemblers list only applicable charts; `chart_panel` renders the figure or the reason (δ) |
 | A chart's id, title and height live once. | `ChartPanel` | the panel helper writes title/height into the figure; the template reads only the panel (δ) |
 | The battery's PV/grid split has one home. | `SummaryStatistics.__post_init__` (grid charge ≤ charge, ≤ import) | Sankey and radar read the properties (ε, ζ) |
-| A fleet summary's names are mapped once. | `storage.run_headline` (S19) | the comparison charts read `RunHeadline` (ζ) |
+| A fleet summary's names are mapped once. | `run_headline.run_headline` (S19) | the comparison charts read `RunHeadline` (ζ) |
 | Each card is the card macro. | `card` | a source test: the triple appears only in `macros.html` (θ) |
 | Each other card look is its macro: `panel`, `flat_card`, `split_card` (task 1168). | those macros | a source test: each look's classes appear only in `macros.html` |
 | A titled panel's header band is `panel`'s (task 1196). | `panel` | a source test: the band's classes appear only in `macros.html`; a source test: a `panel` call that gives `subtitle_expression` gives a title |
