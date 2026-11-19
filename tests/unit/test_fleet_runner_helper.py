@@ -6,8 +6,9 @@ import multiprocessing
 import os
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -17,7 +18,15 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import PrefetchedWeather
-from tests._fleet_runner import HomeStart, MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, started
+from tests._fleet_runner import (
+    HomeStart,
+    MarkingHomeSimulator,
+    ProcessEndingHomeSimulator,
+    finish_marker,
+    finished,
+    start_marker,
+    started,
+)
 
 _DAY = pd.Timestamp("2024-06-21")
 _BRISTOL_ONLY = PrefetchedWeather({Location.bristol(): pd.DataFrame()})
@@ -27,6 +36,7 @@ _HELD = HomeConfig(
     load_config=LoadConfig(annual_consumption_kwh=3500.0, use_stochastic=False),
     name="Held",
 )
+_OTHER = replace(_HELD, name="Other")
 
 
 def _mark_each(simulator: MarkingHomeSimulator, homes: Sequence[HomeConfig]) -> None:
@@ -113,6 +123,22 @@ def test_a_home_whose_release_never_appears_raises_timeout_error_naming_it_and_i
 
     assert str(caught.value) == f"Held was held until {never} existed, which it did not within 0.05 s"
     assert finished(tmp_path) == {"Held"}
+
+
+@pytest.mark.parametrize("marker", [start_marker, finish_marker], ids=["start", "finish"])
+def test_a_home_held_until_another_homes_marker_is_released_once_that_home_writes_it(
+    tmp_path: Path, marker: Callable[[Path, str], Path]
+) -> None:
+    simulator = MarkingHomeSimulator(tmp_path, held_until=(("Held", marker(tmp_path, "Other")),))
+
+    with ThreadPoolExecutor(max_workers=1) as holding:
+        held = holding.submit(simulator, _HELD, _DAY, _DAY, weather=_BRISTOL_ONLY)
+        with pytest.raises(concurrent.futures.TimeoutError):
+            held.result(timeout=0.2)
+        simulator(_OTHER, _DAY, _DAY, weather=_BRISTOL_ONLY)
+        results = held.result(timeout=10)
+
+    assert calculate_summary(results).total_self_consumption_kwh == pytest.approx(4.0)
 
 
 @pytest.mark.parametrize("failing", [frozenset(), frozenset({"Held"})], ids=["returns", "refused"])
