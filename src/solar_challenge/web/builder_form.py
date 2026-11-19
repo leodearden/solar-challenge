@@ -221,10 +221,13 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The location: block for the form's location_preset: a dashboard preset, or 'custom'.
+    """The location: block for the form's location_preset: a key of location.LOCATION_PRESETS, or 'custom'.
 
-    A custom block holds the coordinates the form gives, as numbers.  A coordinate the
-    form leaves out is left out of the block, for the loader to default.
+    A custom block holds the coordinates the form gives, as numbers, and leaves out each
+    one the form leaves out.  The loader reads a block with no coordinate as Bristol's
+    location.  A block that sets any coordinate must set both latitude and longitude,
+    and the loader refuses it naming each one it leaves out.  An omitted altitude takes
+    its default.
 
     Raises:
         ValueError: for any other preset, naming it, or for a custom coordinate that is
