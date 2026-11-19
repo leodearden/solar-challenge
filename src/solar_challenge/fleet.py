@@ -5,6 +5,7 @@ import contextlib
 import math
 import os
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
@@ -346,7 +347,9 @@ class FleetRunner:
 
         A home that fails re-raises its own exception, with a note naming the home and its fleet; an
         exception progress raises propagates as raised. Either, or closing the iterator early, cancels
-        the homes not yet started, and the call ends once the homes already running have finished.
+        the homes not yet started, and the call ends once the homes already running have finished. A
+        worker process that ends abruptly breaks the pool, and the BrokenProcessPool raised then carries
+        a note naming one home it left unfinished, which need not be the home whose process ended.
         """
         return _simulate_fleets(self, fleets, start_date, end_date, progress)
 
@@ -431,13 +434,23 @@ def _result_naming_the_home(job: _HomeJob, future: Future[SimulationResults]) ->
 
 @contextlib.contextmanager
 def _naming_the_home(job: _HomeJob) -> Iterator[None]:
-    """Re-raise an exception the block raises, that same object, with a note naming job's home and fleet."""
+    """Re-raise an exception the block raises, that same object, with a note naming job's home and fleet.
+
+    The note says simulating the home failed, or for a BrokenProcessPool only that the pool broke before the home
+    finished: the pool fails every unfinished home with that one exception and does not say which home the process
+    that ended held.
+    """
+    place = f"home {job.home_index} ({job.home.name!r}) of fleet {job.fleet_index} ({job.fleet.name!r})"
     try:
         yield
-    except Exception as error:
-        error.add_note(
-            f"simulating home {job.home_index} ({job.home.name!r}) of fleet {job.fleet_index} ({job.fleet.name!r})"
+    except BrokenProcessPool as broken:
+        broken.add_note(
+            f"the process pool broke before {place} finished; the process that ended may have been simulating "
+            "another home"
         )
+        raise
+    except Exception as error:
+        error.add_note(f"simulating {place}")
         raise
 
 
