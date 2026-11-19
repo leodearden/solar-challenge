@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every pointer into tests/ from a scanned file resolves, and names a test only by its node-id.
 
-The scanned files are those git lists outside RECORD_DIRECTORIES, the records, which name tests as they were when
-written, such as the PRDs and research notes under docs/.
+The scanned files are those git lists outside RECORD_DIRECTORIES, plus review/briefing.yaml. The records, such as the
+PRDs and research notes under docs/ and the rest of review/, name tests as they were when written, so they are left
+unread. The briefing is read only in the rule of each of its conventions, the present-tense claims whose cited test
+enforces them; the rest of its text is left unread as a record.
 
 A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
 names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for in a file's whole text, comments,
 docstrings and code alike, but a Python file under tests/ is read only in its comments and the strings it writes as
 statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A
-file that is not UTF-8 text holds none. The path is looked up in the files git lists, as a fresh clone would hold them,
-so a file git ignores is not there to point at. Its names are looked up in the syntax tree of the Python file there, so
-a pointer naming a test in a Python file that is not UTF-8 text, or that does not parse, is reported. A path in another
-repository, or in a throwaway checkout a test builds, is written from that tree's name, as in
+file that is not UTF-8 text holds none. A briefing that does not parse, or whose conventions are not a sequence of one
+or more entries that each have a scalar rule, is reported rather than read as holding none. The path is looked up in
+the files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its names are
+looked up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not UTF-8
+text, or that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds, is
+written from that tree's name, as in
 reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A path names its test file up
 to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in test_<name>.py.<Class>, each word
 after the .py then being a name, up to a hyphen that joins one that is not, as in <Class>-based; otherwise it names its
@@ -50,9 +54,11 @@ import yaml
 
 from tests._pointer_scan import RECORD_DIRECTORIES, scanned_files, utf8_text
 from tests._synthetic_checkout import synthetic_checkout, write_file
-from tests._working_tree import WorkingTreePaths, working_tree_paths
+from tests._working_tree import WorkingTreePaths, working_tree_files, working_tree_paths
 
 _TESTS = PurePosixPath("tests")
+
+_BRIEFING = PurePosixPath("review/briefing.yaml")
 
 
 def _is_python_file_under_tests(path: PurePosixPath) -> bool:
@@ -241,8 +247,11 @@ def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tup
 
     A Python file under tests/ gives each of its comments and each string it writes as a statement, in text order, a
     string statement before a comment on a line they share. They are read from its raw text, so a line counted within a
-    passage is a line of the file. Any other file gives its whole text.
+    passage is a line of the file. The briefing gives the rule of each of its conventions, as _conventions_rules reads
+    them, and any other file gives its whole text.
     """
+    if source == _BRIEFING:
+        return _conventions_rules(source, text)
     if not _is_python_file_under_tests(source):
         return [(1, text)]
     strings = _string_statements(_parsed_source(checkout, source), text)
@@ -290,6 +299,61 @@ def _statements(node: ast.AST) -> Iterator[ast.stmt]:
             yield child
         if isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
             yield from _statements(child)
+
+
+def _conventions_rules(source: PurePosixPath, text: str) -> list[tuple[int, str]]:
+    """Return the rule of each conventions entry of the briefing *source*, after its first line's number.
+
+    The rules are in text order. Each is sliced from *text*, the briefing's text, at the marks of its composed node, as
+    _string_statements slices a string, so a line counted within a passage is a line of the file. A text that does not
+    parse, or whose conventions are not a sequence of one or more entries that each have a scalar rule, raises
+    ValueError, naming the file.
+    """
+    entries = _convention_entries(source, _composed(source, text))
+    rules = [_rule_scalar(source, entry) for entry in entries]
+    return [(rule.start_mark.line + 1, text[rule.start_mark.index : rule.end_mark.index]) for rule in rules]
+
+
+def _composed(source: PurePosixPath, text: str) -> yaml.Node | None:
+    """Return the root node of the one YAML document in *text*, the text of the file *source*, or None if it holds none.
+
+    A text that does not parse raises ValueError, naming the file.
+    """
+    try:
+        return yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError as error:
+        raise _unparsed_yaml(source, error) from error
+
+
+def _convention_entries(source: PurePosixPath, document: yaml.Node | None) -> list[yaml.Node]:
+    """Return the entries of the conventions sequence of the briefing *source*, whose composed root node is *document*.
+
+    Conventions that are not a sequence of one or more entries raise ValueError, naming the file.
+    """
+    conventions = _value_of(document, "conventions")
+    if not isinstance(conventions, yaml.SequenceNode) or not conventions.value:
+        raise ValueError(f"{source} has no conventions sequence with an entry, so it holds no rule to read")
+    return conventions.value
+
+
+def _rule_scalar(source: PurePosixPath, entry: yaml.Node) -> yaml.ScalarNode:
+    """Return the scalar node of the rule of the conventions *entry* of the briefing *source*.
+
+    An entry that is no mapping, or has no scalar rule, raises ValueError, naming the file and the entry's line.
+    """
+    rule = _value_of(entry, "rule")
+    if not isinstance(rule, yaml.ScalarNode):
+        raise ValueError(f"{source}:{entry.start_mark.line + 1}: a conventions entry has no scalar rule to read")
+    return rule
+
+
+def _value_of(node: yaml.Node | None, key: str) -> yaml.Node | None:
+    """Return the node the composed YAML *node* maps the scalar *key* to, or None if it holds no such key."""
+    if isinstance(node, yaml.MappingNode):
+        for key_node, value_node in node.value:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.value == key:
+                return value_node
+    return None
 
 
 def _pointers_given(
@@ -394,7 +458,7 @@ def _own_names(checkout: _Checkout, source: PurePosixPath, text: str) -> frozens
             try:
                 return _yaml_keys(text)
             except yaml.YAMLError as error:
-                raise ValueError(f"{source} does not parse, {_POINTERS_UNTOLD}: {error}") from error
+                raise _unparsed_yaml(source, error) from error
         case _:
             return frozenset()
 
@@ -405,6 +469,11 @@ def _parsed_source(checkout: _Checkout, source: PurePosixPath) -> ast.Module:
     if isinstance(module, _NoSyntaxTree):
         raise ValueError(f"{source} {module.value}, {_POINTERS_UNTOLD}")
     return module
+
+
+def _unparsed_yaml(source: PurePosixPath, error: yaml.YAMLError) -> ValueError:
+    """Return the ValueError that refuses the YAML file *source*, which does not parse because of *error*, naming it."""
+    return ValueError(f"{source} does not parse, {_POINTERS_UNTOLD}: {error}")
 
 
 def _code_names(module: ast.Module) -> frozenset[str]:
@@ -556,8 +625,14 @@ def _node_ids_defined(prefix: str, body: list[ast.stmt]) -> Iterator[tuple[str, 
 
 
 def _sources(root: Path) -> list[PurePosixPath]:
-    """Return the files the gate scans in the checkout at *root*: those git lists outside the records."""
-    return scanned_files(root, RECORD_DIRECTORIES)
+    """Return the files the gate scans in the checkout at *root*.
+
+    They are those git lists outside the records, and the briefing if git lists it.
+    """
+    sources = scanned_files(root, RECORD_DIRECTORIES)
+    if _BRIEFING in working_tree_files(root):
+        sources.append(_BRIEFING)
+    return sources
 
 
 def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: Path) -> None:
