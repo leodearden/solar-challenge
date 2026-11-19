@@ -37,9 +37,9 @@ from solar_challenge.web.fleet_config import (
     read_fleet_size,
 )
 from solar_challenge.web.request_boundary import (
+    read_location,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
-    resolve_location,
 )
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.simulation_params import (
@@ -157,8 +157,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _fleet_form_location(form: Mapping[str, Any]) -> Location:
-    """The location of the fleet *form* describes: its 'location' as resolve_location reads it, 'bristol' when absent."""
-    return resolve_location(form.get("location", "bristol"))
+    """The location of the fleet *form* describes: its 'location' as read_location reads it, 'bristol' when absent."""
+    return read_location(form.get("location", "bristol"))
 
 
 @dataclass(frozen=True)

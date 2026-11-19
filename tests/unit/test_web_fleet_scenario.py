@@ -11,7 +11,7 @@ import yaml
 pytest.importorskip("flask")
 
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.location import Location
+from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
@@ -22,7 +22,7 @@ from solar_challenge.web.fleet_scenario import (
     parse_fleet_form,
     scenario_from_fleet_form,
 )
-from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
+from solar_challenge.web.request_boundary import require_encodable_text
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -453,7 +453,7 @@ class TestFleetFormFromScenario:
 
     def test_a_location_other_than_bristol_is_not_loaded(self) -> None:
         """The fleet page has no location control and runs its fleet at Bristol, so a London scenario loads the rest and names its location."""
-        london = {**_FLEET_SCENARIO, "location": location_block(resolve_location("london"))}
+        london = {**_FLEET_SCENARIO, "location": location_block(LOCATION_PRESETS["london"])}
 
         assert fleet_form_from_scenario(london) == ImportedFleetForm(
             form=_FLEET_FORM, not_loaded=("location",)

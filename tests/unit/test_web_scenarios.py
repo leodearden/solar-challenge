@@ -24,12 +24,13 @@ from solar_challenge.config import (
     parse_location_block,
     parse_seg_rate,
 )
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
+from solar_challenge.web.request_boundary import require_encodable_text
 from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason

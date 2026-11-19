@@ -25,8 +25,8 @@ from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     refuse_unencodable_text,
     refuse_unrecognised_keys,
+    read_location,
     require_json_object,
-    resolve_location,
 )
 
 _HOME_CONFIG = "Home config"
@@ -327,10 +327,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             float() reads, or occupants is not a whole number, a boolean
             included (the error names the field, as heat_pump.<key> for a
             heat-pump number, and the value sent), if its days, start or
-            end is one parse_date_range refuses, if location is not one
-            resolve_location resolves (the error names location, the value
-            sent and the accepted forms, or is Location's own refusal of
-            coordinates outside its range), if battery_kwh is negative
+            end is one parse_date_range refuses, if location is one
+            read_location refuses (the error is its own refusal), if
+            battery_kwh is negative
             (the error names battery_kwh and the value sent), if a sent
             consumption_kwh lies outside the fleet load component's fixed
             range (the error names consumption_kwh, the range and the value
@@ -373,7 +372,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     if not (0.5 <= pv_kw <= 20.0):
         raise ValueError(f"PV capacity must be 0.5-20 kW, got {pv_kw}")
 
-    loc = resolve_location(params["location"])
+    loc = read_location(params["location"])
 
     # Build component configs
     pv_config = PVConfig(

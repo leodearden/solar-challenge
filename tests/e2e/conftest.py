@@ -56,9 +56,9 @@ from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.request_boundary import LOCATION_PRESETS
 from solar_challenge.web.shared import get_job_manager, get_job_stream_policy
 from solar_challenge.web.storage import RunStorage
 
