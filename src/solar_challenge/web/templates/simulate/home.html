@@ -126,7 +126,7 @@ document.addEventListener('alpine:init', () => {
                 occupants: parseInt(f.occupants),
                 stochastic: f.stochastic,
                 location: f.location === 'custom'
-                    ? f.custom_lat + ',' + f.custom_lon
+                    ? { latitude: parseFloat(f.custom_lat), longitude: parseFloat(f.custom_lon) }
                     : f.location,
                 name: f.name
             };
