@@ -835,6 +835,9 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
     The CLI's default_runner is replaced with a FleetRunner whose home simulator marks each
     home it starts, on the committed Bristol TMY, so the runs are offline and need no seeded
     weather cache. monkeypatch.setattr fails if the CLI no longer binds default_runner.
+    `fleet run` sets the runner's parallelism from its own --sequential and --workers
+    options, so the fixture sets none, and `_fleet_run_in_process`'s --sequential keeps the
+    marking simulator in this process, as the positive control asserts.
     """
 
     @pytest.fixture
@@ -846,7 +849,7 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         monkeypatch.setattr(
             _cli_fleet_module,
             "default_runner",
-            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir), parallel=False),
+            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir)),
         )
         return marker_dir
 
