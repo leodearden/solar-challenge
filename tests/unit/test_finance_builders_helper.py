@@ -12,6 +12,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.finance import FinanceConfig, project_multi_year
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import calculate_summary
+from solar_challenge.timebase import ONE_MINUTE
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -73,6 +74,25 @@ def test_sim_results_summary_covers_make_window_of_the_same_days(first_day: date
 
     assert summary.window == make_window(days=days, first_day=first_day)
     assert summary.simulation_days == days
+
+
+def test_sim_results_at_a_minute_cadence_are_the_minute_rows_of_their_window() -> None:
+    results = make_sim_results(
+        days=2,
+        first_day=date(2024, 3, 31),
+        cadence=ONE_MINUTE,
+        self_kwh=30.0,
+        export_kwh=10.0,
+        import_kwh=5.0,
+    )
+    summary = calculate_summary(results)
+
+    assert len(results.generation) == (23 + 24) * 60
+    assert summary.window == make_window(days=2, first_day=date(2024, 3, 31), cadence=ONE_MINUTE)
+    assert summary.simulation_days == 2
+    assert summary.total_self_consumption_kwh == pytest.approx(30.0)
+    assert summary.total_grid_export_kwh == pytest.approx(10.0)
+    assert summary.total_grid_import_kwh == pytest.approx(5.0)
 
 
 def test_sim_results_default_to_one_whole_calendar_year() -> None:
