@@ -213,7 +213,7 @@ _ACCORDION_IS_AT_REST = f"""(accordion) => {{
 
 
 def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]:
-    """The argument of _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
+    """The argument of _ACCORDION_STATE and _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
     return {
         "opened": _panel_id_of(page, section),
         "closed": [_panel_id_of(page, other) for other in _ACCORDION_SECTIONS if other != section],
@@ -236,13 +236,10 @@ def _open_section(page: Page, section: str) -> None:
     try:
         page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion)
     except PlaywrightTimeoutError as timeout:
-        displayed = [
-            other for other in _ACCORDION_SECTIONS if _panel_of(page, other).evaluate("panel => panel.checkVisibility()")
-        ]
-        scroll_height, client_height = _panel_of(page, section).evaluate("panel => [panel.scrollHeight, panel.clientHeight]")
+        state = page.evaluate(_ACCORDION_STATE, accordion)
         raise AssertionError(
-            f"the accordion did not come to rest after opening {section}: the panels displayed are {displayed}, "
-            f"and the {section} panel's scrollHeight is {scroll_height} against its clientHeight {client_height}"
+            f"the accordion did not come to rest after opening {section}: "
+            f"the state _ACCORDION_STATE reads, which _ACCORDION_IS_AT_REST judges, is {state}"
         ) from timeout
 
 
