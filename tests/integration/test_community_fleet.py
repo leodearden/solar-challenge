@@ -14,6 +14,7 @@ Tests the full stack:
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 from pathlib import Path
 
@@ -834,6 +835,9 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
     The CLI's default_runner is replaced with a FleetRunner whose home simulator marks each
     home it starts, on the committed Bristol TMY, so the runs are offline and need no seeded
     weather cache. monkeypatch.setattr fails if the CLI no longer binds default_runner.
+    `fleet run` sets the runner's parallelism from its own --sequential and --workers
+    options, so the fixture sets none, and `_fleet_run_in_process`'s --sequential keeps the
+    marking simulator in this process, as the positive control asserts.
     """
 
     @pytest.fixture
@@ -845,7 +849,7 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         monkeypatch.setattr(
             _cli_fleet_module,
             "default_runner",
-            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir), parallel=False),
+            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir)),
         )
         return marker_dir
 
@@ -871,10 +875,12 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         """The positive control, without which the test above could pass on a simulator `fleet run` never calls.
 
         It asserts only on the marks: the simulator's stand-in results need not suit the rest of the run.
+        It also asserts that every home ran in this process, where `_fleet_run_in_process`'s --sequential keeps the simulator.
         """
         _fleet_run_in_process(SCENARIO, "--start", "2024-01-15", "--end", "2024-01-15")
 
         assert set(started(marker_dir)) == {home.name for home in load_fleet_config(SCENARIO).homes}
+        assert {start.pid for start in started(marker_dir).values()} == {os.getpid()}
 
 
 # ---------------------------------------------------------------------------
