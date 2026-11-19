@@ -24,7 +24,6 @@ and migrate_runs_table_documents, which brings the runs rows' copies forward ins
 
 import json
 import logging
-import math
 import re
 import shutil
 import sqlite3
@@ -38,6 +37,7 @@ from solar_challenge.fleet import FleetResults, FleetSummary, aggregate_home_sum
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.web.database import Database, RowRefused, TableSchema, check_one_of, rebuild_table, sql_string_literal
 from solar_challenge.web.field_tree import field_tree
+from solar_challenge.web.run_headline import RunHeadline, run_headline
 from solar_challenge.web.run_names import is_run_name, require_run_name
 from solar_challenge.web.stored_runs import (
     FIRST_FORMAT_VERSION,
@@ -142,7 +142,7 @@ class RunRecord:
         summary = self.summary()
         return {} if summary is None else field_tree(summary)
 
-    def headline(self) -> "RunHeadline | None":
+    def headline(self) -> RunHeadline | None:
         """The run's headline: run_headline of the summary summary() reads; None while the run has none.
 
         Raises:
@@ -198,7 +198,7 @@ def _run_summary(
     return _run_kind(run_id, run_type).summary(_row_document(run_id, "summary_json", summary_json))
 
 
-def _stored_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> "RunHeadline | None":
+def _stored_headline(run_id: str, run_type: RunType | None, summary_json: str | None) -> RunHeadline | None:
     """Run *run_id*'s headline: run_headline of the summary _run_summary reads from its *summary_json*; None while it has none.
 
     Raises:
@@ -220,7 +220,7 @@ def _stored_headline(run_id: str, run_type: RunType | None, summary_json: str | 
         ) from refusal
 
 
-_DocumentColumn =Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
+_DocumentColumn = Literal["config_json", "summary_json"]  # a runs column holding the JSON text of a stored document
 
 
 def _row_document_name(column: _DocumentColumn) -> str:
@@ -599,114 +599,6 @@ def _row_brought_forward(
         if from_version <= FIRST_FORMAT_VERSION:
             raise
     return bring_run_documents_forward(run_type, documents, FIRST_FORMAT_VERSION, to_version)
-
-
-_MAY_BE_NONE = "may_be_none"
-
-
-@dataclass(frozen=True)
-class RunHeadline:
-    """The figures the web shows for a run of either kind: its five energy totals, its self-consumption, grid dependency and export ratios, and the share of its generation the battery stored from PV.
-
-    The run lists show its generation and self-consumption ratio, and the comparison every
-    figure. pv_stored_share is None for a fleet run, as FleetSummary carries no battery totals.
-
-    Raises:
-        ValueError: A figure is not a finite number a float can hold, e.g. None, a text, a bool,
-            NaN, an infinity or an int too large for a float; the message names the figure and
-            its value. A pv_stored_share of None is not refused.
-    """
-
-    generation_kwh: float
-    demand_kwh: float
-    self_consumption_kwh: float
-    grid_import_kwh: float
-    grid_export_kwh: float
-    self_consumption_ratio: float
-    grid_dependency_ratio: float
-    export_ratio: float
-    pv_stored_share: float | None = field(metadata={_MAY_BE_NONE: True})
-
-    def __post_init__(self) -> None:
-        for figure in fields(self):
-            value = getattr(self, figure.name)
-            if value is None and figure.metadata.get(_MAY_BE_NONE, False):
-                continue
-            _require_finite_number(figure.name, value)
-
-
-def _require_finite_number(figure: str, value: object) -> None:
-    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is an int or a float that is finite as a float; a bool is neither."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not _is_finite_as_float(value):
-        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number a float can hold")
-
-
-def _is_finite_as_float(number: int | float) -> bool:
-    """Whether *number* is finite as a float: not NaN, not an infinity, and no int too large for a float, for which math.isfinite raises OverflowError."""
-    try:
-        return math.isfinite(number)
-    except OverflowError:
-        return False
-
-
-def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
-    """RunHeadline's *figure*: *kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
-
-    Raises:
-        ValueError: *generation_kwh* or *kwh* is not a finite number a float can hold, as
-            _require_finite_number refuses it, naming generation_kwh or *figure*, before anything
-            is divided.
-    """
-    _require_finite_number("generation_kwh", generation_kwh)
-    _require_finite_number(figure, kwh)
-    return kwh / generation_kwh if generation_kwh > 0 else 0.0
-
-
-def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
-    """The headline of the run whose summary is *summary*, a home run's or a fleet run's.
-
-    It is the one place the web maps a fleet summary's names, such as fleet_self_consumption_ratio,
-    to a headline's (D-S19-8 in docs/prds/run-store-one-owner.md). It also derives the two figures
-    a summary does not hold, each a share of the generation: a fleet's export ratio, its grid
-    export's share, and a home's pv_stored_share, the share of the PV its battery stored, which
-    total_pv_charge_kwh counts without the grid charge. A fleet's pv_stored_share is None.
-
-    Raises:
-        ValueError: A figure of the summary that the headline holds, or that a share is derived
-            from, is not a finite number a float can hold, e.g. None, a text, a bool, NaN, an
-            infinity or an int too large for a float, as RunHeadline refuses it.
-    """
-    match summary:
-        case SummaryStatistics():
-            return RunHeadline(
-                generation_kwh=summary.total_generation_kwh,
-                demand_kwh=summary.total_demand_kwh,
-                self_consumption_kwh=summary.total_self_consumption_kwh,
-                grid_import_kwh=summary.total_grid_import_kwh,
-                grid_export_kwh=summary.total_grid_export_kwh,
-                self_consumption_ratio=summary.self_consumption_ratio,
-                grid_dependency_ratio=summary.grid_dependency_ratio,
-                export_ratio=summary.export_ratio,
-                pv_stored_share=_share_of_generation(
-                    "pv_stored_share", summary.total_pv_charge_kwh, summary.total_generation_kwh
-                ),
-            )
-        case FleetSummary():
-            return RunHeadline(
-                generation_kwh=summary.total_generation_kwh,
-                demand_kwh=summary.total_demand_kwh,
-                self_consumption_kwh=summary.total_self_consumption_kwh,
-                grid_import_kwh=summary.total_grid_import_kwh,
-                grid_export_kwh=summary.total_grid_export_kwh,
-                self_consumption_ratio=summary.fleet_self_consumption_ratio,
-                grid_dependency_ratio=summary.fleet_grid_dependency_ratio,
-                export_ratio=_share_of_generation(
-                    "export_ratio", summary.total_grid_export_kwh, summary.total_generation_kwh
-                ),
-                pv_stored_share=None,
-            )
-        case _:
-            assert_never(summary)
 
 
 def _read_headline(

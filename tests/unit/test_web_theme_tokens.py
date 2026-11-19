@@ -27,7 +27,7 @@ pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.home import calculate_summary
 from solar_challenge.web import charts
-from solar_challenge.web.storage import run_headline
+from solar_challenge.web.run_headline import run_headline
 from solar_challenge.web.theme_tokens import chart_colour_palette
 from tests._dashboard_sources import (
     FAVICON_BUILDER_KEY,

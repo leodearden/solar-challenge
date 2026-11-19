@@ -36,8 +36,8 @@ from solar_challenge.web.charts import (
     sankey_diagram,
     seasonal_comparison,
 )
+from solar_challenge.web.run_headline import run_headline
 from solar_challenge.web.simulation_params import parse_home_config
-from solar_challenge.web.storage import run_headline
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
