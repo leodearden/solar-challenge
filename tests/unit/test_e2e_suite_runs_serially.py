@@ -15,11 +15,11 @@ import pytest
 pytest.importorskip("flask")
 
 RUNS_IN_THE_SESSIONS_OWN_PROCESS = """\
-import os
+from xdist import is_xdist_worker
 
 
-def test_runs_in_the_sessions_own_process():
-    assert os.environ.get("PYTEST_XDIST_WORKER") is None
+def test_runs_in_the_sessions_own_process(request):
+    assert not is_xdist_worker(request)
 """
 
 
@@ -38,6 +38,10 @@ def test_the_e2e_suite_runs_in_its_sessions_own_process_when_addopts_ask_for_a_w
     directory the run names, as it does for `pytest tests/e2e`; that directory is
     not named tests/e2e, because a tests directory there would compete with the
     tests package the conftest imports its helpers from.
+
+    The scenario asks its own session's config whether it is a worker, because
+    PYTEST_XDIST_WORKER in os.environ cannot answer: the verify runs this test on
+    a worker, and every session that test starts inherits that worker's variable.
     """
     monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "2")
     pytester = pytester_importing_test_helpers
