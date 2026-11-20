@@ -206,7 +206,9 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   Installing it (the same command without `--dry-run`) has to happen outside
   the sandbox. The lane job installs that browser before its suite, so neither
   another project's `playwright install` nor a `uv.lock` move of playwright
-  turns the lane red (`docs/orchestrator-config.md` says why). If e2e tests
+  turns the lane red (`docs/orchestrator-config.md` says why). An
+  `e2e::nonzero-exit` whose install could not reach playwright's download host
+  was an outage: retry later before changing code. If e2e tests
   ERROR at setup in a sandboxed session with
   `Executable doesn't exist at ~/.cache/ms-playwright/chromium_headless_shell-<revision>/...`,
   that install is still the whole fix, run in the main checkout, whose `.venv`
