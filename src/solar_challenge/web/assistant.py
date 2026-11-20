@@ -456,7 +456,8 @@ def list_recent_runs(limit: int, storage: RunStorage) -> dict[str, Any]:
     Reads the first page of *storage*'s run list; a limit above _LIST_RUNS_MAX_LIMIT
     is clamped to it, so callers cannot request an unbounded result set.  Returns
     identifying fields plus each run's headline figures and, as ``unreadable``,
-    why its summary cannot be read, if it cannot.
+    why its headline cannot be read (its summary cannot be read, or holds a figure
+    the headline cannot show), if it cannot.
 
     Args:
         limit:   Maximum number of runs to return (at most
@@ -784,8 +785,9 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
             "description": (
                 "List recent simulation runs in reverse chronological order.  "
                 "Returns identifying fields and key summary metrics for each run; "
-                "a run whose stored summary cannot be read has no metrics, and its "
-                "'unreadable' says why. "
+                "a run whose headline cannot be read (its stored summary cannot be "
+                "read, or holds a figure the headline cannot show) has no metrics, "
+                "and its 'unreadable' says why. "
                 "Use this when the user asks what simulations have been run recently."
             ),
             "input_schema": {
