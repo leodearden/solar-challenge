@@ -1007,9 +1007,10 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         assert caught.value is raised
         assert getattr(caught.value, "__notes__", []) == []
         _assert_every_started_home_finished(tmp_path)
-        assert len(started(tmp_path)) < len(fleet.homes), (
-            "when the second home finished, the one worker had started at most the two finished homes, the home "
-            "it took next and the two queued behind that one, so the sixth home was cancelled"
+        assert set(started(tmp_path)) == {"Home 1", "Home 2", "Home 3"}, (
+            "the pool holds one home per worker, and the next home is handed to it from this process only as a "
+            "finished home's results are read, so when the sink raised at the second home only the third had been "
+            "handed on"
         )
 
 
@@ -1066,9 +1067,9 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
         assert index == 0
         _assert_marked_results_of(results, fleets[0])
         _assert_every_started_home_finished(tmp_path)
-        assert len(started(tmp_path)) < sum(len(fleet.homes) for fleet in fleets), (
-            "when the first fleet was yielded, the one worker had started at most its home, the home it took next "
-            "and the two queued behind that one, so the fifth and sixth homes were cancelled"
+        assert set(started(tmp_path)) == {"Alone", "Home 1"}, (
+            "when fleet One was yielded, only Home 1 had been handed to the one worker, so closing the iterator left "
+            "Home 2 onward unstarted"
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
