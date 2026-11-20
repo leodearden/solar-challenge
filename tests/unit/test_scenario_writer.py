@@ -2,7 +2,8 @@
 
 import dataclasses
 from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Collection
+from typing import Any, Callable, TypeVar
 
 import pytest
 import yaml
@@ -28,6 +29,8 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
+from solar_challenge.ev import EVConfig
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -37,79 +40,97 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 
 
-def _setting_every_key(block: ComponentBlock[Any], **values: Any) -> Any:
-    """*block*'s dataclass built from *values*, refused unless each of *block*'s keys is set away from what an omitted key reads as."""
-    config = block.config_type(**values)
-    unset = [key for key in block.keys if getattr(config, key) == block.value_when_omitted(key)]
+_Config = TypeVar("_Config")
+
+
+def _setting_every_key(block: ComponentBlock[Any], config: _Config, *, unwritten: Collection[str] = ()) -> _Config:
+    """*config*, refused unless each of *block*'s keys but *unwritten*, those the writer never writes, is set away from what an omitted key reads as."""
+    unset = [
+        key
+        for key in block.keys
+        if key not in unwritten and getattr(config, key) == block.value_when_omitted(key)
+    ]
     assert not unset, f"{block.config_type.__name__} leaves {unset} as an omitted key reads"
     return config
 
 
 def _every_grammar_field_home() -> HomeConfig:
-    """A Dublin home with every key of every component block table set away from what an omitted key reads as."""
+    """A Dublin home with every key the writer writes, of every component block table, set away from what an omitted key reads as; its battery's pair is split from a round trip."""
     return HomeConfig(
         pv_config=_setting_every_key(
             PV_BLOCK,
-            capacity_kw=9.0,
-            azimuth=135.0,
-            tilt=20.0,
-            name="South roof",
-            module_efficiency=0.21,
-            temperature_coefficient=-0.0035,
-            inverter_efficiency=0.97,
-            inverter_capacity_kw=8.0,
-            system_age_years=3.0,
-            degradation_rate_per_year=0.006,
-            system_losses=0.05,
+            PVConfig(
+                capacity_kw=9.0,
+                azimuth=135.0,
+                tilt=20.0,
+                name="South roof",
+                module_efficiency=0.21,
+                temperature_coefficient=-0.0035,
+                inverter_efficiency=0.97,
+                inverter_capacity_kw=8.0,
+                system_age_years=3.0,
+                degradation_rate_per_year=0.006,
+                system_losses=0.05,
+            ),
         ),
         battery_config=_setting_every_key(
             BATTERY_BLOCK,
-            capacity_kwh=10.0,
-            max_charge_kw=3.0,
-            max_discharge_kw=3.5,
-            name="Wall",
-            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-            grid_charging=GridChargeConfig(target_soc_fraction=0.8),
-            min_soc_fraction=0.15,
-            max_soc_fraction=0.95,
-            efficiency=0.9,
-            system_age_years=2.0,
-            calendar_fade_rate_per_year=0.03,
-            cycle_fade_per_equivalent_full_cycle=6e-05,
-            soh_floor=0.6,
-            soh=0.95,
+            BatteryConfig(
+                capacity_kwh=10.0,
+                max_charge_kw=3.0,
+                max_discharge_kw=3.5,
+                name="Wall",
+                dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                min_soc_fraction=0.15,
+                max_soc_fraction=0.95,
+                system_age_years=2.0,
+                calendar_fade_rate_per_year=0.03,
+                cycle_fade_per_equivalent_full_cycle=6e-05,
+                soh_floor=0.6,
+                soh=0.95,
+            ).with_round_trip(0.9),
+            unwritten=("efficiency",),
         ),
         load_config=_setting_every_key(
             LOAD_BLOCK,
-            annual_consumption_kwh=4200.0,
-            household_occupants=4,
-            name="Family",
-            use_stochastic=False,
-            seed=7,
+            LoadConfig(
+                annual_consumption_kwh=4200.0,
+                household_occupants=4,
+                name="Family",
+                use_stochastic=False,
+                seed=7,
+            ),
         ),
         heat_pump_config=_setting_every_key(
             HEAT_PUMP_BLOCK,
-            heat_pump_type="GSHP",
-            thermal_capacity_kw=6.0,
-            annual_heat_demand_kwh=9000.0,
-            name="Ground loop",
+            HeatPumpConfig(
+                heat_pump_type="GSHP",
+                thermal_capacity_kw=6.0,
+                annual_heat_demand_kwh=9000.0,
+                name="Ground loop",
+            ),
         ),
         ev_config=_setting_every_key(
             EV_BLOCK,
-            charger_type="7kW",
-            arrival_hour=19,
-            departure_hour=6,
-            required_charge_kwh=20.0,
-            smart_charging_mode="solar",
-            name="Car",
+            EVConfig(
+                charger_type="7kW",
+                arrival_hour=19,
+                departure_hour=6,
+                required_charge_kwh=20.0,
+                smart_charging_mode="solar",
+                name="Car",
+            ),
         ),
         location=_setting_every_key(
             LOCATION_BLOCK,
-            latitude=53.35,
-            longitude=-6.26,
-            timezone="Europe/Dublin",
-            altitude=8.0,
-            name="Dublin, IE",
+            Location(
+                latitude=53.35,
+                longitude=-6.26,
+                timezone="Europe/Dublin",
+                altitude=8.0,
+                name="Dublin, IE",
+            ),
         ),
         name="Nine kW home",
         tariff_config=TariffConfig.economy_7(),
@@ -219,8 +240,8 @@ def test_a_block_is_written_with_every_key_of_its_table_in_order(
     assert list(written_block(document)) == list(block.keys)
 
 
-def test_a_per_direction_battery_is_written_with_every_key_its_efficiency_null() -> None:
-    """R2: an unset round-trip efficiency is written as null, which the reader reads as absent."""
+def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_order() -> None:
+    """R2's one stated exception: a battery block holds the per-direction pair, never efficiency, the round trip."""
     home = _home(
         4.0,
         battery_config=BatteryConfig(
@@ -230,17 +251,20 @@ def test_a_per_direction_battery_is_written_with_every_key_its_efficiency_null()
 
     battery = home_scenario(home, name="Split efficiencies")["home"]["battery"]
 
-    assert list(battery) == list(BATTERY_BLOCK.keys)
-    assert battery["efficiency"] is None
+    assert list(battery) == [key for key in BATTERY_BLOCK.keys if key != "efficiency"]
+    assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.96, 0.97)
 
 
-def test_a_round_trip_efficiency_battery_is_written_without_the_pair_it_derives() -> None:
-    """R2's one stated exception: a battery with an efficiency omits the per-direction pair derived from it."""
-    battery = home_scenario(_every_grammar_field_home(), name="Nine kW home")["home"]["battery"]
+def test_a_battery_built_with_a_round_trip_efficiency_is_written_as_the_pair_it_derives(tmp_path: Path) -> None:
+    """Its block holds the derived pair and no efficiency, so it reads back as with_round_trip of its efficiency."""
+    battery_config = BatteryConfig(capacity_kwh=5.0, efficiency=0.81)
+    document = home_scenario(_home(4.0, battery_config=battery_config), name="Round trip")
 
-    assert list(battery) == [
-        key for key in BATTERY_BLOCK.keys if key not in {"charge_efficiency", "discharge_efficiency"}
-    ]
+    battery = document["home"]["battery"]
+
+    assert "efficiency" not in battery
+    assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.9, 0.9)
+    assert _load_through_home_run(document, tmp_path).battery_config == battery_config.with_round_trip(0.81)
 
 
 def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -> None:
