@@ -76,8 +76,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short -n auto --dist loadgroup"
-# Every pytest deprecation is an error; tests/unit/test_pytest_deprecations_are_errors.py says why.
-filterwarnings = ["error::pytest.PytestDeprecationWarning"]
+# Every pytest deprecation, and every deprecated call made from solar_challenge's own modules, is an error;
+# tests/unit/test_pytest_deprecations_are_errors.py and tests/unit/test_deprecated_calls_from_solar_challenge_are_errors.py say why.
+filterwarnings = ["error::pytest.PytestDeprecationWarning", "error::DeprecationWarning:solar_challenge"]
 # An unregistered mark fails collection; tests/unit/test_unregistered_marks_are_refused.py says why.
 strict_markers = true
 markers = [
