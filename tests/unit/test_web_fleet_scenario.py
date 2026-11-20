@@ -195,18 +195,24 @@ class TestParseFleetForm:
     def test_every_home_holds_the_forms_tariff_and_seg_and_every_battery_its_dispatch_strategy(
         self, form: dict[str, Any]
     ) -> None:
-        """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value."""
+        """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value.
+
+        A home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
+        """
         tariff = parse_tariff_config(form.get("tariff"))
         seg = parse_seg_tariff(form.get("seg"))
         dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        battery_pool = form["battery"]["capacity_kwh"]["entries"]
+        homes_with_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] > 0)
+        homes_without_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] == 0)
 
         homes = parse_fleet_form(form).homes
 
         assert [(home.tariff_config, home.seg_tariff) for home in homes] == [(tariff, seg)] * len(homes)
         assert [
             home.battery_config.dispatch_strategy for home in homes if home.battery_config is not None
-        ] == [dispatch] * 2
-        assert sum(home.battery_config is None for home in homes) == 1
+        ] == [dispatch] * homes_with_a_battery
+        assert sum(home.battery_config is None for home in homes) == homes_without_a_battery
 
     @pytest.mark.parametrize(
         "value",
