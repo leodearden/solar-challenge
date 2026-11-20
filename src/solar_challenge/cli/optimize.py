@@ -37,9 +37,12 @@ from solar_challenge.timebase import covered_days
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
+# The knob the flat grid-services pricing reads: what --grid-services-kw sets.
+_FLAT_RATE_KNOB = "grid_services_income_per_kw_per_year_gbp"
+
 # --sensitivity alias → the knob it sweeps, over that knob's optimize.SENSITIVITY_BANDS values.
 _SENSITIVITY_ALIAS_MAP: dict[str, str] = {
-    "grid_services": "grid_services_income_per_kw_per_year_gbp",
+    "grid_services": _FLAT_RATE_KNOB,
     "retained_floor": "retained_cash_floor_per_home_per_year_gbp",
     "battery_cost": "battery_cost_per_kwh_gbp",
     "pv_cost": "pv_cost_per_kwp_gbp",
@@ -51,7 +54,7 @@ _DEFAULT_SENSITIVITY_ALIASES: tuple[str, ...] = ("retained_floor", "grid_service
 
 # Why --grid-services-kw and the grid_services axis have nothing to set under the events model.
 _FLAT_RATE_UNREAD_UNDER_EVENTS = (
-    "the flat grid-services rate, grid_services_income_per_kw_per_year_gbp, "
+    f"the flat grid-services rate, {_FLAT_RATE_KNOB}, "
     "which grid_services_model='capacity_at_events' does not read"
 )
 
@@ -94,31 +97,38 @@ def _parse_sensitivity_aliases(raw: str) -> tuple[str, ...]:
     return aliases
 
 
-def _sensitivity_aliases(
+def _flat_rate_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
+    """The aliases of *aliases* whose axis sweeps _FLAT_RATE_KNOB, in order."""
+    return tuple(alias for alias in aliases if _SENSITIVITY_ALIAS_MAP[alias] == _FLAT_RATE_KNOB)
+
+
+def _resolve_sensitivity_aliases(
     requested: Optional[tuple[str, ...]], pricing: GridServicesModel
 ) -> tuple[str, ...]:
-    """The sensitivity axes to sweep: *requested*, or the default for *pricing* when None.
+    """The sensitivity axes to sweep under *pricing*: *requested*, or _DEFAULT_SENSITIVITY_ALIASES when it is None.
 
-    The default is _DEFAULT_SENSITIVITY_ALIASES, less grid_services, with a note
-    on stderr, when *pricing* is an events configuration.
+    Under an events configuration the default omits each axis that sweeps
+    _FLAT_RATE_KNOB, with a note on stderr naming it.
 
     Raises:
-        ConfigurationError: If *requested* names grid_services and *pricing* is
-            an events configuration.
+        ConfigurationError: If *pricing* is an events configuration and
+            *requested* names an axis that sweeps _FLAT_RATE_KNOB.
     """
-    under_events = isinstance(pricing, GridServicesEventsConfig)
+    if not isinstance(pricing, GridServicesEventsConfig):
+        return _DEFAULT_SENSITIVITY_ALIASES if requested is None else requested
     if requested is None:
-        if not under_events:
-            return _DEFAULT_SENSITIVITY_ALIASES
-        print_info(
-            f"Sensitivity axis grid_services omitted from the default: it sweeps "
-            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
-        )
-        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias != "grid_services")
-    if under_events and "grid_services" in requested:
+        omitted = _flat_rate_aliases(_DEFAULT_SENSITIVITY_ALIASES)
+        for alias in omitted:
+            print_info(
+                f"Sensitivity axis {alias} omitted from the default: it sweeps "
+                f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
+            )
+        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias not in omitted)
+    refused = _flat_rate_aliases(requested)
+    if refused:
         raise ConfigurationError(
-            f"--sensitivity names grid_services, which sweeps {_FLAT_RATE_UNREAD_UNDER_EVENTS}; "
-            "drop it from --sensitivity"
+            f"--sensitivity names {', '.join(refused)}, which sweeps "
+            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop it from --sensitivity"
         )
     return requested
 
@@ -275,7 +285,7 @@ def configs(
 
     pricing = grid_services_model_of(finance)
     finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
-    sensitivity_axes = _sensitivity_aliases(requested_sensitivity, pricing)
+    sensitivity_axes = _resolve_sensitivity_aliases(requested_sensitivity, pricing)
 
     # ---- Load fleet config --------------------------------------------------
     fleet_config = load_fleet_config(scenario)
