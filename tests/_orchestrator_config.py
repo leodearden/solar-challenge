@@ -11,6 +11,7 @@ Usage::
         git_config,
         lane_command,
         lane_commands,
+        lane_job_steps,
         lane_jobs_declaring_an_outage_probe,
         lane_outage_probe,
         offline_lane_jobs,
@@ -20,6 +21,7 @@ Usage::
     test_command = verify_command(project_root, "test_command")
     verify_commands = [verify_command(project_root, slot) for slot in VERIFY_SLOTS]
     e2e_job = lane_command(project_root, "e2e")
+    e2e_suite_step = lane_job_steps(project_root, "e2e").suite
     pvgis_outage_probe = lane_outage_probe(project_root, "pvgis")
     probed_lane_jobs = lane_jobs_declaring_an_outage_probe(project_root)
     every_lane_job = lane_commands(project_root)
@@ -27,6 +29,7 @@ Usage::
     lane_job_names = [job["name"] for job in offline_lane_jobs(project_root)]
 """
 
+import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -39,6 +42,10 @@ from tests._command_runner import VerifyRole
 VerifySlot = Literal["lint_command", "type_check_command", "test_command"]
 
 VERIFY_SLOTS: tuple[VerifySlot, ...] = get_args(VerifySlot)
+
+_STEP_SEPARATOR = "&&"
+
+_SHELL_OPERATOR_CHARACTERS = frozenset("();<>|&")
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,21 @@ class OrchestratorCommand:
         assert self.directory.is_dir(), (
             f"the {self.label} runs in {self.directory}, which is not a directory, so its command cannot start there"
         )
+
+
+@dataclass(frozen=True)
+class LaneJobSteps:
+    """An offline-lane job's command, read as the steps `sh -c` runs in turn, each only if the one before succeeded.
+
+    Each step is its words re-quoted with shlex.join, run in the job's directory
+    and role. The setup steps provision, as the e2e job's browser install does,
+    and never collect. The suite step, the last, is the one pytest run, which the
+    lane contract probes model the job by; it keeps the job's label, so a failure
+    about the suite it collects names the job.
+    """
+
+    setup: tuple[OrchestratorCommand, ...]
+    suite: OrchestratorCommand
 
 
 def verify_command(project_root: Path, slot: VerifySlot) -> OrchestratorCommand:
@@ -94,6 +116,69 @@ def lane_command(project_root: Path, name: str) -> OrchestratorCommand:
     cwd = job.get("cwd", ".")
     assert isinstance(cwd, str), f"the cwd of the {label} is {cwd!r}, not a path string, so dark-factory rejects it"
     return OrchestratorCommand(label=label, command=job["command"], directory=project_root / cwd, role="offline")
+
+
+def lane_job_steps(project_root: Path, name: str) -> LaneJobSteps:
+    """Return the offline-lane job *name* of *project_root*'s yaml, as lane_command builds it, split into its steps at each `&&` outside quotes.
+
+    It asserts, naming the job and its command, that `&&` is the only shell
+    operator the command holds, that no step is empty, and that the last step
+    runs pytest and no other step does, so a command the steps cannot model
+    fails here rather than being collected wrongly.
+    """
+    job = lane_command(project_root, name)
+    *setup_words, suite_words = _words_of_each_step(job)
+    assert "pytest" in suite_words, (
+        f"the last step of the {job.label} {job.command!r} runs no pytest, though the lane contract probes collect "
+        "the job by that step; run the job's suite last"
+    )
+    setup_steps_running_pytest = [number for number, words in enumerate(setup_words, start=1) if "pytest" in words]
+    assert not setup_steps_running_pytest, (
+        f"the {job.label} {job.command!r} runs pytest in its setup steps {setup_steps_running_pytest}, though the "
+        "lane contract probes collect only its last step, so the tests those steps run go unchecked; run pytest in "
+        "the last step alone"
+    )
+    return LaneJobSteps(
+        setup=tuple(
+            replace(job, label=f"setup step {number} of the {job.label}", command=shlex.join(words))
+            for number, words in enumerate(setup_words, start=1)
+        ),
+        suite=replace(job, command=shlex.join(suite_words)),
+    )
+
+
+def _words_of_each_step(job: OrchestratorCommand) -> list[list[str]]:
+    """Return the shell words of each step of *job*'s command, in order, the steps split at each `&&` outside quotes.
+
+    It asserts, naming the job and its command, that no other shell operator is
+    among the words and that no step is empty.
+    """
+    lexer = shlex.shlex(job.command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    words = list(lexer)
+    other_operators = sorted({word for word in words if _is_shell_operator(word) and word != _STEP_SEPARATOR})
+    assert not other_operators, (
+        f"the {job.label} {job.command!r} holds shell operators other than {_STEP_SEPARATOR!r}: "
+        f"{', '.join(map(repr, other_operators))}; the lane runs it whole with `sh -c`, but its steps are read as "
+        f"joined by {_STEP_SEPARATOR!r} alone, so the lane contract probes would model it wrongly; write it as steps "
+        f"joined by {_STEP_SEPARATOR!r} alone"
+    )
+    steps: list[list[str]] = [[]]
+    for word in words:
+        if word == _STEP_SEPARATOR:
+            steps.append([])
+        else:
+            steps[-1].append(word)
+    assert all(steps), (
+        f"the {job.label} {job.command!r} has an empty step, which sh refuses as a syntax error; give each "
+        f"{_STEP_SEPARATOR!r} a command on either side"
+    )
+    return steps
+
+
+def _is_shell_operator(word: str) -> bool:
+    """Whether *word* is a shell operator: a word made only of the characters the shell-words lexer splits words at."""
+    return bool(word) and set(word) <= _SHELL_OPERATOR_CHARACTERS
 
 
 def lane_outage_probe(project_root: Path, name: str) -> OrchestratorCommand:
