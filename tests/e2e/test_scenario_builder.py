@@ -289,19 +289,28 @@ def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: 
 _BUSY_ON_MOUSEDOWN = """(element, busyMs) => element.addEventListener('mousedown', () => {
     const until = performance.now() + busyMs;
     while (performance.now() < until) {}
+    element.dataset.busyHandled = 'true';
 }, { once: true })"""
-"""Keeps the page's main thread busy for *busyMs* milliseconds the next time *element* takes a mousedown, as a loaded host's renderer is busy, so a click on *element* is not done until then."""
+"""Keeps the page's main thread busy for *busyMs* milliseconds the next time *element* takes a mousedown, as a loaded host's renderer is busy, so a click on *element* is not done until then; the handler then sets *element*'s data-busy-handled attribute to "true", so a test can see that the click met it."""
 
 
 def test_a_click_that_outlasts_open_sections_rest_timeout_still_lands_and_its_wait_for_rest_fails(page: Page, live_server: str) -> None:
     """rest_timeout_ms bounds only _open_section's wait for rest: a click whose handling keeps the page busy for twice that bound still lands, opening Period, and _open_section then fails because the accordion does not come to rest, not because of the click."""
     page.goto(live_server + "/scenarios/builder")
     page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
-    page.get_by_role("button", name="Period", exact=True).evaluate(_BUSY_ON_MOUSEDOWN, 2000)
+    period_header = page.get_by_role("button", name="Period", exact=True)
+    period_header.evaluate(_BUSY_ON_MOUSEDOWN, 2000)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError) as failure:
         _open_section(page, "Period", rest_timeout_ms=1000)
 
+    assert isinstance(failure.value.__cause__, PlaywrightTimeoutError), (
+        f"_open_section should have failed in its wait for rest, an AssertionError raised from the wait's PlaywrightTimeoutError, but it failed with: {failure.value}"
+    )
+    expect(
+        period_header,
+        "the click should have run _BUSY_ON_MOUSEDOWN's handler on the Period header; if it did not, the click was not held up and this test cannot tell whether rest_timeout_ms wrongly bounds it",
+    ).to_have_attribute("data-busy-handled", "true")
     expect(page.get_by_role("button", name="Period", exact=True, expanded=True)).to_be_visible()
 
 
