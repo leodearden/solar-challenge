@@ -377,6 +377,7 @@ class Battery:
     config: BatteryConfig
     _soc_limits_and_efficiencies: _SocLimitsAndEfficiencies
     _soc_envelope: SocEnvelope
+    _grid_charge_target_kwh: Optional[float]
 
     def __init__(
         self,
@@ -421,12 +422,17 @@ class Battery:
             self._soc_kwh = initial_soc_kwh
 
     def _set_soc_limits_and_efficiencies(self, limits: _SocLimitsAndEfficiencies) -> None:
-        """Hold *limits* and the envelope at their SOC fractions, both built before either is stored."""
+        """Hold *limits*, the envelope at their SOC fractions and that envelope's grid-charge target, all built before any is stored."""
         envelope = _derated_soc_envelope(
             self.config.capacity_kwh, self._soh, limits.min_soc_fraction, limits.max_soc_fraction
         )
+        grid_charging = self.config.grid_charging
+        grid_charge_target_kwh = (
+            None if grid_charging is None else envelope.target_kwh(grid_charging.target_soc_fraction)
+        )
         self._soc_limits_and_efficiencies = limits
         self._soc_envelope = envelope
+        self._grid_charge_target_kwh = grid_charge_target_kwh
 
     @property
     def min_soc_fraction(self) -> float:
@@ -512,12 +518,9 @@ class Battery:
         """The SOC, in kWh, that grid charging fills the battery to, None when config.grid_charging is None.
 
         It is soc_envelope's target_kwh at config.grid_charging's target_soc_fraction, so it is at
-        most max_soc_kwh.
+        most max_soc_kwh. It is built with the envelope, so it follows an assignment to max_soc_fraction.
         """
-        grid_charging = self.config.grid_charging
-        if grid_charging is None:
-            return None
-        return self._soc_envelope.target_kwh(grid_charging.target_soc_fraction)
+        return self._grid_charge_target_kwh
 
     @property
     def usable_capacity_kwh(self) -> float:
