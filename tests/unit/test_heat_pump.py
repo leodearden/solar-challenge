@@ -348,7 +348,7 @@ def seasonal_year() -> pd.Series:
     when only the small hours fall below the 15.5 °C base temperature.
     """
     index = _utc_1990_minute_index()
-    day_of_year_angle = 2 * np.pi * (index.dayofyear.to_numpy() - 15) / 365
+    day_of_year_angle = 2 * np.pi * (index.day_of_year.to_numpy() - 15) / 365
     minute_of_day_angle = 2 * np.pi * (index.hour.to_numpy() * 60 + index.minute.to_numpy() - 180) / 1440
     return pd.Series(10.0 - 7.0 * np.cos(day_of_year_angle) - 3.0 * np.cos(minute_of_day_angle), index=index)
 

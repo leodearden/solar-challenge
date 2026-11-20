@@ -305,7 +305,7 @@ class EventWindow:
         """
         arr = (
             index.month.isin(self.months)
-            & index.weekday.isin(self.weekdays)
+            & index.day_of_week.isin(self.weekdays)
             & index.hour.isin(self.hours)
         )
         return pd.Series(arr, index=index)
