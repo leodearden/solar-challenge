@@ -764,6 +764,7 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
         page.expect_response("**/api/jobs/*/progress") as first_stream,
     ):
         page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+        assert submitted.value.status == 201, submitted.value.text()
     job_ids = submitted.value.json()["job_ids"]
     opens_the_first_points_stream = is_job_request(job_ids[0], "progress")
     assert opens_the_first_points_stream(first_stream.value.request), first_stream.value.url
