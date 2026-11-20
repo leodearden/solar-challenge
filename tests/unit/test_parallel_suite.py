@@ -29,3 +29,26 @@ def test_a_console_the_cli_builds_at_import_follows_a_columns_set_after_it_on_an
     result = pytester_under_root_conftest.runpytest_subprocess("-n", "1", "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
+
+
+def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_process(pytester: pytest.Pytester) -> None:
+    """A session that a test not marked slow starts with `-n auto`, as a copy of pyproject's addopts gives it, starts no workers.
+
+    The suite already spreads its tests over every core. A child session that
+    started a worker per core multiplied the run's CPU, 1853 s against 1195 s,
+    and broke the tests that count a session's outcomes: errors=32, doubled
+    rerun counts, and e2e-conftest scenarios whose second test needs the first.
+    """
+    pytester.makepyfile(
+        """
+        from xdist import is_xdist_worker
+
+
+        def test_runs_in_the_sessions_own_process(request):
+            assert not is_xdist_worker(request)
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-n", "auto", "-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=1)
