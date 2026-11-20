@@ -265,7 +265,11 @@ _SOC_LIMIT_LINES_KWH: dict[str, tuple[BatteryConfig, dict[str, float]]] = {
         {"Min SOC": 1.4, "Max SOC": 5.6},
     ),
 }
-"""Batteries battery_soc_chart draws the limits of, each by its id, with the kWh of the line each annotation names."""
+"""Batteries battery_soc_chart draws the limits of, each by its id, with the kWh of the line each annotation names.
+
+Five years of calendar fade at the default 2% a year leave calendar-faded-and-raised-min at 90% SoH, as the override
+sets soh-override-and-raised-max's.
+"""
 
 
 class TestBatterySocChartLimitLines:
@@ -277,7 +281,6 @@ class TestBatterySocChartLimitLines:
     def test_each_dashed_line_marks_one_of_the_batterys_soc_limits(
         self, battery_config: BatteryConfig, limits_kwh: dict[str, float]
     ) -> None:
-        """Five years of calendar fade at the default 2% a year leave the last battery at 90% SoH, as the override sets the second's."""
         figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config).content
         shapes = json.loads(figure)["layout"]["shapes"]
 
