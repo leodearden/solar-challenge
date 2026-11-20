@@ -118,8 +118,6 @@ def test_mobile_simulate_home_usable(page: Page, live_server: str) -> None:
     assert response is not None
     assert response.status == 200
 
-    page.wait_for_load_state("networkidle")
-
     # The page heading should be visible
     heading = page.locator("text=Single Home Simulation").first
     expect(heading).to_be_visible()
