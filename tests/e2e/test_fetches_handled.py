@@ -79,14 +79,14 @@ def test_a_fetch_is_handled_once_the_page_catches_its_failure(page: Page, live_s
 
 
 @pytest.mark.parametrize(
-    ("leave_a_rejection_unhandled", "error_name"),
+    ("leave_a_rejection_unhandled", "message_part"),
     [
-        pytest.param("() => { fetch('/api/presets'); }", "TypeError", id="fetch-fails"),
-        pytest.param("() => fetch('/').then(response => { response.json(); })", "SyntaxError", id="json-of-html"),
+        pytest.param("() => { fetch('/api/presets'); }", "Failed to fetch", id="fetch-fails"),
+        pytest.param("() => fetch('/').then(response => { response.json(); })", "JSON", id="json-of-html"),
     ],
 )
 def test_a_rejection_the_page_leaves_unhandled_is_still_an_uncaught_error(
-    page: Page, live_server: str, leave_a_rejection_unhandled: str, error_name: str
+    page: Page, live_server: str, leave_a_rejection_unhandled: str, message_part: str
 ) -> None:
     """The recorder watches each fetch's answer and body without handling the promises the page is given, so the page's own unhandled rejection still reaches page_errors.
 
@@ -99,7 +99,7 @@ def test_a_rejection_the_page_leaves_unhandled_is_still_an_uncaught_error(
     with page.expect_event("pageerror") as uncaught:
         page.evaluate(leave_a_rejection_unhandled)
 
-    assert uncaught.value.name == error_name, f"the uncaught error: {uncaught.value}"
+    assert message_part in uncaught.value.message, f"the uncaught error: {uncaught.value}"
 
 
 @pytest.mark.usefixtures("runs_api_never_answers")
