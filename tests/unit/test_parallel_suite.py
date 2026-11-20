@@ -70,9 +70,8 @@ def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_p
     """A session that a test not marked slow starts with `-n auto`, as a copy of pyproject's addopts gives it, starts no workers.
 
     The suite already spreads its tests over every core. A child session that
-    started a worker per core multiplied the run's CPU, 1853 s against 1195 s,
-    and broke the tests that count a session's outcomes: errors=32, doubled
-    rerun counts, and e2e-conftest scenarios whose second test needs the first.
+    started a worker per core would multiply the run's workers, and would break
+    the tests that count a session's outcomes or need its tests run in order.
     """
     pytester.makepyfile(
         """
@@ -127,19 +126,13 @@ def test_a_pytest_session_a_slow_test_starts_runs_n_auto_on_workers(
     result.assert_outcomes(passed=1)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "pytest 9.2's Node.nodeid reads its structured NodeId, while pytest-xdist 3.8.0 appends the group to "
-        "item._nodeid, which nothing reads, so --dist loadgroup schedules a group's tests as --dist load does"
-    ),
-)
-def test_the_tests_of_an_xdist_group_run_on_one_worker(pytester: pytest.Pytester) -> None:
-    """Under `--dist loadgroup`, the tests sharing an xdist_group run on one worker, as tests/integration/test_external_install.py asks for its wheel build.
+def test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers(pytester: pytest.Pytester) -> None:
+    """Under `--dist loadgroup`, the tests sharing an xdist_group are spread over the workers as ungrouped tests are, so no test may need a group to pass.
 
-    Strict, so a release that honours the group again fails it, in the
-    newest-releases lane first; then the caveats in that module's docstring
-    and in CLAUDE.md go with the xfail.
+    pytest 9.2's Node.nodeid reads its structured NodeId, while pytest-xdist
+    3.8.0 appends the group to item._nodeid, which nothing reads, so the
+    scheduler never sees the group. A release that honours it again fails this
+    test, in the newest-releases lane first.
     """
     pytester.makepyfile(
         """
@@ -159,4 +152,9 @@ def test_the_tests_of_an_xdist_group_run_on_one_worker(pytester: pytest.Pytester
     result = pytester.runpytest_subprocess("-n", "2", "--dist", "loadgroup", "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=4)
-    assert len({path.read_text() for path in pytester.path.glob("worker-of-case-*")}) == 1
+    workers = sorted({path.read_text() for path in pytester.path.glob("worker-of-case-*")})
+    assert workers == ["gw0", "gw1"], (
+        f"the four tests of one xdist_group ran on {workers}: a release honours the group again, so lock it, "
+        "drop the caveats in CLAUDE.md's parallel-suite bullet and in tests/integration/test_external_install.py's "
+        "docstring, and assert here that the four share one worker"
+    )

@@ -26,9 +26,9 @@ The wheel is built once, from a copy of the working tree (wheel_source), via a
 module-scoped fixture shared by every test here. The module's xdist_group asks
 pytest-xdist to run every test here on one worker, so that its module-scoped
 wheel build and consumer environment are built once per run, not on each worker
-that runs one of its tests. Under pytest 9.2, pytest-xdist 3.8.0 ignores the
-group; tests/unit/test_parallel_suite.py's strict xfail fails once a release
-honours it.
+that runs one of its tests. The group is currently ignored;
+tests/unit/test_parallel_suite.py::test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers
+says why.
 The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
 (underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
 environment the module-scoped consumer_environment fixture builds. That

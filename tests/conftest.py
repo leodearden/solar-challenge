@@ -149,7 +149,7 @@ def _pytest_sessions_it_starts_run_serially() -> Iterator[None]:
     """Resolve `-n auto` to no workers in every pytest session started while it is open, through pytest-xdist's PYTEST_XDIST_AUTO_NUM_WORKERS.
 
     The suite already runs on a worker per core; tests/unit/test_parallel_suite.py
-    says what a session that started its own did to it.
+    says what a session that started its own would do to it.
     """
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "0")
