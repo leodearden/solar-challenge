@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
 **Task:** #823, #1029, #1374, #1376, #1400, #1404
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_module_rating_w`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_require_module_numbers`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_module_rating_w`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_require_module_values`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -40,7 +40,7 @@
   Outside that domain a cell runs no hotter than the air, or colder; a NaN gives NaN
   cells, so no DC, with no error. A module's own `T_NOCT` or `A_c` that is not a
   finite number, text that reads as one included, is refused first, by the number
-  rule (`_require_module_numbers`; [pv-module-settings.md](pv-module-settings.md)),
+  rule (`_require_module_values`; [pv-module-settings.md](pv-module-settings.md)),
   so the domain check reads numbers only. `PVConfig`'s construction refuses
   `custom_module_params` outside the domain, reading the area a set
   `module_efficiency` gives (`_template_with_set_efficiency`). `create_pv_system`,
