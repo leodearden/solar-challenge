@@ -34,6 +34,7 @@ from tests._network_guard import send_child_processes_to_a_dead_proxy
 from tests._orchestrator_config import (
     git_config,
     lane_command,
+    lane_job_steps,
     lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
@@ -225,8 +226,8 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
-    """The job's command passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
-    command = lane_command(project_root, job.name).command
+    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
+    command = lane_job_steps(project_root, job.name).suite.command
     argv = shlex.split(command)
     assert "pytest" in argv, f"the {job.name!r} lane job {command!r} runs no pytest"
     pytest_arguments = argv[argv.index("pytest") + 1 :]
@@ -384,12 +385,12 @@ def test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage(
 ) -> None:
     """Run as the lane runs it after a red run, with everything off this machine out of reach, the job's outage probe reports an outage of the row's service.
 
-    It runs in the uv environment of the job's command, as the lane runs it. Here that environment may not be synced
+    It runs in the uv environment of the job's suite step, as the lane runs it. Here that environment may not be synced
     yet, so the run is given longer than the job's outage_probe_timeout_secs.
     """
     send_child_processes_to_a_dead_proxy(monkeypatch)
     probe = lane_outage_probe(project_root, job.name)
-    environment = shared_uv_probe_environments.for_command(lane_command(project_root, job.name).command)
+    environment = shared_uv_probe_environments.for_command(lane_job_steps(project_root, job.name).suite.command)
 
     result = run_command(probe, environment, timeout_secs=300)
 

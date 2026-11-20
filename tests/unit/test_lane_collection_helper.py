@@ -107,6 +107,22 @@ def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
     assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
 
+def test_a_jobs_setup_steps_are_not_run_when_it_is_collected(tmp_path: Path) -> None:
+    """Only the job's suite step runs, collecting only.
+
+    A setup step provisions, as the e2e job's browser install does, and run in a
+    verify it would write outside the test's tmp_path or reach the network.
+    """
+    project_root = _project_with_lane_job(tmp_path, f"touch setup-ran && {_PYTEST} test_kept.py")
+    (project_root / "test_kept.py").write_text("def test_alpha():\n    pass\n", encoding="utf-8")
+
+    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+
+    assert not (project_root / "setup-ran").exists()
+    assert collection.command == f"{_PYTEST} test_kept.py"
+    assert collection.node_ids() == ("test_kept.py::test_alpha",), collection.describe()
+
+
 def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_this_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -161,9 +177,11 @@ def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_comma
 def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path: Path) -> None:
     """The command exits 0, yet reading its node ids fails, naming it and showing its output; it never reads as an empty suite.
 
-    It prints its phrase in two parts, so only its output, not its text, holds the phrase whole.
+    Its one word pytest is an argument it prints, which makes it the job's suite
+    step. It prints its phrase in two parts, so only its output, not its text,
+    holds the phrase whole.
     """
-    command = shlex.join([sys.executable, "-c", "print('this command never ran', 'pytest')"])
+    command = shlex.join([sys.executable, "-c", "import sys; print('this command never ran', sys.argv[1])", "pytest"])
     project_root = _project_with_lane_job(tmp_path, command)
 
     collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)

@@ -5,10 +5,10 @@ Usage::
 
     from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
-    result = run_collect_only(lane_command(project_root, "e2e"), env=isolated_uv_env(tmp_path / "venv"))
+    result = run_collect_only(lane_job_steps(project_root, "e2e").suite, env=isolated_uv_env(tmp_path / "venv"))
 
     environments = SharedUvEnvironments(tmp_path_factory.mktemp("uv-probe-environments"))
-    command = lane_command(project_root, "e2e")
+    command = lane_job_steps(project_root, "e2e").suite
     result = run_collect_only(command, env=environments.for_command(command.command))
 """
 

@@ -119,10 +119,24 @@ workers.
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
   except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
   downloads whenever `uv.lock` changes.
-- **`e2e`.** The non-slow Playwright suite. `LaneCommand` has no timeout field and the lane is
-  single-flight, so without the `timeout` prefix a hung browser run would stall every later
-  lane run. The prefix is sized as a generous multiple of the run, not at the run. Its suite
-  needs no live service, so it declares no probe.
+- **`e2e`.** The non-slow Playwright suite. Its command first installs the
+  chromium-headless-shell the locked playwright needs, then runs the suite, both through
+  `uv run` with the same options, so they share one environment and the install is the suite's
+  own playwright. Playwright's install deletes every browser in `~/.cache/ms-playwright` that no
+  still-present install registered, and the environments this project's runs register one from
+  are temporary: a task worktree's `.venv`, and the lane's, which its reset deletes before every
+  pass. So another project's install could delete ours, and a `uv.lock` move of playwright
+  needs a revision nobody has installed. The lane is the one runner of the suite that may write
+  that cache and reach the download host. When the browser is present the install downloads
+  nothing, and `PLAYWRIGHT_SKIP_BROWSER_GC=1` stops it deleting other installs' browsers in
+  turn. `LaneCommand` has no timeout field and the lane is single-flight, so without the
+  `timeout` prefix on each step a hung download or browser run would stall every later lane
+  run. Each prefix is sized as a generous multiple of its step's run, not at the run. Only a
+  missing browser sends the install to the download host, and an outage there fails it, which
+  the lane files as `e2e::nonzero-exit`: the job declares no outage probe, since its suite needs
+  no live service. The lane contract probes collect only the suite step
+  (`tests/_lane_collection.py::collect_lane_job`), so no verify runs the install, and
+  `tests/unit/test_e2e_lane.py` checks that the job keeps it.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
   live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. One of
   them also checks that the Bristol TMY committed under `tests/fixtures/weather_cache`, which

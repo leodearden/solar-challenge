@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 r"""Collect-only probes for the lane contract tests.
 
-They collect an offline-lane job as the lane runs it, a default collection of
-tests/, a suite by its explicit path under a mark expression, and every test
-under tests/, the lane-only suites included, under a mark expression.
+They collect an offline-lane job's suite step as the lane runs it, a default
+collection of tests/, a suite by its explicit path under a mark expression, and
+every test under tests/, the lane-only suites included, under a mark expression.
 
 Usage::
 
@@ -46,22 +46,23 @@ import pytest
 
 from tests._collect_only import CollectedTest, Collection, collect
 from tests._command_runner import ShellCommand
-from tests._orchestrator_config import lane_command
+from tests._orchestrator_config import lane_job_steps
 
 
 def collect_lane_job(project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]) -> Collection:
-    """Run the offline-lane job *name* of *project_root* as the lane runs it, collecting only, in env_for(its command).
+    """Run the suite step of the offline-lane job *name* of *project_root* as the lane runs it, collecting only, in env_for(its command).
 
-    env_for is given the very command that runs, so an environment keyed on it,
-    as SharedUvEnvironments.for_command keys one, fits what runs.
+    The setup steps before it are never run. env_for is given the very command
+    that runs, so an environment keyed on it, as SharedUvEnvironments.for_command
+    keys one, fits what runs.
 
     It asserts the command collected, naming the job, its command and how the run
     ended. Whether what it collected is right is the calling lane test's own assertion.
     """
-    lane_job = lane_command(project_root, name)
-    collection = collect(lane_job, env=env_for(lane_job.command))
+    suite = lane_job_steps(project_root, name).suite
+    collection = collect(suite, env=env_for(suite.command))
     assert collection.returncode == pytest.ExitCode.OK, (
-        f"the {lane_job.label} {lane_job.command!r} failed to collect\n{collection.describe()}"
+        f"the {suite.label} {suite.command!r} failed to collect\n{collection.describe()}"
     )
     return collection
 
