@@ -885,24 +885,39 @@ def test_importing_the_package_refuses_tables_that_disagree(
 # ===========================================================================
 
 
-def test_import_is_pvlib_free() -> None:
-    """`import solar_challenge` alone leaves pvlib out of sys.modules.
+_PVLIB_LOADED_PROBE = """\
+import json
+import sys
 
-    It runs in a fresh interpreter, since the test process has already imported pvlib.
+import solar_challenge
+
+for public_name in sys.argv[1:]:
+    getattr(solar_challenge, public_name)
+print(json.dumps("pvlib" in sys.modules))
+"""
+
+
+def _pvlib_loaded_after_accessing(*public_names: str) -> bool:
+    """Return whether pvlib is loaded once a fresh interpreter has imported solar_challenge and accessed each of *public_names*.
+
+    The interpreter is fresh because the test process has already imported pvlib.
     """
-    code = (
-        "import sys, solar_challenge; "
-        "sys.exit(0 if 'pvlib' not in sys.modules else 1)"
-    )
     result = subprocess.run(
-        [sys.executable, "-I", "-c", code],
+        [sys.executable, "-I", "-c", _PVLIB_LOADED_PROBE, *public_names],
         capture_output=True,
         text=True,
-        timeout=60,
+        check=False,
+        timeout=120,
     )
-    assert result.returncode == 0, (
-        f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
-    )
+    probed = "; ".join(["import solar_challenge", *(f"solar_challenge.{name}" for name in public_names)])
+    assert result.returncode == 0, f"the probe of `{probed}` failed:\n{result.stderr}"
+    loaded: bool = json.loads(result.stdout)
+    return loaded
+
+
+def test_import_is_pvlib_free() -> None:
+    """`import solar_challenge` alone leaves pvlib out of sys.modules."""
+    assert not _pvlib_loaded_after_accessing(), "`import solar_challenge` alone loaded pvlib"
 
 
 # ---------------------------------------------------------------------------
@@ -926,31 +941,6 @@ def _first_exported_name_per_submodule() -> dict[str, str]:
     return first_names
 
 
-_FIRST_ACCESS_PROBE = """\
-import json
-import sys
-
-import solar_challenge
-
-getattr(solar_challenge, sys.argv[1])
-print(json.dumps("pvlib" in sys.modules))
-"""
-
-
-def _first_access_loads_pvlib(public_name: str) -> bool:
-    """Return whether the first access of solar_challenge.<public_name> loads pvlib, in a fresh interpreter that imported only solar_challenge."""
-    result = subprocess.run(
-        [sys.executable, "-I", "-c", _FIRST_ACCESS_PROBE, public_name],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-    assert result.returncode == 0, f"the probe of solar_challenge.{public_name} failed:\n{result.stderr}"
-    loads_pvlib: bool = json.loads(result.stdout)
-    return loads_pvlib
-
-
 @pytest.mark.parametrize(
     ("submodule", "public_name"),
     [
@@ -962,7 +952,7 @@ def test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_su
     submodule: str, public_name: str
 ) -> None:
     """The first access of *public_name*, whose typed import comes from *submodule*, loads pvlib exactly when PVLIB_IMPORTING_SUBMODULES lists *submodule*."""
-    loads_pvlib = _first_access_loads_pvlib(public_name)
+    loads_pvlib = _pvlib_loaded_after_accessing(public_name)
 
     assert loads_pvlib == (submodule in PVLIB_IMPORTING_SUBMODULES), (
         f"the first access of solar_challenge.{public_name} {'loads' if loads_pvlib else 'leaves unloaded'} pvlib, "
