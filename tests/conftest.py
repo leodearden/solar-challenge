@@ -142,6 +142,18 @@ def _open_offline_window() -> Iterator[_OfflineWindow]:
         yield _OfflineWindow(WeatherCache(cache_dir=Path(cache_dir)), refused)
 
 
+@contextmanager
+def _pytest_sessions_it_starts_run_serially() -> Iterator[None]:
+    """Resolve `-n auto` to no workers in every pytest session started while it is open, through pytest-xdist's PYTEST_XDIST_AUTO_NUM_WORKERS.
+
+    The suite already runs on a worker per core; tests/unit/test_parallel_suite.py
+    says what a session that started its own did to it.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "0")
+        yield
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object]:
     """Run each test not marked slow offline, from the setup of its first fixture to the teardown of its last.
@@ -151,11 +163,13 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     default_weather() reads it, in the test and in a child process that inherits its
     environment. Every name lookup or connection off this machine, from any thread,
     is refused, as is every HTTP(S) request the test's child processes send through
-    the standard proxy variables.
+    the standard proxy variables. Over the same span, a pytest session the test
+    starts runs `-n auto` in its own process, while a slow test's sessions, such as
+    the lanes' verify runs, keep a worker per core.
     """
     if item.get_closest_marker("slow"):
         return (yield)
-    with _open_offline_window() as window:
+    with _open_offline_window() as window, _pytest_sessions_it_starts_run_serially():
         item.stash[_OFFLINE_WINDOW_KEY] = window
         try:
             return (yield)
