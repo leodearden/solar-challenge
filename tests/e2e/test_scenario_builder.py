@@ -243,21 +243,28 @@ def _open_section(page: Page, section: str) -> None:
         ) from timeout
 
 
-def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
+@pytest.mark.parametrize(
+    "stretched_panel",
+    [pytest.param("closing", id="closing_panel_stretched"), pytest.param("opening", id="opening_panel_stretched")],
+)
+def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str, stretched_panel: str) -> None:
     """When _open_section returns, Playwright shows only the panel of the section it opened, laid out as tall as its content to within half a pixel, so the next click meets no header or control still moving.
 
-    General's panel is made to take 3 s to close, far longer than the accordion's own transition, so a helper that returns before it has closed is caught by any read that follows within 3 s of the click, not only by one that beats the transition.
+    The *stretched_panel*, the closing one (that of the section open when the page loads) or the opening one (that of the section the test opens), is made to take 3 s to move, far longer than the accordion's own transition. With the closing panel stretched, a helper that returns while that panel is still displayed is caught by `shown`. With the opening panel stretched, a helper that returns while that panel is still growing is caught by the height read. Either is caught by any read within 3 s of the click, not only by one that beats the transition.
     """
+    section_open_on_load = "General"
+    section_to_open = "Period"
+    stretched_section = {"closing": section_open_on_load, "opening": section_to_open}[stretched_panel]
     page.goto(live_server + "/scenarios/builder")
     panels = {section: _panel_of(page, section) for section in _ACCORDION_SECTIONS}
-    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ transition-duration: 3s !important; }}")
-    _open_section(page, "Period")
+    page.add_style_tag(content=f"#{_panel_id_of(page, stretched_section)} {{ transition-duration: 3s !important; }}")
+    _open_section(page, section_to_open)
 
     shown = {section for section, panel in panels.items() if panel.is_visible()}
-    period_height = _layout_box(panels["Period"])["height"]
-    period_scroll_height = panels["Period"].evaluate("panel => panel.scrollHeight")
+    opened_height = _layout_box(panels[section_to_open])["height"]
+    opened_scroll_height = panels[section_to_open].evaluate("panel => panel.scrollHeight")
 
-    assert (shown, period_height) == ({"Period"}, pytest.approx(period_scroll_height, abs=0.5))
+    assert (shown, opened_height) == ({section_to_open}, pytest.approx(opened_scroll_height, abs=0.5))
 
 
 def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: Page, live_server: str) -> None:
