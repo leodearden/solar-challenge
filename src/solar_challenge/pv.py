@@ -97,7 +97,7 @@ _MODULE_NUMBER_DOMAINS: Mapping[str, Interval] = MappingProxyType(
         "I_L_ref": POSITIVE,
     }
 )
-"""The domains of the module numbers a model divides by or whose sign it assumes, inside which _require_module_values reads them: pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and _adjust_bracket's photocurrent-positive bracket needs a positive I_L_ref. The rule reads every other key of _MODULE_KEYS_READ_AS_NUMBERS as any finite number (docs/pv-module-settings.md §2)."""
+"""The domains of the module numbers a model divides by or whose sign it assumes, inside which _require_module_values reads them: pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and _adjust_bracket's photocurrent-positive bracket needs a positive I_L_ref. Each key is one of _MODULE_KEYS_READ_AS_NUMBERS, as _number_families checks at import; the rule reads every other key of that set as any finite number (docs/pv-module-settings.md §2)."""
 
 _MODULE_KEYS_READ_AS_FLAGS = frozenset({"cap_adjustment"})
 """The module parameters pvlib reads by their truthiness, which _require_module_values checks as true or false: pvwatts_dc's cap_adjustment, which applies its k adjustment only at and below 1000 W/m² when true."""
@@ -118,12 +118,23 @@ def _one_reader_per_key(
     return MappingProxyType(readers)
 
 
+def _number_families(
+    keys: frozenset[str], domains: Mapping[str, Interval]
+) -> tuple[tuple[frozenset[str], _ModuleValueReader], ...]:
+    """The (keys, reader) families that read each of keys as a finite number, inside its domain for a key domains holds, refusing a domain whose key is not one of keys, which would check a key no model reads as a number and leave the key meant read as any finite number."""
+    if stray := sorted(domains.keys() - keys):
+        raise RuntimeError(f"Module parameters {stray} have a domain but are not read as numbers")
+    return (
+        (keys.difference(domains.keys()), as_finite_real),
+        *(
+            (frozenset({key}), functools.partial(as_finite_real, within=domain))
+            for key, domain in domains.items()
+        ),
+    )
+
+
 _MODULE_VALUE_READERS = _one_reader_per_key(
-    (_MODULE_KEYS_READ_AS_NUMBERS.difference(_MODULE_NUMBER_DOMAINS.keys()), as_finite_real),
-    *(
-        (frozenset({key}), functools.partial(as_finite_real, within=domain))
-        for key, domain in _MODULE_NUMBER_DOMAINS.items()
-    ),
+    *_number_families(_MODULE_KEYS_READ_AS_NUMBERS, _MODULE_NUMBER_DOMAINS),
     (_MODULE_KEYS_READ_AS_FLAGS, as_boolean),
 )
 """The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, inside its _MODULE_NUMBER_DOMAINS domain for a key that has one, and as_boolean for a flag."""
