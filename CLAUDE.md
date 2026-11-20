@@ -160,13 +160,19 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   re-locking it. A dependency edit to `pyproject.toml` must commit its `uv lock`
   re-lock in the same change, or verify fails with uv's "The lockfile at
   `uv.lock` needs to be updated" error.
-- Merge verifies run on `leo-laptop` first, and on this workstation when the
-  laptop is busy, benched or unreachable (`verify_runners` and
-  `verify_host_policy` in `dark-factory-orchestrator.yaml`). A merge-verify red
-  whose `merge_verify` event names runner `laptop`, and which does not
-  reproduce here, may come from the laptop's environment.
-  `docs/laptop-merge-verify.md` says how to reproduce it there and how to send
-  merge verifies back to this host.
+- Merge and task verifies may run on `leo-laptop` (`verify_runners`,
+  `verify_host_policy` and the `verify_task_*` keys in
+  `dark-factory-orchestrator.yaml`): a merge verify there first, and on this
+  workstation when the laptop is busy, benched or unreachable; a task verify on
+  whichever host grants it a turn first. A red whose runner is `laptop`, and
+  which does not reproduce here, may come from the laptop's environment. A
+  merge verify's runner is in its `merge_verify` event; a task verify's is in
+  its `workflow_verify` event and its dispatch record, beside its verify logs.
+  A task sees a laptop red only when `verify_task_remote_red_confirms_locally`
+  is off: while it is on, the red re-runs here and the task gets this
+  workstation's verdict. `docs/laptop-merge-verify.md` §5 says how to read and
+  reproduce such a red. `docs/laptop-merge-verify.md` §6 says how to send merge
+  or task verifies back to this host.
 - An offline-lane job whose suite needs a live service declares, as its
   `outage_probe` in `dark-factory-orchestrator.yaml`, `scripts/outage_probe.py`
   naming that service; the script's docstring says what counts as an outage and
