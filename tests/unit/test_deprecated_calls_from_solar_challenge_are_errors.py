@@ -4,7 +4,7 @@
 pyproject.toml's filterwarnings turns every DeprecationWarning attributed to a
 solar_challenge module into an error, in each run that reads its pytest ini.
 Libraries such as pandas attribute a deprecation to the frame that made the
-deprecated call, so a call this project makes fails the first run whose
+deprecated call, so a call solar_challenge makes fails the first run whose
 release deprecates it, not a run on the release that removes it. The
 newest-releases lane runs on the newest releases pyproject's ranges admit, so
 it fails at, and names, each such call before uv.lock reaches that release.
