@@ -129,10 +129,17 @@ class TestEventWindowMask:
         """mask() raises no warning, not even a pandas deprecation such as 3.1's of the index's weekday alias."""
         # Mon Dec 2 2024, 15:00 to 18:00: the first hour is before the window.
         idx = pd.date_range("2024-12-02 15:00", periods=4, freq="h", tz="Europe/London")
+        window = EventWindow(
+            months=(11, 12, 1, 2),
+            weekdays=(0, 1, 2, 3, 4),
+            hours=(16, 17, 18),
+            events_per_year=12,
+            event_hours=3.0,
+        )
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            mask = DEFAULT_EVENT_WINDOWS[0].mask(idx)
+            mask = window.mask(idx)
 
         assert mask.tolist() == [False, True, True, True]
 
