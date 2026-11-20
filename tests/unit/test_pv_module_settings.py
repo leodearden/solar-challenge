@@ -372,3 +372,49 @@ class TestACoefficientNoAdjustReachesIsRefused:
         message = one_refusal_at_construction_and_at_use(config)
         assert f"temperature_coefficient={coefficient}" in message, message
         assert reason in message, message
+
+
+_NUMBERS_OUTSIDE_THEIR_DOMAIN = [
+    pytest.param("temp_ref", -273.15, "greater than -273.15", id="temp_ref-at-absolute-zero"),
+    pytest.param("temp_ref", -300.0, "greater than -273.15", id="temp_ref-below-absolute-zero"),
+    pytest.param("irrad_ref", 0.0, "greater than 0", id="irrad_ref-0"),
+    pytest.param("irrad_ref", -1000.0, "greater than 0", id="irrad_ref-negative"),
+    pytest.param("I_L_ref", 0.0, "greater than 0", id="I_L_ref-0"),
+    pytest.param("I_L_ref", -1.0, "greater than 0", id="I_L_ref-negative"),
+]
+
+
+class TestAModuleNumberOutsideItsDomainIsRefused:
+    """pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and the reach check's photocurrent-positive Adjust bracket needs a positive I_L_ref, so construction and use refuse a finite value outside those domains, naming its key and value, whether or not a temperature coefficient is set."""
+
+    @pytest.mark.parametrize(
+        "coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
+    )
+    @pytest.mark.parametrize(("key", "value", "domain"), _NUMBERS_OUTSIDE_THEIR_DOMAIN)
+    def test_at_construction_and_at_use_naming_its_key_and_value(
+        self, key: str, value: float, domain: str, coefficient: float | None
+    ) -> None:
+        module = default_module()
+        config = PVConfig(
+            capacity_kw=4.0, temperature_coefficient=coefficient, custom_module_params=module
+        )
+        module[key] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert key in re.findall(r"\w+", message), message
+        assert f"got {value!r}" in message, message
+        assert domain in message, message
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            pytest.param("temp_ref", -273.0, id="temp_ref-above-absolute-zero"),
+            pytest.param("irrad_ref", 1e-3, id="irrad_ref-above-0"),
+            pytest.param("I_L_ref", 1e-6, id="I_L_ref-above-0"),
+        ],
+    )
+    def test_a_value_just_inside_its_domain_is_kept(self, key: str, value: float) -> None:
+        config = PVConfig(capacity_kw=4.0, custom_module_params={**default_module(), key: value})
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters[key] == value
