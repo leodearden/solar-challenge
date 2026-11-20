@@ -734,10 +734,10 @@ def _arrays(
 
 
 def _module_rating_w(module_params: Mapping[str, float]) -> float:
-    """Each module's rated DC power in watts, a finite number above 0: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC.
+    """Each module's rated DC power in watts: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC.
 
-    The rating must already be a number: text that float() reads as one would pass
-    as_finite_float, but pvlib reads the module's own pdc0.
+    Whichever key gives it, the rating must be a finite number above 0 and never text,
+    even text that reads as one (docs/pv-cell-temperature.md §1 says why).
     """
     if _is_pvwatts_module(module_params):
         key = "pdc0"
