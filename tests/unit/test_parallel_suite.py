@@ -89,6 +89,44 @@ def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_p
     result.assert_outcomes(passed=1)
 
 
+def test_a_pytest_session_a_slow_test_starts_runs_n_auto_on_workers(
+    pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that a slow test starts with `-n auto` starts workers, so the lanes' slow tests run the verify suite on workers, as the verify runs it.
+
+    The slow test runs under a copy of the root conftest, without the variable
+    this test's own window sets, and `--maxprocesses 1` caps its session at one
+    worker.
+    """
+    monkeypatch.delenv("PYTEST_XDIST_AUTO_NUM_WORKERS", raising=False)
+    pytester_under_root_conftest.makepyfile(
+        """
+        import pytest
+
+
+        @pytest.mark.slow
+        def test_starts_a_session_whose_test_runs_on_a_worker(pytester):
+            pytester.makepyfile(
+                '''
+                from xdist import is_xdist_worker
+
+
+                def test_runs_on_a_worker(request):
+                    assert is_xdist_worker(request)
+                '''
+            )
+
+            result = pytester.runpytest_subprocess("-n", "auto", "--maxprocesses", "1", "-p", "no:cacheprovider")
+
+            result.assert_outcomes(passed=1)
+        """
+    )
+
+    result = pytester_under_root_conftest.runpytest_subprocess("-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=1)
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
