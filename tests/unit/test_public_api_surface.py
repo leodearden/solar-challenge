@@ -14,7 +14,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
   resolve to the kind their spelling misleads about.
 - The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
-- The package imports without pvlib.
+- The package imports without pvlib, and the first access of a name loads pvlib exactly
+  when the submodule its typed import comes from is in PVLIB_IMPORTING_SUBMODULES.
 """
 
 import abc
@@ -878,11 +879,9 @@ def test_importing_the_package_refuses_tables_that_disagree(
 
 
 # ===========================================================================
-# The package imports without pvlib
-#
-# Whether the first access of a name loads pvlib is checked, for each submodule
-# the lazy loader maps names to, by
-# tests/unit/test_lazy_pvlib_submodules.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules
+# The package imports without pvlib, and the first access of a name loads pvlib
+# exactly when the submodule its typed import comes from is in
+# PVLIB_IMPORTING_SUBMODULES
 # ===========================================================================
 
 
@@ -903,4 +902,82 @@ def test_import_is_pvlib_free() -> None:
     )
     assert result.returncode == 0, (
         f"pvlib was imported by 'import solar_challenge'.\nstderr: {result.stderr}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The submodules whose names load pvlib on first access, as the 'Lazy pvlib
+# dependency' caveat in docs/domain-library-consumption.md tells consumers
+# ---------------------------------------------------------------------------
+PVLIB_IMPORTING_SUBMODULES: frozenset[str] = frozenset({"config", "fleet", "home", "pv", "weather"})
+
+
+def _first_exported_name_per_submodule() -> dict[str, str]:
+    """Each submodule an exported name's typed import comes from, mapped to the first such name in __all__ order.
+
+    A name the `if TYPE_CHECKING:` block does not import is test_type_checking_block_names_match_all's to report.
+    """
+    imports = _type_checking_imports()
+    first_names: dict[str, str] = {}
+    for name in solar_challenge.__all__:
+        if name in imports:
+            module, _ = imports[name]
+            first_names.setdefault(module.removeprefix(_SUBMODULE_PREFIX), name)
+    return first_names
+
+
+_FIRST_ACCESS_PROBE = """\
+import json
+import sys
+
+import solar_challenge
+
+getattr(solar_challenge, sys.argv[1])
+print(json.dumps("pvlib" in sys.modules))
+"""
+
+
+def _first_access_loads_pvlib(public_name: str) -> bool:
+    """Return whether the first access of solar_challenge.<public_name> loads pvlib, in a fresh interpreter that imported only solar_challenge."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", _FIRST_ACCESS_PROBE, public_name],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 0, f"the probe of solar_challenge.{public_name} failed:\n{result.stderr}"
+    loads_pvlib: bool = json.loads(result.stdout)
+    return loads_pvlib
+
+
+@pytest.mark.parametrize(
+    ("submodule", "public_name"),
+    [
+        pytest.param(submodule, public_name, id=submodule)
+        for submodule, public_name in sorted(_first_exported_name_per_submodule().items())
+    ],
+)
+def test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules(
+    submodule: str, public_name: str
+) -> None:
+    """The first access of *public_name*, whose typed import comes from *submodule*, loads pvlib exactly when PVLIB_IMPORTING_SUBMODULES lists *submodule*."""
+    loads_pvlib = _first_access_loads_pvlib(public_name)
+
+    assert loads_pvlib == (submodule in PVLIB_IMPORTING_SUBMODULES), (
+        f"the first access of solar_challenge.{public_name} {'loads' if loads_pvlib else 'leaves unloaded'} pvlib, "
+        f"and PVLIB_IMPORTING_SUBMODULES in tests/unit/test_public_api_surface.py "
+        f"{'omits' if loads_pvlib else 'lists'} {submodule}. Change that set and the 'Lazy pvlib dependency' "
+        "caveat in docs/domain-library-consumption.md together, so consumers learn what the name now costs"
+    )
+
+
+def test_every_listed_submodule_still_has_public_names() -> None:
+    """Sync guard: each submodule PVLIB_IMPORTING_SUBMODULES lists is one some exported name's typed import comes from."""
+    stale = PVLIB_IMPORTING_SUBMODULES - set(_first_exported_name_per_submodule())
+
+    assert not stale, (
+        f"no exported name's typed import comes from {sorted(stale)} any more, so they go from "
+        "PVLIB_IMPORTING_SUBMODULES in tests/unit/test_public_api_surface.py and from the "
+        "'Lazy pvlib dependency' caveat in docs/domain-library-consumption.md"
     )
