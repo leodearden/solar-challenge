@@ -2,6 +2,8 @@
 
 from playwright.sync_api import Page
 
+from tests.e2e._alpine_start import open_once_alpine_has_started
+
 
 def test_page_errors_holds_the_reference_error_bug_b1_raises(
     page: Page, live_server: str, page_errors: list[str]
@@ -15,7 +17,6 @@ def test_page_errors_holds_the_reference_error_bug_b1_raises(
         lambda route: route.fulfill(body="", content_type="text/javascript"),
     )
 
-    page.goto(live_server + "/simulate/fleet")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/simulate/fleet")
 
     assert "fleetSimulator is not defined" in page_errors

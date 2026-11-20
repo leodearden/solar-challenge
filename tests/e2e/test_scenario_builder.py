@@ -16,6 +16,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 
@@ -47,8 +48,7 @@ def test_builder_no_js_errors(
     the ``x-data`` before the component function is registered, which
     throws an uncaught ReferenceError.
     """
-    page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/scenarios/builder")
 
     assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
@@ -71,7 +71,6 @@ def test_accordion_sections_exist(page: Page, live_server: str) -> None:
     and Tariff sections.
     """
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     for section_name in _ACCORDION_SECTIONS:
         expect(
@@ -169,7 +168,6 @@ def test_yaml_preview_visible(page: Page, live_server: str) -> None:
     ``<pre>`` element is attached to the DOM.
     """
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     yaml_heading = page.locator("h3", has_text="YAML Preview")
     expect(yaml_heading).to_be_visible()
@@ -188,7 +186,6 @@ def test_yaml_preview_visible(page: Page, live_server: str) -> None:
 def test_download_yaml_button(page: Page, live_server: str) -> None:
     """The 'Download YAML' button exists and is clickable."""
     page.goto(live_server + "/scenarios/builder")
-    page.wait_for_load_state("networkidle")
 
     download_btn = page.locator("button", has_text="Download YAML")
     expect(download_btn).to_be_visible()

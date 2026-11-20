@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
 # -- The list a search leaves ----------------------------------------------
@@ -39,7 +40,6 @@ def test_search_filter_updates_table(
     """Type run name -> row visible; type nonsense -> 'No simulation runs found'."""
     _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     search_input = page.locator("#filter-search")
     expect(search_input).to_be_visible()
@@ -178,15 +178,11 @@ def test_pagination_controls_exist(
 ) -> None:
     """'Prev' and 'Next' buttons attached in DOM."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     prev_btn = page.locator("button", has_text="Prev")
     next_btn = page.locator("button", has_text="Next")
 
     # Pagination buttons should exist in the DOM
-    assert prev_btn.count() > 0, "Expected 'Prev' pagination button in DOM"
-    assert next_btn.count() > 0, "Expected 'Next' pagination button in DOM"
-
     expect(prev_btn.first).to_be_attached()
     expect(next_btn.first).to_be_attached()
 
@@ -197,6 +193,41 @@ def test_pagination_controls_exist(
 def _is_unfiltered_runs_request(url: str) -> bool:
     parts = urlsplit(url)
     return parts.path == "/api/history/runs" and "q" not in parse_qs(parts.query)
+
+
+_RECORD_EACH_FETCH_ONCE_ITS_FAILURE_OR_JSON_BODY_IS_HANDLED = """(() => {
+    window.fetchesHandled = [];
+    const record = (url) => setTimeout(() => window.fetchesHandled.push(url), 0);
+    const originalFetch = window.fetch;
+    window.fetch = function (resource, options) {
+        const answer = originalFetch.call(this, resource, options);
+        answer.catch(() => record(new URL(resource, location.href).href));
+        return answer;
+    };
+    const originalJson = Response.prototype.json;
+    Response.prototype.json = function () {
+        const body = originalJson.call(this);
+        const mark = () => record(this.url);
+        body.then(mark, mark);
+        return body;
+    };
+})();"""
+"""An init script that pushes to window.fetchesHandled the URL of each fetch whose failure, or whose json() body, the page has handled. A fetch whose answer the page reads otherwise, with text() say, or never reads, is never pushed.
+
+It pushes from a 0 ms timer queued as that promise settles. The timer runs only after every microtask chained from the settle, which includes the page's code awaiting it and the Alpine re-render that code schedules. So a pushed URL means the page has finished handling that answer, by the ordering tests/e2e/_alpine_start.py relies on.
+"""
+
+
+def _wait_until_the_page_has_handled_the_failure_or_json_body_of(page: Page, url: str) -> None:
+    """Return once the page, opened with that init script, has pushed url to window.fetchesHandled. If Playwright's default timeout runs out first, fail naming url and the URLs the page had pushed."""
+    try:
+        page.wait_for_function("url => window.fetchesHandled.includes(url)", arg=url)
+    except PlaywrightTimeoutError as timeout:
+        handled = page.evaluate("() => window.fetchesHandled")
+        raise AssertionError(
+            f"The page had not handled the failure or json() body of the fetch of {url} "
+            f"(window.fetchesHandled: {handled})"
+        ) from timeout
 
 
 @pytest.mark.usefixtures("seeded_home_runs_pair")
@@ -219,14 +250,14 @@ def test_late_superseded_request_does_not_replace_search_results(
         held_requests.append(route)
 
     page.route(_is_unfiltered_runs_request, hold)
+    page.add_init_script(_RECORD_EACH_FETCH_ONCE_ITS_FAILURE_OR_JSON_BODY_IS_HANDLED)
     page.goto(live_server + "/history/runs")
     page.get_by_label("Search", exact=True).fill(run_name)
     _expect_search_listed_only_one_run(page)
 
     (superseded_request,) = held_requests
     settle_superseded_request(superseded_request)
-    # networkidle cannot fire while the held request is in flight, and fires 500 ms after it settles
-    page.wait_for_load_state("networkidle")
+    _wait_until_the_page_has_handled_the_failure_or_json_body_of(page, superseded_request.request.url)
 
     result_link = _expect_search_listed_only_one_run(page)
     expect(result_link).to_have_attribute("href", f"/results/{run_id}")
