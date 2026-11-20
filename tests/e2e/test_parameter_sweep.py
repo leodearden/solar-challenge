@@ -35,8 +35,9 @@ region.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
-wait for the page to fetch those results, when it times out, fails naming the
-jobs whose results it has not fetched, while a Playwright timeout raised inside
+wait for the page to fetch those results gives each job's fetch the default
+timeout from the wait before it and, when it times out, fails naming the jobs
+whose results it has not fetched, while a Playwright timeout raised inside
 that wait's block passes through it unchanged; and that a real three-point
 sweep draws one chart per metric from its points' runs.
 
@@ -47,7 +48,7 @@ builds from its catalogue (tests/e2e/_job_requests.py).
 import itertools
 import json
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -741,7 +742,7 @@ def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_j
 
 @contextmanager
 def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator[None]:
-    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched. An exception the block raises, a Playwright timeout among them, passes through unchanged."""
+    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order. It records the fetches that finish during the block, then waits for each job's fetch in turn, on Playwright's default timeout from when its own wait begins, so a sweep the page follows point by point is bounded per point, not in total. If a wait times out, fail naming the jobs whose results the page has not fetched. An exception the block raises, a Playwright timeout among them, passes through unchanged."""
     fetched: set[str] = set()
 
     def note_fetched_results(request: Request) -> None:
@@ -749,15 +750,17 @@ def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator
 
     page.on("requestfinished", note_fetched_results)
     try:
-        with ExitStack() as fetches_finished:
+        yield
+        try:
             for job_id in job_ids:
-                fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
-            yield
-            try:
-                fetches_finished.close()
-            except PlaywrightTimeoutError as timed_out:
-                unfetched = [job_id for job_id in job_ids if job_id not in fetched]
-                raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
+                if job_id not in fetched:
+                    # Not page.wait_for_event: expect_* registers its waiter before the page can dispatch another
+                    # event, so it cannot miss a fetch the record lacks; wait_for_event registers once the loop runs.
+                    with page.expect_request_finished(is_job_request(job_id, "results")):
+                        pass
+        except PlaywrightTimeoutError as timed_out:
+            unfetched = [job_id for job_id in job_ids if job_id not in fetched]
+            raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
     finally:
         page.remove_listener("requestfinished", note_fetched_results)
 
