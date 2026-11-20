@@ -749,7 +749,14 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
     page.get_by_label("Min Value", exact=True).fill("1")
     page.get_by_label("Max Value", exact=True).fill("8")
     page.get_by_label("Steps", exact=True).fill("8")
-    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    with (
+        page.expect_response("**/api/simulate/sweep") as submitted,
+        page.expect_response("**/api/jobs/*/progress") as first_stream,
+    ):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    job_ids = submitted.value.json()["job_ids"]
+    opens_the_first_points_stream = is_job_request(job_ids[0], "progress")
+    assert opens_the_first_points_stream(first_stream.value.request), first_stream.value.url
     rows = _result_rows(page)
     expect(_status_badge(rows.first)).to_have_text("running")
 
