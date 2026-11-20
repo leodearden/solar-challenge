@@ -23,7 +23,12 @@ These tests prove that an EXTERNAL consumer can:
     under solar_challenge/web/static/vendor records in its upstream.toml.
 
 The wheel is built once, from a copy of the working tree (wheel_source), via a
-module-scoped fixture shared by every test here.
+module-scoped fixture shared by every test here. The module's xdist_group asks
+pytest-xdist to run every test here on one worker, so that its module-scoped
+wheel build and consumer environment are built once per run, not on each worker
+that runs one of its tests. Under pytest 9.2, pytest-xdist 3.8.0 ignores the
+group; tests/unit/test_parallel_suite.py's strict xfail fails once a release
+honours it.
 The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
 (underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
 environment the module-scoped consumer_environment fixture builds. That
@@ -59,6 +64,8 @@ from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 from tests._uv_env import isolated_uv_env
 from tests._working_tree import copy_working_tree
+
+pytestmark = pytest.mark.xdist_group("external-install")
 
 _EXTERNAL_PROBE = REPOSITORY_ROOT / "tests" / "integration" / "_external_probe.py"
 

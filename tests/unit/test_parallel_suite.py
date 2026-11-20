@@ -52,3 +52,38 @@ def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_p
     result = pytester.runpytest_subprocess("-n", "auto", "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "pytest 9.2's Node.nodeid reads its structured NodeId, while pytest-xdist 3.8.0 appends the group to "
+        "item._nodeid, which nothing reads, so --dist loadgroup schedules a group's tests as --dist load does"
+    ),
+)
+def test_the_tests_of_an_xdist_group_run_on_one_worker(pytester: pytest.Pytester) -> None:
+    """Under `--dist loadgroup`, the tests sharing an xdist_group run on one worker, as tests/integration/test_external_install.py asks for its wheel build.
+
+    Strict, so a release that honours the group again fails it, in the
+    newest-releases lane first; then the caveats in that module's docstring
+    and in CLAUDE.md go with the xfail.
+    """
+    pytester.makepyfile(
+        """
+        from pathlib import Path
+
+        import pytest
+
+        pytestmark = pytest.mark.xdist_group("shared")
+
+
+        @pytest.mark.parametrize("case", range(4))
+        def test_records_its_worker(case, worker_id):
+            (Path(__file__).parent / f"worker-of-case-{case}").write_text(worker_id)
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-n", "2", "--dist", "loadgroup", "-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=4)
+    assert len({path.read_text() for path in pytester.path.glob("worker-of-case-*")}) == 1
