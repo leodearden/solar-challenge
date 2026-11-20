@@ -451,8 +451,11 @@ def apply_knob(scenario: ScenarioConfig, name: str, value: float) -> ScenarioCon
     Raises:
         ValueError: If *scenario* is not a fleet scenario, *name* is not a supported
             knob, or *name* is a FinanceConfig field and ``scenario.finance`` is None.
-        ConfigurationError: A ValueError, if *name* is a SEG knob and *value* is a rate
-            SEGTariff refuses, or a home carries its own tariff at a different rate.
+        ConfigurationError: A ValueError, if the config the knob rebuilds refuses
+            *value*: :class:`~solar_challenge.finance.FinanceConfig` for a finance
+            knob, :class:`~solar_challenge.pv.PVConfig` for a degradation knob, and
+            for a SEG knob :class:`~solar_challenge.seg.SEGTariff`, or a home carrying
+            its own tariff at another rate.
     """
     _require_fleet_scenario(scenario, "apply_knob")
     if name in _FINANCE_KNOBS:
