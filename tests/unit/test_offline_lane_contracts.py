@@ -385,12 +385,12 @@ def test_with_its_service_out_of_reach_the_jobs_outage_probe_reports_its_outage(
 ) -> None:
     """Run as the lane runs it after a red run, with everything off this machine out of reach, the job's outage probe reports an outage of the row's service.
 
-    It runs in the uv environment of the job's command, as the lane runs it. Here that environment may not be synced
+    It runs in the uv environment of the job's suite step, as the lane runs it. Here that environment may not be synced
     yet, so the run is given longer than the job's outage_probe_timeout_secs.
     """
     send_child_processes_to_a_dead_proxy(monkeypatch)
     probe = lane_outage_probe(project_root, job.name)
-    environment = shared_uv_probe_environments.for_command(lane_command(project_root, job.name).command)
+    environment = shared_uv_probe_environments.for_command(lane_job_steps(project_root, job.name).suite.command)
 
     result = run_command(probe, environment, timeout_secs=300)
 
