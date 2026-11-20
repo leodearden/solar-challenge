@@ -218,19 +218,20 @@ class TestBatterySocEnvelope:
         assert battery.grid_charge_target_kwh == battery.soc_envelope.target_kwh(0.95) == battery.soc_envelope.max_soc_kwh
 
     def test_reading_the_grid_charge_target_does_not_recompute_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """flow.py reads the target once per timestep, so it is built with the envelope and a read costs an attribute read."""
+        """flow.py reads the target once per timestep, so a repeated read is an attribute read, not another SocEnvelope.target_kwh."""
         battery = Battery(dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(0.5)))
-        expected = battery.soc_envelope.target_kwh(0.5)
+        target = battery.grid_charge_target_kwh
+        assert target == battery.soc_envelope.target_kwh(0.5)
 
         def recomputed(self: SocEnvelope, fraction: float) -> float:
             raise AssertionError(
-                "grid_charge_target_kwh recomputed SocEnvelope.target_kwh on a read; "
-                "the target is built when the envelope is, so a read is an attribute read"
+                "grid_charge_target_kwh ran SocEnvelope.target_kwh again on a repeated read; "
+                "the target is kept until the envelope changes, so a repeated read is an attribute read"
             )
 
         monkeypatch.setattr(SocEnvelope, "target_kwh", recomputed)
 
-        assert [battery.grid_charge_target_kwh for _ in range(3)] == [expected] * 3
+        assert [battery.grid_charge_target_kwh for _ in range(3)] == [target] * 3
 
     def test_a_grid_charge_target_follows_a_ceiling_raised_again(self) -> None:
         """The target is rebuilt on every assignment, not only when the ceiling falls below it."""
