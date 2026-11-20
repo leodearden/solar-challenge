@@ -102,12 +102,12 @@ E2E_SUITE_TEST_LOOKS_UP_A_HOST = """
     """
 
 
+@pytest.mark.usefixtures("pytester_sessions_read_the_project_ini")
 def test_a_fast_test_under_the_e2e_conftest_that_reaches_the_network_fails_naming_the_host(
-    suite: pytest.Pytester, project_root: Path, e2e_conftest: Path
+    suite: pytest.Pytester, e2e_conftest: Path
 ) -> None:
     """Laid out as the lane's e2e job runs tests/e2e, the test swallows its lookup's error, so only the guard can catch it: nothing in the e2e conftest takes it out of the window."""
     pytest.importorskip("flask")
-    suite.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     suite.makepyfile(
         **{
             "e2e/conftest": e2e_conftest.read_text(encoding="utf-8"),

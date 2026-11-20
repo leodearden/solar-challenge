@@ -32,7 +32,7 @@ pytest.importorskip("flask")
 @pytest.fixture
 def pytester_laid_out_as_the_e2e_suite(
     pytester_under_root_conftest: pytest.Pytester,
-    project_root: Path,
+    pytester_sessions_read_the_project_ini: None,
     e2e_conftest: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> pytest.Pytester:
@@ -41,7 +41,6 @@ def pytester_laid_out_as_the_e2e_suite(
     Its sessions start with no weather cache directory named.
     """
     monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
-    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     pytester_under_root_conftest.makepyfile(**{"e2e/conftest": e2e_conftest.read_text(encoding="utf-8")})
     return pytester_under_root_conftest
 
