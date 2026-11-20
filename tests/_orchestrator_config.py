@@ -29,8 +29,9 @@ Usage::
     lane_job_names = [job["name"] for job in offline_lane_jobs(project_root)]
 """
 
+import os
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, get_args
@@ -45,7 +46,9 @@ VERIFY_SLOTS: tuple[VerifySlot, ...] = get_args(VerifySlot)
 
 _STEP_SEPARATOR = "&&"
 
-_SHELL_OPERATOR_CHARACTERS = frozenset("();<>|&")
+_SHELL_OPERATOR_CHARACTERS = "();<>|&\n"
+
+_SHELL_BLANKS = " \t"
 
 
 @dataclass(frozen=True)
@@ -73,11 +76,11 @@ class OrchestratorCommand:
 class LaneJobSteps:
     """An offline-lane job's command, read as the steps `sh -c` runs in turn, each only if the one before succeeded.
 
-    Each step is its words re-quoted with shlex.join, run in the job's directory
-    and role. The setup steps provision, as the e2e job's browser install does,
-    and never collect. The suite step, the last, is the one pytest run, which the
-    lane contract probes model the job by; it keeps the job's label, so a failure
-    about the suite it collects names the job.
+    Each step is its text in the command, its words as shlex.join quotes them,
+    run in the job's directory and role. The setup steps provision, as the e2e
+    job's browser install does, and never collect. The suite step, the last, is
+    the one pytest run, which the lane contract probes model the job by; it keeps
+    the job's label, so a failure about the suite it collects names the job.
     """
 
     setup: tuple[OrchestratorCommand, ...]
@@ -122,12 +125,16 @@ def lane_job_steps(project_root: Path, name: str) -> LaneJobSteps:
     """Return the offline-lane job *name* of *project_root*'s yaml, as lane_command builds it, split into its steps at each `&&` outside quotes.
 
     It asserts, naming the job and its command, that `&&` is the only shell
-    operator the command holds, that no step is empty, and that the last step
-    runs pytest and no other step does, so a command the steps cannot model
-    fails here rather than being collected wrongly.
+    operator the command holds, a line break counting as one; that no step is
+    empty; that the command is spelled as its steps' words re-quoted with
+    shlex.join, the spelling the probes run; and that the last step runs pytest
+    and no other step does. So a command the steps cannot model fails here
+    rather than being collected wrongly.
     """
     job = lane_command(project_root, name)
-    *setup_words, suite_words = _words_of_each_step(job)
+    steps = _words_of_each_step(job)
+    _assert_spelled_as_its_steps(job, steps)
+    *setup_words, suite_words = steps
     assert "pytest" in suite_words, (
         f"the last step of the {job.label} {job.command!r} runs no pytest, though the lane contract probes collect "
         "the job by that step; run the job's suite last"
@@ -153,15 +160,13 @@ def _words_of_each_step(job: OrchestratorCommand) -> list[list[str]]:
     It asserts, naming the job and its command, that no other shell operator is
     among the words and that no step is empty.
     """
-    lexer = shlex.shlex(job.command, posix=True, punctuation_chars=True)
-    lexer.whitespace_split = True
-    words = list(lexer)
+    words = _shell_words(job.command)
     other_operators = sorted({word for word in words if _is_shell_operator(word) and word != _STEP_SEPARATOR})
     assert not other_operators, (
         f"the {job.label} {job.command!r} holds shell operators other than {_STEP_SEPARATOR!r}: "
         f"{', '.join(map(repr, other_operators))}; the lane runs it whole with `sh -c`, but its steps are read as "
-        f"joined by {_STEP_SEPARATOR!r} alone, so the lane contract probes would model it wrongly; write it as steps "
-        f"joined by {_STEP_SEPARATOR!r} alone"
+        f"joined by {_STEP_SEPARATOR!r} alone, so the lane contract probes would model it wrongly; write it on one "
+        f"line as steps joined by {_STEP_SEPARATOR!r} alone"
     )
     steps: list[list[str]] = [[]]
     for word in words:
@@ -176,9 +181,37 @@ def _words_of_each_step(job: OrchestratorCommand) -> list[list[str]]:
     return steps
 
 
+def _shell_words(command: str) -> list[str]:
+    """Return *command*'s words, split at sh's blanks and around its operator characters, a line break among them, never inside quotes.
+
+    Like shlex.split, it reads no `#` as a comment, so a `#` stays in its word.
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_SHELL_OPERATOR_CHARACTERS)
+    lexer.whitespace = _SHELL_BLANKS
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+
 def _is_shell_operator(word: str) -> bool:
-    """Whether *word* is a shell operator: a word made only of the characters the shell-words lexer splits words at."""
-    return bool(word) and set(word) <= _SHELL_OPERATOR_CHARACTERS
+    """Whether *word* is a shell operator: a word made only of the operator characters _shell_words splits words around."""
+    return bool(word) and set(word) <= set(_SHELL_OPERATOR_CHARACTERS)
+
+
+def _assert_spelled_as_its_steps(job: OrchestratorCommand, steps: Sequence[Sequence[str]]) -> None:
+    """Assert, naming *job* and its command, that the command is its *steps*' words re-quoted with shlex.join, joined by `&&`.
+
+    The probes run each step so re-quoted. Spelled so in the yaml too, each step
+    is its own text in the command, which sh reads alike in the lane and in a probe.
+    """
+    re_quoted = f" {_STEP_SEPARATOR} ".join(map(shlex.join, steps))
+    parting = len(os.path.commonprefix([job.command, re_quoted]))
+    assert job.command == re_quoted, (
+        f"the {job.label} {job.command!r} is not spelled as its steps' words re-quoted with shlex.join, "
+        f"{re_quoted!r}, the spelling the lane contract probes run. They part at {job.command[parting:]!r}, where "
+        "sh may read the yaml's spelling otherwise, e.g. expanding a $, a backquote, a leading ~ or a glob, or "
+        "reading a # as a comment. Spell the command as re-quoted, where sh reads that as the lane should run it"
+    )
 
 
 def lane_outage_probe(project_root: Path, name: str) -> OrchestratorCommand:

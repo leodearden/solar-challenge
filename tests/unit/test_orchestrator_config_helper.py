@@ -340,6 +340,7 @@ def test_an_and_inside_a_quoted_argument_is_no_step_boundary(tmp_path: Path) -> 
         pytest.param("true || pytest", "||", id="or"),
         pytest.param("true; pytest", ";", id="semicolon"),
         pytest.param("true | pytest", "|", id="pipe"),
+        pytest.param("true\npytest", "\n", id="line-break"),
     ],
 )
 def test_a_lane_job_whose_command_holds_an_operator_other_than_and_fails_naming_the_job_and_the_operator(
@@ -353,6 +354,36 @@ def test_a_lane_job_whose_command_holds_an_operator_other_than_and_fails_naming_
 
     assert "lane job 'probe'" in str(failure.value)
     assert repr(operator) in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    ("command", "re_quoted"),
+    [
+        pytest.param("pytest $HOME/tests", "pytest '$HOME/tests'", id="parameter-expansion"),
+        pytest.param("pytest `cat paths`", "pytest '`cat' 'paths`'", id="command-substitution"),
+        pytest.param("pytest ~/tests", "pytest '~/tests'", id="tilde"),
+        pytest.param("pytest tests/test_*.py", "pytest 'tests/test_*.py'", id="glob"),
+        pytest.param('PYTHONPATH="a b" pytest', "'PYTHONPATH=a b' pytest", id="assignment-of-a-quoted-value"),
+        pytest.param("pytest tests # every test", "pytest tests '#' every test", id="comment"),
+        pytest.param("pytest tests/x.py::test#1", "pytest 'tests/x.py::test#1'", id="hash-inside-a-word"),
+        pytest.param("true '&&' pytest tests", "true && pytest tests", id="quoted-and"),
+    ],
+)
+def test_a_lane_job_whose_command_is_not_spelled_as_its_steps_re_quoted_fails_naming_the_job_and_that_spelling(
+    tmp_path: Path, command: str, re_quoted: str
+) -> None:
+    """The probes run each step re-quoted, and sh reads each of these yaml spellings otherwise.
+
+    It expands, globs or assigns what the re-quote keeps literal, reads a
+    comment, or takes a quoted `&&` for a word where the steps split.
+    """
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": command}))
+
+    with pytest.raises(AssertionError) as failure:
+        lane_job_steps(tmp_path, "probe")
+
+    assert "lane job 'probe'" in str(failure.value)
+    assert repr(re_quoted) in str(failure.value)
 
 
 @pytest.mark.parametrize(
