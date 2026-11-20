@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PV system configuration and modelling."""
 
+import contextlib
 import functools
 import math
 import warnings
@@ -84,7 +85,19 @@ _MODULE_KEYS_READ_AS_NUMBERS = (
     | _PVSYST_ONLY_MODULE_KEYS
     | _OPTIONAL_MODULE_KEYS
 )
-"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
+"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers, each inside its _MODULE_NUMBER_DOMAINS domain where it has one: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
+
+_ABSOLUTE_ZERO_C = -273.15
+"""Absolute zero in °C: pvlib adds 273.15 to a module's temp_ref to get kelvin."""
+
+_MODULE_NUMBER_DOMAINS: Mapping[str, Interval] = MappingProxyType(
+    {
+        "temp_ref": Interval(_ABSOLUTE_ZERO_C, math.inf, low_open=True),
+        "irrad_ref": POSITIVE,
+        "I_L_ref": POSITIVE,
+    }
+)
+"""The domains of the module numbers a model divides by or whose sign it assumes, inside which _require_module_values reads them: pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and _adjust_bracket's photocurrent-positive bracket needs a positive I_L_ref. Each key is one of _MODULE_KEYS_READ_AS_NUMBERS, as _number_families checks at import; the rule reads every other key of that set as any finite number (docs/pv-module-settings.md §2)."""
 
 _MODULE_KEYS_READ_AS_FLAGS = frozenset({"cap_adjustment"})
 """The module parameters pvlib reads by their truthiness, which _require_module_values checks as true or false: pvwatts_dc's cap_adjustment, which applies its k adjustment only at and below 1000 W/m² when true."""
@@ -105,11 +118,26 @@ def _one_reader_per_key(
     return MappingProxyType(readers)
 
 
+def _number_families(
+    keys: frozenset[str], domains: Mapping[str, Interval]
+) -> tuple[tuple[frozenset[str], _ModuleValueReader], ...]:
+    """The (keys, reader) families that read each of keys as a finite number, inside its domain for a key domains holds, refusing a domain whose key is not one of keys, which would check a key no model reads as a number and leave the key meant read as any finite number."""
+    if stray := sorted(domains.keys() - keys):
+        raise RuntimeError(f"Module parameters {stray} have a domain but are not read as numbers")
+    return (
+        (keys.difference(domains.keys()), as_finite_real),
+        *(
+            (frozenset({key}), functools.partial(as_finite_real, within=domain))
+            for key, domain in domains.items()
+        ),
+    )
+
+
 _MODULE_VALUE_READERS = _one_reader_per_key(
-    (_MODULE_KEYS_READ_AS_NUMBERS, as_finite_real),
+    *_number_families(_MODULE_KEYS_READ_AS_NUMBERS, _MODULE_NUMBER_DOMAINS),
     (_MODULE_KEYS_READ_AS_FLAGS, as_boolean),
 )
-"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, as_boolean for a flag."""
+"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, inside its _MODULE_NUMBER_DOMAINS domain for a key that has one, and as_boolean for a flag."""
 
 
 def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
@@ -123,7 +151,7 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
 
 
 def _require_module_values(module_params: Mapping[str, object]) -> None:
-    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
+    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or as one outside its _MODULE_NUMBER_DOMAINS domain, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
 
     A key the module lacks takes pvlib's default; one given as None is refused. The keys
     are read in sorted order, so when several are bad the first refusal does not vary with
@@ -187,7 +215,8 @@ class PVConfig:
             DEFAULT_CEC_MODULE's value for either key the module lacks
             (docs/pv-cell-temperature.md). Construction and use refuse custom
             parameters that give a key the number rule checks as anything but a
-            finite number, text that reads as one included, or cap_adjustment as
+            finite number, text that reads as one included, temp_ref at or below
+            -273.15, irrad_ref or I_L_ref at or below 0, or cap_adjustment as
             anything but true or false (_require_module_values;
             docs/pv-module-settings.md), even where a set field replaces that key.
             They also refuse
@@ -664,7 +693,7 @@ def _with_temperature_coefficient(
 
 
 def _require_adjust_reaches(template: Mapping[str, float], coefficient: float) -> None:
-    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient, which a NaN end never does.
+    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient, which a NaN end never does, such as that of a module with no power at STC (_modelled_gamma).
 
     Construction and use both run it (_require_template_takes_temperature_coefficient).
     """
@@ -716,18 +745,37 @@ def _adjust_bracket(template: Mapping[str, float], coefficient: float) -> tuple[
     return 100 - half_width, 100 + half_width
 
 
+@contextlib.contextmanager
+def _quiet_single_diode_solver() -> Iterator[None]:
+    """Ignore the RuntimeWarning "invalid value encountered" from scipy's _chandrupatla, which pvlib's single-diode solution runs to find the maximum-power point: on a curve with no power, such as a dark hour's or that of a module with none at STC, it divides 0 by 0, yet still finds that curve's maximum power."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="invalid value encountered",
+            category=RuntimeWarning,
+            module=r"scipy\.optimize\._chandrupatla",
+        )
+        yield
+
+
 def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     """The module's temperature coefficient of maximum power, per K, as the model chain models it.
 
     That is dP_mp/dT / P_mp at 1000 W/m² and 25 °C, a central difference over
     ±_GAMMA_HALF_STEP_K through pvlib's calcparams_cec, which reads the module's keys, and
-    the single-diode solution the model chain takes.
+    the single-diode solution the model chain takes. A module whose modelled P_mp at STC
+    is not above 0 W has no temperature coefficient of maximum power, so the result is
+    NaN, never a division by 0; _require_adjust_reaches refuses that NaN as it refuses
+    any NaN end.
     """
     cell_temperatures_c = 25.0 + _GAMMA_HALF_STEP_K * np.array([-1.0, 0.0, 1.0])
     diode = PVSystem(module_parameters=dict(module_params)).calcparams_cec(
         np.full(3, 1000.0), cell_temperatures_c
     )
-    p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
+    with _quiet_single_diode_solver():
+        p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
+    if not p_stc > 0:
+        return math.nan
     return float((p_hot - p_cold) / (2 * _GAMMA_HALF_STEP_K * p_stc))
 
 
@@ -1126,15 +1174,7 @@ def simulate_pv_output(
     model_chain = create_model_chain(config, location)
 
     # Run the simulation
-    # Suppress scipy warnings from pvlib's single-diode model solver
-    # (edge cases at night/low irradiance trigger harmless divide-by-zero warnings)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
+    with _quiet_single_diode_solver():
         model_chain.run_model(weather_data)
 
     # Get AC power and convert from W to kW
