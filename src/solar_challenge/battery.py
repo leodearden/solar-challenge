@@ -155,8 +155,12 @@ class SocEnvelope:
             )
 
     def target_kwh(self, fraction: float) -> float:
-        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh."""
-        return min(fraction * self.effective_capacity_kwh, self.max_soc_kwh)
+        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh.
+
+        Raises:
+            ConfigurationError: If *fraction* is not a finite number from 0 to 1, naming it and the value.
+        """
+        return min(as_finite_float(fraction, "fraction", UNIT_INTERVAL) * self.effective_capacity_kwh, self.max_soc_kwh)
 
 
 def _derated_soc_envelope(

@@ -13,6 +13,7 @@ import pytest
 from solar_challenge.battery import Battery, BatteryConfig, SocEnvelope, compute_soh
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
+from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _ROW_11_ENVELOPE = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=1.4, max_soc_kwh=5.6)
 """Row 11's envelope built directly: a 10 kWh battery at SOH 0.7 with SOC limits of 0.2 and 0.8."""
@@ -41,6 +42,25 @@ class TestSocEnvelope:
 
     def test_a_target_above_the_ceiling_is_the_ceiling(self) -> None:
         assert _ROW_11_ENVELOPE.target_kwh(0.95) == _ROW_11_ENVELOPE.max_soc_kwh == 5.6
+
+    @pytest.mark.parametrize(
+        ("fraction", "target_kwh"),
+        [
+            pytest.param(0.0, 0.0, id="0-is-an-empty-battery"),
+            pytest.param(1.0, 5.6, id="1-is-the-ceiling"),
+        ],
+    )
+    def test_a_target_fraction_of_0_or_1_is_accepted(self, fraction: float, target_kwh: float) -> None:
+        assert _ROW_11_ENVELOPE.target_kwh(fraction) == target_kwh
+
+    @pytest.mark.parametrize(
+        "fraction", [*UNUSABLE_NUMBERS, pytest.param(-0.1, id="below-0"), pytest.param(1.5, id="above-1")]
+    )
+    def test_a_target_fraction_that_is_not_a_finite_number_from_0_to_1_is_refused_naming_it(
+        self, fraction: float
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=_refusal_of("fraction", fraction)):
+            _ROW_11_ENVELOPE.target_kwh(fraction)
 
     def test_a_field_cannot_be_assigned(self) -> None:
         envelope = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=1.4, max_soc_kwh=5.6)
