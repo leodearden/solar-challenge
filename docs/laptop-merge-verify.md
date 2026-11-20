@@ -1,6 +1,6 @@
 # Merge and Task Verifies on leo-laptop
 
-**Task:** #606, #1271
+**Task:** #606, #1271, #1467
 **Config:** [`dark-factory-orchestrator.yaml`](../dark-factory-orchestrator.yaml), the `verify_runners` block and its neighbours
 
 ---
@@ -9,8 +9,9 @@ Dark Factory's `SETUP.md` §12, "Optional: a remote merge-verify host", in `/hom
 generic mechanics: runners, the per-host yaml contract, gate checkouts and benching. Its subsection "Remote task
 verifies on the same host" and `OPERATIONS.md` §"Remote task verifies" cover the task-verify side: the `verify_task_*`
 keys, the dispatch record and rollback. This page covers only what is particular to this project. The measurements,
-from versions and memory peaks to the pre-flight results, are in the commit messages of task 606 for merge verifies
-and task 1271 for task verifies: `git log --grep='(606)'` and `git log --grep='(1271)'`.
+from versions and memory peaks to the pre-flight results, are in the commit messages of task 606 for merge verifies,
+task 1271 for task verifies and task 1467 for the pytest-xdist worker count under the CPU quota:
+`git log --grep='(606)'`, `git log --grep='(1271)'` and `git log --grep='(1467)'`.
 
 ## 1. What Runs Where
 
@@ -69,9 +70,18 @@ Task verifies joined merge verifies once Dark Factory's own window of remote tas
 - **The scope drop-ins**, in `~/.config/systemd/user/df-verify-solar-challenge-e0fb1248-.scope.d/`:
   - `memory-max.conf` applies the laptop memory policy of 2026-10-09, with `MemoryHigh` sized by dark-factory task
     5415's rule.
-  - `cpu-quota.conf` is the 8-thread cap of dark-factory's 2026-09-11 ruling Q2. It is a CPU quota because the suite
-    has no xdist: a quota is the one cap that also binds `fleet.py`'s process pools and BLAS threads.
-  - Read the files for the values and how they were measured.
+  - `cpu-quota.conf` is the 8-thread cap of dark-factory's 2026-09-11 ruling Q2
+    (`plans/verify-speed-synthesis-2026-09-11.md`). The ruling splits the laptop's 16 threads 8/8 between two projects,
+    so one verify of each fills it. The drop-in caps each verify's scope on its own: a merge verify and a task verify
+    of this project that run at once (§1) are capped separately and may take all 16 threads together. A quota is the
+    one cap that binds everything in a scope: the pytest-xdist workers, the process pools `fleet.py` starts in them, and
+    their BLAS threads.
+  - `-n auto` starts 16 workers in a scope, one per laptop thread, because pytest-xdist counts the CPUs a process may
+    run on and a quota does not change that. The count assumes psutil is not installed (`uv.lock` has none): with it,
+    `-n auto` would start 8 workers, one per physical core. The 16 share 8 threads' worth of CPU time, so each verify
+    stays within Q2's 8 threads. Nothing caps the worker count itself (measured in task 1467's commit,
+    `git log --grep='(1467)'`).
+  - Read the files for the values and where each comes from.
   - They cap task-verify scopes as well as merge-verify ones, because the tag is the project's, not the role's.
   - The tag is Dark Factory's slug plus a hash of the resolved `project_root`. The hash keeps these drop-ins off
     solar-challenge-platform's `df-verify-solar-challenge-platform-74bd33ed-*` scopes. Moving the clone changes the
