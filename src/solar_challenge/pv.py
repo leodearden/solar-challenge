@@ -681,7 +681,7 @@ def _with_temperature_coefficient(
 
 
 def _require_adjust_reaches(template: Mapping[str, float], coefficient: float) -> None:
-    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient, which a NaN end never does.
+    """Refuse a coefficient beyond the CEC template's reach: its alpha_sc is 0 (_adjust_bracket), or its modelled temperature coefficients at the bracket's ends do not straddle coefficient, which a NaN end never does, such as that of a module with no power at STC (_modelled_gamma).
 
     Construction and use both run it (_require_template_takes_temperature_coefficient).
     """
@@ -738,13 +738,18 @@ def _modelled_gamma(module_params: Mapping[str, float]) -> float:
 
     That is dP_mp/dT / P_mp at 1000 W/m² and 25 °C, a central difference over
     ±_GAMMA_HALF_STEP_K through pvlib's calcparams_cec, which reads the module's keys, and
-    the single-diode solution the model chain takes.
+    the single-diode solution the model chain takes. A module whose modelled P_mp at STC
+    is not above 0 W has no temperature coefficient of maximum power, so the result is
+    NaN, never a division by 0; _require_adjust_reaches refuses that NaN as it refuses
+    any NaN end.
     """
     cell_temperatures_c = 25.0 + _GAMMA_HALF_STEP_K * np.array([-1.0, 0.0, 1.0])
     diode = PVSystem(module_parameters=dict(module_params)).calcparams_cec(
         np.full(3, 1000.0), cell_temperatures_c
     )
     p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
+    if not p_stc > 0:
+        return math.nan
     return float((p_hot - p_cold) / (2 * _GAMMA_HALF_STEP_K * p_stc))
 
 
