@@ -13,9 +13,11 @@ solar_challenge.web module but the package and itself.
 
 import dataclasses
 import math
+from fractions import Fraction
 
 import pytest
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSummary, calculate_fleet_summary
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.web.run_headline import RunHeadline, run_headline
@@ -89,6 +91,19 @@ class TestRunHeadline:
         assert run_headline(home_summary(total_generation_kwh=0.0)).pv_stored_share == 0.0
         assert run_headline(fleet_summary(total_generation_kwh=0.0)).export_ratio == 0.0
 
+    def test_a_share_of_a_generation_held_as_a_fraction_is_a_float(self) -> None:
+        """as_finite_real admits any numbers.Real, so a total may be a Fraction, whose share would be a Fraction, not the float a share is."""
+        summary = home_summary(
+            total_generation_kwh=Fraction(100),
+            total_battery_charge_kwh=Fraction(10),
+            total_grid_charge_kwh=Fraction(0),
+        )
+
+        share = run_headline(summary).pv_stored_share
+
+        assert isinstance(share, float)
+        assert share == 0.1
+
     def test_a_headline_with_no_pv_stored_share_is_a_headline(self) -> None:
         headline = dataclasses.replace(run_headline(home_summary()), pv_stored_share=None)
 
@@ -109,16 +124,16 @@ class TestRunHeadline:
     )
     def test_a_headline_with_no_value_for_a_figure_every_run_has_is_refused_naming_it(self, figure: str) -> None:
         """Only pv_stored_share, which a fleet run has none of, may be None."""
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             dataclasses.replace(run_headline(home_summary()), **{figure: None})
 
-        assert f"{figure} is None" in str(refusal.value)
+        assert f"RunHeadline.{figure} must be a finite number, got None" in str(refusal.value)
 
     def test_a_headline_whose_pv_stored_share_is_not_a_finite_number_is_refused_naming_it_and_its_value(self) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             dataclasses.replace(run_headline(home_summary()), pv_stored_share=math.nan)
 
-        assert "pv_stored_share is nan" in str(refusal.value)
+        assert "RunHeadline.pv_stored_share must be a finite number, got nan" in str(refusal.value)
 
     @pytest.mark.parametrize(
         ("summary", "figure", "value"),
@@ -167,10 +182,10 @@ class TestRunHeadline:
     def test_a_summary_whose_headline_figure_is_not_a_finite_number_is_refused_naming_the_figure_and_its_value(
         self, summary: SummaryStatistics | FleetSummary, figure: str, value: object
     ) -> None:
-        with pytest.raises(ValueError) as refusal:
+        with pytest.raises(ConfigurationError) as refusal:
             run_headline(summary)
 
-        assert f"{figure} is {value!r}" in str(refusal.value)
+        assert f"RunHeadline.{figure} must be a finite number, got {value!r}" in str(refusal.value)
 
     def test_a_figure_a_summary_holds_as_a_whole_number_is_a_headline_figure(self) -> None:
         """A stored summary's JSON may hold a figure as a whole number, 100 rather than 100.0, which decodes as an int."""

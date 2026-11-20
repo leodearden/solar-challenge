@@ -6,12 +6,12 @@ docs/prds/run-store-one-owner.md). This module imports no web module, so the run
 web/storage.py, and the charts, web/charts.py, both import it from below.
 """
 
-import math
 from dataclasses import dataclass, field, fields
 from typing import assert_never
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.number_fields import as_finite_real
 
 
 _MAY_BE_NONE = "may_be_none"
@@ -25,9 +25,9 @@ class RunHeadline:
     figure. pv_stored_share is None for a fleet run, as FleetSummary carries no battery totals.
 
     Raises:
-        ValueError: A figure is not a finite number a float can hold, e.g. None, a text, a bool,
-            NaN, an infinity or an int too large for a float; the message names the figure and
-            its value. A pv_stored_share of None is not refused.
+        ConfigurationError: A figure is not a finite number a float can hold, e.g. None, a text,
+            a bool, NaN, an infinity or an int too large for a float; the message names the figure
+            and its value. A pv_stored_share of None is not refused. It is a ValueError.
     """
 
     generation_kwh: float
@@ -45,34 +45,33 @@ class RunHeadline:
             value = getattr(self, figure.name)
             if value is None and figure.metadata.get(_MAY_BE_NONE, False):
                 continue
-            _require_finite_number(figure.name, value)
+            _read_figure(figure.name, value)
 
 
-def _require_finite_number(figure: str, value: object) -> None:
-    """Raise ValueError naming RunHeadline's *figure* and *value* unless *value* is an int or a float that is finite as a float; a bool is neither."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not _is_finite_as_float(value):
-        raise ValueError(f"RunHeadline.{figure} is {value!r}, not a finite number a float can hold")
+def _read_figure(name: str, value: object) -> float:
+    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it; a refusal names the figure RunHeadline.<name>.
 
-
-def _is_finite_as_float(number: int | float) -> bool:
-    """Whether *number* is finite as a float: not NaN, not an infinity, and no int too large for a float, for which math.isfinite raises OverflowError."""
-    try:
-        return math.isfinite(number)
-    except OverflowError:
-        return False
+    Raises:
+        ConfigurationError: *value* is not a finite number a float can hold, e.g. None, a text,
+            a bool, NaN, an infinity or an int too large for a float.
+    """
+    return as_finite_real(value, f"RunHeadline.{name}")
 
 
 def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
     """RunHeadline's *figure*: *kwh*'s share of *generation_kwh*, or 0.0 when the generation is not positive, as calculate_summary's export_ratio is.
 
+    Both are read as floats before they are divided, so the share is a float whatever kind of
+    number a total is, a Fraction included.
+
     Raises:
-        ValueError: *generation_kwh* or *kwh* is not a finite number a float can hold, as
-            _require_finite_number refuses it, naming generation_kwh or *figure*, before anything
-            is divided.
+        ConfigurationError: *generation_kwh* or *kwh* is not a finite number a float can hold,
+            as as_finite_real refuses it, naming generation_kwh or *figure*, before anything is
+            divided.
     """
-    _require_finite_number("generation_kwh", generation_kwh)
-    _require_finite_number(figure, kwh)
-    return kwh / generation_kwh if generation_kwh > 0 else 0.0
+    generation = _read_figure("generation_kwh", generation_kwh)
+    share_kwh = _read_figure(figure, kwh)
+    return share_kwh / generation if generation > 0 else 0.0
 
 
 def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
@@ -85,9 +84,10 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
     total_pv_charge_kwh counts without the grid charge. A fleet's pv_stored_share is None.
 
     Raises:
-        ValueError: A figure of the summary that the headline holds, or that a share is derived
-            from, is not a finite number a float can hold, e.g. None, a text, a bool, NaN, an
-            infinity or an int too large for a float, as RunHeadline refuses it.
+        ConfigurationError: A figure of the summary that the headline holds, or that a share is
+            derived from, is not a finite number a float can hold, e.g. None, a text, a bool, NaN,
+            an infinity or an int too large for a float, as RunHeadline refuses it. It is a
+            ValueError.
     """
     match summary:
         case SummaryStatistics():
