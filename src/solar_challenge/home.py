@@ -13,7 +13,7 @@ from pandas.api.types import is_float_dtype, is_integer_dtype
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
@@ -59,9 +59,11 @@ class HomeConfig:
         dispatch_strategy: Battery dispatch strategy, one of HOME_DISPATCH_STRATEGIES
 
     Raises:
-        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES; or the
-            home has a battery whose dispatch would ignore a setting: tou_optimized with no
-            tariff to dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
+        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES; or
+            ev_config's smart_charging_mode is 'off_peak' and there is no tariff_config whose
+            cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
+            battery whose dispatch would ignore a setting: tou_optimized with no tariff to
+            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
     """
 
     pv_config: PVConfig
@@ -82,6 +84,8 @@ class HomeConfig:
 
     def __post_init__(self) -> None:
         refuse_unknown_home_dispatch_strategy(self.dispatch_strategy, field="dispatch_strategy")
+        if self.ev_config is not None:
+            require_tariff_for_smart_charging(self.ev_config, self.tariff_config)
         if self.battery_config is None:
             return
         if _runs_tariff_tou(self):
