@@ -29,8 +29,10 @@ A test that fails after Chromium failed one of its requests with
 net::ERR_NETWORK_CHANGED runs once more; docs/e2e-network-change-reruns.md
 says why.
 
-It resolves pyproject's `-n auto` to no workers, so the suite runs serially
-wherever its command omits `-n 0`.
+It resolves `-n auto`, which pyproject's addopts pass, to no workers in any
+session that names tests/e2e or a path under it, whatever else that session
+collects. So the suite runs serially unless its command passes an explicit
+`-n N`.
 
 It imports playwright's and pytest-playwright's types for annotations only,
 so nothing from the e2e extra when it loads: tests/unit/test_e2e_job_wait.py
