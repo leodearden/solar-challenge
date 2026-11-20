@@ -28,6 +28,7 @@ from solar_challenge.finance import (
     FinanceConfig,
     ProjectEconomics,
     bill_distribution,
+    grid_services_model_of,
     project_economics,
     project_multi_year,
     solve_cost_recovery_rate,
@@ -37,6 +38,8 @@ from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.gridservices import (
     GridServicesAtEvents,
     GridServicesBand,
+    GridServicesEventsConfig,
+    GridServicesModel,
     compute_grid_services_at_events,
 )
 from solar_challenge.home import calculate_summary
@@ -96,12 +99,12 @@ def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> Fl
 
 
 def _grid_services_at_events(
-    fleet_results: FleetResults, finance: FinanceConfig
+    fleet_results: FleetResults, pricing: GridServicesModel
 ) -> Optional[GridServicesAtEvents]:
-    """The capacity-at-events grid-services income of *fleet_results* when *finance* prices grid services that way, else None."""
-    if finance.grid_services_model != "capacity_at_events" or finance.grid_services_events is None:
+    """The capacity-at-events grid-services income of *fleet_results* when *pricing* prices grid services that way, else None."""
+    if not isinstance(pricing, GridServicesEventsConfig):
         return None
-    return compute_grid_services_at_events(fleet_results, finance.grid_services_events)
+    return compute_grid_services_at_events(fleet_results, pricing)
 
 
 def _bill_finances(
@@ -223,6 +226,7 @@ def run(
     """
     raw = load_config(scenario)
     finance = _required_finance_block(raw)
+    pricing = grid_services_model_of(finance)
     band = _flex_band(flex_band, raw.get("flex_band"))
 
     fleet_config = load_fleet_config(scenario)
@@ -237,7 +241,7 @@ def run(
     print_info(f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
     simulator = ctx.ensure_object(CliFleetSimulator)
     fleet_results = simulator.simulate(fleet_config, start_date, end_date)
-    grid_services_at_events = _grid_services_at_events(fleet_results, finance)
+    grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
     primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)

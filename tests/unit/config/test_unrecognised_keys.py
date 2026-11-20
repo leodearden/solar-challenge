@@ -967,6 +967,7 @@ class TestScenarioFileBlockKeys:
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
+                    "grid_services_model": "capacity_at_events",
                     "grid_services_events": {"band": "central", "events": []},
                 },
                 "finance.grid_services_events",
@@ -977,6 +978,7 @@ class TestScenarioFileBlockKeys:
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
+                    "grid_services_model": "capacity_at_events",
                     "grid_services_events": {
                         "band": "central",
                         "event_windows": [_EVENT_WINDOW, {**_EVENT_WINDOW, "duration": 2}],
@@ -1060,7 +1062,11 @@ class TestScenarioFileBlockKeys:
             pytest.param("parse_seg_rate", 4.1, "seg", "float", id="seg"),
             pytest.param(
                 "parse_finance_config",
-                {"standing_charge_pence_per_day": 60.0, "grid_services_events": "central"},
+                {
+                    "standing_charge_pence_per_day": 60.0,
+                    "grid_services_model": "capacity_at_events",
+                    "grid_services_events": "central",
+                },
                 "finance.grid_services_events",
                 "str",
                 id="grid_services_events",
@@ -1069,6 +1075,7 @@ class TestScenarioFileBlockKeys:
                 "parse_finance_config",
                 {
                     "standing_charge_pence_per_day": 60.0,
+                    "grid_services_model": "capacity_at_events",
                     "grid_services_events": {"band": "central", "event_windows": ["winter"]},
                 },
                 "finance.grid_services_events.event_windows[0]",
@@ -1082,6 +1089,7 @@ class TestScenarioFileBlockKeys:
                         **_SCENARIO,
                         "finance": {
                             "standing_charge_pence_per_day": 60.0,
+                            "grid_services_model": "capacity_at_events",
                             "grid_services_events": "central",
                         },
                     }
@@ -1149,7 +1157,7 @@ class TestScenarioFileBlockKeys:
             "asset_life_years": 25,
             "own_use_rate_pence_per_kwh": 12.0,
             "retained_cash_floor_per_home_per_year_gbp": 30.0,
-            "grid_services_income_per_kw_per_year_gbp": 5.0,
+            "grid_services_income_per_kw_per_year_gbp": 0.0,
             "grid_services_model": "capacity_at_events",
             "grid_services_events": grid_services_events,
         }

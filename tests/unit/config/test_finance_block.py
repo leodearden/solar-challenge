@@ -809,15 +809,18 @@ class TestFinanceConfigGridServicesModel:
         assert pickle.loads(pickle.dumps(fc)) == fc
 
     def test_unknown_grid_services_model_raises(self) -> None:
-        """Unknown grid_services_model raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
+        """Unknown grid_services_model raises ConfigurationError naming the two models."""
+        with pytest.raises(ConfigurationError) as refusal:
             FinanceConfig(**self._BASE, grid_services_model="foo")
 
-    def test_capacity_at_events_without_config_ok(self) -> None:
-        """grid_services_model='capacity_at_events' with grid_services_events=None still constructs."""
-        fc = FinanceConfig(**self._BASE, grid_services_model="capacity_at_events")
-        assert fc.grid_services_model == "capacity_at_events"
-        assert fc.grid_services_events is None
+        message = str(refusal.value)
+        assert "flat" in message
+        assert "capacity_at_events" in message
+
+    def test_capacity_at_events_without_events_is_refused(self) -> None:
+        """grid_services_model='capacity_at_events' with grid_services_events=None is refused at construction."""
+        with pytest.raises(ConfigurationError, match="grid_services_events"):
+            FinanceConfig(**self._BASE, grid_services_model="capacity_at_events")
 
 
 _EVENTS_NUMERIC_KEYS = tuple(
@@ -855,7 +858,9 @@ class TestFinanceConfigParsingGridServices:
     }
 
     def _parse_events_block(self, block: object) -> Optional[FinanceConfig]:
-        return parse_finance_config({**self._BASE, "grid_services_events": block})
+        return parse_finance_config(
+            {**self._BASE, "grid_services_model": "capacity_at_events", "grid_services_events": block}
+        )
 
     def test_capacity_at_events_with_nested_events_block(self) -> None:
         """grid_services_model='capacity_at_events' + events block parses fully."""
@@ -1037,6 +1042,27 @@ class TestFinanceConfigParsingGridServices:
             {**self._BASE, "grid_services_events": None}
         ) == FinanceConfig(**self._BASE)
 
+    def test_an_events_block_without_the_events_model_is_refused(self) -> None:
+        """An events block under the default flat model, which does not read it, is refused naming the model and the block."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_finance_config({**self._BASE, "grid_services_events": self._EVENTS_BLOCK})
+
+        message = str(refusal.value)
+        assert "grid_services_model" in message
+        assert "grid_services_events" in message
+
+    def test_a_flat_rate_beside_the_events_model_is_refused(self) -> None:
+        """A flat rate beside the events model, which does not read it, is refused naming its key."""
+        with pytest.raises(ConfigurationError, match="grid_services_income_per_kw_per_year_gbp"):
+            parse_finance_config(
+                {
+                    **self._BASE,
+                    "grid_services_model": "capacity_at_events",
+                    "grid_services_events": self._EVENTS_BLOCK,
+                    "grid_services_income_per_kw_per_year_gbp": 12.0,
+                }
+            )
+
     @pytest.mark.parametrize(
         ("key", "refusal"),
         [
@@ -1077,6 +1103,7 @@ class TestFinanceConfigParsingGridServices:
         """A null rate override parses to a GridServicesEventsConfig with no override."""
         assert self._parse_events_block({**self._EVENTS_BLOCK, key: None}) == FinanceConfig(
             **self._BASE,
+            grid_services_model="capacity_at_events",
             grid_services_events=GridServicesEventsConfig(**{**self._EVENTS_FIELDS, key: None}),
         )
 
@@ -1145,7 +1172,11 @@ class TestFinanceConfigParsingGridServices:
         """An event_windows refusal names the list's path, taken from the finance block's own path."""
         with pytest.raises(ConfigurationError, match=re.escape(message)):
             parse_finance_config(
-                {**self._BASE, "grid_services_events": {"event_windows": windows}},
+                {
+                    **self._BASE,
+                    "grid_services_model": "capacity_at_events",
+                    "grid_services_events": {"event_windows": windows},
+                },
                 block_path="scenario.finance",
             )
 
@@ -1158,13 +1189,17 @@ class TestFinanceConfigParsingGridServices:
         block = {key: value for key, value in self._EVENTS_BLOCK.items() if key != omitted}
         fields = {key: value for key, value in self._EVENTS_FIELDS.items() if key != omitted}
         assert self._parse_events_block(block) == FinanceConfig(
-            **self._BASE, grid_services_events=GridServicesEventsConfig(**fields)
+            **self._BASE,
+            grid_services_model="capacity_at_events",
+            grid_services_events=GridServicesEventsConfig(**fields),
         )
 
     def test_empty_events_block_parses_to_the_declared_defaults(self) -> None:
         """An empty grid_services_events block parses to the default events config, where a null block parses to none."""
         assert self._parse_events_block({}) == FinanceConfig(
-            **self._BASE, grid_services_events=GridServicesEventsConfig()
+            **self._BASE,
+            grid_services_model="capacity_at_events",
+            grid_services_events=GridServicesEventsConfig(),
         )
 
     @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)

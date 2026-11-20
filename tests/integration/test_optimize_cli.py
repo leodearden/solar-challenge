@@ -11,6 +11,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig, FleetResults
@@ -25,7 +26,8 @@ from solar_challenge.optimize import (
 from solar_challenge.output import generate_config_ranking_report
 from tests._cli_fleet_simulator import invoke_cli
 from tests._factories import make_bill_distribution_from_statistics, make_config_result
-from tests._finance_builders import make_fleet_results
+from tests._finance_builders import make_fleet_results, make_home_config
+from tests.integration._helpers import SCENARIO
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +90,10 @@ def _make_sensitivity_axis(
 # ---------------------------------------------------------------------------
 
 
-def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
-    """Write a minimal feasible-regime scenario YAML to tmp_path."""
+def _write_optimize_scenario(
+    tmp_path: Path, n_homes: int = 5, *, finance_overrides: Optional[dict[str, object]] = None
+) -> Path:
+    """Write a minimal feasible-regime scenario YAML to tmp_path, its finance block updated with *finance_overrides*."""
     scenario = {
         "name": "W3 Optimize CLI Test",
         "location": {
@@ -116,6 +120,7 @@ def _write_optimize_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
             "retail_baseline_rate_pence_per_kwh": 30.0,
             "asset_life_years": 25,
             "vat_rate": 0.05,
+            **(finance_overrides or {}),
         },
     }
     path = tmp_path / "optimize_scenario.yaml"
@@ -821,8 +826,9 @@ class TestOptimizeCLIE2EFast:
         options: list[str],
         *,
         n_homes: int = 5,
+        finance_overrides: Optional[dict[str, object]] = None,
     ) -> tuple[Result, list[FleetConfig]]:
-        """Run `optimize configs` on a fresh *n_homes*-home scenario with *options*, answering every fleet simulation with *fleet_results*.
+        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides*, with *options*, answering every fleet simulation with *fleet_results*.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
@@ -833,7 +839,9 @@ class TestOptimizeCLIE2EFast:
             simulated_fleets.append(fleet_config)
             return fleet_results
 
-        scenario_file = _write_optimize_scenario(tmp_path, n_homes=n_homes)
+        scenario_file = _write_optimize_scenario(
+            tmp_path, n_homes=n_homes, finance_overrides=finance_overrides
+        )
         result = invoke_cli(["optimize", "configs", str(scenario_file), *options], simulate)
         return result, simulated_fleets
 
@@ -947,6 +955,79 @@ class TestOptimizeCLIE2EFast:
             f"Expected exit 0 for single-value --pv 4; got {result.exit_code}.\n"
             f"Output:\n{result.output}"
         )
+
+    def test_the_default_sensitivity_without_events_sweeps_the_retained_floor_and_grid_services_axes(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """With no --sensitivity, a scenario that prices no grid services at events sweeps both default axes and notes no omission."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert set(_swept_values_by_axis(result.stdout)) == {
+            "retained_cash_floor_per_home_per_year_gbp",
+            "grid_services_income_per_kw_per_year_gbp",
+        }, result.output
+        assert "capacity_at_events" not in result.stderr, result.stderr
+
+    def test_the_default_sensitivity_under_the_events_model_omits_the_grid_services_axis_with_a_note(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """C8: with no --sensitivity, a scenario that prices grid services at events sweeps the retained floor alone, and one stderr note names the omitted grid_services axis and why."""
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5"],
+            n_homes=1,
+            finance_overrides={
+                "grid_services_model": "capacity_at_events",
+                "grid_services_events": {"band": "central"},
+            },
+        )
+
+        stderr = " ".join(result.stderr.split())
+        assert result.exit_code == 0, result.output
+        assert stderr.count("capacity_at_events") == 1, stderr
+        assert "axis grid_services" in stderr, stderr
+        assert set(_swept_values_by_axis(result.stdout)) == {
+            "retained_cash_floor_per_home_per_year_gbp"
+        }, result.output
+
+    def test_grid_services_kw_under_the_flat_model_prices_the_battery_at_the_flag_rate(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """--grid-services-kw sets the flat rate a battery's discharge power earns, so it raises the baseline CBS surplus by that rate × the home's discharge power."""
+        battery = BatteryConfig(capacity_kwh=5.0)
+        fleet_results = make_fleet_results(
+            homes=[make_home_config(battery_config=battery)],
+            self_kwh=2000.0,
+            export_kwh=800.0,
+            import_kwh=1200.0,
+        )
+
+        def baseline_surplus_gbp(options: list[str]) -> float:
+            result, _ = self._invoke_configs(
+                tmp_path,
+                fleet_results,
+                ["--pv", "4", "--battery", "5", "--inverter", "5", "--sensitivity", "", *options],
+                n_homes=1,
+            )
+            assert result.exit_code == 0, result.output
+            row = _config_row(result.stdout, "## Fixed-15p Trade-Off", "4.0 kWp / 5.0 kWh / 5.0 kW")
+            return float(row["Baseline CBS Surplus (£/home/yr)"].removeprefix("£"))
+
+        assert baseline_surplus_gbp(["--grid-services-kw", "20"]) - baseline_surplus_gbp(
+            []
+        ) == pytest.approx(20.0 * battery.max_discharge_kw, abs=0.01)
 
     def test_unknown_sensitivity_alias_exits_one(
         self,
@@ -1088,3 +1169,58 @@ class TestOptimizeCLIE2EFast:
         assert "Computing sensitivity panel for axes" in stderr
         assert stderr.endswith("Configuration error: a refusal raised while the sensitivity panel runs")
         assert "Sensitivity panel skipped" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# §H — `optimize configs` ignores no grid-services input under the events model
+# ---------------------------------------------------------------------------
+
+
+def _invoke_configs_on_the_board(options: list[str]) -> tuple[Result, list[FleetConfig]]:
+    """Run `optimize configs` over one config of the committed board scenario, which prices grid services at events, with *options*.
+
+    Returns the CliRunner result and the fleet configs the injected simulator
+    was asked to simulate, each answered with make_fleet_results over that
+    fleet's own homes.
+    """
+    simulated_fleets: list[FleetConfig] = []
+
+    def simulate(fleet_config, start, end):
+        simulated_fleets.append(fleet_config)
+        return make_fleet_results(homes=fleet_config.homes)
+
+    result = invoke_cli(
+        ["optimize", "configs", str(SCENARIO), "--pv", "4", "--battery", "5", "--inverter", "5", *options],
+        simulate,
+    )
+    return result, simulated_fleets
+
+
+@pytest.mark.parametrize("grid_services_kw", ["0", "20"])
+def test_grid_services_kw_under_the_events_model_is_refused_before_any_simulation(
+    grid_services_kw: str,
+) -> None:
+    """C7: --grid-services-kw, whatever its value, sets a flat rate the events model does not read, so it is refused, naming the flag and the model."""
+    result, simulated_fleets = _invoke_configs_on_the_board(["--grid-services-kw", grid_services_kw])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "--grid-services-kw" in stderr
+    assert "capacity_at_events" in stderr
+    assert simulated_fleets == []
+
+
+@pytest.mark.parametrize("sensitivity", ["grid_services", "retained_floor,grid_services"])
+def test_an_explicit_grid_services_axis_under_the_events_model_is_refused_before_any_simulation(
+    sensitivity: str,
+) -> None:
+    """C8: a grid_services axis sweeps a flat rate the events model does not read, so asking for it is refused before the sweep simulates, naming the flag and the model."""
+    result, simulated_fleets = _invoke_configs_on_the_board(["--sensitivity", sensitivity])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 1, result.output
+    assert "Configuration error:" in stderr
+    assert "--sensitivity" in stderr
+    assert "capacity_at_events" in stderr
+    assert simulated_fleets == []
