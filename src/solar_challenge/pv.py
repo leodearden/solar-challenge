@@ -737,7 +737,7 @@ def _module_rating_w(module_params: Mapping[str, float]) -> float:
     """Each module's rated DC power in watts: a PVWatts module's pdc0, which pvlib's PVWatts DC model scales by the module count, else its STC.
 
     Whichever key gives it, the rating must be a finite number above 0 and never text,
-    even text that reads as one (docs/pv-cell-temperature.md says why).
+    even text that reads as one (docs/pv-cell-temperature.md §1 says why).
     """
     if _is_pvwatts_module(module_params):
         key = "pdc0"

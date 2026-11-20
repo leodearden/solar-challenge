@@ -1,7 +1,7 @@
 # PV Cell Temperature: NOCT-SAM from Each Module's Own NOCT and Efficiency
 
 **Task:** #823, #1029, #1374, #1376, #1400, #1404
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_require_module_numbers`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`_temperature_model_parameters`, `_module_rating_w`, `_NoctSamInput`, `_NoctSamModule`, `_require_cells_noct_sam_can_heat`, `_require_module_numbers`, `_arrays`, `create_simple_module_params`, `PVConfig.custom_module_params`, `PVConfig.__post_init__`, `_template_with_set_efficiency`); [`src/solar_challenge/validation.py`](../src/solar_challenge/validation.py) (`BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP`)
 **Measurement:** [`scripts/measure_pv_performance_ratio.py`](../scripts/measure_pv_performance_ratio.py)'s `measure` (§3); [`tests/unit/test_pv_cell_temperature.py`](../tests/unit/test_pv_cell_temperature.py); [`tests/integration/test_pv_performance_ratio.py`](../tests/integration/test_pv_performance_ratio.py)
 
 ---
@@ -18,10 +18,9 @@
     `_module_rating_w` refuses a rating that is not a finite number above 0 with a
     `ConfigurationError` naming its key and value, at construction and at use, before
     anything divides by it. It refuses text even when the text reads as such a number,
-    from either key: the number it reads is never written back, so the module reaches
-    pvlib with the text in it, and pvlib's PVWatts DC model reads that `pdc0`. No pvlib
-    DC model reads `STC`; it is held to the same rule so that a rating is a number
-    whichever key gives it.
+    from either key: the number it reads is never written back, so an accepted text
+    `pdc0` would reach pvlib's PVWatts DC model as text. No pvlib DC model reads `STC`;
+    it is held to the same rule so that a rating is a number whichever key gives it.
   - So `DEFAULT_CEC_MODULE` runs at a NOCT of 45.1 °C and an efficiency of
     400.428 / (1.99 × 1000) = 0.2012.
 - **A missing key takes the default module's value.** A module that lacks `T_NOCT` or

@@ -975,7 +975,7 @@ class TestWiredDcCapacity:
         value: float | str | np.bool_,
         module_efficiency: float | None,
     ) -> None:
-        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as such a number, from either key (docs/pv-cell-temperature.md says why); so is a boolean, Python's or numpy's, though float() reads it as 1.0 or 0.0."""
+        """The rating counts the modules and sizes their area, so a rating that is not a finite number above 0 is refused, naming its key and value, by construction and use alike, before either divides by it; so is text that reads as such a number, from either key (docs/pv-cell-temperature.md §1 says why); so is a boolean, Python's or numpy's, though float() reads it as 1.0 or 0.0."""
         module = build()
         config = PVConfig(
             capacity_kw=4.0, custom_module_params=module, module_efficiency=module_efficiency
