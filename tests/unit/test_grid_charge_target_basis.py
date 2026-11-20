@@ -47,7 +47,7 @@ def _battery(soh: float, target: float, *, start: Literal["midpoint", "min_soc_k
     )
     if start == "midpoint":
         return Battery(config)
-    return Battery(config, initial_soc_kwh=Battery(config).min_soc_kwh)
+    return Battery(config, initial_soc_kwh=config.soc_envelope().min_soc_kwh)
 
 
 class _Recording(DispatchStrategy):
