@@ -32,8 +32,8 @@ from solar_challenge.tariff import TariffConfig
 
 _Component = TypeVar("_Component", bound=DataclassInstance)
 
-_ROUND_TRIP_EFFICIENCY_KEY: tuple[str, ...] = ("efficiency",)
-"""The round-trip form config.py's reader reads through BatteryConfig.with_round_trip; a battery is written as the per-direction pair it holds."""
+_BATTERY_KEYS_NEVER_WRITTEN: tuple[str, ...] = ("efficiency",)
+"""The battery keys no written battery block holds: efficiency, the round trip config.py's reader reads through BatteryConfig.with_round_trip, since a battery is written as the per-direction pair it holds."""
 
 
 def scenario_yaml(document: Mapping[str, Any]) -> str:
@@ -108,7 +108,7 @@ def _home_block(home: HomeConfig) -> dict[str, Any]:
         "battery": (
             None
             if battery is None
-            else _component_block(BATTERY_BLOCK, battery, omit=_ROUND_TRIP_EFFICIENCY_KEY)
+            else _component_block(BATTERY_BLOCK, battery, omit=_BATTERY_KEYS_NEVER_WRITTEN)
         ),
         "load": _component_block(LOAD_BLOCK, home.load_config),
         "tariff": None if home.tariff_config is None else _tariff_block(home.tariff_config),
