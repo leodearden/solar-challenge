@@ -6,6 +6,7 @@ through job_progress_frames, the stream the endpoint serves, read poll by poll u
 heartbeat of 0 s, so no poll waits for the job to move.
 """
 
+import inspect
 import itertools
 import threading
 from collections.abc import Callable, Iterator
@@ -160,16 +161,20 @@ _SERVED_RETRY_MS = JobStreamPolicy().retry_ms
 
 @contextmanager
 def _progress_stream(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> Iterator[Iterator[str]]:
-    """Open job *job_id*'s progress stream unbuffered, with *last_event_id* as its Last-Event-ID header when given; yield its chunks as the server sends them, and close it on exit.
+    """Open job *job_id*'s progress stream unbuffered, with *last_event_id* as its Last-Event-ID header when given; yield its chunks as the server sends them, and close it on exit unless another thread is still reading them.
 
     A test reads only the chunks it asserts, so a stream that heartbeats until its job ends does not hold the test up.
+    Closing a stream another thread is still reading would raise ValueError, generator already executing, in place of
+    the test's own failure.
     """
     headers = {} if last_event_id is None else {"Last-Event-ID": last_event_id}
     response = client.get(f"/api/jobs/{job_id}/progress", headers=headers, buffered=False)
+    chunks = (chunk.decode() for chunk in response.response)
     try:
-        yield (chunk.decode() for chunk in response.response)
+        yield chunks
     finally:
-        response.close()
+        if inspect.getgeneratorstate(chunks) != inspect.GEN_RUNNING:
+            response.close()
 
 
 def _first_chunk(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> str:
