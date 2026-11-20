@@ -1,6 +1,6 @@
 # Merge and Task Verifies on leo-laptop
 
-**Task:** #606, #1271, #1467
+**Task:** #606, #1271, #1467, #1482
 **Config:** [`dark-factory-orchestrator.yaml`](../dark-factory-orchestrator.yaml), the `verify_runners` block and its neighbours
 
 ---
@@ -10,8 +10,9 @@ generic mechanics: runners, the per-host yaml contract, gate checkouts and bench
 verifies on the same host" and `OPERATIONS.md` §"Remote task verifies" cover the task-verify side: the `verify_task_*`
 keys, the dispatch record and rollback. This page covers only what is particular to this project. The measurements,
 from versions and memory peaks to the pre-flight results, are in the commit messages of task 606 for merge verifies,
-task 1271 for task verifies and task 1467 for the pytest-xdist worker count under the CPU quota:
-`git log --grep='(606)'`, `git log --grep='(1271)'` and `git log --grep='(1467)'`.
+task 1271 for task verifies, task 1467 for the pytest-xdist worker count under the CPU quota and task 1482 for the
+worker-count A/B and `MemoryHigh` under `-n auto`: `git log --grep='(606)'`, `git log --grep='(1271)'`,
+`git log --grep='(1467)'` and `git log --grep='(1482)'`.
 
 ## 1. What Runs Where
 
@@ -69,7 +70,8 @@ Task verifies joined merge verifies once Dark Factory's own window of remote tas
     `plans/remote-task-leg-verify-prd.md`, decision 14).
 - **The scope drop-ins**, in `~/.config/systemd/user/df-verify-solar-challenge-e0fb1248-.scope.d/`:
   - `memory-max.conf` applies the laptop memory policy of 2026-10-09, with `MemoryHigh` sized by dark-factory task
-    5415's rule.
+    5415's rule from the test leg under `-n auto`, which starts 16 workers on this host, re-measured in task 1482. A
+    `MemoryHigh` sized on the serial suite, as task 606's was, throttled every full run under `-n auto`.
   - `cpu-quota.conf` is the 8-thread cap of dark-factory's 2026-09-11 ruling Q2
     (`plans/verify-speed-synthesis-2026-09-11.md`). The ruling splits the laptop's 16 threads 8/8 between dark-factory
     and reify, so one verify of each fills it. This project adopted the same 8-thread figure later. A quota is the one
@@ -82,7 +84,10 @@ Task verifies joined merge verifies once Dark Factory's own window of remote tas
     run on and a quota does not change that. The count assumes psutil is not installed (`uv.lock` has none): with it,
     `-n auto` would start 8 workers, one per physical core. The quota makes the 16 share 8 threads' worth of CPU time,
     so starting 16 workers does not take a verify past it. Nothing caps the worker count itself (measured in task 1467's
-    commit, `git log --grep='(1467)'`).
+    commit, `git log --grep='(1467)'`). Task 1482 timed a cap of 8 workers (`PYTEST_XDIST_AUTO_NUM_WORKERS`, Dark
+    Factory's mechanism). It ran faster only while `MemoryHigh` throttled the 16 workers; once `MemoryHigh` fitted
+    them, the 16 ran faster, so no cap is set. A cap in `dark-factory-orchestrator.yaml`'s `verify_env` would also
+    reach this workstation's verifies.
   - Read the files for the values and where each comes from.
   - They cap task-verify scopes as well as merge-verify ones, because the tag is the project's, not the role's.
   - The tag is Dark Factory's slug plus a hash of the resolved `project_root`. The hash keeps these drop-ins off
