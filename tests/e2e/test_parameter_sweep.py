@@ -34,8 +34,10 @@ it could not draw them; a sweep run after it drops that request and clears the
 region.
 
 Last, verifies that another tab loads Run History while the jobs of an
-8-point sweep run, and that each point's row then shows its results, and that
-a real three-point sweep draws one chart per metric from its points' runs.
+8-point sweep run, and that each point's row then shows its results; that the
+wait for the page to fetch those results, when it times out, fails naming the
+jobs whose results it has not fetched; and that a real three-point sweep draws
+one chart per metric from its points' runs.
 
 Each faked progress stream is answered with frames the server's own encoder
 builds from its catalogue (tests/e2e/_job_requests.py).
@@ -50,6 +52,7 @@ from typing import Any
 
 import pytest
 from playwright.sync_api import BrowserContext, Locator, Page, Request, Route, expect
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._job_requests import (
@@ -735,11 +738,23 @@ def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_j
 
 @contextmanager
 def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator[None]:
-    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order."""
-    with ExitStack() as fetches_finished:
-        for job_id in job_ids:
-            fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
-        yield
+    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched."""
+    fetched: set[str] = set()
+
+    def note_fetched_results(request: Request) -> None:
+        fetched.update(job_id for job_id in job_ids if is_job_request(job_id, "results")(request))
+
+    page.on("requestfinished", note_fetched_results)
+    try:
+        with ExitStack() as fetches_finished:
+            for job_id in job_ids:
+                fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
+            yield
+    except PlaywrightTimeoutError as timed_out:
+        unfetched = [job_id for job_id in job_ids if job_id not in fetched]
+        raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
+    finally:
+        page.remove_listener("requestfinished", note_fetched_results)
 
 
 def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
@@ -784,6 +799,27 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
             [str(n), "72.0", "33.3%", "12.0", "completed"]
         )
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_each_points_results_fetched_fails_naming_the_jobs_whose_results_the_page_has_not_fetched(
+    page: Page, live_server: str
+) -> None:
+    """When its wait times out with the results of one job fetched and another's not, _each_points_results_fetched fails naming the job whose results the page has not fetched, and not the other.
+
+    Only the helper's wait runs on the shortened default timeout: the wait for the fetched job's own request keeps Playwright's 30 s, so a fetch slowed by a loaded host cannot fail the test.
+    """
+    fetched, unfetched = "job-a", "job-b"
+    page.goto(live_server + "/scenarios/sweep")
+    page.set_default_timeout(1000)
+
+    with (
+        pytest.raises(AssertionError) as failure,
+        _each_points_results_fetched(page, [fetched, unfetched]),
+        page.expect_request_finished(is_job_request(fetched, "results"), timeout=30_000),
+    ):
+        page.evaluate("url => fetch(url).then(response => response.text())", f"/api/jobs/{fetched}/results")
+
+    assert (unfetched in str(failure.value), fetched in str(failure.value)) == (True, False)
 
 
 # -- A real sweep's charts, drawn from its points' runs ---------------------
