@@ -135,6 +135,47 @@ def compute_soh(
 
 
 @dataclass(frozen=True)
+class SocEnvelope:
+    """A battery's SOH-derated SOC envelope in kWh: its effective capacity and the SOC limits within it."""
+
+    effective_capacity_kwh: float
+    min_soc_kwh: float
+    max_soc_kwh: float
+
+    def __post_init__(self) -> None:
+        """Read each field as a finite number in its range, held as a float, then refuse limits out of order."""
+        read_field(self, "effective_capacity_kwh", as_finite_float, POSITIVE)
+        read_field(self, "min_soc_kwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "max_soc_kwh", as_finite_float, NON_NEGATIVE)
+        if not self.min_soc_kwh <= self.max_soc_kwh <= self.effective_capacity_kwh:
+            raise ConfigurationError(
+                "min_soc_kwh must be at most max_soc_kwh, and max_soc_kwh at most effective_capacity_kwh, got "
+                f"min_soc_kwh={self.min_soc_kwh!r}, max_soc_kwh={self.max_soc_kwh!r} "
+                f"and effective_capacity_kwh={self.effective_capacity_kwh!r}"
+            )
+
+    def target_kwh(self, fraction: float) -> float:
+        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh.
+
+        Raises:
+            ConfigurationError: If *fraction* is not a finite number from 0 to 1, naming it and the value.
+        """
+        return min(as_finite_float(fraction, "fraction", UNIT_INTERVAL) * self.effective_capacity_kwh, self.max_soc_kwh)
+
+
+def _derated_soc_envelope(
+    capacity_kwh: float, soh: float, min_soc_fraction: float, max_soc_fraction: float
+) -> SocEnvelope:
+    """The envelope of a *capacity_kwh* battery at *soh*, its SOC limits those fractions of its effective capacity."""
+    effective_capacity_kwh = capacity_kwh * soh
+    return SocEnvelope(
+        effective_capacity_kwh,
+        effective_capacity_kwh * min_soc_fraction,
+        effective_capacity_kwh * max_soc_fraction,
+    )
+
+
+@dataclass(frozen=True)
 class BatteryConfig:
     """Configuration for a battery storage system.
 
@@ -173,14 +214,14 @@ class BatteryConfig:
         cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
             cycle as :func:`compute_soh` counts one (≥ 0; default 5e-5/EFC
             ≈ 30 % fade over ~6 000 EFC).
-            ``Battery`` computes calendar fade only (throughput 0); cycle
+            ``resolved_soh`` computes calendar fade only (throughput 0); cycle
             fade takes effect only through an ``soh`` computed by
             :func:`compute_soh` from accrued throughput.
         soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
             default 0.5, reflecting end-of-useful-life convention).
         soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
-            computed calendar+cycle fade is bypassed and this value is used
-            directly by ``Battery.__init__``.
+            computed calendar+cycle fade is bypassed and ``resolved_soh``
+            returns this value directly.
     """
 
     capacity_kwh: float
@@ -221,6 +262,26 @@ class BatteryConfig:
     def nominal_usable_capacity_kwh(self) -> float:
         """Usable capacity between the SOC limits, before SOH de-rating (kWh)."""
         return self.capacity_kwh * (self.max_soc_fraction - self.min_soc_fraction)
+
+    @property
+    def resolved_soh(self) -> float:
+        """The state of health a Battery built from this config holds, resolved once.
+
+        The ``soh`` override wins and is used as given, without clamping to
+        ``soh_floor``: supply one consistent with ``soh_floor`` if the
+        ``[soh_floor, 1.0]`` invariant matters for your use case. Without one it is
+        :func:`compute_soh` of ``system_age_years`` with zero throughput, calendar
+        fade only, because one run accrues no throughput.
+        """
+        if self.soh is not None:
+            return self.soh
+        return compute_soh(self.system_age_years, 0.0, self.nominal_usable_capacity_kwh, self)
+
+    def soc_envelope(self) -> SocEnvelope:
+        """The SOH-derated SOC envelope at this config's SOC fractions, the one a Battery built from it starts with."""
+        return _derated_soc_envelope(
+            self.capacity_kwh, self.resolved_soh, self.min_soc_fraction, self.max_soc_fraction
+        )
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
@@ -268,6 +329,8 @@ class Battery:
     """
 
     config: BatteryConfig
+    _soc_limits_and_efficiencies: _SocLimitsAndEfficiencies
+    _soc_envelope: SocEnvelope
 
     def __init__(
         self,
@@ -289,20 +352,15 @@ class Battery:
             discharge_efficiency: Discharging efficiency (0-1); defaults to config.discharge_efficiency
         """
         self.config = config
-        self._soc_limits_and_efficiencies = _SocLimitsAndEfficiencies(
-            min_soc_fraction=config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction,
-            max_soc_fraction=config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction,
-            charge_efficiency=config.charge_efficiency if charge_efficiency is None else charge_efficiency,
-            discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
-        )
-
-        # Resolve SOH once: override wins; else calendar-only (throughput=0).
-        if config.soh is not None:
-            self._soh: float = config.soh
-        else:
-            self._soh = compute_soh(
-                config.system_age_years, 0.0, config.nominal_usable_capacity_kwh, config
+        self._soh: float = config.resolved_soh
+        self._set_soc_limits_and_efficiencies(
+            _SocLimitsAndEfficiencies(
+                min_soc_fraction=config.min_soc_fraction if min_soc_fraction is None else min_soc_fraction,
+                max_soc_fraction=config.max_soc_fraction if max_soc_fraction is None else max_soc_fraction,
+                charge_efficiency=config.charge_efficiency if charge_efficiency is None else charge_efficiency,
+                discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
             )
+        )
 
         # Set initial SOC
         if initial_soc_kwh is None:
@@ -316,6 +374,14 @@ class Battery:
                 )
             self._soc_kwh = initial_soc_kwh
 
+    def _set_soc_limits_and_efficiencies(self, limits: _SocLimitsAndEfficiencies) -> None:
+        """Hold *limits* and the envelope at their SOC fractions, both built before either is stored."""
+        envelope = _derated_soc_envelope(
+            self.config.capacity_kwh, self._soh, limits.min_soc_fraction, limits.max_soc_fraction
+        )
+        self._soc_limits_and_efficiencies = limits
+        self._soc_envelope = envelope
+
     @property
     def min_soc_fraction(self) -> float:
         """Minimum SOC as a fraction of effective capacity."""
@@ -323,8 +389,8 @@ class Battery:
 
     @min_soc_fraction.setter
     def min_soc_fraction(self, value: float) -> None:
-        self._soc_limits_and_efficiencies = dataclasses.replace(
-            self._soc_limits_and_efficiencies, min_soc_fraction=value
+        self._set_soc_limits_and_efficiencies(
+            dataclasses.replace(self._soc_limits_and_efficiencies, min_soc_fraction=value)
         )
 
     @property
@@ -334,8 +400,8 @@ class Battery:
 
     @max_soc_fraction.setter
     def max_soc_fraction(self, value: float) -> None:
-        self._soc_limits_and_efficiencies = dataclasses.replace(
-            self._soc_limits_and_efficiencies, max_soc_fraction=value
+        self._set_soc_limits_and_efficiencies(
+            dataclasses.replace(self._soc_limits_and_efficiencies, max_soc_fraction=value)
         )
 
     @property
@@ -345,8 +411,8 @@ class Battery:
 
     @charge_efficiency.setter
     def charge_efficiency(self, value: float) -> None:
-        self._soc_limits_and_efficiencies = dataclasses.replace(
-            self._soc_limits_and_efficiencies, charge_efficiency=value
+        self._set_soc_limits_and_efficiencies(
+            dataclasses.replace(self._soc_limits_and_efficiencies, charge_efficiency=value)
         )
 
     @property
@@ -356,27 +422,24 @@ class Battery:
 
     @discharge_efficiency.setter
     def discharge_efficiency(self, value: float) -> None:
-        self._soc_limits_and_efficiencies = dataclasses.replace(
-            self._soc_limits_and_efficiencies, discharge_efficiency=value
+        self._set_soc_limits_and_efficiencies(
+            dataclasses.replace(self._soc_limits_and_efficiencies, discharge_efficiency=value)
         )
 
     @property
     def soh(self) -> float:
-        """State of health as a fraction.
-
-        Normally in ``[config.soh_floor, 1.0]`` (guaranteed by
-        :func:`compute_soh`'s clamp when the calendar+cycle path is taken).
-        When ``config.soh`` is an explicit override that value is used
-        *directly*, without clamping to ``soh_floor`` — the override wins
-        outright.  Supply an override consistent with ``soh_floor`` if the
-        ``[soh_floor, 1.0]`` invariant matters for your use case.
-        """
+        """The battery's state of health as a fraction, its config's resolved_soh."""
         return self._soh
 
     @property
+    def soc_envelope(self) -> SocEnvelope:
+        """The SOH-derated envelope at the battery's current SOC fractions, which follows an assignment to either."""
+        return self._soc_envelope
+
+    @property
     def effective_capacity_kwh(self) -> float:
-        """Effective capacity after SOH de-rating (capacity_kwh * soh)."""
-        return self.config.capacity_kwh * self._soh
+        """soc_envelope's effective capacity in kWh, the capacity after SOH de-rating."""
+        return self._soc_envelope.effective_capacity_kwh
 
     @property
     def soc_kwh(self) -> float:
@@ -385,35 +448,34 @@ class Battery:
 
     @property
     def soc_fraction(self) -> float:
-        """Current state of charge as fraction of effective capacity."""
-        return self._soc_kwh / self.effective_capacity_kwh
+        """Current state of charge as fraction of soc_envelope's effective capacity."""
+        return self._soc_kwh / self._soc_envelope.effective_capacity_kwh
 
     @property
     def min_soc_kwh(self) -> float:
-        """Minimum allowed SOC in kWh (based on effective capacity)."""
-        return self.effective_capacity_kwh * self.min_soc_fraction
+        """Minimum allowed SOC in kWh, soc_envelope's min_soc_kwh."""
+        return self._soc_envelope.min_soc_kwh
 
     @property
     def max_soc_kwh(self) -> float:
-        """Maximum allowed SOC in kWh (based on effective capacity)."""
-        return self.effective_capacity_kwh * self.max_soc_fraction
+        """Maximum allowed SOC in kWh, soc_envelope's max_soc_kwh."""
+        return self._soc_envelope.max_soc_kwh
 
     @property
     def grid_charge_target_kwh(self) -> Optional[float]:
-        """The SOC, in kWh, that grid charging fills the battery to.
+        """The SOC, in kWh, that grid charging fills the battery to, None when config.grid_charging is None.
 
-        It is config.grid_charging's target_soc_fraction of the effective (SOH-derated)
-        capacity, capped at the battery's current max_soc_fraction, so it is at most
-        max_soc_kwh. It is None when config.grid_charging is None.
+        It is soc_envelope's target_kwh at config.grid_charging's target_soc_fraction, so it is at
+        most max_soc_kwh.
         """
         grid_charging = self.config.grid_charging
         if grid_charging is None:
             return None
-        return min(grid_charging.target_soc_fraction, self.max_soc_fraction) * self.effective_capacity_kwh
+        return self._soc_envelope.target_kwh(grid_charging.target_soc_fraction)
 
     @property
     def usable_capacity_kwh(self) -> float:
-        """Usable capacity in kWh (max_soc - min_soc)."""
+        """Usable capacity in kWh, the energy between soc_envelope's SOC limits."""
         return self.max_soc_kwh - self.min_soc_kwh
 
     @property

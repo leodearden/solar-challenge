@@ -216,6 +216,7 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # __all__.
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
+    "battery.SocEnvelope": "dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
     "config.OutputConfig": "dataclass[eq] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
     "config.SimulationPeriod": "dataclass[eq] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
     "dispatch.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9) -> None",
@@ -327,6 +328,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "charge_efficiency": "property[settable] (self) -> float",
         "discharge_efficiency": "property[settable] (self) -> float",
         "soh": "property (self) -> float",
+        "soc_envelope": "property (self) -> SocEnvelope",
         "effective_capacity_kwh": "property (self) -> float",
         "soc_kwh": "property (self) -> float",
         "soc_fraction": "property (self) -> float",
@@ -342,6 +344,8 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     "BatteryConfig": {
         "nominal_usable_capacity_kwh": "property (self) -> float",
+        "resolved_soh": "property (self) -> float",
+        "soc_envelope": "(self) -> SocEnvelope",
         "default_5kwh": "classmethod (cls) -> BatteryConfig",
     },
     # --- tariff (tariff.py) ---
@@ -405,6 +409,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "bristol": "classmethod (cls) -> Location",
     },
     # --- classes outside __all__ (FROZEN_CLOSURE) ---
+    "battery.SocEnvelope": {
+        "target_kwh": "(self, fraction: float) -> float",
+    },
     "config.SimulationPeriod": {
         "get_start_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",
         "get_end_timestamp": "(self, timezone: str = 'Europe/London') -> Timestamp",

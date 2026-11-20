@@ -858,26 +858,37 @@ class TestComputeFleetSpareCapacityKw:
     # Amendment pass: additional coverage — SOH derating + below-floor clamp
     # -----------------------------------------------------------------------
 
-    def test_degraded_battery_uses_effective_capacity(self) -> None:
-        """Battery with soh=0.8: min_soc_kwh must use effective (SOH-derated) capacity.
+    @pytest.mark.parametrize(
+        ("battery_config", "battery_soc", "spare_kw"),
+        [
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=0.8),
+                [3.0, 2.5, 2.0],
+                0.4,
+                id="soh-0.8",
+            ),
+            pytest.param(
+                BatteryConfig(
+                    capacity_kwh=10.0, max_discharge_kw=3.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8,
+                ),
+                [4.4, 3.4, 2.9],
+                0.5,
+                id="row-11",
+            ),
+        ],
+    )
+    def test_degraded_battery_uses_effective_capacity(
+        self, battery_config: BatteryConfig, battery_soc: list[float], spare_kw: float
+    ) -> None:
+        """The floor is min_soc_fraction of the SOH-derated capacity, not of the nameplate.
 
-        With soh=0.8, effective_capacity = 10.0 * 0.8 = 8.0 and
-        min_soc_kwh = 8.0 * 0.1 = 0.8.  A regression that used nominal
-        capacity (soh=1.0) would compute min_soc_kwh=1.0 and return 1/3
-        instead of 0.4, so the two values are distinguishable.
+        Each home discharges 0.5 kW through the 3-hour window, leaving P_spare = 3.0 - 0.5 = 2.5 kW,
+        so the energy above the floor at the lowest in-window SOC decides: avail = (that SOC - floor) / 3.0.
 
-        Hand-computed (soh=0.8):
-            effective_capacity = 10.0 * 0.8 = 8.0
-            min_soc_kwh        = 8.0 * 0.1  = 0.8
-            in-window soc=[3.0, 2.5, 2.0], discharge=[0.5, 0.5, 0.5]
-            P_spare = 3.0 - max(0.5, 0.5, 0.5) = 3.0 - 0.5 = 2.5
-            E_spare = min(3.0-0.8, 2.5-0.8, 2.0-0.8) = min(2.2, 1.7, 1.2) = 1.2
-            avail   = min(2.5, 1.2/3.0) = min(2.5, 0.4) = 0.4
-
-        Wrong result with soh=1.0 floor (regression):
-            min_soc_kwh = 1.0
-            E_spare = min(2.0, 1.5, 1.0) = 1.0
-            avail   = min(2.5, 1/3) ≈ 0.333  (different — detectable)
+        soh-0.8: floor = 10.0 * 0.8 * 0.1 = 0.8 kWh, so avail = (2.0 - 0.8) / 3.0 = 0.4 kW;
+            a nameplate floor of 1.0 kWh would give 1/3 kW.
+        row-11, PRD dispatch-configuration-below-config §9 row 11: floor = 10.0 * 0.7 * 0.2 = 1.4 kWh,
+            so avail = (2.9 - 1.4) / 3.0 = 0.5 kW; a nameplate floor of 2.0 kWh would give 0.3 kW.
         """
         idx = pd.DatetimeIndex(
             ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
@@ -887,25 +898,14 @@ class TestComputeFleetSpareCapacityKw:
             months=(12,), weekdays=(0,), hours=(16, 17, 18),
             events_per_year=12, event_hours=3.0,
         )
-        # soh=0.8 ⇒ effective_capacity=8.0 ⇒ min_soc_kwh=0.8
-        bat_cfg = BatteryConfig(
-            capacity_kwh=10.0, max_discharge_kw=3.0, min_soc_fraction=0.1, soh=0.8,
-        )
-        home_cfg = _make_gs_home_config(bat_cfg)
         sim = _make_gs_sim_results(
-            battery_soc=[3.0, 2.5, 2.0],
+            battery_soc=battery_soc,
             battery_discharge=[0.5, 0.5, 0.5],
             index=idx,
         )
-        fleet = _make_gs_fleet_results([(sim, home_cfg)])
+        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(battery_config))])
 
-        result = compute_fleet_spare_capacity_kw(fleet, (w,))
-
-        assert len(result) == 1
-        assert result[0] >= 0.0, "I1: non-negative"
-        # 0.4 is the correct answer for soh=0.8 floor; 1/3 ≈ 0.333 would signal
-        # a regression to nominal-capacity (soh=1.0) floor
-        assert result == pytest.approx((0.4,))
+        assert compute_fleet_spare_capacity_kw(fleet, (w,)) == pytest.approx((spare_kw,))
 
     def test_soc_below_floor_clamps_to_zero(self) -> None:
         """Home whose soc dips below min_soc_kwh mid-window must contribute 0.

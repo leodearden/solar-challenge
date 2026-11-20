@@ -250,33 +250,37 @@ class TestChartDisplayGates:
         )
 
 
+_SOC_LIMIT_LINES_KWH: dict[str, tuple[BatteryConfig, dict[str, float]]] = {
+    "defaults-at-full-health": (BatteryConfig(capacity_kwh=10.0), {"Min SOC": 1.0, "Max SOC": 9.0}),
+    "soh-override-and-raised-max": (
+        BatteryConfig(capacity_kwh=8.0, min_soc_fraction=0.1, max_soc_fraction=0.95, soh=0.9),
+        {"Min SOC": 0.72, "Max SOC": 6.84},
+    ),
+    "calendar-faded-and-raised-min": (
+        BatteryConfig(capacity_kwh=10.0, min_soc_fraction=0.2, system_age_years=5.0),
+        {"Min SOC": 1.8, "Max SOC": 8.1},
+    ),
+    "row-11-soh-and-both-limits": (
+        BatteryConfig(capacity_kwh=10.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8),
+        {"Min SOC": 1.4, "Max SOC": 5.6},
+    ),
+}
+"""Batteries battery_soc_chart draws the limits of, each by its id, with the kWh of the line each annotation names.
+
+Five years of calendar fade at the default 2% a year leave calendar-faded-and-raised-min at 90% SoH, as the override
+sets soh-override-and-raised-max's.
+"""
+
+
 class TestBatterySocChartLimitLines:
     """battery_soc_chart draws a dashed line at each SOC limit Battery holds the run's battery between, the config's min and max SOC fractions of its SoH-derated capacity."""
 
     @pytest.mark.parametrize(
-        ("battery_config", "limits_kwh"),
-        [
-            pytest.param(
-                BatteryConfig(capacity_kwh=10.0),
-                {"Min SOC": 1.0, "Max SOC": 9.0},
-                id="defaults-at-full-health",
-            ),
-            pytest.param(
-                BatteryConfig(capacity_kwh=8.0, min_soc_fraction=0.1, max_soc_fraction=0.95, soh=0.9),
-                {"Min SOC": 0.72, "Max SOC": 6.84},
-                id="soh-override-and-raised-max",
-            ),
-            pytest.param(
-                BatteryConfig(capacity_kwh=10.0, min_soc_fraction=0.2, system_age_years=5.0),
-                {"Min SOC": 1.8, "Max SOC": 8.1},
-                id="calendar-faded-and-raised-min",
-            ),
-        ],
+        ("battery_config", "limits_kwh"), list(_SOC_LIMIT_LINES_KWH.values()), ids=list(_SOC_LIMIT_LINES_KWH)
     )
     def test_each_dashed_line_marks_one_of_the_batterys_soc_limits(
         self, battery_config: BatteryConfig, limits_kwh: dict[str, float]
     ) -> None:
-        """Five years of calendar fade at the default 2% a year leave the last battery at 90% SoH, as the override sets the second's."""
         figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config).content
         shapes = json.loads(figure)["layout"]["shapes"]
 
@@ -285,6 +289,18 @@ class TestBatterySocChartLimitLines:
         )
         assert sorted(shape["y0"] for shape in shapes) == pytest.approx(sorted(limits_kwh.values()))
         assert sorted(shape["y1"] for shape in shapes) == pytest.approx(sorted(limits_kwh.values()))
+
+    @pytest.mark.parametrize(
+        "battery_config", [config for config, _ in _SOC_LIMIT_LINES_KWH.values()], ids=list(_SOC_LIMIT_LINES_KWH)
+    )
+    def test_the_dashed_lines_are_the_configs_soc_envelope(self, battery_config: BatteryConfig) -> None:
+        envelope = battery_config.soc_envelope()
+        figure = battery_soc_chart(make_sinusoidal_sim_results(days=1), battery_config).content
+
+        assert {text: annotation["y"] for text, annotation in annotations_by_text(figure).items()} == {
+            "Min SOC": envelope.min_soc_kwh,
+            "Max SOC": envelope.max_soc_kwh,
+        }
 
 
 class TestSankeyBatteryCharge:

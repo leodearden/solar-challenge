@@ -429,6 +429,24 @@ class TestHomeResultsRoute:
             for text, annotation in annotations_by_text(figure).items()
         } == pytest.approx({"Min SOC": 0.72, "Max SOC": 6.84})
 
+    def test_home_results_battery_soc_chart_draws_the_saved_batterys_soc_envelope(
+        self, storage: RunStorage, client: FlaskClient
+    ) -> None:
+        """PRD dispatch-configuration-below-config §9 row 11: 20% and 80% of a 10 kWh battery at 70% SoH are 1.4 and 5.6 kWh."""
+        battery_config = BatteryConfig(capacity_kwh=10.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8)
+        run_id = _save_home_run(
+            storage, "East Roof", make_sinusoidal_sim_results(days=1), battery_config=battery_config
+        )
+        envelope = battery_config.soc_envelope()
+
+        response = client.get(f"/results/{run_id}")
+
+        assert response.status_code == 200
+        figure = chart_figures(response.get_data(as_text=True))["chart-battery-soc"]
+        limits_kwh = {text: annotation["y"] for text, annotation in annotations_by_text(figure).items()}
+        assert limits_kwh == pytest.approx({"Min SOC": 1.4, "Max SOC": 5.6})
+        assert limits_kwh == {"Min SOC": envelope.min_soc_kwh, "Max SOC": envelope.max_soc_kwh}
+
 
 # ---------------------------------------------------------------------------
 # Error page tests
