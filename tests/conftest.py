@@ -115,6 +115,12 @@ def pytester_under_root_conftest(pytester_importing_test_helpers: pytest.Pyteste
     return pytester_importing_test_helpers
 
 
+@pytest.fixture
+def pytester_sessions_read_the_project_ini(pytester: pytest.Pytester, project_root: Path) -> None:
+    """Copy this project's pyproject.toml into pytester's directory, so the sessions pytester starts read the project's pytest ini: its addopts, markers, strict_markers and filterwarnings."""
+    pytester.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+
+
 @dataclass(frozen=True)
 class _OfflineWindow:
     """What a test not marked slow runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
