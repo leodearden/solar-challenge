@@ -244,14 +244,16 @@ def _open_section(page: Page, section: str) -> None:
 
 
 def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
-    """When _open_section returns, the accordion is at rest with the section it opened open, and not with another section open, so the next click meets no header or control still moving."""
+    """When _open_section returns, Playwright shows only the panel of the section it opened, laid out as tall as its content to within half a pixel, so the next click meets no header or control still moving."""
     page.goto(live_server + "/scenarios/builder")
+    panels = {section: _panel_of(page, section) for section in _ACCORDION_SECTIONS}
     _open_section(page, "Period")
 
-    at_rest_with_period_open = page.evaluate(_ACCORDION_IS_AT_REST, _accordion_with_open(page, "Period"))
-    at_rest_with_location_open = page.evaluate(_ACCORDION_IS_AT_REST, _accordion_with_open(page, "Location"))
+    shown = {section for section, panel in panels.items() if panel.is_visible()}
+    period_height = _layout_box(panels["Period"])["height"]
+    period_scroll_height = panels["Period"].evaluate("panel => panel.scrollHeight")
 
-    assert (at_rest_with_period_open, at_rest_with_location_open) == (True, False)
+    assert (shown, period_height) == ({"Period"}, pytest.approx(period_scroll_height, abs=0.5))
 
 
 def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: Page, live_server: str) -> None:
