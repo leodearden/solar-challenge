@@ -285,6 +285,25 @@ def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: 
     assert str(state) in str(failure.value)
 
 
+_BUSY_ON_MOUSEDOWN = """(element, busyMs) => element.addEventListener('mousedown', () => {
+    const until = performance.now() + busyMs;
+    while (performance.now() < until) {}
+}, { once: true })"""
+"""Keeps the page's main thread busy for *busyMs* milliseconds the next time *element* takes a mousedown, as a loaded host's renderer is busy, so a click on *element* is not done until then."""
+
+
+def test_a_click_that_outlasts_open_sections_rest_timeout_still_lands_and_its_wait_for_rest_fails(page: Page, live_server: str) -> None:
+    """rest_timeout_ms bounds only _open_section's wait for rest: a click whose handling keeps the page busy for twice that bound still lands, opening Period, and _open_section then fails because the accordion does not come to rest, not because of the click."""
+    page.goto(live_server + "/scenarios/builder")
+    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
+    page.get_by_role("button", name="Period", exact=True).evaluate(_BUSY_ON_MOUSEDOWN, 2000)
+
+    with pytest.raises(AssertionError):
+        _open_section(page, "Period", rest_timeout_ms=1000)
+
+    expect(page.get_by_role("button", name="Period", exact=True, expanded=True)).to_be_visible()
+
+
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
     """Click Validate and return the form the builder sends to /api/scenarios/validate."""
     with page.expect_response("**/api/scenarios/validate") as validated:
