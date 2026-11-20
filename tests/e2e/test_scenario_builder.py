@@ -220,10 +220,12 @@ def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]
     }
 
 
-def _open_section(page: Page, section: str) -> None:
+def _open_section(page: Page, section: str, *, rest_timeout_ms: float | None = None) -> None:
     """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
 
     *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
+
+    *rest_timeout_ms*, if given, bounds only the wait for rest, in milliseconds: the click and the panel-id reads keep the page's default timeout and the header check keeps expect's own, so a click slowed by a loaded host cannot fail a caller that expects the wait to time out.
     """
     header = page.get_by_role("button", name=section, exact=True, expanded=False)
     expect(
@@ -234,7 +236,7 @@ def _open_section(page: Page, section: str) -> None:
     accordion = _accordion_with_open(page, section)
     header.click()
     try:
-        page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion)
+        page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion, timeout=rest_timeout_ms)
     except PlaywrightTimeoutError as timeout:
         state = page.evaluate(_ACCORDION_STATE, accordion)
         raise AssertionError(
@@ -276,10 +278,9 @@ def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: 
     """When the accordion does not come to rest, here because General's panel is kept displayed after Period opens, _open_section fails reporting the state _ACCORDION_STATE reads, the state _ACCORDION_IS_AT_REST judged."""
     page.goto(live_server + "/scenarios/builder")
     page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
-    page.set_default_timeout(5000)
 
     with pytest.raises(AssertionError) as failure:
-        _open_section(page, "Period")
+        _open_section(page, "Period", rest_timeout_ms=5000)
 
     state = page.evaluate(_ACCORDION_STATE, _accordion_with_open(page, "Period"))
     assert str(state) in str(failure.value)
