@@ -491,7 +491,7 @@ class JobManager:
             )
 
     def _stop_tracking_jobs_finished_long_ago(self) -> None:
-        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago, waking every wait_for_job_snapshot caller as each one goes; a queued or running job stays tracked."""
+        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago, waking every wait_for_job_snapshot caller once they are gone; a queued or running job stays tracked."""
         now = self._clock()
         with self._lock:
             expired = [
@@ -501,6 +501,7 @@ class JobManager:
             ]
             for job_id in expired:
                 del self._jobs[job_id]
+            if expired:
                 self._job_changed.notify_all()
 
     def _submit_job(
