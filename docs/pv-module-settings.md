@@ -1,7 +1,7 @@
 # PV Module Settings: Module Efficiency and Temperature Coefficient Derive the Module
 
-**Task:** #825, #1029, #1372, #1374, #1400, #1440
-**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`, `_require_module_values`, `_require_template_takes_temperature_coefficient`, `_require_adjust_reaches`)
+**Task:** #825, #1029, #1372, #1374, #1400, #1440, #1473
+**Code:** [`src/solar_challenge/pv.py`](../src/solar_challenge/pv.py) (`PVConfig`, `_module_parameters`, `_template_with_set_efficiency`, `_with_temperature_coefficient`, `_with_module_efficiency`, `_adjust_giving`, `_adjust_bracket`, `_modelled_gamma`, `_require_module_values`, `_MODULE_NUMBER_DOMAINS`, `_require_template_takes_temperature_coefficient`, `_require_adjust_reaches`)
 **Measurement:** [`tests/unit/test_pv_module_settings.py`](../tests/unit/test_pv_module_settings.py)
 
 ---
@@ -71,14 +71,24 @@
         to `A4`, `B0` to `B5`, `A`, `B` and `DTC`, or a CECMod row's `Technology`
         text. pvlib's CECMod and SandiaMod rows give every checked key they hold as a
         finite number;
+    - of those numbers, `temp_ref` at or below −273.15 °C, absolute zero, and
+      `irrad_ref` or `I_L_ref` at or below 0, naming the key, the value and the domain,
+      e.g. "Module parameter temp_ref must be greater than -273.15, got -273.15"
+      (`_MODULE_NUMBER_DOMAINS`; §2, *Why the module numbers' domains*). The
+      module-value rule reads these domains, so it refuses such a value in every
+      module form, with or without a set coefficient, ahead of the reach check. It
+      checks that a value is a finite number first, so a NaN, infinite or text
+      `temp_ref` still gets "must be a finite number";
     - a set coefficient that custom parameters cannot take, through
       `_require_template_takes_temperature_coefficient`, which use runs too: parameters
       in neither form, such as a row of pvlib's `SandiaMod` library, naming the keys of
       each form; or CEC single-diode parameters whose `alpha_sc` is 0, since `Adjust`
       scales only `alpha_sc` and so cannot move the coefficient, or on which the
-      coefficient is beyond the reach of the bracket's ends, a NaN reach included (a
-      negative `R_sh_ref` gives one), naming the bracket and the reach
-      (`_require_adjust_reaches`). Construction
+      coefficient is beyond the reach of the bracket's ends, a NaN reach included,
+      naming the bracket and the reach (`_require_adjust_reaches`). A negative
+      `R_sh_ref` gives a NaN reach, and so does a module whose modelled P_mp at STC is
+      not above 0 W, such as one whose `I_L_ref` or `R_sh_ref` is 1e-300:
+      `_modelled_gamma` gives NaN for it rather than dividing by 0. Construction
       evaluates only the bracket's two ends, not the solve;
     - then custom parameters with no rating (neither `pdc0` and `gamma_pdc` nor `STC`),
       or whose rating is not a finite number above 0, text that reads as one included,
@@ -149,6 +159,22 @@
   hold"; measured on 2026-11-20 at fbdaccd1). No web path sets `custom_module_params`,
   so no stored run carries such a module; a typed module specification (§4) would let
   the type and the rule agree.
+- **Why the module numbers' domains** (task 1473). pvlib's `calcparams_desoto`, which
+  `calcparams_cec` calls, computes `EgRef / (k (temp_ref + 273.15))`, so a Python
+  float `temp_ref` of −273.15 raised a bare `ZeroDivisionError`: in the reach check
+  under a set coefficient, and when simulated without one (§3). It scales the
+  photocurrent by `effective_irradiance / irrad_ref`, as PVsyst's model does, so an
+  `irrad_ref` of 0 simulated to 0 kWh with no error. `_adjust_bracket`'s
+  photocurrent-positive bracket, 100 (1 ∓ I_L_ref / (65 |alpha_sc|)), is the single
+  point 100 at an `I_L_ref` of 0, whose module has no power at STC, so the reach check
+  divided by 0; below 0 the bracket is inverted. None of the three values describes a
+  module, so the module-value rule reads these keys inside their domains in every
+  form, at construction and at use. Only these three keys have a domain. Under a set
+  coefficient, another single-diode value that leaves the module no modelled power at
+  STC (0 W or NaN), such as a negative `R_sh_ref` or an `I_L_ref` or `R_sh_ref` of
+  1e-300, gets the reach check's NaN refusal. Without a coefficient nothing checks
+  such a value: it simulates, to 0 kWh for those `R_sh_ref`s and 0.00485 kWh for that
+  `I_L_ref` (§3).
 - **The domains.** 0.9 is NOCT-SAM's transmittance–absorptance, read from the one
   constant the model reads. −0.01 per K (−1 %/K) is steeper than every catalogue row's
   modelled coefficient (−0.68 %/K), and the old (−1, 0) admitted values no model can
@@ -211,6 +237,36 @@ this branch at 695d386 and reproduce exactly.
   `UFuncTypeError`, a `TypeError`; 10 of SandiaMod's 523 rows give NaN in `IXO`,
   `IXXO` or `C4` to `C7`, and one, `Panasonic_VBHN235SA06B__2013_`, rated so, gives
   27.0011 kWh; the rule refuses none of CECMod's 21,535 rows nor SandiaMod's 523.
+- **Module numbers outside their domains**, measured on 2026-11-20 with pvlib 0.15.1,
+  scipy 1.17.1 and CPython 3.12.3 by task 1473's implementer, in scratch scripts
+  outside the tree: at the branch's base, main 9459a793, and on task/1473 at f1a04bfd,
+  "GREEN — _modelled_gamma gives NaN for a module with no power at STC".
+  - The reproductions, at the base: a 4 kW `PVConfig` of the default row as custom
+    parameters at −0.004 per K raised `ZeroDivisionError` with `temp_ref` −273.15,
+    from `calcparams_desoto`'s `EgRef / (k*(Tref_K))`, and with `I_L_ref` 0.0, from
+    `_modelled_gamma`'s division by the power at STC.
+  - A grid of that construction with one of 11 keys, the 7 CEC single-diode keys and
+    `EgRef`, `dEgdT`, `irrad_ref` and `temp_ref`, set to one of 16 finite values
+    (±0.0, ±5e-324, ±1e-300, ±1e-6, ±1, 25, 1000, ±1e300, −273.15 and −300), at each
+    of −0.004, −0.01 and −0.0001 per K: 528 constructions. At the base 251 constructed,
+    253 were refused with a `ConfigurationError` and 24 raised a bare
+    `ZeroDivisionError`, 8 per coefficient: `temp_ref` −273.15, `I_L_ref` ±0.0,
+    ±5e-324 and ±1e-300, and `R_sh_ref` 1e-300. On the branch 242 construct and 286 are
+    refused, with no other exception. The 9 that no longer construct are `I_L_ref` −1,
+    −273.15 and −300 at each coefficient, whose inverted brackets passed the reach
+    check. `I_L_ref` 5e-324 and 1e-300 and `R_sh_ref` 1e-300 now get the reach check's
+    "nan to nan" refusal, and every out-of-domain value the module-value rule's.
+  - With no coefficient, 4 kW at Bristol over the synthetic clear June day (the row
+    26.8194 kWh): at the base `temp_ref` −273.15 constructed and raised
+    `ZeroDivisionError` when simulated, and `irrad_ref` 0 gave 0.0 kWh, `I_L_ref` 0
+    0.00485 kWh and `I_L_ref` −1 8.1557 kWh, none with an error; on the branch all four
+    are refused at construction. At the base and on the branch alike, `I_L_ref` 1e-300
+    gives 0.00485 kWh, and `R_sh_ref` 1e-300 or −1 0.0 kWh.
+  - The rule refuses none of CECMod's 21,535 rows nor SandiaMod's 523: CECMod's least
+    `I_L_ref` is 0.842615, and neither library has `temp_ref` or `irrad_ref`.
+  - Under a set coefficient, the reach check's single-diode solve for an `I_L_ref` of
+    1e-300 emits scipy's `RuntimeWarning` "invalid value encountered in divide" before
+    the refusal.
 
 ## 4. When to Revisit
 
