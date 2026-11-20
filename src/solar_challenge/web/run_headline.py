@@ -11,7 +11,7 @@ from typing import assert_never
 
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.number_fields import as_finite_real
+from solar_challenge.number_fields import Interval, as_finite_real, read_field
 
 
 _MAY_BE_NONE = "may_be_none"
@@ -44,20 +44,20 @@ class RunHeadline:
 
     def __post_init__(self) -> None:
         for figure in fields(self):
-            value = getattr(self, figure.name)
-            if value is None and figure.metadata.get(_MAY_BE_NONE, False):
-                continue
-            object.__setattr__(self, figure.name, _read_figure(figure.name, value))
+            may_be_none = figure.metadata.get(_MAY_BE_NONE, False)
+            read_field(self, figure.name, _read_figure, optional=may_be_none)
 
 
-def _read_figure(name: str, value: object) -> float:
-    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it.
+def _read_figure(value: object, name: str, within: Interval = Interval()) -> float:
+    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it within *within*.
+
+    Its parameters are those :func:`~solar_challenge.number_fields.read_field` calls a reader with.
 
     Raises:
         ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses *value*;
             the message names RunHeadline.<name>.
     """
-    return as_finite_real(value, f"RunHeadline.{name}")
+    return as_finite_real(value, f"RunHeadline.{name}", within)
 
 
 def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> float:
@@ -71,8 +71,8 @@ def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> floa
             *generation_kwh* or *kwh*, before anything is divided; the message names
             RunHeadline.generation_kwh or RunHeadline.<figure>.
     """
-    generation = _read_figure("generation_kwh", generation_kwh)
-    share_kwh = _read_figure(figure, kwh)
+    generation = _read_figure(generation_kwh, "generation_kwh")
+    share_kwh = _read_figure(kwh, figure)
     return share_kwh / generation if generation > 0 else 0.0
 
 
