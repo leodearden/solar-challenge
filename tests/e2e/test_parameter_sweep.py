@@ -679,7 +679,8 @@ def test_the_page_says_why_it_could_not_draw_the_sweep_charts(
     sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
     page.goto(live_server + "/scenarios/sweep")
 
-    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    with page.expect_request_finished(_is_the_sweep_charts_request):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
 
     expect(page.get_by_text(f"Could not draw the sweep charts: {why}", exact=True)).to_be_visible()
 
