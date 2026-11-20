@@ -10,9 +10,10 @@ from collections.abc import Callable, Sequence
 def error_text_with_notes(error: BaseException) -> str:
     """*error*'s text, then each of its notes on a line of its own.
 
-    A text that cannot be read, the error's or a note's, is named as unreadable in its place. A __notes__ that is not a
-    sequence of notes is one line, as _note_texts_of gives it. Only an Exception raised while a text is read is caught,
-    so an error that is not one, such as a KeyboardInterrupt, propagates.
+    A __notes__ that is not a sequence of notes (a str or bytes included) is one line, its repr, as the interpreter's
+    traceback shows it. A text that cannot be read, the error's, a note's or that repr, is named as unreadable in its
+    place. Only an Exception raised while a text is read is caught, so an error that is not one, such as a
+    KeyboardInterrupt, propagates.
     """
     return "\n".join(
         [_text_or(error, f"{type(error).__name__}, whose message could not be read"), *_note_texts_of(error)]
