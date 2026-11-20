@@ -477,7 +477,7 @@ _Found = typing.TypeVar("_Found")
 
 
 class _LookupTiming(typing.Protocol):
-    """When a reader looks up the module that spells an annotation: the thunk it gives _parsed, which calls one only when it reads a string, giving what *lookup* finds, looked up now or once the thunk is first called."""
+    """When a reader looks up the module that spells an annotation: from *lookup*, the thunk the reader gives _parsed, which calls it only when it reads a string; _looked_up_now looks up at once, _looked_up_when_read only once that thunk is first called."""
 
     def __call__(self, lookup: Callable[[], _Found], /) -> Callable[[], _Found]: ...
 

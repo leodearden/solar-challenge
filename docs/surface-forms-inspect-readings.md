@@ -21,12 +21,12 @@ could differ by minor (4.2). `surface_form` evaluates each string annotation whe
 `named_classes` reads it and spells what it evaluates to, so each refusal this document
 gives `named_classes` for a string annotation is `surface_form`'s too;
 `tests/unit/surface_forms_helper/test_surface_form_module_lookup.py` pins that for a name
-the module does not bind, a module that is not the class's own, and a signature no module
-is known to spell. `named_classes` also raises `TypeError` for a constructor named as the dataclass decorator or
-`collections.namedtuple` names the one it writes, but written by a `def` statement, in a
-source file or in text given to `exec`, in a class whose module's source holds no class
-statement for it (3.5). `member_forms`, which spells the public
-members a class's own body defines, raises `TypeError` for one that is a
+the module does not bind, a class the module it records does not bind, and a signature no
+module is known to spell. `named_classes` also raises `TypeError` for a constructor named
+as the dataclass decorator or `collections.namedtuple` names the one it writes, but
+written by a `def` statement, in a source file or in text given to `exec`, in a class
+whose module's source holds no class statement for it (3.5). `member_forms`, which spells
+the public members a class's own body defines, raises `TypeError` for one that is a
 `functools.partial` (4.4, 4.6). Both raise `TypeError` for a class whose metaclass shadows
 `__dict__` or overrides `type`'s `__getattribute__` (4.8). `member_forms` also raises
 `TypeError` for a named tuple whose `_fields` holder holds anything but a tuple of strings
