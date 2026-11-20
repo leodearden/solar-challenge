@@ -22,16 +22,16 @@ These tests prove that an EXTERNAL consumer can:
   - Confirm that License-Expression names the license each package vendored
     under solar_challenge/web/static/vendor records in its upstream.toml.
 
-The wheel is built once, from a copy of the working tree (wheel_source), via a
-module-scoped fixture shared by every test here. The module's xdist_group asks
-pytest-xdist to run every test here on one worker, so that its module-scoped
-wheel build and consumer environment are built once per run, not on each worker
-that runs one of its tests. The group is currently ignored;
-tests/unit/test_parallel_suite.py::test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers
-says why.
+The copy of the working tree the wheel is built from (wheel_source), the wheel
+and the consumer environment it is installed into are each built once per run,
+by session-scoped fixtures that every test here shares. They build through
+tests/_once_per_run.py: on whichever xdist worker first asks, in a directory
+every worker of the run shares. The two tests that re-run a fixture's build or
+install with an empty cache, which a regression could let write, run it in a
+fresh copy of the working tree of their own (unshared_wheel_source).
 The consumer-side proof runs _external_probe.py, which is NOT collected by pytest
 (underscore-prefixed, matches _helpers.py), with the interpreter of the virtual
-environment the module-scoped consumer_environment fixture builds. That
+environment the consumer_environment fixture builds. That
 environment holds only the wheel and the runtime dependencies uv.lock pins.
 Every uv command runs offline: the build reads its build backend from uv's
 cache, and the install reads the wheels uv.lock pins from it.
@@ -55,17 +55,17 @@ import subprocess
 import tomllib
 import zipfile
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 
 import pytest
 from packaging.utils import canonicalize_name
 
+from tests._once_per_run import built_once, run_shared_path
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 from tests._uv_env import isolated_uv_env
 from tests._working_tree import copy_working_tree
-
-pytestmark = pytest.mark.xdist_group("external-install")
 
 _EXTERNAL_PROBE = REPOSITORY_ROOT / "tests" / "integration" / "_external_probe.py"
 
@@ -75,14 +75,15 @@ def _offline_uv_environment(base: Mapping[str, str], **overrides: str) -> dict[s
 
     Offline, uv reads the package index, the build backend and the wheels from its
     cache alone. The offline guard (tests/conftest.py) refuses the network access of
-    a test not marked slow, its child processes' included, and the commands of the
-    module-scoped fixtures run in the window of the first test that requests them.
+    a test not marked slow, its child processes' included, and the commands that
+    build the shared fixtures run in the window of the first test to request them,
+    on the worker that builds them.
     """
     return {**base, "UV_OFFLINE": "1", **overrides}
 
 
 # ---------------------------------------------------------------------------
-# Module-scoped shared fixtures: one copy of the working tree, one wheel build.
+# Shared fixtures, each built once per run: one copy of the working tree, one wheel build.
 # ---------------------------------------------------------------------------
 
 
@@ -104,16 +105,19 @@ def _skip_unless_a_clean_wheel_can_be_built() -> None:
         )
 
 
-@pytest.fixture(scope="module")
-def wheel_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Return a copy of what a fresh clone plus uncommitted new files would hold.
+@pytest.fixture(scope="session")
+def wheel_source(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return the run's one copy of what a fresh clone plus uncommitted new files would hold.
 
     The wheel is built from it because a build in the checkout reuses the ignored build/ and
     src/solar_challenge.egg-info, whose stale entries setuptools keeps shipping after pyproject
     stops declaring them.
     """
     _skip_unless_a_clean_wheel_can_be_built()
-    return copy_working_tree(REPOSITORY_ROOT, tmp_path_factory.mktemp("wheel_source"))
+    return built_once(
+        run_shared_path(request, tmp_path_factory, "external_install_wheel_source"),
+        partial(copy_working_tree, REPOSITORY_ROOT),
+    )
 
 
 def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
@@ -128,16 +132,9 @@ def _build_wheel(source: Path, out_dir: Path, **env_overrides: str) -> subproces
     )
 
 
-@pytest.fixture(scope="module")
-def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Build the solar_challenge wheel once, from the wheel_source copy, and return its path.
-
-    The build and its output both stay under tmp, so the checkout gains no build/,
-    egg-info or dist/.
-    """
-    out_dir = tmp_path_factory.mktemp("wheel_out")
-
-    result = _build_wheel(wheel_source, out_dir)
+def _build_exactly_one_wheel(source: Path, out_dir: Path) -> None:
+    """Build the wheel of the project in *source* into *out_dir*, failing the test that asked, with uv's output, unless uv built exactly one."""
+    result = _build_wheel(source, out_dir)
     assert result.returncode == 0, (
         f"uv build --wheel failed (returncode={result.returncode}). If uv says the network is disabled, "
         "its cache lacks the build backend: run `uv build --wheel --out-dir <a temporary directory>` once "
@@ -152,7 +149,20 @@ def built_wheel(wheel_source: Path, tmp_path_factory: pytest.TempPathFactory) ->
         f"uv stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
-    return wheels[0]
+
+@pytest.fixture(scope="session")
+def built_wheel(wheel_source: Path, request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the solar_challenge wheel once per run, from the wheel_source copy, and return its path.
+
+    The build and its output both stay under tmp, so the checkout gains no build/,
+    egg-info or dist/.
+    """
+    out_dir = built_once(
+        run_shared_path(request, tmp_path_factory, "external_install_wheel"),
+        partial(_build_exactly_one_wheel, wheel_source),
+    )
+    [wheel] = out_dir.glob("*.whl")
+    return wheel
 
 
 # ---------------------------------------------------------------------------
@@ -500,12 +510,11 @@ def _install_against_uv_lock(
     )
 
 
-@pytest.fixture(scope="module")
-def consumer_environment(wheel_source: Path, built_wheel: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Return a fresh virtual environment, outside the checkout, into which the built wheel is installed once."""
-    environment = tmp_path_factory.mktemp("consumer_environment") / "venv"
-
-    result = _install_against_uv_lock(built_wheel, wheel_source, environment)
+def _create_the_consumer_environment(wheel: Path, source: Path, directory: Path) -> None:
+    """Create the virtual environment *directory*/venv as _install_against_uv_lock does, failing the test that asked,
+    with uv's output, unless it succeeds.
+    """
+    result = _install_against_uv_lock(wheel, source, directory / "venv")
     assert result.returncode == 0, (
         f"`{shlex.join(result.args)}` failed (returncode={result.returncode}).\n"
         "If uv says the network is disabled, its cache lacks a wheel uv.lock pins for this interpreter: run "
@@ -517,7 +526,17 @@ def consumer_environment(wheel_source: Path, built_wheel: Path, tmp_path_factory
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
-    return environment
+
+@pytest.fixture(scope="session")
+def consumer_environment(
+    wheel_source: Path, built_wheel: Path, request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """Return the run's one virtual environment, outside the checkout, into which the built wheel is installed once per run."""
+    directory = built_once(
+        run_shared_path(request, tmp_path_factory, "external_install_consumer_environment"),
+        partial(_create_the_consumer_environment, built_wheel, wheel_source),
+    )
+    return directory / "venv"
 
 
 @pytest.mark.build
@@ -632,15 +651,26 @@ def test_the_isolated_install_holds_only_the_wheel_and_the_runtime_dependencies_
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def unshared_wheel_source(tmp_path: Path) -> Path:
+    """Return a fresh copy of the working tree, as wheel_source starts out, for one test alone to run uv in."""
+    _skip_unless_a_clean_wheel_can_be_built()
+    return copy_working_tree(REPOSITORY_ROOT, tmp_path / "wheel_source")
+
+
 @pytest.mark.build
 @pytest.mark.usefixtures("built_wheel")
-def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_source: Path, tmp_path: Path) -> None:
+def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(
+    unshared_wheel_source: Path, tmp_path: Path
+) -> None:
     """The build that built_wheel runs with uv's cache, failing unless it succeeds, fails with an empty cache.
 
-    So the empty cache alone accounts for the failure. uv build exits 2 offline and when refused alike; the
-    offline guard tells them apart, failing this test if the build reached the network.
+    It runs in a fresh copy of the working tree, as built_wheel's own build started in one, and never in
+    the copy the run shares. So the empty cache alone accounts for the failure. uv build exits 2 offline
+    and when refused alike; the offline guard tells them apart, failing this test if the build reached the
+    network.
     """
-    result = _build_wheel(wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
+    result = _build_wheel(unshared_wheel_source, tmp_path / "wheel", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache"))
 
     assert result.returncode != 0, (
         "uv build succeeded with an empty cache, so it found setuptools outside uv's cache\n"
@@ -651,16 +681,17 @@ def test_the_wheel_build_reads_its_build_backend_only_from_uv_s_cache(wheel_sour
 @pytest.mark.build
 @pytest.mark.usefixtures("consumer_environment")
 def test_the_isolated_install_takes_uv_lock_s_wheels_only_from_uv_s_cache(
-    wheel_source: Path, built_wheel: Path, tmp_path: Path
+    unshared_wheel_source: Path, built_wheel: Path, tmp_path: Path
 ) -> None:
     """The install that consumer_environment runs with uv's cache, failing unless it succeeds, fails with an empty cache.
 
-    So the empty cache alone accounts for the failure: offline, the locked sync finds none of uv.lock's
-    wheels. The offline guard, not uv's exit code, catches a fetch, failing this test if the install
-    reached the network.
+    It runs in a fresh copy of the working tree, as the copy consumer_environment's install ran in started
+    out, and never in the copy the run shares. So the empty cache alone accounts for the failure: offline,
+    the locked sync finds none of uv.lock's wheels. The offline guard, not uv's exit code, catches a fetch,
+    failing this test if the install reached the network.
     """
     result = _install_against_uv_lock(
-        built_wheel, wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
+        built_wheel, unshared_wheel_source, tmp_path / "venv", UV_CACHE_DIR=str(tmp_path / "empty-uv-cache")
     )
 
     assert result.returncode != 0, (
