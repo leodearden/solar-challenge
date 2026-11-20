@@ -194,6 +194,29 @@ def _is_unfiltered_runs_request(url: str) -> bool:
     return parts.path == "/api/history/runs" and "q" not in parse_qs(parts.query)
 
 
+_RECORD_EACH_FETCH_ONCE_THE_PAGE_HAS_HANDLED_IT = """(() => {
+    window.fetchesHandled = [];
+    const record = (url) => setTimeout(() => window.fetchesHandled.push(url), 0);
+    const originalFetch = window.fetch;
+    window.fetch = function (resource, options) {
+        const answer = originalFetch.call(this, resource, options);
+        answer.catch(() => record(new URL(resource, location.href).href));
+        return answer;
+    };
+    const originalJson = Response.prototype.json;
+    Response.prototype.json = function () {
+        const body = originalJson.call(this);
+        const mark = () => record(this.url);
+        body.then(mark, mark);
+        return body;
+    };
+})();"""
+"""An init script that pushes to window.fetchesHandled the URL of each fetch the page has handled: one that failed, or one whose json() body has settled.
+
+It pushes from a 0 ms timer queued as that promise settles. The timer runs only after every microtask chained from the settle, which includes the page's code awaiting it and the Alpine re-render that code schedules. So a pushed URL means the page has finished handling that answer, by the ordering tests/e2e/_alpine_start.py relies on.
+"""
+
+
 @pytest.mark.usefixtures("seeded_home_runs_pair")
 @pytest.mark.parametrize(
     "settle_superseded_request",
@@ -214,14 +237,14 @@ def test_late_superseded_request_does_not_replace_search_results(
         held_requests.append(route)
 
     page.route(_is_unfiltered_runs_request, hold)
+    page.add_init_script(_RECORD_EACH_FETCH_ONCE_THE_PAGE_HAS_HANDLED_IT)
     page.goto(live_server + "/history/runs")
     page.get_by_label("Search", exact=True).fill(run_name)
     _expect_search_listed_only_one_run(page)
 
     (superseded_request,) = held_requests
     settle_superseded_request(superseded_request)
-    # networkidle cannot fire while the held request is in flight, and fires 500 ms after it settles
-    page.wait_for_load_state("networkidle")
+    page.wait_for_function("url => window.fetchesHandled.includes(url)", arg=superseded_request.request.url)
 
     result_link = _expect_search_listed_only_one_run(page)
     expect(result_link).to_have_attribute("href", f"/results/{run_id}")
