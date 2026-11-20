@@ -2,9 +2,8 @@
 """Helper module for fleet configuration in the web dashboard.
 
 Provides utilities for sampling distributions, converting form data to
-fleet distribution configs and their distributions back to the form's,
-writing either fleet form's distributions in config.py's grammar, and
-fleet-wide overlay application for tariff/dispatch/SEG settings.
+fleet distribution configs and their distributions back to the form's, and
+writing either fleet form's distributions in config.py's grammar.
 """
 
 from __future__ import annotations
@@ -14,16 +13,10 @@ import math
 import random
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import Any, TypeGuard
 
 
-from solar_challenge.home import HomeConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
-
-if TYPE_CHECKING:
-    from solar_challenge.dispatch import DispatchStrategyConfig
-    from solar_challenge.seg import SEGTariff
-    from solar_challenge.tariff import TariffConfig
 
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
 #: shuffled pool that holds values for more homes, and a preview that draws more values.
@@ -73,51 +66,6 @@ def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list
             f"{pool_field} counts must total at most {MAX_FLEET_HOMES}, got {total}"
         )
     return read_counts
-
-
-def apply_fleet_overlay(
-    configs: list[HomeConfig],
-    *,
-    tariff_config: TariffConfig | None = None,
-    dispatch_strategy: DispatchStrategyConfig | None = None,
-    seg_tariff: SEGTariff | None = None,
-) -> list[HomeConfig]:
-    """Apply fleet-wide tariff, dispatch strategy, and SEG overlay to all homes.
-
-    Uses :func:`dataclasses.replace` to produce new frozen :class:`HomeConfig`
-    objects; the originals are never mutated.
-
-    The dispatch strategy is applied only to homes that already have a
-    :class:`~solar_challenge.battery.BatteryConfig` (i.e. ``battery_config is
-    not None``).  Battery-less homes are left unchanged so no battery is ever
-    fabricated merely to hold a dispatch strategy.
-
-    Args:
-        configs: List of :class:`~solar_challenge.home.HomeConfig` instances to
-            overlay.  Must not be mutated by the caller after passing in.
-        tariff_config: Optional tariff to set on every home.
-        dispatch_strategy: Optional dispatch strategy to set on every home that
-            has a battery.
-        seg_tariff: Optional SEG tariff to set on every home.
-
-    Returns:
-        A new list of :class:`~solar_challenge.home.HomeConfig` with the overlay
-        applied.  Items whose overlay is a no-op are returned as-is (same
-        object, not a copy) for efficiency.
-    """
-    result: list[HomeConfig] = []
-    for home in configs:
-        replacements: dict[str, Any] = {}
-        if tariff_config is not None:
-            replacements["tariff_config"] = tariff_config
-        if seg_tariff is not None:
-            replacements["seg_tariff"] = seg_tariff
-        if dispatch_strategy is not None and home.battery_config is not None:
-            replacements["battery_config"] = dataclasses.replace(
-                home.battery_config, dispatch_strategy=dispatch_strategy
-            )
-        result.append(dataclasses.replace(home, **replacements) if replacements else home)
-    return result
 
 
 def sample_distribution(

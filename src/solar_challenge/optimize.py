@@ -807,8 +807,6 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
     - A battery, and the home has NO battery → a fresh
       :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
       (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).
-      This is the intentional divergence from ``apply_fleet_overlay`` (which
-      never fabricates a battery).
 
     Args:
         home: Original (frozen) home configuration.
