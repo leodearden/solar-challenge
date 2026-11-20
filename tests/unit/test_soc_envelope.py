@@ -21,6 +21,15 @@ _ROW_11_CONFIG = BatteryConfig(capacity_kwh=10.0, soh=0.7, min_soc_fraction=0.2,
 """Row 11's battery: 10 kWh at SOH 0.7, with SOC limits of 0.2 and 0.8."""
 
 
+def _refusal_of(field: str, value: object) -> str:
+    """The pattern of the refusal of *value* for *field* alone, "<field> must be <requirement>, got <value!r>".
+
+    The order refusal names every field and its value too, so a pattern that only looks for the
+    field and the value would also match it.
+    """
+    return rf"^{re.escape(field)} must be .+, got {re.escape(repr(value))}$"
+
+
 class TestSocEnvelope:
     """A SocEnvelope built directly holds an effective capacity and the SOC limits within it, and caps a target at its ceiling."""
 
@@ -56,8 +65,13 @@ class TestSocEnvelope:
     def test_a_field_that_is_not_a_finite_number_in_its_range_is_refused_naming_it_and_the_value(
         self, field: str, value: float
     ) -> None:
-        with pytest.raises(ConfigurationError, match=f"{re.escape(field)}.*{re.escape(repr(value))}"):
+        with pytest.raises(ConfigurationError, match=_refusal_of(field, value)):
             dataclasses.replace(_ROW_11_ENVELOPE, **{field: value})
+
+    def test_an_envelope_with_no_capacity_is_refused_though_its_limits_are_in_order(self) -> None:
+        """0 <= 0 <= 0 is in order, so only the effective capacity's own bound, above 0, refuses it."""
+        with pytest.raises(ConfigurationError, match=_refusal_of("effective_capacity_kwh", 0.0)):
+            SocEnvelope(effective_capacity_kwh=0.0, min_soc_kwh=0.0, max_soc_kwh=0.0)
 
     @pytest.mark.parametrize(
         ("min_soc_kwh", "max_soc_kwh"),
