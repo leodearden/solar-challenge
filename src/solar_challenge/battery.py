@@ -135,6 +135,43 @@ def compute_soh(
 
 
 @dataclass(frozen=True)
+class SocEnvelope:
+    """A battery's SOH-derated SOC envelope in kWh: its effective capacity and the SOC limits within it."""
+
+    effective_capacity_kwh: float
+    min_soc_kwh: float
+    max_soc_kwh: float
+
+    def __post_init__(self) -> None:
+        """Read each field as a finite number in its range, held as a float, then refuse limits out of order."""
+        read_field(self, "effective_capacity_kwh", as_finite_float, POSITIVE)
+        read_field(self, "min_soc_kwh", as_finite_float, NON_NEGATIVE)
+        read_field(self, "max_soc_kwh", as_finite_float, NON_NEGATIVE)
+        if not self.min_soc_kwh <= self.max_soc_kwh <= self.effective_capacity_kwh:
+            raise ConfigurationError(
+                "min_soc_kwh must be at most max_soc_kwh, and max_soc_kwh at most effective_capacity_kwh, got "
+                f"min_soc_kwh={self.min_soc_kwh!r}, max_soc_kwh={self.max_soc_kwh!r} "
+                f"and effective_capacity_kwh={self.effective_capacity_kwh!r}"
+            )
+
+    def target_kwh(self, fraction: float) -> float:
+        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh."""
+        return min(fraction * self.effective_capacity_kwh, self.max_soc_kwh)
+
+
+def _derated_soc_envelope(
+    capacity_kwh: float, soh: float, min_soc_fraction: float, max_soc_fraction: float
+) -> SocEnvelope:
+    """The envelope of a *capacity_kwh* battery at *soh*, its SOC limits those fractions of its effective capacity."""
+    effective_capacity_kwh = capacity_kwh * soh
+    return SocEnvelope(
+        effective_capacity_kwh,
+        effective_capacity_kwh * min_soc_fraction,
+        effective_capacity_kwh * max_soc_fraction,
+    )
+
+
+@dataclass(frozen=True)
 class BatteryConfig:
     """Configuration for a battery storage system.
 
