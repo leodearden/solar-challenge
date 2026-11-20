@@ -36,8 +36,9 @@ region.
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
 wait for the page to fetch those results, when it times out, fails naming the
-jobs whose results it has not fetched; and that a real three-point sweep draws
-one chart per metric from its points' runs.
+jobs whose results it has not fetched, while a Playwright timeout raised inside
+that wait's block passes through it unchanged; and that a real three-point
+sweep draws one chart per metric from its points' runs.
 
 Each faked progress stream is answered with frames the server's own encoder
 builds from its catalogue (tests/e2e/_job_requests.py).
@@ -820,6 +821,22 @@ def test_each_points_results_fetched_fails_naming_the_jobs_whose_results_the_pag
         page.evaluate("url => fetch(url).then(response => response.text())", f"/api/jobs/{fetched}/results")
 
     assert (unfetched in str(failure.value), fetched in str(failure.value)) == (True, False)
+
+
+def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raises_through_unchanged(
+    page: Page, live_server: str
+) -> None:
+    """A Playwright timeout raised inside the block _each_points_results_fetched wraps, here a locator's wait, comes out of it unchanged, not relabelled as its failure naming unfetched jobs.
+
+    The selector is one the page never shows, and Playwright's timeout names it in its call log, so matching it proves the exception that came out is the block's own and not the helper's waiters'.
+    """
+    page.goto(live_server + "/scenarios/sweep")
+
+    with (
+        pytest.raises(PlaywrightTimeoutError, match="#the-blocks-own-wait"),
+        _each_points_results_fetched(page, ["job-a"]),
+    ):
+        page.locator("#the-blocks-own-wait").wait_for(timeout=100)
 
 
 # -- A real sweep's charts, drawn from its points' runs ---------------------
