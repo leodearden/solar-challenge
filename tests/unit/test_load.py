@@ -26,6 +26,7 @@ from solar_challenge.load import (
     richardsonpy_household,
     scale_profile_to_energy,
 )
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._non_booleans import NON_BOOLEANS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -954,3 +955,28 @@ class TestEVChargingOnTheProfile:
             )
 
         assert household.windows == []
+
+    def test_an_off_peak_ev_charges_in_the_tariffs_cheap_minutes(self) -> None:
+        """On Economy 10 the 7 kW EV charges its 35 kWh in the night's cheap minutes, 00:00-04:59."""
+        load_config = LoadConfig(annual_consumption_kwh=3400, use_stochastic=False)
+        window = _window("2024-01-10", "2024-01-12")
+
+        with_ev = generate_load_profile(
+            load_config, window, EVConfig("7kW", 18, 7, 35.0, "off_peak"), tariff=TariffConfig.economy_10()
+        )
+        ev_kw = with_ev - generate_load_profile(load_config, window)
+
+        on_the_11th = ev_kw.loc["2024-01-11"]
+        pd.testing.assert_index_equal(
+            on_the_11th.index[on_the_11th > 3.5],
+            pd.date_range("2024-01-11 00:00", "2024-01-11 04:59", freq="1min", tz="Europe/London"),
+            check_names=False,
+        )
+
+    def test_an_off_peak_ev_with_no_tariff_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="smart_charging_mode 'off_peak'"):
+            generate_load_profile(
+                LoadConfig(annual_consumption_kwh=3400, use_stochastic=False),
+                _window("2024-01-10", "2024-01-12"),
+                EVConfig("7kW", 18, 7, 35.0, "off_peak"),
+            )

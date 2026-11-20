@@ -18,6 +18,7 @@ import pandas as pd
 
 from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.number_fields import POSITIVE, Interval, as_finite_float, as_whole_number, read_field
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, ONE_MINUTE, LocalDay, SimulationWindow
 
 if TYPE_CHECKING:
@@ -409,6 +410,7 @@ def generate_load_profile(
     ev_config: "Optional[EVConfig]" = None,
     *,
     household_model: HouseholdModel = richardsonpy_household,
+    tariff: Optional[TariffConfig] = None,
 ) -> pd.Series:
     """The household's demand in kW on window.rows(), EV charging included when ev_config is set.
 
@@ -440,6 +442,8 @@ def generate_load_profile(
         household_model: Called once per stochastic window with config and the window's
             dates; the day simulator it returns is called once per date. Unused when
             config.use_stochastic is False.
+        tariff: The home's tariff, whose cheap minutes an off_peak EV charges in; unused
+            without ev_config.
 
     Returns:
         Series of power in kW on window.rows(), named demand_kw
@@ -448,6 +452,8 @@ def generate_load_profile(
         ValueError: Naming window's cadence, before any household is built, if it is not a
             whole number of minutes dividing one hour, or, with ev_config, not one minute; or
             if a stochastic window's simulated days have no energy.
+        ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and there is no
+            tariff (generate_ev_charging_profile).
     """
     if ev_config is not None and window.cadence != ONE_MINUTE:
         raise ValueError(
@@ -465,7 +471,7 @@ def generate_load_profile(
     from solar_challenge.ev import generate_ev_charging_profile
 
     ev_kw = generate_ev_charging_profile(
-        ev_config, pd.Timestamp(window.first_day), pd.Timestamp(window.last_day), window.timezone
+        ev_config, pd.Timestamp(window.first_day), pd.Timestamp(window.last_day), window.timezone, tariff=tariff
     ).reindex(household_kw.index, fill_value=0.0)
     return (household_kw + ev_kw).rename("demand_kw")
 

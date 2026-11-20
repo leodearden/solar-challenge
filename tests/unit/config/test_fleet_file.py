@@ -634,6 +634,41 @@ fleet_distribution:
             self._load_fleet(tmp_path, dispatch_strategy)
 
 
+class TestFleetFileOffPeakEV:
+    """A fleet file's off_peak EVs need its tariff: block, which the reader gives each home as it builds it.
+
+    The fleet has no battery, so no dispatch refusal can fire; it sets pv and load because every
+    generated home needs both.
+    """
+
+    _OFF_PEAK_EV_FLEET = {
+        "fleet_distribution": {
+            "n_homes": 2,
+            "seed": 7,
+            "pv": {"capacity_kw": 4.0},
+            "load": {"annual_consumption_kwh": 3400},
+            "ev": {"charger_type": "7kW", "smart_charging_mode": "off_peak"},
+        }
+    }
+
+    def test_a_fleet_of_off_peak_evs_with_no_tariff_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            parse_fleet_config(self._OFF_PEAK_EV_FLEET)
+
+        assert "smart_charging_mode 'off_peak'" in str(refused.value)
+        assert "tariff" in str(refused.value)
+
+    def test_each_off_peak_ev_home_is_built_with_the_files_tariff(self) -> None:
+        """The construction path load_fleet_config gives the web builder's imported fleet scenarios."""
+        fleet = parse_fleet_config({**self._OFF_PEAK_EV_FLEET, "tariff": {"type": "economy_10"}})
+
+        assert len(fleet.homes) == 2
+        for home in fleet.homes:
+            assert home.ev_config is not None
+            assert home.ev_config.smart_charging_mode == "off_peak"
+            assert home.tariff_config == TariffConfig.economy_10()
+
+
 class TestFleetHeatPumpTypePools:
     """A fleet_distribution.heat_pump.heat_pump_type pool gives each home the type it draws, a null being no heat pump."""
 

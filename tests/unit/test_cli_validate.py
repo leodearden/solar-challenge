@@ -201,6 +201,20 @@ def _bristol_arbitrage_with_its_home(edit_home: Callable[[dict[str, Any]], objec
     return yaml.safe_dump(document)
 
 
+def _example_economy7_with_an_off_peak_ev(edit_home: Callable[[dict[str, Any]], object]) -> str:
+    """scenarios/example-economy7.yaml as YAML, its home given a 7 kW off_peak EV home from 18:00 to 07:00, then changed by *edit_home*."""
+    document: dict[str, Any] = yaml.safe_load((SCENARIOS_DIR / "example-economy7.yaml").read_text())
+    document["home"]["ev"] = {
+        "charger_type": "7kW",
+        "arrival_hour": 18,
+        "departure_hour": 7,
+        "required_charge_kwh": 35,
+        "smart_charging_mode": "off_peak",
+    }
+    edit_home(document["home"])
+    return yaml.safe_dump(document)
+
+
 def _flex_document_with_infinite_event_hours() -> dict[str, Any]:
     """scenarios/bristol-phase1-flex.yaml as loaded, its first event window's event_hours infinite."""
     flex = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
@@ -651,6 +665,22 @@ home:
         error_row = text[text.index("ERROR"):]
         for name in named:
             assert name in error_row
+
+    def test_a_home_with_an_off_peak_ev_and_no_tariff_is_an_error_row(self, tmp_path: Path) -> None:
+        """scenarios/example-economy7.yaml with an off_peak EV: valid on Economy 10, an error row without a tariff."""
+        on_economy_10 = self._validate_config(
+            tmp_path, _example_economy7_with_an_off_peak_ev(lambda home: home.update(tariff={"type": "economy_10"}))
+        )
+        assert on_economy_10.exit_code == 0, f"premise: the home is valid with a tariff\n{on_economy_10.stdout}"
+
+        result = self._validate_config(tmp_path, _example_economy7_with_an_off_peak_ev(lambda home: home.pop("tariff")))
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert "smart_charging_mode 'off_peak'" in error_row
+        assert "tariff" in error_row
 
     @pytest.mark.parametrize(
         ("tariff", "named"),
