@@ -25,9 +25,12 @@ app = typer.Typer(help="Configuration management commands")
 # Template configurations
 HOME_TEMPLATE = """\
 # Single home simulation configuration
-# All fields are optional - defaults will be used if not specified
+# Any block may be deleted entirely, or any key left out of it, to take its
+# default, except that a location: block that sets any key must set both
+# latitude and longitude
 
-# Geographic location (defaults to Bristol, UK)
+# Geographic location: Bristol, UK if the block is deleted; timezone and
+# altitude default to Bristol's
 location:
   latitude: 51.45
   longitude: -2.58
