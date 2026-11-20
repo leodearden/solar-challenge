@@ -61,7 +61,7 @@ _TESTS = PurePosixPath("tests")
 
 _BRIEFING = PurePosixPath("review/briefing.yaml")
 
-_CONVENTION_TEXTS = ("rule", "why")
+_CONVENTION_KEYS_READ = ("rule", "why")
 
 
 def _is_python_file_under_tests(path: PurePosixPath) -> bool:
@@ -314,7 +314,7 @@ def _conventions_rules_and_whys(source: PurePosixPath, text: str) -> list[tuple[
     """
     entries = _convention_entries(source, _composed(source, text))
     scalars = sorted(
-        (_text_node_of(source, entry, key) for entry in entries for key in _CONVENTION_TEXTS),
+        (_text_node_of(source, entry, key) for entry in entries for key in _CONVENTION_KEYS_READ),
         key=lambda scalar: scalar.start_mark.index,
     )
     return [(scalar.start_mark.line + 1, text[scalar.start_mark.index : scalar.end_mark.index]) for scalar in scalars]
@@ -338,7 +338,8 @@ def _convention_entries(source: PurePosixPath, document: yaml.Node | None) -> li
     """
     conventions = _value_of(document, "conventions")
     if not isinstance(conventions, yaml.SequenceNode) or not conventions.value:
-        raise ValueError(f"{source} has no conventions sequence with an entry, so it holds no rule or why to read")
+        keys = " or ".join(_CONVENTION_KEYS_READ)
+        raise ValueError(f"{source} has no conventions sequence with an entry, so it holds no {keys} to read")
     return conventions.value
 
 
