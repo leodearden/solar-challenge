@@ -171,8 +171,8 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   A task sees a laptop red only when `verify_task_remote_red_confirms_locally`
   is off: while it is on, the red re-runs here and the task gets this
   workstation's verdict. `docs/laptop-merge-verify.md` §5 says how to read and
-  reproduce such a red, and §6 how to send merge or task verifies back to this
-  host.
+  reproduce such a red. `docs/laptop-merge-verify.md` §6 says how to send merge
+  or task verifies back to this host.
 - An offline-lane job whose suite needs a live service declares, as its
   `outage_probe` in `dark-factory-orchestrator.yaml`, `scripts/outage_probe.py`
   naming that service; the script's docstring says what counts as an outage and
