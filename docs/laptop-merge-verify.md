@@ -192,9 +192,10 @@ To reproduce the whole gate on the laptop, as task 606's pre-flight did:
 
 To run one node-id, push the commit as in step 1, then on the laptop run
 `git -C /home/leo/src/solar-challenge worktree add --detach /tmp/<dir> <sha>`, then
-`uv run --locked --extra dev --extra web pytest -n 0 <node-id>` in that directory, then `git worktree remove` it. Never move
-the clone's own HEAD. A non-login `ssh leo-laptop '<command>'` does not put `~/.local/bin`, where uv lives, on PATH
-(`SETUP.md`'s "Non-login-ssh PATH trap").
+`uv run --locked --extra dev --extra web pytest -n 0 <node-id>` in that directory, then `git worktree remove` it. Leave
+out `-n 0` for a commit whose `uv.lock` has no `pytest-xdist`: its pytest refuses the option. Never move the clone's own
+HEAD. A non-login `ssh leo-laptop '<command>'` does not put `~/.local/bin`, where uv lives, on PATH (`SETUP.md`'s
+"Non-login-ssh PATH trap").
 
 ## 6. Rollback, Tiers and the Parity Rule
 
