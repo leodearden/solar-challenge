@@ -109,6 +109,13 @@ environment. If PyPI is out of reach while `uv.lock` pins a file this host's uv 
 the job's own sync fails, and so does the probe's: the lane reads a broken probe, so the red
 goes to its confirm and is filed, with a broken-probe escalation beside it.
 
+Each job passes `-n 0`, so its suite runs serially whatever workers pyproject's addopts ask
+for, as `tests/unit/test_offline_lane_contracts.py` checks. On a worker per core, each worker
+would repeat its suite's module-scoped work, which asks a live service or builds (pvgis' TMY,
+css-build's `npm ci`), the interpreter-matrix cases would run at once, each a verify over every
+core, and the e2e tests, which share one live server in session order, would be split across
+workers.
+
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
   except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
   downloads whenever `uv.lock` changes.

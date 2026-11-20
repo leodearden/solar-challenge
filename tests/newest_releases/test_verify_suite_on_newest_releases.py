@@ -23,7 +23,7 @@ because uv resolves and downloads the releases from PyPI.
 
 Manual run::
 
-    uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+    uv run --locked --extra dev pytest -n 0 tests/newest_releases -p no:cacheprovider
 """
 
 import shlex

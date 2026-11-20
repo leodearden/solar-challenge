@@ -33,16 +33,16 @@ pytest --cov=src/solar_challenge
 
 # Interpreter matrix: the orchestrator verify on every admitted Python minor
 # except the .python-version pin (one case per minor, ~6-10 min each)
-uv run --locked --extra dev pytest tests/interpreter_matrix
+uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 
 # Browser e2e suite: what the offline lane's e2e job runs after every merge
 # (~3.5 min); the per-task verify never runs it
-uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
+uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
 
 # PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
 # they check PVGIS's live response, so they need network access, and the per-task
 # verify never runs them
-uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/integration/test_pvgis.py -p no:cacheprovider
 
 # Tailwind rebuild: after editing tailwind.config.js, static/src/theme-tokens.json's
 # tailwind section, static/src/input.css, a template or a script, rebuild
@@ -60,12 +60,12 @@ cd src/solar_challenge/web && npm ci && npm run build:favicon
 # merge; it rebuilds the stylesheet and the favicon with npm and compares the
 # Tailwind license texts beside them with the locked tailwindcss package's, so it
 # needs npm and network access, and the per-task verify never runs it
-uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/css_build -p no:cacheprovider
 
 # Newest-releases check: what the offline lane's newest-releases job runs after
 # every merge (~15-20 min); it upgrades a scratch copy's uv.lock from PyPI, so it
 # needs network access, and the per-task verify never runs it
-uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/newest_releases -p no:cacheprovider
 
 # CLI entry point
 solar-challenge --help
@@ -190,7 +190,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
   the red run printed no failing node-id (it hit the job's `timeout`, or pytest
   could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  `uv run --locked --extra dev --extra web --extra e2e pytest -n 0 <node-id> -p no:cacheprovider`.
   An e2e test that fails after Chromium failed one of its requests with
   `net::ERR_NETWORK_CHANGED` runs once more and shows as `RERUN`;
   `docs/e2e-network-change-reruns.md` says why.
@@ -216,7 +216,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
   when the red run printed no failing node-id (it hit the job's `timeout`, or
   pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. The
+  `uv run --locked --extra dev pytest -n 0 <node-id> -p no:cacheprovider`. The
   failure line a fix task quotes is the traceback's first: for a request PVGIS
   refused, pvlib's JSONDecodeError on PVGIS's HTML error page. The HTTP status
   is at the end of the traceback, in the pass's `detect.log` under the main
@@ -250,7 +250,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `<file>` being the stale copy. The fix is the `cp` its failure message gives,
   from `node_modules/tailwindcss` after `npm ci` in `src/solar_challenge/web`,
   then a commit of the copy. Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
+  `uv run --locked --extra dev pytest -n 0 <node-id> -p no:cacheprovider`. To change
   the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
   `package-lock.json`, then rebuild and copy each license text from the new
   `node_modules/tailwindcss`.
@@ -280,4 +280,4 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   PyPI, retry later before changing code. Reproduce with the newest-releases
   check in Commands; to iterate on one failing test, overlay its one new
   release on the locked environment:
-  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest <node-id> -p no:cacheprovider`.
+  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest -n 0 <node-id> -p no:cacheprovider`.

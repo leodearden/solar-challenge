@@ -11,7 +11,7 @@ its interpreter's environment from PyPI whenever uv.lock changes.
 
 Manual run::
 
-    uv run --locked --extra dev pytest tests/interpreter_matrix [-k 3.13]
+    uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix [-k 3.13]
 
 Inside a sandbox that cannot write uv's python directory, set
 UV_PYTHON_INSTALL_DIR to a writable path.
