@@ -11,6 +11,7 @@ from typing import Optional, Union
 
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ComponentDistribution,
     DistributionSpec,
@@ -26,6 +27,7 @@ from solar_challenge.config import (
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, simulate_pv_output
 from solar_challenge.tariff import TariffConfig
@@ -1099,6 +1101,40 @@ class TestGenerateHomesFromDistributionFlex:
         homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
         for home in homes:
             assert home.dispatch_strategy == "greedy"
+
+    def test_tou_optimized_batteries_without_a_fleet_tariff_are_refused_as_home_config_refuses_them(self) -> None:
+        """A fleet that dispatches tou_optimized with no fleet_tariff is refused when its first home is built, in HomeConfig's own words, which name neither the home nor the fleet_distribution block (docs/prds/dispatch-configuration-below-config.md §5.3)."""
+        fleet = self._base_config(dispatch_strategy="tou_optimized")
+
+        with pytest.raises(ConfigurationError) as generation_refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(),
+                battery_config=BatteryConfig(capacity_kwh=5.0),
+                dispatch_strategy="tou_optimized",
+            )
+
+        assert str(generation_refusal.value) == str(construction_refusal.value)
+
+    def test_battery_grid_charging_its_dispatch_would_ignore_is_refused_as_home_config_refuses_it(self) -> None:
+        """A fleet whose batteries grid-charge under greedy dispatch is refused when its first home is built, in HomeConfig's own words, which name neither the home nor the fleet_distribution block (docs/prds/dispatch-configuration-below-config.md §5.3)."""
+        grid_charging = GridChargeConfig(target_soc_fraction=0.9)
+        fleet = self._base_config(grid_charging=grid_charging)
+
+        with pytest.raises(ConfigurationError) as generation_refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        with pytest.raises(ConfigurationError) as construction_refusal:
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(),
+                battery_config=BatteryConfig(capacity_kwh=5.0, grid_charging=grid_charging),
+            )
+
+        assert str(generation_refusal.value) == str(construction_refusal.value)
 
 
 def _declared_default(declared: "dataclasses.Field[object]") -> object:
