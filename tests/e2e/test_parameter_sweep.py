@@ -642,7 +642,8 @@ def test_a_sweep_run_after_another_clears_the_earlier_sweeps_charts(
     sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
     page.goto(live_server + "/scenarios/sweep")
     run = page.get_by_role("button", name="Run Parameter Sweep", exact=True)
-    run.click()
+    with page.expect_request_finished(_is_the_sweep_charts_request):
+        run.click()
     expect(_sweep_charts(page).get_by_text("The first sweep's charts", exact=True)).to_be_visible()
 
     run.click()
