@@ -37,10 +37,23 @@ def _browser_install_steps(project_root: Path) -> list[OrchestratorCommand]:
     ]
 
 
-def _words_before_the_installer(words: Sequence[str]) -> Sequence[str]:
-    """Return an install step's words before its first `uv` or `playwright`, those that set the installer's environment."""
-    starts = [index for index, word in enumerate(words) if word in ("uv", "playwright")]
-    return words[: starts[0]] if starts else words
+def _is_assignment(word: str) -> bool:
+    """Whether sh reads *word*, at the start of a command, as a variable assignment: a name, `=`, then its value."""
+    name, equals, _ = word.partition("=")
+    return bool(equals) and name.isidentifier()
+
+
+def _installer_environment(words: Sequence[str]) -> Sequence[str]:
+    """Return a step's leading words that set the environment its command runs in: shell assignments, and `env` with those it passes on.
+
+    The first word that is neither, such as `timeout`, is the command, and an
+    assignment after it is that command's argument, which `timeout` runs as a
+    program, not a variable.
+    """
+    for index, word in enumerate(words):
+        if word != "env" and not _is_assignment(word):
+            return words[:index]
+    return words
 
 
 def test_the_e2e_job_installs_the_browser_its_suite_launches_before_running_it(project_root: Path) -> None:
@@ -49,12 +62,8 @@ def test_the_e2e_job_installs_the_browser_its_suite_launches_before_running_it(p
 
     assert any(_holds_run(shlex.split(step.command), expected) for step in steps.setup), (
         f"no setup step of the {steps.suite.label} runs {shlex.join(expected)!r} before its suite step "
-        f"{steps.suite.command!r}. Another project's `playwright install` deletes every browser in "
-        "~/.cache/ms-playwright that no still-present install registered, and the environments this project's runs "
-        "register one from are temporary; a uv.lock move of playwright needs a revision nobody has installed. "
-        "Either way every e2e test then ERRORs with \"Executable doesn't exist\". The lane may write that cache and "
-        "reach the download host, and the suite's own uv run options make the install the suite's own playwright, "
-        "in its one environment; docs/orchestrator-config.md §8 says why"
+        f"{steps.suite.command!r}, so once the browser its playwright needs is missing, every e2e test ERRORs with "
+        "\"Executable doesn't exist\"; docs/orchestrator-config.md §8 says why the job installs it"
     )
 
 
@@ -68,11 +77,10 @@ def test_the_e2e_jobs_browser_install_deletes_no_browser_of_another_install(proj
     unguarded = [
         install.command
         for install in installs
-        if _SKIP_BROWSER_GC not in _words_before_the_installer(shlex.split(install.command))
+        if _SKIP_BROWSER_GC not in _installer_environment(shlex.split(install.command))
     ]
     assert not unguarded, (
-        f"the browser installs {unguarded} of the lane job {_E2E_JOB!r} do not set {_SKIP_BROWSER_GC} before the "
-        "installer starts, so each deletes every browser in ~/.cache/ms-playwright that no still-present install "
-        "registered, other projects' included: the very failure this job's install exists to survive; set it as a "
-        "shell assignment or through `env` ahead of the install's `uv run`"
+        f"the browser installs {unguarded} of the lane job {_E2E_JOB!r} do not set {_SKIP_BROWSER_GC} in the "
+        "installer's environment, so each deletes other installs' browsers; set it as a shell assignment or through "
+        "`env` at the start of the step; docs/orchestrator-config.md §8 says why"
     )
