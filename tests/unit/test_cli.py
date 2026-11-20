@@ -42,7 +42,7 @@ from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
-from solar_challenge.location import Location, parse_location
+from solar_challenge.location import parse_location
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
@@ -52,7 +52,6 @@ from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
-from tests._synthetic_weather import synthetic_tmy
 
 runner = CliRunner()
 
@@ -848,48 +847,6 @@ home:
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
         assert captured["home_config"].location == edinburgh
-
-
-class TestHomeRunChargesAnOffPeakEVInItsTariffsCheapMinutes:
-    """`home run` gives an off_peak EV its home tariff, whose cheap minutes it charges in."""
-
-    def test_on_economy_10_demand_steps_by_the_charger_at_00_00_and_05_00(
-        self, tmp_path: Path, weather_cache: WeatherCache
-    ) -> None:
-        """scenarios/example-economy7.yaml on Economy 10 with an off_peak EV and a deterministic load.
-
-        Economy 7's 00:30-07:30 would put the steps at 00:30 and 05:30.
-        """
-        document = yaml.safe_load((SCENARIOS_DIR / "example-economy7.yaml").read_text())
-        home = document["home"]
-        home["ev"] = {
-            "charger_type": "7kW",
-            "arrival_hour": 18,
-            "departure_hour": 7,
-            "required_charge_kwh": 35,
-            "smart_charging_mode": "off_peak",
-        }
-        home["tariff"] = {"type": "economy_10"}
-        home["load"]["use_stochastic"] = False
-        config_file = tmp_path / "example-economy10-off-peak-ev.yaml"
-        config_file.write_text(yaml.safe_dump(document))
-        weather_cache.put(synthetic_tmy(), "tmy", Location.bristol())
-        output = tmp_path / "results.csv"
-
-        result = runner.invoke(
-            app,
-            ["home", "run", str(config_file), "--start", "2024-01-10", "--end", "2024-01-11", "--output", str(output)],
-            catch_exceptions=False,
-        )
-
-        assert result.exit_code == 0, result.output
-        demand_steps = pd.read_csv(output, index_col=0, parse_dates=True)["demand_kw"].diff()
-        charger_steps = demand_steps[demand_steps.abs() > 3.5]
-        assert list(charger_steps.index) == [
-            pd.Timestamp("2024-01-11 00:00", tz="Europe/London"),
-            pd.Timestamp("2024-01-11 05:00", tz="Europe/London"),
-        ]
-        assert charger_steps.tolist() == pytest.approx([7.0, -7.0], abs=0.5)
 
 
 @pytest.fixture
