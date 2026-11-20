@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("flask")
 from flask import Flask
 
+from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
@@ -909,60 +910,23 @@ def _assert_a_job_raising_is_reported_failed_with(
 
 
 class TestJobManagerFailureNotes:
-    """A failed job's message is its error's text, then each of the error's notes on a line of its own."""
+    """A failed job's message is error_text_with_notes's reading of its error, whether the runner's failure handling caught the error or it escaped the runner; tests/unit/test_error_text.py pins that reading."""
 
     @pytest.mark.parametrize(
-        ("error", "expected"),
+        "error_type",
         [
-            pytest.param(
-                lambda: _with_notes(RuntimeError("the simulation failed"), "first note", "second note"),
-                "the simulation failed\nfirst note\nsecond note",
-                id="an exception",
-            ),
-            pytest.param(
-                lambda: _with_notes(SystemExit("the simulation exited"), "first note", "second note"),
-                "the simulation exited\nfirst note\nsecond note",
-                id="an error that is not an exception",
-            ),
+            pytest.param(RuntimeError, id="an exception, which the runner's failure handling catches"),
+            pytest.param(SystemExit, id="an error that is not an exception, which escapes the runner"),
         ],
     )
-    def test_a_job_whose_error_carries_notes_is_reported_failed_with_its_message_then_each_note_on_a_line_of_its_own(
-        self, storage: RunStorage, error: Callable[[], BaseException], expected: str
+    def test_a_failed_jobs_message_is_its_error_as_error_text_with_notes_reads_it(
+        self, storage: RunStorage, error_type: type[BaseException]
     ) -> None:
-        _assert_a_job_raising_is_reported_failed_with(storage, error, expected)
+        """__notes__ is assigned a str, which a loop over the notes would read one character per line."""
+        error = error_type("the simulation failed")
+        setattr(error, "__notes__", "abc")
 
-    def test_a_note_whose_text_cannot_be_read_is_named_unreadable_in_its_place_and_the_other_notes_still_read(
-        self, storage: RunStorage
-    ) -> None:
-        _assert_a_job_raising_is_reported_failed_with(
-            storage,
-            lambda: _with_notes(RuntimeError("the simulation failed"), _AnUnreadableNote("hidden"), "a readable note"),
-            "the simulation failed\nA note whose text could not be read\na readable note",
-        )
-
-    @pytest.mark.parametrize(
-        "error_type", [RuntimeError, SystemExit], ids=["an exception", "an error that is not an exception"]
-    )
-    @pytest.mark.parametrize(
-        ("notes", "shown"),
-        [
-            pytest.param("a note", "'a note'", id="a str"),
-            pytest.param(5, "5", id="an int"),
-            pytest.param(
-                _AnObjectWhoseReprCannotBeRead(),
-                "A __notes__ whose text could not be read",
-                id="an object whose repr cannot be read",
-            ),
-        ],
-    )
-    def test_a_job_whose_error_has_notes_that_are_not_a_sequence_of_notes_is_reported_failed_with_them_as_one_line_as_the_traceback_shows_them(
-        self, storage: RunStorage, error_type: type[BaseException], notes: object, shown: str
-    ) -> None:
-        _assert_a_job_raising_is_reported_failed_with(
-            storage,
-            lambda: _with_notes_assigned(error_type("the simulation failed"), notes),
-            f"the simulation failed\n{shown}",
-        )
+        _assert_a_job_raising_is_reported_failed_with(storage, lambda: error, error_text_with_notes(error))
 
 
 class TestJobManagerCancelRun:
