@@ -196,7 +196,7 @@ def get_job_progress(job_id: str) -> Response:
     job_manager = get_job_manager()
     return event_stream(
         job_progress_frames(
-            job_manager.job_snapshot,
+            job_manager,
             job_id,
             last_event_id=parse_last_event_id(request.headers.get("Last-Event-ID")),
             policy=get_job_stream_policy(),
