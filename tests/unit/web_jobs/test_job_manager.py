@@ -162,7 +162,74 @@ class TestJobManagerSnapshots:
         assert manager.job_snapshot("nonexistent-job-id") is None
 
 
-_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+def _waited_for_snapshot(
+    manager: JobManager, job_id: str, *, newer_than: int, timeout: float
+) -> tuple[JobSnapshot | None, float]:
+    """Return what manager.wait_for_job_snapshot returned for job *job_id*, and the seconds it took to return."""
+    started = time.monotonic()
+    snapshot = manager.wait_for_job_snapshot(job_id, newer_than=newer_than, timeout=timeout)
+    return snapshot, time.monotonic() - started
+
+
+class TestJobManagerSnapshotWaits:
+    """Tests for wait_for_job_snapshot, which returns a job's snapshot once the job has moved past a version, waiting at most a timeout.
+
+    A home job held in its simulation is at version 3. A wait given 60 s that returns in under 30 s did not wait its
+    timeout out.
+    """
+
+    def test_a_waiter_is_woken_with_the_jobs_newer_snapshot_as_soon_as_the_job_moves(
+        self, blocking_simulation: BlockingSimulation, save_gate: SaveGate, storage: RunStorage
+    ) -> None:
+        gated_storage = RunStorageWithGatedHomeSaves(storage.database, storage.data_dir, save_gate)
+        manager = JobManager(gated_storage, max_workers=1, simulate_home=blocking_simulation)
+        held = _submit_home_job(manager)
+        blocking_simulation.wait_until_started()
+        release = threading.Timer(0.2, blocking_simulation.release)
+        release.start()
+        try:
+            woken, waited = _waited_for_snapshot(manager, held, newer_than=3, timeout=60.0)
+        finally:
+            release.cancel()
+
+        assert woken is not None and woken.version == 4, "the release moves the job on to Saving, where the gate holds it"
+        assert woken == manager.job_snapshot(held)
+        assert waited < 30.0
+
+    def test_a_waiter_whose_job_does_not_move_gets_the_same_snapshot_once_its_timeout_has_passed(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        held = _submit_home_job(manager)
+        blocking_simulation.wait_until_started()
+
+        unmoved, waited = _waited_for_snapshot(manager, held, newer_than=3, timeout=0.05)
+
+        assert unmoved == manager.job_snapshot(held) == JobSnapshot(version=3, state=manager.job_state(held))
+        assert waited >= 0.05
+
+    def test_a_wait_for_a_version_the_job_has_already_passed_returns_its_snapshot_at_once(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+    ) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation)
+        held = _submit_home_job(manager)
+        blocking_simulation.wait_until_started()
+
+        current, waited = _waited_for_snapshot(manager, held, newer_than=2, timeout=60.0)
+
+        assert current == manager.job_snapshot(held)
+        assert waited < 30.0
+
+    def test_a_wait_on_a_job_the_manager_does_not_track_returns_none_at_once(self, storage: RunStorage) -> None:
+        manager = JobManager(storage, max_workers=1, simulate_home=RecordingSimulation())
+
+        untracked, waited = _waited_for_snapshot(manager, "nonexistent-job-id", newer_than=0, timeout=60.0)
+
+        assert untracked is None
+        assert waited < 30.0
+
+
+_A_HOME =HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
 _JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
 _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
