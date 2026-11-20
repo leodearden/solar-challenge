@@ -34,6 +34,7 @@ from tests._network_guard import send_child_processes_to_a_dead_proxy
 from tests._orchestrator_config import (
     git_config,
     lane_command,
+    lane_job_steps,
     lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
@@ -225,8 +226,8 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
-    """The job's command passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
-    command = lane_command(project_root, job.name).command
+    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
+    command = lane_job_steps(project_root, job.name).suite.command
     argv = shlex.split(command)
     assert "pytest" in argv, f"the {job.name!r} lane job {command!r} runs no pytest"
     pytest_arguments = argv[argv.index("pytest") + 1 :]

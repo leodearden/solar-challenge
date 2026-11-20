@@ -177,9 +177,11 @@ def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_comma
 def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path: Path) -> None:
     """The command exits 0, yet reading its node ids fails, naming it and showing its output; it never reads as an empty suite.
 
-    It prints its phrase in two parts, so only its output, not its text, holds the phrase whole.
+    Its one word pytest is an argument it prints, which makes it the job's suite
+    step. It prints its phrase in two parts, so only its output, not its text,
+    holds the phrase whole.
     """
-    command = shlex.join([sys.executable, "-c", "print('this command never ran', 'pytest')"])
+    command = shlex.join([sys.executable, "-c", "import sys; print('this command never ran', sys.argv[1])", "pytest"])
     project_root = _project_with_lane_job(tmp_path, command)
 
     collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)

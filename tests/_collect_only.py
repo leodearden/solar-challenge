@@ -15,9 +15,9 @@ Usage::
 
     from tests._collect_only import collect, requires_uv, run_collect_only
     from tests._command_runner import ShellCommand, describe_outcome
-    from tests._orchestrator_config import lane_command, verify_command
+    from tests._orchestrator_config import lane_job_steps, verify_command
 
-    collection = collect(lane_command(project_root, "e2e"), env=environment)
+    collection = collect(lane_job_steps(project_root, "e2e").suite, env=environment)
     assert collection.returncode == pytest.ExitCode.OK, collection.describe()
     node_ids = collection.node_ids()
     outside = collection.node_ids_outside("tests/e2e")

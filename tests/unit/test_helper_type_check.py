@@ -25,7 +25,7 @@ import pytest
 
 from tests._collect_only import requires_uv
 from tests._command_runner import ShellCommand, describe_outcome, run_command
-from tests._orchestrator_config import lane_command
+from tests._orchestrator_config import lane_job_steps
 from tests._uv_env import SharedUvEnvironments, uv_run_options
 
 pytest.importorskip(
@@ -111,11 +111,11 @@ def _in_the_e2e_suite(module: str) -> bool:
 
 
 def _e2e_job_interpreter(project_root: Path, environments: SharedUvEnvironments) -> str:
-    """The Python of the environment the offline lane's e2e job runs its suite in, synced as the job's command syncs it.
+    """The Python of the environment the offline lane's e2e job runs its suite in, synced as the job's suite step syncs it.
 
-    environments shares that environment with every probe that runs the job's command, so a session syncs it once.
+    environments shares that environment with every probe that runs the job's suite step, so a session syncs it once.
     """
-    command = lane_command(project_root, "e2e").command
+    command = lane_job_steps(project_root, "e2e").suite.command
     print_interpreter = shlex.join(
         ["uv", "run", *uv_run_options(command), "python", "-c", "import sys; print(sys.executable)"]
     )
