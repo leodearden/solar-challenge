@@ -13,6 +13,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 from tests._server_drawn_badges import server_drawn_classes
+from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._run_badges import classes_of_each
 
 
@@ -38,7 +39,6 @@ def test_history_page_loads(page: Page, live_server: str) -> None:
 def test_history_table_exists(page: Page, live_server: str) -> None:
     """With runs to list, the runs table shows the expected column headers."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     # The table should be present on the page
     table = page.locator("table")
@@ -94,7 +94,6 @@ def test_history_loading_state(page: Page, live_server: str) -> None:
 def test_filter_controls_exist(page: Page, live_server: str) -> None:
     """Verify Type dropdown, Search input, and From/To date inputs exist."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     # Type filter dropdown
     type_select = page.locator("#filter-type")
@@ -119,7 +118,6 @@ def test_filter_controls_exist(page: Page, live_server: str) -> None:
 def test_type_filter_dropdown(page: Page, live_server: str) -> None:
     """The Type filter has options: All, Home, Fleet."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     type_select = page.locator("#filter-type")
 
@@ -131,10 +129,7 @@ def test_type_filter_dropdown(page: Page, live_server: str) -> None:
     ]
 
     options = type_select.locator("option")
-    assert options.count() == len(expected_options), (
-        f"Expected {len(expected_options)} options in Type filter, "
-        f"got {options.count()}"
-    )
+    expect(options).to_have_count(len(expected_options))
 
     for value, label in expected_options:
         option = type_select.locator(f'option[value="{value}"]')
@@ -155,7 +150,6 @@ def test_type_filter_dropdown(page: Page, live_server: str) -> None:
 def test_sort_columns(page: Page, live_server: str) -> None:
     """Click the 'Name' column header and verify a sort indicator appears."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     # Click the "Name" column header (it has @click="toggleSort('name')")
     name_header = page.locator('th', has_text="Name").first
@@ -179,8 +173,7 @@ def test_compare_button_hidden_by_default(page: Page, live_server: str) -> None:
     The button container uses ``x-show="selectedIds.length >= 2"``
     with ``x-cloak``, so it should not be visible initially.
     """
-    page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/history/runs")
 
     # The compare button link has text "Compare Selected"
     compare_btn = page.locator("a", has_text="Compare Selected")
