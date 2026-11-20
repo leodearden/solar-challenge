@@ -23,6 +23,8 @@ class RunHeadline:
 
     The run lists show its generation and self-consumption ratio, and the comparison every
     figure. pv_stored_share is None for a fleet run, as FleetSummary carries no battery totals.
+    Each figure but a None pv_stored_share is held as the float as_finite_real reads it, whatever
+    kind of number it was given.
 
     Raises:
         ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses a figure;
@@ -45,7 +47,7 @@ class RunHeadline:
             value = getattr(self, figure.name)
             if value is None and figure.metadata.get(_MAY_BE_NONE, False):
                 continue
-            _read_figure(figure.name, value)
+            object.__setattr__(self, figure.name, _read_figure(figure.name, value))
 
 
 def _read_figure(name: str, value: object) -> float:
