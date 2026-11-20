@@ -39,7 +39,6 @@ def test_search_filter_updates_table(
     """Type run name -> row visible; type nonsense -> 'No simulation runs found'."""
     _, run_name = seeded_home_run
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     search_input = page.locator("#filter-search")
     expect(search_input).to_be_visible()
@@ -178,15 +177,11 @@ def test_pagination_controls_exist(
 ) -> None:
     """'Prev' and 'Next' buttons attached in DOM."""
     page.goto(live_server + "/history/runs")
-    page.wait_for_load_state("networkidle")
 
     prev_btn = page.locator("button", has_text="Prev")
     next_btn = page.locator("button", has_text="Next")
 
     # Pagination buttons should exist in the DOM
-    assert prev_btn.count() > 0, "Expected 'Prev' pagination button in DOM"
-    assert next_btn.count() > 0, "Expected 'Next' pagination button in DOM"
-
     expect(prev_btn.first).to_be_attached()
     expect(next_btn.first).to_be_attached()
 
