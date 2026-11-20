@@ -18,11 +18,6 @@ from playwright.sync_api import Locator, Page, expect
 from tests.e2e._chart_tabs import open_chart_tab
 
 
-def _expect_dark_class_on_html(page: Page, page_name: str) -> None:
-    """Wait until the <html> element has the 'dark' class."""
-    expect(page.locator("html"), f"Expected <html class='dark'> on {page_name}").to_contain_class("dark")
-
-
 def _plotly_background_colors(page: Page) -> list[str]:
     """Collect each Plotly chart's painted paper color and every .bg rect fill."""
     colors: list[str] = page.evaluate("""() => {
@@ -60,6 +55,11 @@ def _open_in_theme(page: Page, url: str, theme: str) -> None:
     """Open url in theme: base.html's inline script reads localStorage before first paint."""
     page.add_init_script(f"localStorage.setItem('theme', '{theme}')")
     page.goto(url)
+
+
+def _expect_dark_class_on_html(page: Page) -> None:
+    """Wait until the <html> element of page has the 'dark' class."""
+    expect(page.locator("html"), f"Expected <html class='dark'> on {page.url}").to_contain_class("dark")
 
 
 def _toggle_theme(page: Page) -> None:
@@ -114,7 +114,7 @@ def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
 def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
     """/simulate/home opened with localStorage theme=dark has <html class='dark'>."""
     _open_in_theme(page, live_server + "/simulate/home", "dark")
-    _expect_dark_class_on_html(page, "/simulate/home")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /simulate/fleet ------------------------------------------
@@ -123,7 +123,7 @@ def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
 def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
     """Same check on /simulate/fleet."""
     _open_in_theme(page, live_server + "/simulate/fleet", "dark")
-    _expect_dark_class_on_html(page, "/simulate/fleet")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /scenarios/builder ----------------------------------------
@@ -132,7 +132,7 @@ def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
 def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
     """Same check on /scenarios/builder."""
     _open_in_theme(page, live_server + "/scenarios/builder", "dark")
-    _expect_dark_class_on_html(page, "/scenarios/builder")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /history/runs --------------------------------------------
@@ -141,7 +141,7 @@ def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
 def test_dark_mode_history_page(page: Page, live_server: str) -> None:
     """Same check on /history/runs."""
     _open_in_theme(page, live_server + "/history/runs", "dark")
-    _expect_dark_class_on_html(page, "/history/runs")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on results page charts --------------------------------------
@@ -158,7 +158,7 @@ def test_dark_mode_results_page_charts(
     """
     run_id, _ = seeded_home_run
     _open_in_theme(page, live_server + f"/results/home/{run_id}", "dark")
-    _expect_dark_class_on_html(page, f"/results/home/{run_id}")
+    _expect_dark_class_on_html(page)
 
     opening_panel = _chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first
     _expect_each_chart_titled_in(opening_panel, "dark")
