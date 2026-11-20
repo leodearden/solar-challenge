@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Final, Literal, Optional
 
-from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.dispatch import TARGET_SOC_FRACTION, DispatchStrategyConfig, GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
@@ -193,12 +193,15 @@ class SocEnvelope:
             )
 
     def target_kwh(self, fraction: float) -> float:
-        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh.
+        """The SOC at *fraction* of the effective capacity, capped at max_soc_kwh and not raised to min_soc_kwh.
 
         Raises:
-            ConfigurationError: If *fraction* is not a finite number from 0 to 1, naming it and the value.
+            ConfigurationError: If *fraction* is not a finite number greater than 0 and at most 1,
+                the grid-charge targets TARGET_SOC_FRACTION admits, naming it and the value.
         """
-        return min(as_finite_float(fraction, "fraction", UNIT_INTERVAL) * self.effective_capacity_kwh, self.max_soc_kwh)
+        return min(
+            as_finite_float(fraction, "fraction", TARGET_SOC_FRACTION) * self.effective_capacity_kwh, self.max_soc_kwh
+        )
 
 
 def _derated_soc_envelope(
