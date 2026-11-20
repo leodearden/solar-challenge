@@ -2217,7 +2217,7 @@ def _generated_home(
         location=location,
         name=f"Home {home_number}",
         tariff_config=fleet_tariff,
-        dispatch_strategy=config.dispatch_strategy or "greedy",
+        **_dispatch_strategy_argument(config.dispatch_strategy),
     )
 
 
