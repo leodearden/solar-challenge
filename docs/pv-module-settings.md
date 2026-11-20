@@ -223,9 +223,9 @@ this branch at 695d386 and reproduce exactly.
   changes the chain's aoi, spectral or temperature model, which changes which keys are
   read (§1, the module-value rule). A parameter a pvlib release adds to
   `calcparams_cec`, `calcparams_desoto`, `calcparams_pvsyst`, `pvwatts_dc` or the
-  physical IAM fails `tests/unit/test_pv.py`'s
-  `test_each_module_parameter_a_pvlib_reader_takes_by_name_is_refused_as_text`, which
-  reads their signatures; nothing flags a key `sapm` or the effective irradiance
+  physical IAM fails
+  `tests/unit/test_pv.py::TestAModuleParameterAModelReadsIsAFiniteNumber::test_each_module_parameter_a_pvlib_reader_takes_by_name_is_refused_as_text`,
+  which reads their signatures; nothing flags a key `sapm` or the effective irradiance
   starts reading.
 - A typed module specification replaces the trio of `module_efficiency`,
   `temperature_coefficient` and `custom_module_params`.
