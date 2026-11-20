@@ -198,17 +198,22 @@ def test_download_yaml_button(page: Page, live_server: str) -> None:
 # ── Form controls: each caption names its control ────────────────────
 
 
-_ACCORDION_IS_AT_REST = """({ opened, closed }) => {
+_ACCORDION_STATE = """({ opened, closed }) => {
     const panel = (id) => document.getElementById(id);
-    const isDisplayed = (id) => panel(id).checkVisibility();
     const { scrollHeight, clientHeight } = panel(opened);
-    return isDisplayed(opened) && scrollHeight <= clientHeight && !closed.some(isDisplayed);
+    return { displayed: [opened, ...closed].filter((id) => panel(id).checkVisibility()), scrollHeight, clientHeight };
 }"""
-"""Whether the accordion is at rest with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the open panel is displayed and tall enough to show all of its content, as a panel is once it has finished opening, and no closed panel is displayed, as a panel is once it has finished closing."""
+"""The state of the accordion with the panel whose id is *opened* open and the panels whose ids are *closed* closed: the ids of those panels that are displayed (checkVisibility()), *opened* first and then *closed* in its order, and the opened panel's scrollHeight and clientHeight."""
+
+_ACCORDION_IS_AT_REST = f"""(accordion) => {{
+    const {{ displayed, scrollHeight, clientHeight }} = ({_ACCORDION_STATE})(accordion);
+    return displayed.length === 1 && displayed[0] === accordion.opened && scrollHeight <= clientHeight;
+}}"""
+"""Whether the accordion is at rest, judged on the state _ACCORDION_STATE reads: the opened panel alone is displayed, no closed panel being displayed, as a panel is once it has finished closing, and the opened panel is tall enough to show all of its content, as a panel is once it has finished opening."""
 
 
 def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]:
-    """The argument of _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
+    """The argument of _ACCORDION_STATE and _ACCORDION_IS_AT_REST for the accordion with *section* open: the id of *section*'s panel and the ids of every other section's."""
     return {
         "opened": _panel_id_of(page, section),
         "closed": [_panel_id_of(page, other) for other in _ACCORDION_SECTIONS if other != section],
@@ -221,19 +226,20 @@ def _open_section(page: Page, section: str) -> None:
     *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
     """
     header = page.get_by_role("button", name=section, exact=True, expanded=False)
-    expect(header, f"the {section} section is open, so a click on its header would close it").to_be_visible()
+    expect(
+        header,
+        f"the {section} header should be exposed as collapsed before _open_section clicks it "
+        "(Alpine binds its aria-expanded, and a click on an open section's header closes it)",
+    ).to_be_visible()
     accordion = _accordion_with_open(page, section)
     header.click()
     try:
         page.wait_for_function(_ACCORDION_IS_AT_REST, arg=accordion)
     except PlaywrightTimeoutError as timeout:
-        displayed = [
-            other for other in _ACCORDION_SECTIONS if _panel_of(page, other).evaluate("panel => panel.checkVisibility()")
-        ]
-        scroll_height, client_height = _panel_of(page, section).evaluate("panel => [panel.scrollHeight, panel.clientHeight]")
+        state = page.evaluate(_ACCORDION_STATE, accordion)
         raise AssertionError(
-            f"the accordion did not come to rest after opening {section}: the panels displayed are {displayed}, "
-            f"and the {section} panel's scrollHeight is {scroll_height} against its clientHeight {client_height}"
+            f"the accordion did not come to rest after opening {section}: "
+            f"the state _ACCORDION_STATE reads, which _ACCORDION_IS_AT_REST judges, is {state}"
         ) from timeout
 
 
@@ -246,6 +252,19 @@ def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_s
     at_rest_with_location_open = page.evaluate(_ACCORDION_IS_AT_REST, _accordion_with_open(page, "Location"))
 
     assert (at_rest_with_period_open, at_rest_with_location_open) == (True, False)
+
+
+def test_open_section_fails_reporting_the_accordion_state_its_wait_judged(page: Page, live_server: str) -> None:
+    """When the accordion does not come to rest, here because General's panel is kept displayed after Period opens, _open_section fails reporting the state _ACCORDION_STATE reads, the state _ACCORDION_IS_AT_REST judged."""
+    page.goto(live_server + "/scenarios/builder")
+    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ display: block !important; }}")
+    page.set_default_timeout(5000)
+
+    with pytest.raises(AssertionError) as failure:
+        _open_section(page, "Period")
+
+    state = page.evaluate(_ACCORDION_STATE, _accordion_with_open(page, "Period"))
+    assert str(state) in str(failure.value)
 
 
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
