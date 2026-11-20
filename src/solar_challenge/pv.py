@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """PV system configuration and modelling."""
 
+import contextlib
 import functools
 import math
 import warnings
@@ -733,6 +734,19 @@ def _adjust_bracket(template: Mapping[str, float], coefficient: float) -> tuple[
     return 100 - half_width, 100 + half_width
 
 
+@contextlib.contextmanager
+def _quiet_single_diode_solver() -> Iterator[None]:
+    """Ignore the RuntimeWarning "invalid value encountered" from scipy's _chandrupatla, which pvlib's single-diode solution runs to find the maximum-power point: on a curve with no power, such as a dark hour's or that of a module with none at STC, it divides 0 by 0, yet still finds that curve's maximum power."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="invalid value encountered",
+            category=RuntimeWarning,
+            module=r"scipy\.optimize\._chandrupatla",
+        )
+        yield
+
+
 def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     """The module's temperature coefficient of maximum power, per K, as the model chain models it.
 
@@ -747,7 +761,8 @@ def _modelled_gamma(module_params: Mapping[str, float]) -> float:
     diode = PVSystem(module_parameters=dict(module_params)).calcparams_cec(
         np.full(3, 1000.0), cell_temperatures_c
     )
-    p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
+    with _quiet_single_diode_solver():
+        p_cold, p_stc, p_hot = pvlib.pvsystem.singlediode(*diode)["p_mp"]
     if not p_stc > 0:
         return math.nan
     return float((p_hot - p_cold) / (2 * _GAMMA_HALF_STEP_K * p_stc))
@@ -1148,15 +1163,7 @@ def simulate_pv_output(
     model_chain = create_model_chain(config, location)
 
     # Run the simulation
-    # Suppress scipy warnings from pvlib's single-diode model solver
-    # (edge cases at night/low irradiance trigger harmless divide-by-zero warnings)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="invalid value encountered",
-            category=RuntimeWarning,
-            module=r"scipy\.optimize\._chandrupatla",
-        )
+    with _quiet_single_diode_solver():
         model_chain.run_model(weather_data)
 
     # Get AC power and convert from W to kW

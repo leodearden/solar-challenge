@@ -358,8 +358,9 @@ _COEFFICIENTS_NO_ADJUST_REACHES = [
 ]
 
 
+@pytest.mark.filterwarnings("error::RuntimeWarning")
 class TestACoefficientNoAdjustReachesIsRefused:
-    """Adjust scales only alpha_sc's temperature term, so a CEC template whose alpha_sc is 0, or whose modelled coefficient at the bracket's ends does not straddle the set one, cannot take it; PVConfig refuses it when built and use refuses it again."""
+    """Adjust scales only alpha_sc's temperature term, so a CEC template whose alpha_sc is 0, or whose modelled coefficient at the bracket's ends does not straddle the set one, cannot take it; PVConfig refuses it when built and use refuses it again, with that refusal even where RuntimeWarnings are errors."""
 
     @pytest.mark.parametrize(
         ("unreachable", "coefficient", "reason"), _COEFFICIENTS_NO_ADJUST_REACHES

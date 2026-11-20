@@ -264,9 +264,6 @@ this branch at 695d386 and reproduce exactly.
     gives 0.00485 kWh, and `R_sh_ref` 1e-300 or −1 0.0 kWh.
   - The rule refuses none of CECMod's 21,535 rows nor SandiaMod's 523: CECMod's least
     `I_L_ref` is 0.842615, and neither library has `temp_ref` or `irrad_ref`.
-  - Under a set coefficient, the reach check's single-diode solve for an `I_L_ref` of
-    1e-300 emits scipy's `RuntimeWarning` "invalid value encountered in divide" before
-    the refusal.
 
 ## 4. When to Revisit
 
