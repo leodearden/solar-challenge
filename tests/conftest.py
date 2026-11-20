@@ -121,6 +121,25 @@ def pytester_sessions_read_the_project_ini(pytester: pytest.Pytester, project_ro
     pytester.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
 
 
+@pytest.fixture
+def pytester_laid_out_as_the_e2e_suite(
+    pytester_under_root_conftest: pytest.Pytester,
+    pytester_sessions_read_the_project_ini: None,
+    e2e_conftest: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> pytest.Pytester:
+    """pytester_under_root_conftest, laid out as the offline lane's e2e job runs tests/e2e: its sessions read the project ini, and e2e/ holds a copy of the e2e conftest.
+
+    A session collects e2e/ only if it names it, as the lane's job names tests/e2e, since this conftest's collect_ignore keeps e2e/ out of every other collection.
+    Like the lane's, its sessions start with no weather cache directory named, not with the variable of the window that runs the test.
+    """
+    from solar_challenge.weather import CACHE_DIR_VARIABLE
+
+    monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
+    pytester_under_root_conftest.makepyfile(**{"e2e/conftest": e2e_conftest.read_text(encoding="utf-8")})
+    return pytester_under_root_conftest
+
+
 @dataclass(frozen=True)
 class _OfflineWindow:
     """What a test not marked slow runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
