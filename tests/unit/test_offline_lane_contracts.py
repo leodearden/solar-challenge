@@ -225,12 +225,14 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
-    """The job's command passes `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
+    """The job's command passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
     command = lane_command(project_root, job.name).command
     argv = shlex.split(command)
+    assert "pytest" in argv, f"the {job.name!r} lane job {command!r} runs no pytest"
+    pytest_arguments = argv[argv.index("pytest") + 1 :]
 
-    assert ("-n", "0") in zip(argv, argv[1:]), (
-        f"the {job.name!r} lane job {command!r} does not pass `-n 0`, so pyproject's addopts run its suite on one "
+    assert ("-n", "0") in zip(pytest_arguments, pytest_arguments[1:]), (
+        f"the {job.name!r} lane job {command!r} does not pass pytest `-n 0`, so pyproject's addopts run its suite on one "
         "pytest-xdist worker per core: each worker repeats the module-scoped work its suite does once, which asks a "
         "live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, each a "
         "verify over every core; and the e2e tests, which share one live server in session order, are split across "
