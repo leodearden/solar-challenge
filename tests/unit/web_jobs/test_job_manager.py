@@ -229,7 +229,7 @@ class TestJobManagerSnapshotWaits:
         assert waited < 30.0
 
 
-_A_HOME =HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
 _JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
 _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 
