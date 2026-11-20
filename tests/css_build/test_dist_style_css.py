@@ -30,7 +30,7 @@ ci installs Tailwind from registry.npmjs.org.
 
 Manual run::
 
-    uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+    uv run --locked --extra dev pytest -n 0 tests/css_build -p no:cacheprovider
 """
 
 import difflib

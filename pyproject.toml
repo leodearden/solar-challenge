@@ -47,6 +47,7 @@ dev = [
     "pytest-rerunfailures>=16.7",
     "ruff>=0.16.10",
     "requests>=2.34.2",  # used directly by tests/unit/test_network_guard_helper.py
+    "pytest-xdist>=3.8.0",
 ]
 stochastic = []  # backward-compat alias; richardsonpy is now a core dependency
 web = [
@@ -74,7 +75,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -n auto --dist loadgroup"
 # Every pytest deprecation is an error; tests/unit/test_pytest_deprecations_are_errors.py says why.
 filterwarnings = ["error::pytest.PytestDeprecationWarning"]
 # An unregistered mark fails collection; tests/unit/test_unregistered_marks_are_refused.py says why.
@@ -82,6 +83,7 @@ strict_markers = true
 markers = [
     "slow: tests that make real external API calls (e.g. PVGIS)",
     "build: tests that invoke the build toolchain (uv build --wheel); requires uv and cached build-backend deps",
+    "xdist_group(name): asks --dist loadgroup to run the tests sharing a name on one pytest-xdist worker; tests/unit/test_parallel_suite.py says whether it does",
 ]
 
 [tool.mypy]

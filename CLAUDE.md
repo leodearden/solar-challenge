@@ -12,14 +12,16 @@ Solar Challenge is a Python energy flow simulator for domestic PV and battery sy
 # Install (editable, with dev dependencies)
 pip install -e ".[dev]"
 
-# Run all tests
+# Run all tests: pyproject's addopts run every pytest on pytest-xdist workers,
+# one per core
 pytest
 
-# Run a single test file
-pytest tests/unit/test_battery.py -v
+# Run a single test file; for a single file or test pass `-n 0`, which runs it
+# in pytest's own process instead of starting a worker per core
+pytest tests/unit/test_battery.py -v -n 0
 
 # Run a specific test
-pytest tests/unit/test_battery.py::TestBatteryConfigDefaults::test_default_5kwh -v
+pytest tests/unit/test_battery.py::TestBatteryConfigDefaults::test_default_5kwh -v -n 0
 
 # Type checking
 mypy src/solar_challenge
@@ -33,16 +35,16 @@ pytest --cov=src/solar_challenge
 
 # Interpreter matrix: the orchestrator verify on every admitted Python minor
 # except the .python-version pin (one case per minor, ~6-10 min each)
-uv run --locked --extra dev pytest tests/interpreter_matrix
+uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 
 # Browser e2e suite: what the offline lane's e2e job runs after every merge
 # (~3.5 min); the per-task verify never runs it
-uv run --locked --extra dev --extra web --extra e2e pytest tests/e2e -m 'not slow' -p no:cacheprovider
+uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
 
 # PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
 # they check PVGIS's live response, so they need network access, and the per-task
 # verify never runs them
-uv run --locked --extra dev pytest tests/integration/test_pvgis.py -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/integration/test_pvgis.py -p no:cacheprovider
 
 # Tailwind rebuild: after editing tailwind.config.js, static/src/theme-tokens.json's
 # tailwind section, static/src/input.css, a template or a script, rebuild
@@ -60,12 +62,12 @@ cd src/solar_challenge/web && npm ci && npm run build:favicon
 # merge; it rebuilds the stylesheet and the favicon with npm and compares the
 # Tailwind license texts beside them with the locked tailwindcss package's, so it
 # needs npm and network access, and the per-task verify never runs it
-uv run --locked --extra dev pytest tests/css_build -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/css_build -p no:cacheprovider
 
 # Newest-releases check: what the offline lane's newest-releases job runs after
 # every merge (~15-20 min); it upgrades a scratch copy's uv.lock from PyPI, so it
 # needs network access, and the per-task verify never runs it
-uv run --locked --extra dev pytest tests/newest_releases -p no:cacheprovider
+uv run --locked --extra dev pytest -n 0 tests/newest_releases -p no:cacheprovider
 
 # CLI entry point
 solar-challenge --help
@@ -123,6 +125,7 @@ Typer-based; subcommand groups are registered in `cli/main.py` (run `solar-chall
 - **Validation in `__post_init__`** — Domain constraints enforced at construction time
 - **mypy strict mode** enabled; a third-party package that ships no types mypy can read is listed in `pyproject.toml`'s `ignore_missing_imports` override, never suppressed per import (`docs/type-check.md` says why scipy is there rather than scipy-stubs)
 - **pytest deprecations are errors** — `filterwarnings` in `pyproject.toml` turns every `PytestDeprecationWarning` into an error in every run, so the suite keeps running on the pytest releases the `dev` extra's range admits (`tests/unit/test_pytest_deprecations_are_errors.py` says why). Fix the use the message names, e.g. parametrize over a list or tuple, not an iterator; if the use is in a plugin's code, raise that plugin's floor to a release without it. Do not filter the warning out. A pytest newer than `uv.lock`'s can flag a use the locked one passes.
+- **The suite runs in parallel** — pyproject's addopts (`-n auto --dist loadgroup`) run every pytest on pytest-xdist workers, one per core, so a test shares nothing another test writes: it writes under its own `tmp_path` and binds its servers to port 0. `@pytest.mark.xdist_group(<what it shares>)` asks for every test of that name on one worker, as `tests/integration/test_external_install.py` asks for its module-scoped wheel build, but the group is currently ignored, so no test may need one to pass (`tests/unit/test_parallel_suite.py::test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers` says why, and fails once a release honours it). The pytest sessions a test not marked slow starts run serially, since `tests/conftest.py` sets `PYTEST_XDIST_AUTO_NUM_WORKERS=0` for it, so pass `-n 1` to test a worker, as `tests/unit/test_parallel_suite.py` does; a slow test's keep a worker per core, so the lanes run the verify suite as the verify does. No process of the suite, serial or a worker, holds `COLUMNS` or `LINES`, and no child a test starts inherits them. To reproduce a red as dark-factory's serial recovery runs it, pass `-p no:xdist -o addopts='-v --tb=short'`.
 - **Floors are the lock** — every requirement in `pyproject.toml`'s `[project].dependencies` and extras declares `name>=<the version uv.lock pins>`, so a consumer that re-locks gets at least the releases this repo tests; `tests/unit/test_dependency_floors.py` fails otherwise, naming the requirement, its table, the locked version and the fix. A dependency edit declares its floor at the version `uv lock` picks, in the same change: `uv add <dist>` (with `--optional <extra>` for an extra) writes such a floor itself (probed offline with uv 0.11.6). After a re-lock moves a dependency (e.g. `uv lock --upgrade-package <dist>`), raise its floor to the new pin and run `uv lock` again, which then changes only the specifier. `[build-system].requires` is outside the rule, because `uv.lock` does not lock build requirements.
 - **Release notes are one file per task** — a change merged since the last tag that alters the frozen public surface, or what a public name returns, writes `docs/unreleased/<doc>/<task id>.md`, never a paragraph in a doc, and a task that writes one declares that file, not the doc, in `metadata.files`, so note writers never share a file lock; the rule is in `docs/domain-library-consumption.md`, *Changes merged since the last tag*, and `tests/unit/test_unreleased_notes.py` enforces the layout
 - **Reproducible simulations** via per-home seeding (seed parameter in configs)
@@ -190,7 +193,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
   the red run printed no failing node-id (it hit the job's `timeout`, or pytest
   could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev --extra web --extra e2e pytest <node-id> -p no:cacheprovider`.
+  `uv run --locked --extra dev --extra web --extra e2e pytest -n 0 <node-id> -p no:cacheprovider`.
   An e2e test that fails after Chromium failed one of its requests with
   `net::ERR_NETWORK_CHANGED` runs once more and shows as `RERUN`;
   `docs/e2e-network-change-reruns.md` says why.
@@ -216,7 +219,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
   when the red run printed no failing node-id (it hit the job's `timeout`, or
   pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. The
+  `uv run --locked --extra dev pytest -n 0 <node-id> -p no:cacheprovider`. The
   failure line a fix task quotes is the traceback's first: for a request PVGIS
   refused, pvlib's JSONDecodeError on PVGIS's HTML error page. The HTTP status
   is at the end of the traceback, in the pass's `detect.log` under the main
@@ -250,7 +253,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   `<file>` being the stale copy. The fix is the `cp` its failure message gives,
   from `node_modules/tailwindcss` after `npm ci` in `src/solar_challenge/web`,
   then a commit of the copy. Reproduce with
-  `uv run --locked --extra dev pytest <node-id> -p no:cacheprovider`. To change
+  `uv run --locked --extra dev pytest -n 0 <node-id> -p no:cacheprovider`. To change
   the Tailwind version, run `npm install tailwindcss@<version>`, which rewrites
   `package-lock.json`, then rebuild and copy each license text from the new
   `node_modules/tailwindcss`.
@@ -280,4 +283,4 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   PyPI, retry later before changing code. Reproduce with the newest-releases
   check in Commands; to iterate on one failing test, overlay its one new
   release on the locked environment:
-  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest <node-id> -p no:cacheprovider`.
+  `uv run --locked --extra dev --extra web --with '<dist>==<new version>' pytest -n 0 <node-id> -p no:cacheprovider`.

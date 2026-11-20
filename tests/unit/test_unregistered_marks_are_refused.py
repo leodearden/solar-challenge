@@ -8,8 +8,8 @@ nothing. So a new mark is registered in pyproject's marker table, or its module
 fails collection naming it.
 
 strict_markers is an ini option, not --strict-markers in addopts, so the refusal
-holds when addopts are cleared, as dark-factory's serial and confirm reruns
-clear them with `-o addopts=`.
+holds when addopts are cleared, as dark-factory's serial recovery run clears
+them with `-o addopts=`.
 """
 
 from pathlib import Path
@@ -38,3 +38,24 @@ def test_a_module_carrying_an_unregistered_mark_fails_collection_naming_the_mark
 
     result.assert_outcomes(errors=1)
     result.stdout.fnmatch_lines(["*ERROR collecting*", "*'slwo'*"])
+
+
+def test_the_xdist_group_mark_collects_with_pytest_xdist_disabled(
+    pytester_under_root_conftest: pytest.Pytester, project_root: Path
+) -> None:
+    """With xdist disabled, as dark-factory's serial recovery run disables it, the plugin that registers xdist_group is gone, so under strict_markers the mark resolves only if pyproject.toml registers it."""
+    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
+    module = pytester_under_root_conftest.makepyfile(
+        """
+        import pytest
+
+
+        @pytest.mark.xdist_group("shared")
+        def test_shares_a_worker_with_its_group():
+            pass
+        """
+    )
+
+    result = pytester_under_root_conftest.runpytest_subprocess("-p", "no:xdist", "-o", "addopts=", module)
+
+    result.assert_outcomes(passed=1)
