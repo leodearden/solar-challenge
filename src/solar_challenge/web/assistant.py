@@ -29,6 +29,7 @@ from flask import Blueprint, Response, current_app, jsonify, render_template, re
 from flask.typing import ResponseReturnValue
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
@@ -398,6 +399,15 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
             f"end spans at most {MAX_WINDOW_DAYS} days."
         ),
     },
+}
+
+# The location both trigger tools take, as parse_home_config reads a string: a key of location.LOCATION_PRESETS or coordinates.
+_TRIGGER_TOOL_LOCATION_PROPERTY: Mapping[str, str] = {
+    "type": "string",
+    "description": (
+        f"A location preset, one of {', '.join(map(repr, LOCATION_PRESETS))}, or 'lat,lon' or "
+        "'lat,lon,alt' coordinates in decimal degrees and metres."
+    ),
 }
 
 
@@ -826,10 +836,7 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "type": "integer",
                         "description": "Number of household occupants (default 3).",
                     },
-                    "location": {
-                        "type": "string",
-                        "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
-                    },
+                    "location": _TRIGGER_TOOL_LOCATION_PROPERTY,
                     **_TRIGGER_TOOL_WINDOW_PROPERTIES,
                 },
                 "required": ["pv_kw"],
@@ -860,10 +867,7 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                         "type": "number",
                         "description": "Battery capacity per home in kWh (0 = no battery).",
                     },
-                    "location": {
-                        "type": "string",
-                        "description": "Location preset, e.g. 'bristol' (default) or 'london'.",
-                    },
+                    "location": _TRIGGER_TOOL_LOCATION_PROPERTY,
                     **_TRIGGER_TOOL_WINDOW_PROPERTIES,
                 },
                 "required": ["n_homes"],

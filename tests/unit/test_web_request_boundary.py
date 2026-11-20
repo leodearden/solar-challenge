@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, and its location resolver."""
+"""Tests for solar_challenge.web.request_boundary, called directly: its request-body rules, a JSON object, only recognised keys and text that encodes as UTF-8, and its location reader."""
+
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -7,29 +10,18 @@ pytest.importorskip("flask")
 
 from flask import Flask
 
-from solar_challenge.location import Location
+from solar_challenge.config import parse_location_block
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import Location, parse_location
 from solar_challenge.web.request_boundary import (
-    LOCATION_PRESETS,
     NotAJsonObject,
+    read_location,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
     request_json_object,
     require_encodable_text,
     require_json_object,
-    resolve_location,
 )
-
-
-def _assert_names_location_the_accepted_forms_and_the_value(
-    refusal: ValueError, value: object
-) -> None:
-    """Assert that *refusal* names the location field and the forms resolve_location accepts, 'lat,lon' coordinates and every LOCATION_PRESETS key, and ends naming *value* by its repr, as sent."""
-    message = str(refusal)
-    assert message.startswith("location")
-    assert "lat,lon" in message
-    for key in LOCATION_PRESETS:
-        assert repr(key) in message
-    assert message.endswith(repr(value))
 
 
 class TestRequireJsonObject:
@@ -160,91 +152,72 @@ class TestRefuseUnencodableText:
         assert str(refusal.value) == str(expected.value)
 
 
-class TestResolveLocation:
-    """resolve_location returns the location a preset name or 'lat,lon' coordinates name, and refuses every other value naming it."""
-
-    @pytest.mark.parametrize(
-        ("spelling", "key"),
-        [
-            pytest.param(spelling, key, id=f"{key}-{form}")
-            for key in LOCATION_PRESETS
-            for form, spelling in (
-                ("as-keyed", key),
-                ("upper-case", key.upper()),
-                ("title-case-padded", f"  {key.title()} "),
-            )
-        ],
-    )
-    def test_a_preset_name_resolves_to_that_preset_in_any_case_and_with_surrounding_whitespace(
-        self, spelling: str, key: str
-    ) -> None:
-        """A LOCATION_PRESETS key resolves to its preset, whatever its case and the whitespace around it."""
-        assert resolve_location(spelling) == LOCATION_PRESETS[key]
+class TestReadLocation:
+    """read_location reads a string as location.parse_location reads it and a JSON object as config.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
 
     @pytest.mark.parametrize(
         "text",
         [
-            pytest.param("51.5,-0.1", id="bare"),
-            pytest.param(" 51.5 , -0.1 ", id="padded"),
+            pytest.param("London ", id="preset"),
+            pytest.param("51.5,-0.1", id="lat-lon"),
+            pytest.param("51.5,-0.1,11", id="lat-lon-alt"),
         ],
     )
-    def test_lat_lon_coordinates_resolve_to_a_location_at_them(self, text: str) -> None:
-        """'lat,lon' coordinates, with or without whitespace around each number, resolve to a Location at them."""
-        assert resolve_location(text) == Location(latitude=51.5, longitude=-0.1)
+    def test_a_string_is_the_location_parse_location_reads(self, text: str) -> None:
+        """A string of each form the location grammar accepts is the whole Location parse_location reads from it."""
+        assert read_location(text) == parse_location(text)
 
     @pytest.mark.parametrize(
-        "text",
+        "block",
         [
-            pytest.param("Paris", id="unknown-place"),
-            pytest.param("lodnon", id="typo"),
-            pytest.param("51.5;-0.1", id="wrong-separator"),
-            pytest.param("51.5,-0.1,11", id="lat-lon-altitude"),
-            pytest.param("51.5", id="one-number"),
-            pytest.param("north,west", id="two-words"),
-            pytest.param("", id="empty"),
+            pytest.param({"latitude": 51.5, "longitude": -0.1}, id="coordinates"),
+            pytest.param({}, id="empty"),
         ],
     )
-    def test_a_string_of_any_other_form_is_refused_naming_it_and_the_accepted_forms(
-        self, text: str
+    def test_a_json_object_is_the_location_parse_location_block_reads(
+        self, block: dict[str, Any]
     ) -> None:
-        """A string that is neither a preset name nor 'lat,lon' coordinates is refused naming it as sent and the accepted forms, never read as Bristol."""
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(text)
-        _assert_names_location_the_accepted_forms_and_the_value(refusal.value, text)
+        """A JSON object is the whole Location parse_location_block reads from it as a location: block."""
+        assert read_location(block) == parse_location_block(block)
 
     @pytest.mark.parametrize(
-        "value",
+        ("value", "grammar", "named"),
         [
-            pytest.param(None, id="null"),
-            pytest.param(5, id="integer"),
-            pytest.param(51.5, id="float"),
-            pytest.param(True, id="boolean"),
-            pytest.param([51.5, -0.1], id="array"),
-            pytest.param({"latitude": 51.5}, id="object"),
+            pytest.param("londn", parse_location, "'londn'", id="unknown-place"),
+            pytest.param("95,0", parse_location, "latitude", id="latitude-above-90"),
+            pytest.param(
+                {"latitude": 50}, parse_location_block, "location.longitude", id="object-without-longitude"
+            ),
         ],
     )
-    def test_a_value_that_is_not_a_string_is_refused_naming_it_and_the_accepted_forms(
-        self, value: object
+    def test_a_value_its_grammar_refuses_is_refused_with_that_grammars_refusal(
+        self, value: object, grammar: Callable[[Any], Location], named: str
     ) -> None:
-        """A value that is not a string gets the same refusal, naming the value by its repr: None, not 'None'."""
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(value)
-        _assert_names_location_the_accepted_forms_and_the_value(refusal.value, value)
+        """A value the grammar for its type refuses is refused with that grammar's own ConfigurationError, carried verbatim."""
+        with pytest.raises(ConfigurationError) as expected:
+            grammar(value)
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(value)
+
+        assert str(refusal.value) == str(expected.value)
+        assert named in str(refusal.value)
 
     @pytest.mark.parametrize(
-        ("text", "latitude", "longitude"),
+        ("value", "type_name"),
         [
-            pytest.param("95,0", 95.0, 0.0, id="latitude-above-90"),
-            pytest.param("0,181", 0.0, 181.0, id="longitude-above-180"),
-            pytest.param("nan,0", float("nan"), 0.0, id="nan-latitude"),
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param(5, "int", id="integer"),
+            pytest.param(51.5, "float", id="float"),
+            pytest.param(True, "bool", id="boolean"),
+            pytest.param([51.5, -0.1], "list", id="array"),
         ],
     )
-    def test_coordinates_location_refuses_are_refused_with_its_own_message(
-        self, text: str, latitude: float, longitude: float
+    def test_any_other_json_value_is_refused_naming_location_and_its_type(
+        self, value: object, type_name: str
     ) -> None:
-        """'lat,lon' coordinates that Location refuses are refused with Location's own message, not the accepted-forms one, since they are of an accepted form."""
-        with pytest.raises(ValueError) as location_refusal:
-            Location(latitude=latitude, longitude=longitude)
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(text)
-        assert str(refusal.value) == str(location_refusal.value)
+        """A JSON value that is neither a string nor an object is refused naming location and its JSON type."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(value)
+
+        assert str(refusal.value).startswith("location")
+        assert str(refusal.value).endswith(f"got {type_name}")

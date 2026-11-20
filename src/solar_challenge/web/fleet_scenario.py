@@ -37,9 +37,9 @@ from solar_challenge.web.fleet_config import (
     read_fleet_size,
 )
 from solar_challenge.web.request_boundary import (
+    read_location,
     refuse_unencodable_text,
     refuse_unrecognised_keys,
-    resolve_location,
 )
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.simulation_params import (
@@ -157,8 +157,8 @@ def scenario_from_fleet_form(form: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _fleet_form_location(form: Mapping[str, Any]) -> Location:
-    """The location of the fleet *form* describes: its 'location' as resolve_location reads it, 'bristol' when absent."""
-    return resolve_location(form.get("location", "bristol"))
+    """The location of the fleet *form* describes: its 'location' as read_location reads it, 'bristol' when absent."""
+    return read_location(form.get("location", "bristol"))
 
 
 @dataclass(frozen=True)
@@ -241,7 +241,7 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
         {
             "name": _read_name(scenario.get("name")),
             "period": _read_period(scenario.get("period")),
-            "location": _read_location(scenario.get("location")),
+            "location": _read_location_block(scenario.get("location")),
             "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
@@ -382,7 +382,7 @@ def _read_day(value: Any, path: str) -> date:
     return read_iso_date(value, path)
 
 
-def _read_location(location: Any) -> _BlockRead:
+def _read_location_block(location: Any) -> _BlockRead:
     """Nothing of the fleet form, which has no location control: a location other than the one it runs at is not loaded."""
     if parse_location_block(location) == _fleet_form_location({}):
         return {}, ()

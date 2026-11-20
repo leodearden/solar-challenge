@@ -12,6 +12,7 @@ from flask.testing import FlaskClient
 from solar_challenge.config import (
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
+    parse_location_block,
 )
 from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
 from solar_challenge.errors import ConfigurationError
@@ -22,7 +23,7 @@ from solar_challenge.web.fleet_config import (
     form_to_fleet_distribution_config,
     sample_distribution,
 )
-from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
+from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
@@ -412,21 +413,35 @@ class TestFleetFromDistribution:
             pytest.param("95,0", id="latitude-out-of-range"),
             pytest.param(5, id="number"),
             pytest.param(None, id="null"),
+            pytest.param({"latitude": 50}, id="block-without-longitude"),
         ],
     )
     def test_location_it_cannot_resolve_returns_400_carrying_the_refusal_and_queues_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, location: object
     ) -> None:
-        """A location resolve_location refuses, a value that is not a string included, is a 400 whose error is its refusal, never a fleet at Bristol or a 500; no fleet is queued."""
+        """A location read_location refuses, a value that is neither a string nor a JSON object included, is a 400 whose error is its refusal, never a fleet at Bristol or a 500; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, "location": location},
         )
         assert resp.status_code == 400
         mock_job_manager.submit_fleet_job.assert_not_called()
-        with pytest.raises(ValueError) as refusal:
-            resolve_location(location)
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location(location)
         assert resp.get_json() == {"error": str(refusal.value)}
+
+    def test_a_location_block_queues_every_home_at_the_location_it_reads_as(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """A location: block of latitude and longitude is a 201 that queues every home at the location parse_location_block reads from it."""
+        block = {"latitude": 55.95, "longitude": -3.19}
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "location": block},
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
+        assert [config.location for config in configs] == [parse_location_block(block)] * 2
 
     def test_a_name_holding_a_lone_surrogate_returns_400_naming_name_and_submits_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -910,7 +925,7 @@ class TestFleetFromDistribution:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(
                 parse_fleet_distribution_config(form_to_fleet_distribution_config(body)),
-                resolve_location(body["location"]),
+                read_location(body["location"]),
             )
         resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400

@@ -24,12 +24,13 @@ from solar_challenge.config import (
     parse_location_block,
     parse_seg_rate,
 )
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
-from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
+from solar_challenge.web.request_boundary import require_encodable_text
 from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
@@ -37,6 +38,7 @@ from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_na
 from tests._deeply_nested_json import JSON_NESTED_TOO_DEEPLY_TO_DECODE
 from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
 from tests._html_page import chart_figures, counts_of, element_attributes, element_count, headings, texts, texts_after
+from tests._html_select_options import option_texts
 from tests._plotly_figure import traces_by_name
 from tests._run_summaries import home_summary
 from tests._web_app import database_of, point_store_config_at_a_missing_directory
@@ -105,6 +107,17 @@ class TestScenarioBuilderRoute:
             ]
         ]
 
+    def test_builder_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/builder's location select offers each LOCATION_PRESETS key labelled with its Location's name, and a custom location."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+
+        assert option_texts(page, {"x-model": "location_preset"}) == {
+            **{key: preset.name for key, preset in LOCATION_PRESETS.items()},
+            "custom": "Custom Location",
+        }
+
 
 class TestSweepRoute:
     """Tests for the GET /scenarios/sweep route."""
@@ -119,6 +132,16 @@ class TestSweepRoute:
         response = client.get("/scenarios/sweep")
         page = response.get_data(as_text=True)
         assert element_count(page, "select", {"x-model": "parameter"}) == 1
+
+    def test_sweep_page_offers_each_location_preset_labelled_with_its_name(
+        self, client: FlaskClient
+    ) -> None:
+        """GET /scenarios/sweep's location select offers each LOCATION_PRESETS key, labelled with its Location's name."""
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+
+        assert option_texts(page, {"x-model": "baseConfig.location"}) == {
+            key: preset.name for key, preset in LOCATION_PRESETS.items()
+        }
 
     def test_sweep_page_contains_mode_options(self, client: FlaskClient) -> None:
         """GET /scenarios/sweep offers the Linear and Geometric modes, in that order, after the Sweep Mode label."""
@@ -812,8 +835,6 @@ class TestBuilderScenarioYaml:
     @pytest.mark.parametrize(
         "omitted",
         [
-            pytest.param(("latitude",), id="without latitude"),
-            pytest.param(("longitude",), id="without longitude"),
             pytest.param(("altitude",), id="without altitude"),
             pytest.param(("latitude", "longitude", "altitude"), id="without any coordinate"),
         ],
@@ -843,6 +864,33 @@ class TestBuilderScenarioYaml:
             parse_location_block(given)
         }
         assert validation == {"valid": True, "errors": []}
+
+    @pytest.mark.parametrize(
+        "omitted",
+        [
+            pytest.param("latitude", id="without latitude"),
+            pytest.param("longitude", id="without longitude"),
+        ],
+    )
+    def test_a_custom_location_without_one_coordinate_is_written_as_given_and_reported(
+        self, client: FlaskClient, omitted: str
+    ) -> None:
+        """A custom location the form sends without its latitude or its longitude is reported by the key it leaves out, not loaded as Bristol's.
+
+        The form sends the *omitted* coordinate as ''.  The preview writes the coordinates
+        given as the document's location: block, which the loader refuses by the missing
+        key's path.
+        """
+        coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
+        given = {key: value for key, value in coordinates.items() if key != omitted}
+        form = {**self._DEFAULT_FORM, "location_preset": "custom", **given, omitted: ""}
+
+        _, document = _preview_document(client, form)
+        validation = client.post("/api/scenarios/validate", json=form).get_json()
+
+        assert document["location"] == given
+        assert validation["valid"] is False
+        assert any(f"location.{omitted}" in error for error in validation["errors"]), validation
 
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""

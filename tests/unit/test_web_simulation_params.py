@@ -13,14 +13,14 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
-    LOCATION_PRESETS,
     NotAJsonObject,
+    read_location,
     require_encodable_text,
-    resolve_location,
 )
 from solar_challenge.web.simulation_params import (
     DAYS_WINDOW_START,
@@ -896,30 +896,31 @@ class TestParseHomeConfigSEG:
 
 
 class TestParseHomeConfigLocation:
-    """parse_home_config's location is the value sent as resolve_location reads it, 'bristol' when absent."""
+    """parse_home_config's location is the value sent as read_location reads it, Bristol when absent; a value read_location refuses is refused with its refusal."""
 
     @pytest.mark.parametrize(
         "value",
         [
             pytest.param("london", id="preset"),
-            pytest.param("51.5,-0.1", id="coordinates"),
             pytest.param(" Edinburgh ", id="padded-title-case-preset"),
+            pytest.param("51.5,-0.1,11", id="coordinates-with-altitude"),
+            pytest.param({"latitude": 51.5, "longitude": -0.1}, id="location-block"),
         ],
     )
-    def test_a_location_it_resolves_is_the_homes_location(self, value: str) -> None:
-        """A location resolve_location resolves is the home's location, the string read as sent."""
+    def test_a_location_read_location_reads_is_the_homes_location(self, value: object) -> None:
+        """A location string or location: block read_location reads is the home's location, read as sent."""
         home_config, _start, _end, _name = parse_home_config(
             {**VALID_HOME_PAYLOAD, "location": value}
         )
-        assert home_config.location == resolve_location(value)
+        assert home_config.location == read_location(value)
 
     def test_absent_location_is_bristol(self) -> None:
-        """A home config without a location is a home at the Bristol preset."""
+        """A home config without a location is a home at Bristol."""
         without_location = {
             key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "location"
         }
         home_config, _start, _end, _name = parse_home_config(without_location)
-        assert home_config.location == LOCATION_PRESETS["bristol"]
+        assert home_config.location == Location.bristol()
 
     @pytest.mark.parametrize(
         "value",
@@ -928,14 +929,15 @@ class TestParseHomeConfigLocation:
             pytest.param(5, id="number"),
             pytest.param([51.5, -0.1], id="array"),
             pytest.param("Paris", id="unknown-place"),
+            pytest.param({"latitude": 50}, id="block-without-longitude"),
         ],
     )
-    def test_a_location_it_cannot_resolve_is_refused_naming_the_value_as_sent(
+    def test_a_location_read_location_refuses_is_refused_with_its_refusal(
         self, value: object
     ) -> None:
-        """A location resolve_location refuses is refused with its refusal, which names the value as sent: null as None, not as the string 'None'."""
+        """A location read_location refuses is refused with read_location's own refusal, null included: it is not read as absent."""
         with pytest.raises(ValueError) as refusal:
             parse_home_config({**VALID_HOME_PAYLOAD, "location": value})
-        with pytest.raises(ValueError) as resolver_refusal:
-            resolve_location(value)
-        assert str(refusal.value) == str(resolver_refusal.value)
+        with pytest.raises(ConfigurationError) as reader_refusal:
+            read_location(value)
+        assert str(refusal.value) == str(reader_refusal.value)

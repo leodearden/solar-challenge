@@ -22,6 +22,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
@@ -1196,7 +1197,7 @@ _YIELDS_KWH_PER_KWP = {
 
 
 class TestTheModelIsToldTheEnginesFacts:
-    """The figures the chat gives the model are the ones the engine simulates and validates with."""
+    """The figures and location presets the chat gives the model are the ones the engine simulates and validates with."""
 
     def test_the_tool_results_carry_the_engines_facts(
         self,
@@ -1264,3 +1265,15 @@ class TestTheModelIsToldTheEnginesFacts:
 
         assert not missing, f"Expected the description to carry {sorted(missing)}; got {description!r}"
         assert "Ofgem" not in description, f"Expected the description not to mention Ofgem; got {description!r}"
+
+    @pytest.mark.parametrize("tool_name", ("run_home_simulation", "run_fleet_simulation"))
+    def test_a_trigger_tools_location_names_each_preset_and_both_coordinate_forms(self, tool_name: str) -> None:
+        """The tool's location description names every LOCATION_PRESETS key and the 'lat,lon' and 'lat,lon,alt' forms, and leaves the default to the reader that applies it."""
+        trigger_tool = next(tool for tool in TOOLS if tool["name"] == tool_name)
+        description = trigger_tool["input_schema"]["properties"]["location"]["description"]
+
+        forms = (*map(repr, LOCATION_PRESETS), repr("lat,lon"), repr("lat,lon,alt"))
+        missing = [form for form in forms if form not in description]
+
+        assert not missing, f"Expected the description to name {missing}; got {description!r}"
+        assert "(default)" not in description, f"Expected the description not to state a default; got {description!r}"

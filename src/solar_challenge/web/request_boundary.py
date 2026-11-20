@@ -10,7 +10,9 @@ from typing import Any
 
 from flask import request
 
-from solar_challenge.location import Location
+from solar_challenge.config import parse_location_block
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import Location, parse_location
 
 
 class NotAJsonObject(ValueError):
@@ -89,40 +91,15 @@ def refuse_unencodable_text(value: object, what: str) -> None:
         require_encodable_text(value, what)
 
 
-LOCATION_PRESETS: dict[str, Location] = {
-    "bristol": Location(latitude=51.45, longitude=-2.58, altitude=11.0, name="Bristol, UK"),
-    "london": Location(latitude=51.51, longitude=-0.13, altitude=11.0, name="London, UK"),
-    "edinburgh": Location(latitude=55.95, longitude=-3.19, altitude=47.0, name="Edinburgh, UK"),
-    "manchester": Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester, UK"),
-}
-
-
-def resolve_location(location: object) -> Location:
-    """The Location *location* names: a LOCATION_PRESETS key, in any case and with surrounding whitespace, or 'lat,lon' coordinates.
+def read_location(value: object) -> Location:
+    """The Location a request's location *value* names: a string as location.parse_location reads it, a JSON object as config.parse_location_block reads a scenario's location: block.
 
     Raises:
-        ValueError: For any other value, a non-string included, naming location,
-            the value and the accepted forms; or, from Location, for
-            coordinates outside its range.
+        ConfigurationError: From parse_location or parse_location_block, for a value they
+            refuse; for any other value, naming location and its type.
     """
-    if isinstance(location, str):
-        key = location.strip().lower()
-        if key in LOCATION_PRESETS:
-            return LOCATION_PRESETS[key]
-        coordinates = _lat_lon(location)
-        if coordinates is not None:
-            latitude, longitude = coordinates
-            return Location(latitude=latitude, longitude=longitude)
-    raise ValueError(
-        "location must be 'lat,lon' coordinates or one of "
-        f"{', '.join(map(repr, LOCATION_PRESETS))}, got {location!r}"
-    )
-
-
-def _lat_lon(text: str) -> tuple[float, float] | None:
-    """The latitude and longitude of 'lat,lon' *text*, two numbers float() reads either side of one comma; None for any other text."""
-    try:
-        latitude, longitude = map(float, text.split(","))
-    except ValueError:
-        return None
-    return latitude, longitude
+    if isinstance(value, str):
+        return parse_location(value)
+    if isinstance(value, dict):
+        return parse_location_block(value)
+    raise ConfigurationError(f"location must be a string or a JSON object, got {type(value).__name__}")

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import split_card, tab_bar %}
+{% from "components/macros.html" import location_preset_options, split_card, tab_bar %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 
@@ -126,7 +126,7 @@ document.addEventListener('alpine:init', () => {
                 occupants: parseInt(f.occupants),
                 stochastic: f.stochastic,
                 location: f.location === 'custom'
-                    ? f.custom_lat + ',' + f.custom_lon
+                    ? { latitude: parseFloat(f.custom_lat), longitude: parseFloat(f.custom_lon) }
                     : f.location,
                 name: f.name
             };
@@ -260,10 +260,7 @@ document.addEventListener('alpine:init', () => {
                             x-model="formData.location"
                             class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm"
                         >
-                            <option value="bristol">Bristol (51.45&deg;N, 2.58&deg;W)</option>
-                            <option value="london">London (51.51&deg;N, 0.13&deg;W)</option>
-                            <option value="edinburgh">Edinburgh (55.95&deg;N, 3.19&deg;W)</option>
-                            <option value="manchester">Manchester (53.48&deg;N, 2.24&deg;W)</option>
+                            {{ location_preset_options(location_presets, with_coordinates=true) }}
                             <option value="custom">Custom coordinates...</option>
                         </select>
                     </div>

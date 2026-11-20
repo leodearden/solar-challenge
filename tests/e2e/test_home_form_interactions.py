@@ -2,8 +2,8 @@
 
 Verifies preset population, including a preset select that lists each
 preset once and applies the built-in one when a saved home preset holds a
-built-in preset's name, location changes, period buttons, and conditional
-field visibility.
+built-in preset's name, location changes, a custom location posted as its
+latitude and longitude, period buttons, and conditional field visibility.
 """
 
 from urllib.parse import quote
@@ -16,6 +16,7 @@ from tests.e2e._home_form import (
     form_data,
     open_location_tab,
     open_period_tab,
+    submit_two_day_run,
 )
 
 
@@ -104,6 +105,19 @@ def test_custom_location_fields_appear(page: Page, live_server: str) -> None:
 
     for coordinate_input in coordinate_inputs:
         expect(coordinate_input).to_be_visible()
+
+
+def test_custom_location_is_posted_as_its_latitude_and_longitude(page: Page, live_server: str) -> None:
+    """Run at the 'custom' location 55.95, -3.19 -> the form posts location {latitude: 55.95, longitude: -3.19}, which the server accepts (201)."""
+    page.goto(live_server + "/simulate/home")
+    choose_location(page, "custom")
+    page.locator("#custom_lat").fill("55.95")
+    page.locator("#custom_lon").fill("-3.19")
+
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["location"] == {"latitude": 55.95, "longitude": -3.19}
+    assert response.status == 201, response.text()
 
 
 # -- Custom date range fields -----------------------------------------------

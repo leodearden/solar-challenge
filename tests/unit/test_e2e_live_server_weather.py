@@ -50,7 +50,7 @@ HOME_JOBS_AT_EVERY_LOCATION_PRESET = """
     import json
     import urllib.request
 
-    from solar_challenge.web.request_boundary import LOCATION_PRESETS
+    from solar_challenge.location import LOCATION_PRESETS
 
     HOME_JOBS = {
         **{location: {"location": location, "days": 1} for location in LOCATION_PRESETS},
@@ -102,7 +102,7 @@ A_HOME_JOB_ON_A_SUNLESS_OVERRIDE = """
     import pytest
 
     from solar_challenge.weather import WeatherCache
-    from solar_challenge.web.request_boundary import LOCATION_PRESETS
+    from solar_challenge.location import LOCATION_PRESETS
 
     from tests._synthetic_weather import TMY_DAYS, synthetic_tmy
 

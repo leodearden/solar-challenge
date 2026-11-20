@@ -20,6 +20,7 @@ from solar_challenge.config import (
     parse_seg_rate,
 )
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_writer import location_block, scenario_yaml
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
@@ -29,7 +30,6 @@ from solar_challenge.web.fleet_config import (
     distribution_grammar_spec,
 )
 from solar_challenge.web.request_boundary import (
-    LOCATION_PRESETS,
     NotAJsonObject,
     refuse_unrecognised_keys,
     require_json_object,
@@ -221,10 +221,10 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """The location: block for the form's location_preset: a dashboard preset, or 'custom'.
+    """The location: block for the form's location_preset: a key of location.LOCATION_PRESETS, or 'custom'.
 
-    A custom block holds the coordinates the form gives, as numbers.  A coordinate the
-    form leaves out is left out of the block, for the loader to default.
+    A custom block holds the coordinates the form gives, as numbers, and leaves out each
+    one the form leaves out; config.parse_location_block reads it as any location: block.
 
     Raises:
         ValueError: for any other preset, naming it, or for a custom coordinate that is

@@ -222,7 +222,10 @@ def test_a_param_sweep_of_a_placeholder_in_the_location_block_simulates_each_poi
     )
 
     result = _sweep_document(
-        {"location": {"latitude": "${LAT:51.45}"}, "fleet_distribution": _fleet_distribution()},
+        {
+            "location": {"latitude": "${LAT:51.45}", "longitude": Location.BRISTOL_LON},
+            "fleet_distribution": _fleet_distribution(),
+        },
         "--param", "LAT", "--min", "50", "--max", "52", "--steps", "2", "--mode", "linear",
     )
 

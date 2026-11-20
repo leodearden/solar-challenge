@@ -583,46 +583,44 @@ class TestLocationBlockParsing:
         """A config that gives no location, or only null keys, which read as absent, simulates Bristol."""
         assert parse_location_block(block) == Location.bristol()
 
+    def test_an_omitted_timezone_and_altitude_are_bristols_and_an_omitted_name_stays_empty(
+        self,
+    ) -> None:
+        """A block that sets only its coordinates is at Bristol's timezone and altitude, with no name."""
+        assert parse_location_block({"latitude": 55.95, "longitude": -3.19}) == Location(
+            latitude=55.95,
+            longitude=-3.19,
+            timezone="Europe/London",
+            altitude=11.0,
+            name="",
+        )
+
     @pytest.mark.parametrize(
-        ("block", "expected"),
+        ("block", "missing"),
         [
+            pytest.param({"name": "Clifton"}, {"latitude", "longitude"}, id="name-only"),
             pytest.param(
-                {"name": "Clifton"},
-                Location(
-                    latitude=51.45,
-                    longitude=-2.58,
-                    timezone="Europe/London",
-                    altitude=11.0,
-                    name="Clifton",
-                ),
-                id="name-only",
+                {"latitude": None, "name": "Clifton"}, {"latitude", "longitude"}, id="null-latitude"
             ),
-            pytest.param(
-                {"latitude": 55.95, "longitude": -3.19},
-                Location(
-                    latitude=55.95,
-                    longitude=-3.19,
-                    timezone="Europe/London",
-                    altitude=11.0,
-                    name="",
-                ),
-                id="coordinates-only",
-            ),
-            pytest.param(
-                {"latitude": None, "name": "Clifton"},
-                Location(
-                    latitude=51.45,
-                    longitude=-2.58,
-                    timezone="Europe/London",
-                    altitude=11.0,
-                    name="Clifton",
-                ),
-                id="null-latitude",
-            ),
+            pytest.param({"latitude": 50}, {"longitude"}, id="latitude-only"),
+            pytest.param({"longitude": -0.1}, {"latitude"}, id="longitude-only"),
+            pytest.param({"altitude": 5.0}, {"latitude", "longitude"}, id="altitude-only"),
         ],
     )
-    def test_omitted_keys_take_bristol_values_except_the_name(
-        self, block: dict[str, object], expected: Location
+    def test_a_block_that_leaves_out_a_coordinate_is_refused_naming_each_missing_one(
+        self, block: dict[str, object], missing: set[str]
     ) -> None:
-        """Omitted or null coordinates, timezone and altitude are Bristol's; an omitted name stays empty."""
-        assert parse_location_block(block) == expected
+        """A block that sets any key sets both coordinates: each it leaves out or nulls is named by its path, and one it sets is not."""
+        with pytest.raises(ConfigurationError) as refused:
+            parse_location_block(block)
+
+        assert {
+            coordinate
+            for coordinate in ("latitude", "longitude")
+            if f"location.{coordinate}" in str(refused.value)
+        } == missing
+
+    def test_a_coordinate_left_out_is_named_by_the_blocks_path_in_its_file(self) -> None:
+        """The refusal names the missing coordinate under *block_path*, the block's path in its file."""
+        with pytest.raises(ConfigurationError, match=re.escape("scenarios[1].location.longitude")):
+            parse_location_block({"latitude": 50}, block_path="scenarios[1].location")

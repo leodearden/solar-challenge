@@ -16,6 +16,7 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_fleet_summary
 from solar_challenge.validation import BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP
 from solar_challenge.web.assistant import (
@@ -29,7 +30,7 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database
 from solar_challenge.web.field_tree import field_tree
-from solar_challenge.web.request_boundary import require_encodable_text, resolve_location
+from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -858,7 +859,7 @@ class TestRunHomeSimulation:
         jm.submit_home_job.assert_not_called()
 
     def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
-        """A location the model sends that resolve_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
+        """A location the model sends that read_location refuses is returned as its refusal, never run at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_home_simulation(
             {"pv_kw": 4, "days": 7, "location": "Cardiff"},
@@ -867,8 +868,8 @@ class TestRunHomeSimulation:
         )
 
         jm.submit_home_job.assert_not_called()
-        with pytest.raises(ValueError) as refusal:
-            resolve_location("Cardiff")
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location("Cardiff")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
     def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:
@@ -1060,7 +1061,7 @@ class TestRunFleetSimulation:
         )
 
     def test_location_it_cannot_resolve_returns_the_refusal_and_submits_nothing(self) -> None:
-        """A location the model sends that resolve_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
+        """A location the model sends that read_location refuses is returned as its refusal, never a fleet at Bristol; nothing is submitted."""
         jm = self._make_jm()
         result = run_fleet_simulation(
             3,
@@ -1070,8 +1071,8 @@ class TestRunFleetSimulation:
         )
 
         jm.submit_fleet_job.assert_not_called()
-        with pytest.raises(ValueError) as refusal:
-            resolve_location("Cardiff")
+        with pytest.raises(ConfigurationError) as refusal:
+            read_location("Cardiff")
         assert result == {"error": f"Invalid simulation parameters: {refusal.value}"}
 
     def test_a_name_holding_a_lone_surrogate_returns_the_refusal_naming_name_and_submits_nothing(self) -> None:

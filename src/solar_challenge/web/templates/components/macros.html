@@ -88,6 +88,14 @@
 {% endmacro %}
 
 
+{# An option per location preset of presets, a mapping of key to Location such as location.LOCATION_PRESETS: valued its key and labelled its name, then its latitude and longitude if with_coordinates #}
+{% macro location_preset_options(presets, with_coordinates=false) %}
+{% for key, preset in presets.items() %}
+<option value="{{ key }}">{{ preset.name }}{% if with_coordinates %} ({{ '%.2f'|format(preset.latitude|abs) }}&deg;{{ 'N' if preset.latitude >= 0 else 'S' }}, {{ '%.2f'|format(preset.longitude|abs) }}&deg;{{ 'E' if preset.longitude >= 0 else 'W' }}){% endif %}</option>
+{% endfor %}
+{% endmacro %}
+
+
 {# Stat display card for key metrics #}
 {% macro stat_card(label, value, unit='', icon='', trend='') %}
 {% call card(classes='p-5') %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
-{% from "components/macros.html" import bound_run_status_badge, chart_scripts, panel %}
+{% from "components/macros.html" import bound_run_status_badge, chart_scripts, location_preset_options, panel %}
 
 {% block title %}Parameter Sweep{% endblock %}
 
@@ -84,10 +84,7 @@
                                 <label for="sweep_base_location" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Location</label>
                                 <select id="sweep_base_location" x-model="baseConfig.location"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
-                                    <option value="bristol">Bristol</option>
-                                    <option value="london">London</option>
-                                    <option value="edinburgh">Edinburgh</option>
-                                    <option value="manchester">Manchester</option>
+                                    {{ location_preset_options(location_presets) }}
                                 </select>
                             </div>
                             <div>

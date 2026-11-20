@@ -68,6 +68,36 @@ class TestLoadFleetConfig:
         ):
             load_fleet_config(path)
 
+    def test_a_location_block_without_its_longitude_is_refused_naming_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A fleet file whose location: block sets a latitude but no longitude is refused by the key's path, not placed at Bristol's longitude."""
+        yaml_content = """
+name: Half-located Fleet
+location:
+  latitude: 53.4
+fleet_distribution:
+  n_homes: 10
+  seed: 42
+  pv:
+    capacity_kw:
+      type: weighted_discrete
+      values: [3.0, 4.0, 5.0]
+      weights: [30, 50, 20]
+  load:
+    annual_consumption_kwh:
+      type: normal
+      mean: 3400
+      std: 800
+      min: 2000
+      max: 6000
+"""
+        path = tmp_path / "fleet.yaml"
+        path.write_text(yaml_content)
+
+        with pytest.raises(ConfigurationError, match=re.escape("location.longitude")):
+            load_fleet_config(path)
+
 
 class TestBristolPhase1Scenario:
     """Tests for Bristol Phase 1 scenario (loaded from YAML)."""

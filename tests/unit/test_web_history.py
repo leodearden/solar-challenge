@@ -18,6 +18,7 @@ from flask.testing import FlaskClient
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import load_fleet_config
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.dispatch import (
     GridChargeConfig,
     PeakShavingStrategyConfig,
@@ -32,7 +33,7 @@ from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import Database
 from solar_challenge.web.field_tree import field_tree
-from solar_challenge.web.request_boundary import LOCATION_PRESETS, require_encodable_text
+from solar_challenge.web.request_boundary import require_encodable_text
 from solar_challenge.web.schema import migrate_store
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_TYPES
