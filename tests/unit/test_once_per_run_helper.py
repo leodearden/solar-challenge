@@ -9,6 +9,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NoReturn, Protocol
 
 import pytest
 
@@ -18,6 +19,21 @@ from tests._once_per_run import built_once
 def _files_in(directory: Path) -> dict[str, str]:
     """The text of each file *directory* holds, keyed by its name."""
     return {path.name: path.read_text() for path in directory.iterdir()}
+
+
+def _assert_the_next_call_builds_into_an_empty_directory_once(shared: Path, after: str) -> None:
+    """Assert that the next built_once of *shared* builds into an empty directory and the one after it builds nothing; *after* names the build before, for the message."""
+    held_on_entry: list[dict[str, str]] = []
+
+    def build(directory: Path) -> None:
+        held_on_entry.append(_files_in(directory))
+        (directory / "built").write_text("built")
+
+    assert built_once(shared, build) == shared
+    assert held_on_entry == [{}], f"the build after {after} must start from an empty directory, since it left no record"
+
+    assert built_once(shared, build) == shared
+    assert len(held_on_entry) == 1, "the directory, once built, must not be built again"
 
 
 def test_a_second_call_returns_the_built_directory_without_building_it_again(tmp_path: Path) -> None:
@@ -85,6 +101,38 @@ def test_a_build_that_raised_is_never_returned_nor_run_again_and_each_later_call
     assert builds == [], "a call after a build that raised must raise that build's error, never build again"
 
 
+class _PytestOutcome(Protocol):
+    """pytest.skip or pytest.fail: calling one raises the OutcomeException it names as its Exception."""
+
+    @property
+    def Exception(self) -> type[BaseException]: ...
+
+    def __call__(self, reason: str) -> NoReturn: ...
+
+
+@pytest.mark.parametrize("outcome", [pytest.skip, pytest.fail], ids=["pytest.skip", "pytest.fail"])
+def test_a_build_stopped_by_a_base_exception_leaves_no_record_and_the_next_call_builds_into_an_empty_directory(
+    tmp_path: Path, outcome: _PytestOutcome
+) -> None:
+    """pytest.skip and pytest.fail raise OutcomeExceptions, which are not Exceptions, so built_once keeps no record of them, as it keeps none of a killed build, and a skip never becomes an error on a later call."""
+    shared = tmp_path / "shared"
+
+    def stopped_build(directory: Path) -> None:
+        (directory / "partial").write_text("partial")
+        outcome("the build stopped")
+
+    with pytest.raises(outcome.Exception, match="the build stopped"):
+        built_once(shared, stopped_build)
+    assert not issubclass(outcome.Exception, Exception), (
+        "the outcome raises an Exception, so this case does not exercise the BaseException path built_once leaves unrecorded"
+    )
+    assert _files_in(shared) == {"partial": "partial"}, (
+        "the stopped build left nothing in the directory, so this test cannot tell whether the next call empties it"
+    )
+
+    _assert_the_next_call_builds_into_an_empty_directory_once(shared, after="one stopped by a BaseException")
+
+
 _BUILD_KILLED_MIDWAY = """
 import sys
 from pathlib import Path
@@ -125,17 +173,7 @@ def test_a_build_whose_process_was_killed_is_never_returned_and_the_next_call_bu
         "the killed build left nothing in the directory, so this test cannot tell whether the next call empties it"
     )
 
-    held_on_entry: list[dict[str, str]] = []
-
-    def build(directory: Path) -> None:
-        held_on_entry.append(_files_in(directory))
-        (directory / "built").write_text("built")
-
-    assert built_once(shared, build) == shared
-    assert held_on_entry == [{}], "the build after one whose process was killed must start from an empty directory"
-
-    assert built_once(shared, build) == shared
-    assert len(held_on_entry) == 1, "the directory, once built, must not be built again"
+    _assert_the_next_call_builds_into_an_empty_directory_once(shared, after="one whose process was killed")
 
 
 @pytest.mark.parametrize(
