@@ -138,10 +138,7 @@ def surface_form(obj: object) -> str:
     if not _is_class_or_routine(obj):
         return _constant(obj).text()
     signature = signature_of(obj)
-    annotations = _signature_annotations(signature)
-    constructs = _annotation_constructs(
-        annotations, functools.cache(functools.partial(spelling_modules, obj, annotations))
-    )
+    constructs = _signature_constructs(obj, signature, _looked_up_when_read)
     text = str(
         signature.replace(
             parameters=[
@@ -476,6 +473,25 @@ _CLASSLESS_NAME_KINDS: tuple[type, ...] = (typing._SpecialForm,)
 
 _ModuleLookup: typing.TypeAlias = Callable[[], ModuleOrUnspelled]
 
+_Found = typing.TypeVar("_Found")
+
+
+class _LookupTiming(typing.Protocol):
+    """When a reader looks up the module that spells an annotation: the thunk it gives _parsed, which calls one only when it reads a string, giving what *lookup* finds, looked up now or once the thunk is first called."""
+
+    def __call__(self, lookup: Callable[[], _Found], /) -> Callable[[], _Found]: ...
+
+
+def _looked_up_now(lookup: Callable[[], _Found]) -> Callable[[], _Found]:
+    """What *lookup* finds, looked up before any annotation is read, as named_classes looks up the module that spells one, so that it raises what the lookup raises whatever the annotation holds."""
+    found = lookup()
+    return lambda: found
+
+
+def _looked_up_when_read(lookup: Callable[[], _Found]) -> Callable[[], _Found]:
+    """What *lookup* finds, looked up only once the thunk is first called and kept for each call after, as surface_form and member_forms look up the module that spells an annotation, so that one holding no string is spelled whatever the lookup would raise."""
+    return functools.cache(lookup)
+
 
 def _parsed(
     annotation: object, module_of: _ModuleLookup, enclosing: frozenset[str] = frozenset()
@@ -690,11 +706,7 @@ def _form_classes(obj: object) -> set[type]:
         return set()
     if not _is_class_or_routine(obj):
         return _constant(obj).classes()
-    annotations = _signature_annotations(signature_of(obj))
-    if not annotations:
-        return set()
-    modules = spelling_modules(obj, annotations)
-    return _classes_of(_annotation_constructs(annotations, lambda: modules).values())
+    return _classes_of(_signature_constructs(obj, signature_of(obj), _looked_up_now).values())
 
 
 def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
@@ -714,10 +726,14 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
     return annotations
 
 
-def _annotation_constructs(
-    annotations: Mapping[str, object], modules: Callable[[], Mapping[str, ModuleOrUnspelled]]
+def _signature_constructs(
+    obj: object, signature: inspect.Signature, timing: _LookupTiming
 ) -> dict[str, _Construct]:
-    """Each of *annotations*, as _signature_annotations gives them by parameter name or "return", parsed as the construct it is, each string in it evaluated in the module that the mapping *modules* gives holds under its name, which *modules* is asked for only when a string is read."""
+    """Each annotation *signature*, signature_of(obj)'s, gives, by parameter name or "return", parsed as the construct it is, each string in it evaluated in the module spelling_modules finds for that name, looked up as *timing* says; none, and no module looked up, where *signature* annotates nothing."""
+    annotations = _signature_annotations(signature)
+    if not annotations:
+        return {}
+    modules = timing(functools.partial(spelling_modules, obj, annotations))
     return {
         name: _parsed(annotation, _spelling_module_under(name, modules))
         for name, annotation in annotations.items()
@@ -734,8 +750,7 @@ def _spelling_module_under(
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        module = defining_module(cls)
-        return _parsed(member.annotation, lambda: module).classes()
+        return _attribute_construct(member, cls, _looked_up_now).classes()
     function = spelled_function(member)
     return _form_classes(member if function is None else function)
 
@@ -857,6 +872,13 @@ class _AnnotatedAttribute:
     annotation: object
 
 
+def _attribute_construct(
+    attribute: _AnnotatedAttribute, cls: type, timing: _LookupTiming
+) -> _Construct:
+    """The construct the annotation of *attribute*, which *cls*'s body declares, is, each string in it evaluated in *cls*'s module, looked up as *timing* says."""
+    return _parsed(attribute.annotation, timing(functools.partial(defining_module, cls)))
+
+
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
@@ -933,10 +955,9 @@ def _member_form(member: object, cls: type) -> str:
 
 
 def _form_by_kind(member: object, cls: type) -> str:
-    """The form of *member*, one of *cls*'s, by its kind; an attribute's annotation is read in *cls*'s module, which is looked up only when a string in it is read."""
+    """The form of *member*, one of *cls*'s, by its kind."""
     if isinstance(member, _AnnotatedAttribute):
-        construct = _parsed(member.annotation, functools.partial(defining_module, cls))
-        return f"attribute {construct.text()}"
+        return f"attribute {_attribute_construct(member, cls, _looked_up_when_read).text()}"
     function = spelled_function(member)
     if function is None:
         return surface_form(member)

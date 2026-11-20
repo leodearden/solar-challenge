@@ -346,6 +346,23 @@ def test_a_class_body_string_annotation_of_a_class_whose_module_another_module_o
     assert later.__file__ in str(raised.value)
 
 
+def test_a_class_body_annotation_holding_no_string_is_spelled_without_looking_up_the_module_of_its_class_though_another_module_of_the_same_name_has_replaced_it_in_sys_modules_where_named_classes_raises_the_lookup_error(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "from fractions import Fraction\n\nclass Plain:\n    share: Fraction\n"
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"), monkeypatch, "stringlessauditing", source
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"), monkeypatch, "stringlessauditing", source
+    )
+
+    assert member_forms(earlier.Plain) == {"share": "attribute Fraction"}
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.Plain)
+    assert later.__file__ in str(raised.value)
+
+
 def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
