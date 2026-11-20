@@ -3,8 +3,9 @@
 
 import copy
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -110,12 +111,17 @@ def _nested_blocks(value: Any, path: str) -> Iterator[tuple[str, dict[str, Any]]
 
 
 def _assert_blocks_recognise_exactly_their_keys(
-    read: Callable[[Any], object], block: dict[str, Any], block_path: str
+    read: Callable[[Any], object],
+    block: dict[str, Any],
+    block_path: str,
+    *,
+    also_recognised: Mapping[str, Collection[str]] = MappingProxyType({}),
 ) -> None:
     """Assert that *block*, and each block nested in it, recognises exactly the keys it sets.
 
     Each block in turn gains a probe key, which *read* must refuse alone,
-    listing that block's own keys as every key it recognises.
+    listing that block's own keys as every key it recognises, with the keys
+    *also_recognised* holds under its path, which it recognises but does not set.
     """
     for index, (path, nested) in enumerate(_nested_blocks(block, block_path)):
         probed = copy.deepcopy(block)
@@ -123,9 +129,10 @@ def _assert_blocks_recognise_exactly_their_keys(
         probed_nested[_PROBE_KEY] = None
         with pytest.raises(ConfigurationError) as refusal:
             read(probed)
+        recognised = set(nested) | set(also_recognised.get(path, ()))
         assert str(refusal.value) == (
             f"Unrecognised keys in {path}: {_PROBE_KEY!r}; "
-            f"recognised keys: {', '.join(sorted(nested))}"
+            f"recognised keys: {', '.join(sorted(recognised))}"
         )
 
 
@@ -327,8 +334,30 @@ class TestHomeBlockKeys:
         path = _write(tmp_path, {"location": location, "pv": {"capacity_kw": 4.0}})
         assert load_home_config(path).location.latitude == 52.0
 
-    def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A home block setting every key of every sub-block parses to the HomeConfig built from those values; no block recognises another key."""
+    @pytest.mark.parametrize(
+        ("efficiency_keys", "expected_battery", "other_efficiency_keys"),
+        [
+            pytest.param(
+                {"charge_efficiency": 0.96, "discharge_efficiency": 0.97},
+                lambda others: BatteryConfig(**others, charge_efficiency=0.96, discharge_efficiency=0.97),
+                ("efficiency",),
+                id="pair",
+            ),
+            pytest.param(
+                {"efficiency": 0.9},
+                lambda others: BatteryConfig(**others).with_round_trip(0.9),
+                ("charge_efficiency", "discharge_efficiency"),
+                id="round-trip",
+            ),
+        ],
+    )
+    def test_block_setting_every_recognised_key_is_accepted(
+        self,
+        efficiency_keys: dict[str, float],
+        expected_battery: Callable[[dict[str, Any]], BatteryConfig],
+        other_efficiency_keys: tuple[str, ...],
+    ) -> None:
+        """A home block setting every key of every sub-block, its battery's efficiency in one form at a time, parses to the HomeConfig built from those values; no block recognises another key."""
         pv: dict[str, Any] = {
             "capacity_kw": 5.0,
             "azimuth": 170.0,
@@ -344,7 +373,7 @@ class TestHomeBlockKeys:
         }
         grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8}
         dispatch_strategy: dict[str, Any] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
-        battery: dict[str, Any] = {
+        battery_without_efficiency: dict[str, Any] = {
             "capacity_kwh": 9.5,
             "max_charge_kw": 3.0,
             "max_discharge_kw": 3.5,
@@ -353,15 +382,13 @@ class TestHomeBlockKeys:
             "grid_charging": grid_charging,
             "min_soc_fraction": 0.15,
             "max_soc_fraction": 0.95,
-            "charge_efficiency": 0.96,
-            "discharge_efficiency": 0.97,
-            "efficiency": 0.9,
             "system_age_years": 1.0,
             "calendar_fade_rate_per_year": 0.03,
             "cycle_fade_per_equivalent_full_cycle": 6e-5,
             "soh_floor": 0.6,
             "soh": 0.95,
         }
+        battery = {**battery_without_efficiency, **efficiency_keys}
         load: dict[str, Any] = {
             "annual_consumption_kwh": 3400.0,
             "household_occupants": 2,
@@ -396,9 +423,9 @@ class TestHomeBlockKeys:
 
         expected = HomeConfig(
             pv_config=PVConfig(**pv),
-            battery_config=BatteryConfig(
-                **{
-                    **battery,
+            battery_config=expected_battery(
+                {
+                    **battery_without_efficiency,
                     "dispatch_strategy": TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
                     "grid_charging": GridChargeConfig(**grid_charging),
                 }
@@ -413,7 +440,10 @@ class TestHomeBlockKeys:
         )
         assert parse_home_block(block, Location.bristol()) == expected
         _assert_blocks_recognise_exactly_their_keys(
-            lambda home: parse_home_block(home, Location.bristol()), block, "home"
+            lambda home: parse_home_block(home, Location.bristol()),
+            block,
+            "home",
+            also_recognised={"home.battery": other_efficiency_keys},
         )
 
 

@@ -332,6 +332,13 @@ home:
                 id="home-unrecognised-key",
             ),
             pytest.param(
+                "home:\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: 5.0, efficiency: 0.95, charge_efficiency: 0.99}\n",
+                "home.battery sets both forms of a battery's efficiency: efficiency and charge_efficiency;",
+                id="home-battery-both-efficiency-forms",
+            ),
+            pytest.param(
                 "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
                 "household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
