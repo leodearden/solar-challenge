@@ -57,3 +57,4 @@ def test_the_xdist_group_mark_collects_with_pytest_xdist_disabled(
     result = pytester_under_root_conftest.runpytest_subprocess("-p", "no:xdist", "-o", "addopts=", module)
 
     result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*PytestUnknownMarkWarning*")
