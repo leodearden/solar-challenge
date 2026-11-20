@@ -842,6 +842,29 @@ def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raise
         page.locator("#the-blocks-own-wait").wait_for(timeout=100)
 
 
+def test_each_points_results_fetched_waits_for_each_jobs_fetch_on_the_default_timeout_from_the_wait_before_it(
+    page: Page, live_server: str
+) -> None:
+    """Each of three fetches finishes 3 s after the one before it, so the last finishes past the 8 s default timeout from the block's start. _each_points_results_fetched passes because it gives each job's fetch the default timeout from the wait before it, not all three one window that opened at the block's start."""
+    job_ids = ["job-a", "job-b", "job-c"]
+    pause_ms = 3000
+    page.goto(live_server + "/scenarios/sweep")
+    page.set_default_timeout(8000)
+
+    with _each_points_results_fetched(page, job_ids):
+        page.evaluate(
+            """([urls, pauseMs]) => {
+                (async () => {
+                    for (const url of urls) {
+                        await new Promise(resolve => setTimeout(resolve, pauseMs));
+                        await fetch(url).then(response => response.text());
+                    }
+                })();
+            }""",
+            [[f"/api/jobs/{job_id}/results" for job_id in job_ids], pause_ms],
+        )
+
+
 # -- A real sweep's charts, drawn from its points' runs ---------------------
 
 
