@@ -11,8 +11,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   current forms.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
-  names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
-  resolve to the kind their spelling misleads about.
+  names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
+  to the kind it pins.
 - The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
 - The package imports without pvlib, and the first access of a name loads pvlib exactly
   when the submodule its typed import comes from is in PVLIB_IMPORTING_SUBMODULES.
@@ -746,8 +746,8 @@ def test_dir_returns_sorted_all() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The kind each name below resolves to, where its spelling suggests another:
-# 'class', 'function' or 'constant', as _kind classifies it
+# The kind each name below is expected to resolve to: 'class', 'function' or
+# 'constant', as _kind classifies it
 # ---------------------------------------------------------------------------
 EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
