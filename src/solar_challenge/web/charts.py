@@ -40,7 +40,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
 from solar_challenge.output import SeasonSummary, aggregate_daily, aggregate_monthly, calculate_seasonal_metrics
@@ -271,8 +271,8 @@ def power_flow_timeline(results: SimulationResults) -> ChartPanel:
 def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig) -> ChartPanel:
     """The panel of the battery state of charge in *results*, filled to zero, with a dashed line at each SOC limit of the battery *battery_config* describes.
 
-    The limits are Battery's min_soc_kwh and max_soc_kwh, its SOC fractions of its
-    SoH-derated capacity, which bound the SOC simulate_home tracks.
+    The limits are battery_config.soc_envelope()'s min_soc_kwh and max_soc_kwh, its
+    SOC fractions of its SoH-derated capacity, which bound the SOC simulate_home tracks.
     """
     soc = _adaptive_downsample(results.battery_soc)
     dates = [d.isoformat() for d in soc.index]
@@ -290,16 +290,16 @@ def battery_soc_chart(results: SimulationResults, battery_config: BatteryConfig)
 
     fig = go.Figure(data=[trace])
 
-    battery = Battery(battery_config)
+    envelope = battery_config.soc_envelope()
     fig.add_hline(
-        y=battery.min_soc_kwh,
+        y=envelope.min_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_low_threshold"],
         annotation_text="Min SOC",
         annotation_position="bottom right",
     )
     fig.add_hline(
-        y=battery.max_soc_kwh,
+        y=envelope.max_soc_kwh,
         line_dash="dash",
         line_color=COLOUR_PALETTE["soc_high_threshold"],
         annotation_text="Max SOC",

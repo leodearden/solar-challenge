@@ -55,7 +55,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     NON_NEGATIVE,
@@ -671,7 +671,7 @@ def _per_home_event_days(
     """
     # A battery's SOC floor depends on its configuration alone: computed once, not per window.
     floors = [
-        (sim, battery_config, Battery(battery_config).min_soc_kwh)
+        (sim, battery_config, battery_config.soc_envelope().min_soc_kwh)
         for sim, battery_config in battery_homes
     ]
     return tuple(
@@ -699,7 +699,7 @@ def compute_fleet_spare_capacity_kw(
     own timezone, holding at least one of *w*'s timesteps.
 
     **Formula** (per battery home, per event day *d* of window *w*, with
-    ``P = max_discharge_kw``, ``floor = Battery(battery_config).min_soc_kwh`` and
+    ``P = max_discharge_kw``, ``floor = battery_config.soc_envelope().min_soc_kwh`` and
     ``h = w.event_hours``):
 
     .. code-block:: text

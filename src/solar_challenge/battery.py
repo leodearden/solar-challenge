@@ -210,14 +210,14 @@ class BatteryConfig:
         cycle_fade_per_equivalent_full_cycle: SOH fade per equivalent full
             cycle as :func:`compute_soh` counts one (≥ 0; default 5e-5/EFC
             ≈ 30 % fade over ~6 000 EFC).
-            ``Battery`` computes calendar fade only (throughput 0); cycle
+            ``resolved_soh`` computes calendar fade only (throughput 0); cycle
             fade takes effect only through an ``soh`` computed by
             :func:`compute_soh` from accrued throughput.
         soh_floor: Minimum allowed SOH after clamping (0 < soh_floor ≤ 1;
             default 0.5, reflecting end-of-useful-life convention).
         soh: Optional direct SOH override (0 < soh ≤ 1).  When set, the
-            computed calendar+cycle fade is bypassed and this value is used
-            directly by ``Battery.__init__``.
+            computed calendar+cycle fade is bypassed and ``resolved_soh``
+            returns this value directly.
     """
 
     capacity_kwh: float
@@ -258,6 +258,26 @@ class BatteryConfig:
     def nominal_usable_capacity_kwh(self) -> float:
         """Usable capacity between the SOC limits, before SOH de-rating (kWh)."""
         return self.capacity_kwh * (self.max_soc_fraction - self.min_soc_fraction)
+
+    @property
+    def resolved_soh(self) -> float:
+        """The state of health a Battery built from this config holds, resolved once.
+
+        The ``soh`` override wins and is used as given, without clamping to
+        ``soh_floor``: supply one consistent with ``soh_floor`` if the
+        ``[soh_floor, 1.0]`` invariant matters for your use case. Without one it is
+        :func:`compute_soh` of ``system_age_years`` with zero throughput, calendar
+        fade only, because one run accrues no throughput.
+        """
+        if self.soh is not None:
+            return self.soh
+        return compute_soh(self.system_age_years, 0.0, self.nominal_usable_capacity_kwh, self)
+
+    def soc_envelope(self) -> SocEnvelope:
+        """The SOH-derated SOC envelope at this config's SOC fractions, the one a Battery built from it starts with."""
+        return _derated_soc_envelope(
+            self.capacity_kwh, self.resolved_soh, self.min_soc_fraction, self.max_soc_fraction
+        )
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":
@@ -333,13 +353,7 @@ class Battery:
             discharge_efficiency=config.discharge_efficiency if discharge_efficiency is None else discharge_efficiency,
         )
 
-        # Resolve SOH once: override wins; else calendar-only (throughput=0).
-        if config.soh is not None:
-            self._soh: float = config.soh
-        else:
-            self._soh = compute_soh(
-                config.system_age_years, 0.0, config.nominal_usable_capacity_kwh, config
-            )
+        self._soh: float = config.resolved_soh
 
         # Set initial SOC
         if initial_soc_kwh is None:
@@ -399,15 +413,7 @@ class Battery:
 
     @property
     def soh(self) -> float:
-        """State of health as a fraction.
-
-        Normally in ``[config.soh_floor, 1.0]`` (guaranteed by
-        :func:`compute_soh`'s clamp when the calendar+cycle path is taken).
-        When ``config.soh`` is an explicit override that value is used
-        *directly*, without clamping to ``soh_floor`` — the override wins
-        outright.  Supply an override consistent with ``soh_floor`` if the
-        ``[soh_floor, 1.0]`` invariant matters for your use case.
-        """
+        """The battery's state of health as a fraction, its config's resolved_soh."""
         return self._soh
 
     @property

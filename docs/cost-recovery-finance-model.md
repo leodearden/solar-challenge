@@ -835,7 +835,7 @@ fleet: £9.97 per kW of firm spare capacity per year in the central band (§4).
 
 **Firm capacity per event day.** An event day of window w is a local calendar
 date holding at least one of w's timesteps. Per battery home and event day d,
-with `P = max_discharge_kw`, `floor = Battery(battery_config).min_soc_kwh` and
+with `P = max_discharge_kw`, `floor = battery_config.soc_envelope().min_soc_kwh` and
 `h = event_hours`:
 
 ```
