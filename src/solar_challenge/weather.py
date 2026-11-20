@@ -163,7 +163,7 @@ def _decode_sealed_content(content: TextIO) -> pd.DataFrame:
         )
     if timezone is not None:
         _require_timezone_name(timezone)
-    frame = pd.read_csv(content, index_col=0, float_precision="round_trip")
+    frame = pd.read_csv(content, index_col=0)
     if timezone is None:
         instants = pd.to_datetime(frame.index)
     else:
