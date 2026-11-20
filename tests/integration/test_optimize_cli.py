@@ -18,14 +18,17 @@ from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.optimize import (
     SENSITIVITY_BANDS,
     ConfigPoint,
-    ConfigResult,
     RankedSweep,
     SensitivityAxis,
     SensitivityPanel,
 )
 from solar_challenge.output import generate_config_ranking_report
 from tests._cli_fleet_simulator import invoke_cli
-from tests._factories import make_bill_distribution_from_statistics, make_config_result
+from tests._factories import (
+    make_bill_distribution_from_statistics,
+    make_config_result,
+    make_ranked_sweep,
+)
 from tests._finance_builders import make_fleet_results, make_home_config
 from tests.integration._helpers import SCENARIO
 
@@ -33,23 +36,6 @@ from tests.integration._helpers import SCENARIO
 # ---------------------------------------------------------------------------
 # §A — Helper factories
 # ---------------------------------------------------------------------------
-
-
-def _make_ranked_sweep(
-    results: tuple[ConfigResult, ...],
-    infeasible: tuple[ConfigPoint, ...] = (),
-    pareto: tuple[ConfigPoint, ...] = (),
-    floor: float = 27.0,
-) -> RankedSweep:
-    """Assemble a RankedSweep honouring cheapest_feasible == results[0].config invariant."""
-    cheapest = results[0].config if results else None
-    return RankedSweep(
-        results=results,
-        infeasible=infeasible,
-        retained_cash_floor_gbp=floor,
-        cheapest_feasible=cheapest,
-        pareto_baseline=pareto,
-    )
 
 
 def _make_sensitivity_panel(
@@ -217,7 +203,7 @@ class TestGenerateConfigRankingReportTable1:
         )
         # Infeasible: 6 kWp, 10 kWh — ConfigPoint only in RankedSweep
         infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
-        return _make_ranked_sweep(
+        return make_ranked_sweep(
             results=(r1, r2),
             infeasible=(infeasible_pt,),
             pareto=(r1.config,),
@@ -332,7 +318,7 @@ class TestGenerateConfigRankingReportTable1:
             payback_years=None,
             solved_own_use_rate_pence_per_kwh=10.0,
         )
-        sweep = _make_ranked_sweep(results=(r_no_payback,))
+        sweep = make_ranked_sweep(results=(r_no_payback,))
         report = generate_config_ranking_report(sweep)
 
         row = _config_row(report, "## Cost-Recovery Rank", "3.0 kWp / 0.0 kWh / 5.0 kW")
@@ -345,7 +331,7 @@ class TestGenerateConfigRankingReportTable1:
             equity_irr=float("nan"),
             solved_own_use_rate_pence_per_kwh=10.0,
         )
-        sweep = _make_ranked_sweep(results=(r_nan_irr,))
+        sweep = make_ranked_sweep(results=(r_nan_irr,))
         report = generate_config_ranking_report(sweep)
 
         row = _config_row(report, "## Cost-Recovery Rank", "3.0 kWp / 0.0 kWh / 5.0 kW")
@@ -374,7 +360,7 @@ class TestGenerateConfigRankingReportTable1:
     def test_empty_infeasible_no_infeasible_section(self) -> None:
         """When there are no infeasible configs, the infeasible section is omitted."""
         r = make_config_result()
-        sweep = _make_ranked_sweep(results=(r,), infeasible=())
+        sweep = make_ranked_sweep(results=(r,), infeasible=())
         report = generate_config_ranking_report(sweep)
 
         assert "### Infeasible Configurations" not in report, (
@@ -430,7 +416,7 @@ class TestGenerateConfigRankingReportTable2:
         )
         # Pareto front: A and B (C is dominated by B)
         pareto = (r_a.config, r_b.config)
-        return _make_ranked_sweep(
+        return make_ranked_sweep(
             results=(r_a, r_b, r_c),
             infeasible=(),
             pareto=pareto,
@@ -537,7 +523,7 @@ class TestGenerateConfigRankingReportTable2:
         """Infeasible ConfigPoints must NOT appear in Table 2 (no baseline economics)."""
         r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
         infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
-        sweep = _make_ranked_sweep(
+        sweep = make_ranked_sweep(
             results=(r,),
             infeasible=(infeasible_pt,),
         )
@@ -569,7 +555,7 @@ class TestGenerateConfigRankingReportSensitivity:
     def _make_sweep_one(self) -> RankedSweep:
         """A minimal single-config RankedSweep."""
         r = make_config_result(pv_kwp=4.0, battery_kwh=0.0, inverter_kw=5.0)
-        return _make_ranked_sweep(results=(r,), pareto=(r.config,))
+        return make_ranked_sweep(results=(r,), pareto=(r.config,))
 
     def _make_panel(self, sweep: RankedSweep) -> SensitivityPanel:
         """Build a SensitivityPanel with two axes at rank_stability=0.75."""
