@@ -50,8 +50,8 @@ def test_the_e2e_job_installs_the_browser_its_suite_launches_before_running_it(p
     assert any(_holds_run(shlex.split(step.command), expected) for step in steps.setup), (
         f"no setup step of the {steps.suite.label} runs {shlex.join(expected)!r} before its suite step "
         f"{steps.suite.command!r}. Another project's `playwright install` deletes every browser in "
-        "~/.cache/ms-playwright that no still-present install registered, and every environment this project "
-        "registers one from is temporary; a uv.lock move of playwright needs a revision nobody has installed. "
+        "~/.cache/ms-playwright that no still-present install registered, and the environments this project's runs "
+        "register one from are temporary; a uv.lock move of playwright needs a revision nobody has installed. "
         "Either way every e2e test then ERRORs with \"Executable doesn't exist\". The lane may write that cache and "
         "reach the download host, and the suite's own uv run options make the install the suite's own playwright, "
         "in its one environment; docs/orchestrator-config.md §8 says why"

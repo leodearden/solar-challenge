@@ -38,7 +38,8 @@ pytest --cov=src/solar_challenge
 uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 
 # Browser e2e suite: what the offline lane's e2e job runs after every merge
-# (~3.5 min); the per-task verify never runs it
+# (~3.5 min), once it has installed the browser the locked playwright needs;
+# the per-task verify never runs it
 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
 
 # PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
@@ -191,8 +192,9 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
 - The lane's `e2e` job runs the non-slow Playwright suite after every merge. A
   fix task it files names the failing e2e node-ids, e.g.
   `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
-  the red run printed no failing node-id (it hit the job's `timeout`, or pytest
-  could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
+  the red run printed no failing node-id (it hit the job's `timeout`, its
+  browser install failed, or pytest could not start, e.g. uv refused a stale
+  `uv.lock`). Reproduce with
   `uv run --locked --extra dev --extra web --extra e2e pytest -n 0 <node-id> -p no:cacheprovider`.
   An e2e test that fails after Chromium failed one of its requests with
   `net::ERR_NETWORK_CHANGED` runs once more and shows as `RERUN`;
@@ -202,16 +204,13 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   chromium-headless-shell. This shows the revision it needs:
   `uv run --extra e2e playwright install --dry-run chromium-headless-shell`.
   Installing it (the same command without `--dry-run`) has to happen outside
-  the sandbox. Another project's `playwright install` deletes that browser once
-  the environment that installed it is gone, because playwright keeps only the
-  browsers a still-present install has registered under
-  `~/.cache/ms-playwright/.links`. Every e2e test that needs the browser then
-  ERRORs at setup with
+  the sandbox. The lane job installs that browser before its suite, so neither
+  another project's `playwright install` nor a `uv.lock` move of playwright
+  turns the lane red (`docs/orchestrator-config.md` says why). If e2e tests
+  ERROR at setup in a sandboxed session with
   `Executable doesn't exist at ~/.cache/ms-playwright/chromium_headless_shell-<revision>/...`,
-  and that install is the whole fix: no code change. Run it in the main
-  checkout, whose `.venv` lasts. A task worktree's goes when the worktree is
-  reaped, and the lane's, in `.worktrees/_offline-deep`, goes before every
-  pass, when the lane's reset deletes it.
+  that install is still the whole fix, run in the main checkout, whose `.venv`
+  lasts: no code change.
 - The lane's `pvgis` job runs `tests/integration/test_pvgis.py`, the PVGIS
   contract tests, after every merge. They check PVGIS's live response, never a
   cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
