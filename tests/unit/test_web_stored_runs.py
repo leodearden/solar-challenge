@@ -6,10 +6,12 @@ reads the run's files back as a StoredHomeRun or a StoredFleetRun, the variant w
 export_frame the run's CSV export answers with. A record with no type names no kind, so its
 run is refused as a StoredRunUnreadable naming runs.type. The kind also reads the
 HomeConfigs the run's record holds, and builds from them the scenario the run's YAML export
-answers with. A kind also names a run created without a name.
+answers with. A kind also names a run created without a name. A battery a run stored with a
+round-trip efficiency, beside the per-direction pair it derived, reads back as stored.
 """
 
 import dataclasses
+import json
 import re
 from typing import get_args
 
@@ -22,6 +24,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunRecord, RunStorage
 from solar_challenge.web.stored_runs import (
     RUN_KINDS,
@@ -134,6 +137,17 @@ def test_the_fleet_kind_reads_the_config_a_fleet_run_records_as_its_homes_in_ord
     store_fleet_run(storage, _FLEET_RUN_ID, fleet)
 
     assert RUN_KINDS["fleet"].home_configs(_recorded_config(storage, _FLEET_RUN_ID)) == tuple(fleet.home_configs)
+
+
+def test_a_battery_stored_with_a_round_trip_efficiency_reads_back_with_the_pair_it_derived() -> None:
+    text = json.dumps(field_tree(BatteryConfig(capacity_kwh=5.0, efficiency=0.81)))
+    document = StoredDocument.decoded("run", "config.json", text)
+    stored = document.content
+    assert (stored["efficiency"], stored["charge_efficiency"], stored["discharge_efficiency"]) == (0.81, 0.9, 0.9)
+
+    battery = document.read(BatteryConfig)
+
+    assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (0.81, 0.9, 0.9)
 
 
 def test_a_stored_home_run_exports_its_time_series(storage: RunStorage) -> None:
