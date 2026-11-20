@@ -59,10 +59,30 @@ _CEC_SINGLE_DIODE_MODULE_KEYS = frozenset(
 )
 """calcparams_cec's module parameters, which pvlib's CEC single-diode model reads."""
 
-_MODULE_KEYS_READ_AS_NUMBERS = (
-    frozenset({"gamma_pdc", "T_NOCT", "A_c", "V_mp_ref"}) | _CEC_SINGLE_DIODE_MODULE_KEYS
+_SAPM_DC_MODULE_KEYS = frozenset(
+    {
+        "C0", "C1", "C2", "C3", "Isco", "Impo", "Voco", "Vmpo",
+        "Aisc", "Aimp", "Bvoco", "Mbvoc", "Bvmpo", "Mbvmp", "N", "Cells_in_Series",
+    }
 )
-"""The module parameters besides its rating (_module_rating_w) that _require_module_numbers checks: PVWatts' gamma_pdc, the CEC single-diode parameters, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. pvlib reads other numbers that are not checked yet: the optional keys it defaults (calcparams_cec's EgRef, dEgdT, irrad_ref and temp_ref, pvwatts_dc's temp_ref and k) and a SAPM module's DC parameters."""
+"""The module parameters pvlib's sapm reads into the power and voltages an inverter reads. IXO, IXXO and C4 to C7 are left out: pvlib marks them not required and reads them only into i_x and i_xx, which no inverter model reads, and 10 SandiaMod rows give them NaN."""
+
+_PVSYST_MODULE_KEYS = frozenset({"gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series"})
+"""calcparams_pvsyst's module parameters that _CEC_SINGLE_DIODE_MODULE_KEYS and _OPTIONAL_MODULE_KEYS leave out, which pvlib's PVsyst single-diode model reads."""
+
+_OPTIONAL_MODULE_KEYS = frozenset(
+    {"EgRef", "dEgdT", "irrad_ref", "temp_ref", "k", "FD", "n", "K", "L", "n_ar"}
+)
+"""The module parameters pvlib defaults when a module lacks them: calcparams_cec and calcparams_desoto read EgRef, dEgdT, irrad_ref and temp_ref, and calcparams_pvsyst all but dEgdT; pvwatts_dc reads temp_ref and k; ModelChain's effective irradiance reads FD; the physical IAM reads n, K, L and n_ar."""
+
+_MODULE_KEYS_READ_AS_NUMBERS = (
+    frozenset({"gamma_pdc", "T_NOCT", "A_c", "V_mp_ref"})
+    | _CEC_SINGLE_DIODE_MODULE_KEYS
+    | _SAPM_DC_MODULE_KEYS
+    | _PVSYST_MODULE_KEYS
+    | _OPTIONAL_MODULE_KEYS
+)
+"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_numbers checks: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is checked: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS); keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment, a flag, not a number."""
 
 
 def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
