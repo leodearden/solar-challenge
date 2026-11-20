@@ -907,6 +907,36 @@ class TestComputeFleetSpareCapacityKw:
         # a regression to nominal-capacity (soh=1.0) floor
         assert result == pytest.approx((0.4,))
 
+    def test_the_floor_is_the_configs_soc_envelope_minimum(self) -> None:
+        """PRD dispatch-configuration-below-config §9 row 11: 0.2 of a 10 kWh battery at SOH 0.7 is a 1.4 kWh floor.
+
+        The lowest in-window SOC, 2.9 kWh, leaves 1.5 kWh above it over the 3-hour event, 0.5 kW;
+        a floor of 0.2 of the 10 kWh nameplate, 2.0 kWh, would leave 0.3 kW.
+        """
+        idx = pd.DatetimeIndex(
+            ["2024-12-02 16:00", "2024-12-02 17:00", "2024-12-02 18:00"],
+            tz="Europe/London",
+        )
+        w = EventWindow(
+            months=(12,), weekdays=(0,), hours=(16, 17, 18),
+            events_per_year=12, event_hours=3.0,
+        )
+        bat_cfg = BatteryConfig(
+            capacity_kwh=10.0, max_discharge_kw=3.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8,
+        )
+        sim = _make_gs_sim_results(
+            battery_soc=[4.4, 3.4, 2.9],
+            battery_discharge=[0.5, 0.5, 0.5],
+            index=idx,
+        )
+        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(bat_cfg))])
+        envelope = bat_cfg.soc_envelope()
+
+        result = compute_fleet_spare_capacity_kw(fleet, (w,))
+
+        assert result == pytest.approx((min(3.0 - 0.5, (2.9 - envelope.min_soc_kwh) / 3.0),))
+        assert result == pytest.approx((0.5,))
+
     def test_soc_below_floor_clamps_to_zero(self) -> None:
         """Home whose soc dips below min_soc_kwh mid-window must contribute 0.
 

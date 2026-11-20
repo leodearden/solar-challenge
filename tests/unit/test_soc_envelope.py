@@ -10,11 +10,15 @@ import math
 import re
 
 import pytest
-from solar_challenge.battery import SocEnvelope
+from solar_challenge.battery import Battery, BatteryConfig, SocEnvelope, compute_soh
+from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
 
 _ROW_11_ENVELOPE = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=1.4, max_soc_kwh=5.6)
 """Row 11's envelope built directly: a 10 kWh battery at SOH 0.7 with SOC limits of 0.2 and 0.8."""
+
+_ROW_11_CONFIG = BatteryConfig(capacity_kwh=10.0, soh=0.7, min_soc_fraction=0.2, max_soc_fraction=0.8)
+"""Row 11's battery: 10 kWh at SOH 0.7, with SOC limits of 0.2 and 0.8."""
 
 
 class TestSocEnvelope:
@@ -83,3 +87,66 @@ class TestSocEnvelope:
         """The order is not strict: two SOC fractions a Battery admits can round to the same kWh."""
         envelope = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=min_soc_kwh, max_soc_kwh=max_soc_kwh)
         assert (envelope.min_soc_kwh, envelope.max_soc_kwh) == (min_soc_kwh, max_soc_kwh)
+
+
+class TestBatteryConfigResolvedSoh:
+    """BatteryConfig.resolved_soh is the one SOH resolution: the soh override as given, else calendar fade alone."""
+
+    def test_the_override_wins(self) -> None:
+        assert BatteryConfig(capacity_kwh=10.0, soh=0.7, system_age_years=5.0).resolved_soh == 0.7
+
+    def test_an_override_below_the_floor_is_used_as_given(self) -> None:
+        config = BatteryConfig(capacity_kwh=10.0, soh=0.3)
+        assert config.soh_floor == 0.5
+        assert config.resolved_soh == 0.3
+
+    @pytest.mark.parametrize(("system_age_years", "soh"), [(5.0, 0.9), (0.0, 1.0)])
+    def test_without_an_override_it_is_the_calendar_fade_alone(self, system_age_years: float, soh: float) -> None:
+        """A single run accrues no throughput, so there is no cycle fade."""
+        config = BatteryConfig(capacity_kwh=10.0, system_age_years=system_age_years)
+        assert config.resolved_soh == compute_soh(system_age_years, 0.0, config.nominal_usable_capacity_kwh, config)
+        assert config.resolved_soh == pytest.approx(soh)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(BatteryConfig(capacity_kwh=10.0, soh=0.7, system_age_years=5.0), id="override"),
+            pytest.param(BatteryConfig(capacity_kwh=10.0, soh=0.3), id="override-below-the-floor"),
+            pytest.param(BatteryConfig(capacity_kwh=10.0, system_age_years=5.0), id="calendar-faded"),
+            pytest.param(BatteryConfig(capacity_kwh=10.0), id="new"),
+        ],
+    )
+    def test_a_battery_holds_its_configs_resolved_soh(self, config: BatteryConfig) -> None:
+        assert Battery(config).soh == config.resolved_soh
+
+
+class TestBatteryConfigSocEnvelope:
+    """BatteryConfig.soc_envelope() is the envelope a Battery built from the config answers, read without building one."""
+
+    def test_row_11s_envelope(self) -> None:
+        assert dataclasses.astuple(_ROW_11_CONFIG.soc_envelope()) == pytest.approx((7.0, 1.4, 5.6))
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            pytest.param(_ROW_11_CONFIG, id="row-11"),
+            pytest.param(BatteryConfig(capacity_kwh=10.0), id="defaults"),
+            pytest.param(
+                BatteryConfig(capacity_kwh=10.0, min_soc_fraction=0.2, system_age_years=5.0), id="calendar-faded"
+            ),
+        ],
+    )
+    def test_it_is_the_envelope_a_battery_built_from_the_config_answers(self, config: BatteryConfig) -> None:
+        envelope = config.soc_envelope()
+        battery = Battery(config)
+        assert (envelope.effective_capacity_kwh, envelope.min_soc_kwh, envelope.max_soc_kwh) == (
+            battery.effective_capacity_kwh,
+            battery.min_soc_kwh,
+            battery.max_soc_kwh,
+        )
+
+    @pytest.mark.parametrize("target_soc_fraction", [0.5, 0.95])
+    def test_its_target_is_the_grid_charge_target_a_battery_answers(self, target_soc_fraction: float) -> None:
+        """0.95 is above row 11's ceiling of 0.8, so both land on max_soc_kwh."""
+        config = dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(target_soc_fraction))
+        assert config.soc_envelope().target_kwh(target_soc_fraction) == Battery(config).grid_charge_target_kwh
