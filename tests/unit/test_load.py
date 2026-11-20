@@ -879,7 +879,7 @@ class TestHouseholdOnLocalDays:
         dates = list(pd.date_range(first, last).date)
         assert household.windows == [dates]
         assert household.days_simulated == dates
-        day_of_year = profile.index.dayofyear.to_numpy()
+        day_of_year = profile.index.day_of_year.to_numpy()
         assert (profile / profile.iloc[0]).to_numpy() == pytest.approx(day_of_year / day_of_year[0], rel=1e-12)
 
     @pytest.mark.parametrize(("first", "last"), [_ACROSS_THE_SPRING_CHANGE, _ACROSS_THE_AUTUMN_CHANGE])

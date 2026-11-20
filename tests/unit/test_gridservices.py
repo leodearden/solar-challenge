@@ -126,7 +126,7 @@ class TestEventWindowMask:
         assert mask.tolist() == [False, True, False]
 
     def test_mask_reads_its_index_without_a_warning(self) -> None:
-        """mask() raises no warning, not even a pandas deprecation such as 3.1's of DatetimeIndex.weekday."""
+        """mask() raises no warning, not even a pandas deprecation such as 3.1's of the index's weekday alias."""
         # Mon Dec 2 2024, 15:00 to 18:00: the first hour is before the window.
         idx = pd.date_range("2024-12-02 15:00", periods=4, freq="h", tz="Europe/London")
 
