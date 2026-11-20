@@ -10,6 +10,7 @@ import yaml
 
 pytest.importorskip("flask")
 
+from solar_challenge.config import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_writer import location_block
@@ -23,7 +24,7 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
+from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS, parse_seg_tariff
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -183,6 +184,53 @@ class TestParseFleetForm:
 
         assert _run(changed) != _run(given)
         assert changed.scenario != given.scenario
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            pytest.param(_FLEET_FORM, id="with-overlays"),
+            pytest.param(_without(_FLEET_FORM, "tariff", "seg", "dispatch_strategy"), id="without-overlays"),
+        ],
+    )
+    def test_every_home_holds_the_forms_tariff_and_seg_and_every_battery_its_dispatch_strategy(
+        self, form: dict[str, Any]
+    ) -> None:
+        """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value."""
+        tariff = parse_tariff_config(form.get("tariff"))
+        seg = parse_seg_tariff(form.get("seg"))
+        dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+
+        homes = parse_fleet_form(form).homes
+
+        assert [(home.tariff_config, home.seg_tariff) for home in homes] == [(tariff, seg)] * len(homes)
+        assert [
+            home.battery_config.dispatch_strategy for home in homes if home.battery_config is not None
+        ] == [dispatch] * 2
+        assert sum(home.battery_config is None for home in homes) == 1
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param({"strategy_type": "turbo"}, id="unknown-type"),
+            pytest.param({"strategy_type": "peak_shaving"}, id="missing-setting"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "form",
+        [
+            pytest.param(_FLEET_FORM, id="with-battery"),
+            pytest.param(_without(_FLEET_FORM, "battery"), id="without-battery"),
+        ],
+    )
+    def test_a_refused_dispatch_strategy_gets_its_readers_refusal_of_the_forms_value(
+        self, form: dict[str, Any], value: dict[str, Any]
+    ) -> None:
+        """The refusal names the form's own dispatch_strategy key, never fleet_distribution.battery.dispatch_strategy, whether or not a battery carries it."""
+        with pytest.raises(ConfigurationError) as expected:
+            parse_dispatch_strategy_config(value)
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form({**form, "dispatch_strategy": value})
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
 class TestParseFleetFormName:
