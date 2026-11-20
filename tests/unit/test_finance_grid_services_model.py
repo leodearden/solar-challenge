@@ -4,8 +4,6 @@
 The rule is the β column of docs/prds/grid-services-pricing-model.md §5.2.
 """
 
-import re
-
 import pytest
 
 from solar_challenge.errors import ConfigurationError
@@ -18,6 +16,11 @@ from solar_challenge.gridservices import (
 )
 
 _EVENTS = GridServicesEventsConfig(band="high", aggregator_share=0.1)
+
+# The refusal of the events model with no events configuration opens as it did when only project_multi_year refused it.
+_EVENTS_MODEL_WITHOUT_EVENTS = (
+    "grid_services_model='capacity_at_events' requires grid_services_events to be configured"
+)
 
 
 @pytest.mark.parametrize(
@@ -65,14 +68,14 @@ def test_grid_services_model_of_maps_todays_three_fields(
             "capacity_at_events",
             0.0,
             None,
-            ("'capacity_at_events'", "grid_services_events"),
+            (_EVENTS_MODEL_WITHOUT_EVENTS, "grid_services_events=None"),
             id="events-model-zero-rate-without-events",
         ),
         pytest.param(
             "capacity_at_events",
             12.0,
             None,
-            ("'capacity_at_events'", "grid_services_events"),
+            (_EVENTS_MODEL_WITHOUT_EVENTS, "grid_services_events=None"),
             id="events-model-rate-without-events",
         ),
         pytest.param(
@@ -99,24 +102,3 @@ def test_an_inconsistent_grid_services_choice_is_refused_at_construction(
     message = str(refusal.value)
     for token in named:
         assert token in message, message
-
-
-def test_the_events_model_with_no_events_block_is_refused_naming_grid_services_events() -> None:
-    with pytest.raises(ConfigurationError, match="grid_services_events"):
-        FinanceConfig(standing_charge_pence_per_day=60, grid_services_model="capacity_at_events")
-
-
-@pytest.mark.parametrize("rate", [0.0, 12.0])
-def test_the_events_model_without_events_is_refused_at_construction(rate: float) -> None:
-    with pytest.raises(
-        ConfigurationError,
-        match=re.escape(
-            "grid_services_model='capacity_at_events' requires "
-            "grid_services_events to be configured"
-        ),
-    ):
-        FinanceConfig(
-            standing_charge_pence_per_day=60,
-            grid_services_model="capacity_at_events",
-            grid_services_income_per_kw_per_year_gbp=rate,
-        )

@@ -8,8 +8,8 @@ the flat per-kW term, gated by FinanceConfig.grid_services_model.
 
 Covers, after the shared helpers:
 - B3: supersede takes effect.
-- Guard: capacity_at_events + events=None is refused with ConfigurationError when the
-  FinanceConfig is built, and finance run refuses such a scenario before any simulation (C6).
+- Guard (C6): finance run refuses a capacity_at_events scenario with no
+  grid_services_events block before any simulation.
 - C1, C2: each simulated age, seed or bisection trial, books its own fleet's
   event income.
 - An event window the simulated period never enters warns once per projection.
@@ -215,20 +215,8 @@ def test_b3_supersede_event_derived_figure_replaces_flat() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Guard — None events → ConfigurationError
+# Guard (C6) — None events → ConfigurationError before any simulation
 # ---------------------------------------------------------------------------
-
-
-def test_the_events_model_without_events_is_refused_at_construction() -> None:
-    """capacity_at_events + grid_services_events=None is refused when the FinanceConfig is built, so no projection can be asked of it."""
-    _scenario, finance_base = board_econ_scenario()
-
-    with pytest.raises(ConfigurationError, match="grid_services_events"):
-        dataclasses.replace(
-            finance_base,
-            grid_services_model="capacity_at_events",
-            grid_services_events=None,
-        )
 
 
 def test_finance_run_refuses_the_events_model_without_events_before_simulating(
@@ -241,7 +229,9 @@ def test_finance_run_refuses_the_events_model_without_events_before_simulating(
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     simulated: list[FleetConfig] = []
 
-    def _recording_simulate(fleet_config, start_ts, end_ts):  # type: ignore[no-untyped-def]
+    def _recording_simulate(
+        fleet_config: FleetConfig, start_ts: pd.Timestamp, end_ts: pd.Timestamp
+    ) -> FleetResults:
         simulated.append(fleet_config)
         return _synthetic_fleet_results_in_window(fleet_config.homes)
 

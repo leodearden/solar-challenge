@@ -264,15 +264,12 @@ def test_unset_grid_services_is_theta_safe_noop() -> None:
     )
     surplus_explicit = _surplus_at(scenario, finance_explicit_zero, simulate)
 
-    # Path 1 — production-parser omitted path: pop the key from the finance dict,
-    # so parse_finance_config leaves it to FinanceConfig's declared default.
+    # Path 1 — production-parser omitted path: the board's finance block omits the
+    # rate, so parse_finance_config leaves it to FinanceConfig's declared default.
+    # Removing the board's events-model keys too leaves every grid-services key
+    # unset, so FinanceConfig's declared default, the flat model, applies.
     cfg = load_config(SCENARIO)
     finance_dict = dict(cfg["finance"])
-    finance_dict.pop("grid_services_income_per_kw_per_year_gbp", None)
-    # Also remove event-model keys so FinanceConfig's declared default, the flat
-    # model, applies.
-    # No-op before task-76 ε flip (board YAML is flat); preserves the
-    # "all grid-services keys unset" intent after the flip.
     finance_dict.pop("grid_services_model", None)
     finance_dict.pop("grid_services_events", None)
     assert "grid_services_income_per_kw_per_year_gbp" not in finance_dict, (
