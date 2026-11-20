@@ -2249,9 +2249,13 @@ def generate_homes_from_distribution(
             infinity or a NaN); if a required field draws null, naming its path and the
             home; if a presence rule refuses a draw, as battery.has_battery refuses a
             negative or non-finite battery capacity; if the fleet gives a home no PV or no
-            load, which every home needs, naming the component and the home; or as a
+            load, which every home needs, naming the component and the home; as a
             component's dataclass refuses what it is built from, naming the component and
-            the home. Where it uses them, it checks again what FleetDistributionConfig
+            the home; or as HomeConfig refuses a home whose battery's dispatch would ignore
+            a setting (tou_optimized with no fleet_tariff, or a grid_charging its dispatch
+            would ignore), in HomeConfig's words, which name neither the home nor the
+            fleet_distribution block.
+            Where it uses them, it checks again what FleetDistributionConfig
             refuses as it is built: that each shuffled pool's counts total config.n_homes,
             that each required field is drawn and that each proportional_to's source is a
             number the home drew earlier.
