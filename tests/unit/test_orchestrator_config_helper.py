@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_orchestrator_config.py, the orchestrator contract tests' reader of dark-factory-orchestrator.yaml.
 
-Each test reads a throwaway project's yaml: its git mapping, its lane jobs, and
-the OrchestratorCommand values built from its verify slots and lane jobs.
+Each test reads a throwaway project's yaml: its git mapping, its lane jobs, the
+OrchestratorCommand values built from its verify slots and lane jobs, and the
+steps of a lane job's command.
 """
 
 import textwrap
@@ -13,10 +14,12 @@ import pytest
 import yaml
 
 from tests._orchestrator_config import (
+    LaneJobSteps,
     OrchestratorCommand,
     git_config,
     lane_command,
     lane_commands,
+    lane_job_steps,
     lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
@@ -24,6 +27,13 @@ from tests._orchestrator_config import (
 )
 
 _COMMAND = "uv run --locked --extra dev pytest -m 'not slow' -p no:cacheprovider"
+
+_INSTALL_STEP = (
+    "PLAYWRIGHT_SKIP_BROWSER_GC=1 timeout -k 60 600 uv run --locked --extra e2e playwright install "
+    "chromium-headless-shell"
+)
+
+_SUITE_STEP = "uv run --locked --extra dev pytest -m 'not slow'"
 
 _OUTAGE_PROBE = "uv run --locked --extra dev python scripts/check.py"
 
@@ -278,6 +288,99 @@ def test_the_lane_commands_of_a_lane_with_a_disabled_job_fail_naming_that_job(tm
         lane_commands(tmp_path)
 
     assert "'dormant'" in str(failure.value)
+
+
+def test_a_lane_job_that_runs_pytest_alone_is_its_suite_step_with_no_setup_step(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": _COMMAND}))
+
+    assert lane_job_steps(tmp_path, "probe") == LaneJobSteps(setup=(), suite=lane_command(tmp_path, "probe"))
+
+
+def test_each_step_a_lane_job_chains_by_and_before_its_last_is_a_setup_step_in_order_run_where_the_job_runs(
+    tmp_path: Path,
+) -> None:
+    """Each step is its words re-joined with shlex.join, which leaves the variable assignment unquoted, so sh still reads it as one."""
+    directory = tmp_path / "tests" / "e2e"
+    directory.mkdir(parents=True)
+    _write_orchestrator_config(
+        tmp_path,
+        _with_lane_jobs(
+            {"name": "probe", "command": f"{_INSTALL_STEP} && touch x && {_SUITE_STEP}", "cwd": "tests/e2e"}
+        ),
+    )
+
+    assert lane_job_steps(tmp_path, "probe") == LaneJobSteps(
+        setup=(
+            OrchestratorCommand(
+                label="setup step 1 of the lane job 'probe'",
+                command=_INSTALL_STEP,
+                directory=directory,
+                role="offline",
+            ),
+            OrchestratorCommand(
+                label="setup step 2 of the lane job 'probe'", command="touch x", directory=directory, role="offline"
+            ),
+        ),
+        suite=OrchestratorCommand(label="lane job 'probe'", command=_SUITE_STEP, directory=directory, role="offline"),
+    )
+
+
+def test_an_and_inside_a_quoted_argument_is_no_step_boundary(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": "pytest -k 'a && b'"}))
+
+    steps = lane_job_steps(tmp_path, "probe")
+
+    assert steps.setup == ()
+    assert steps.suite.command == "pytest -k 'a && b'"
+
+
+@pytest.mark.parametrize(
+    ("command", "operator"),
+    [
+        pytest.param("true || pytest", "||", id="or"),
+        pytest.param("true; pytest", ";", id="semicolon"),
+        pytest.param("true | pytest", "|", id="pipe"),
+    ],
+)
+def test_a_lane_job_whose_command_holds_an_operator_other_than_and_fails_naming_the_job_and_the_operator(
+    tmp_path: Path, command: str, operator: str
+) -> None:
+    """The lane runs the whole command under sh, so a step shape the steps cannot model fails here rather than being collected wrongly."""
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": command}))
+
+    with pytest.raises(AssertionError) as failure:
+        lane_job_steps(tmp_path, "probe")
+
+    assert "lane job 'probe'" in str(failure.value)
+    assert repr(operator) in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("pytest tests && true", id="last-step-runs-no-pytest"),
+        pytest.param("pytest a && pytest b", id="setup-step-runs-pytest"),
+    ],
+)
+def test_a_lane_job_whose_pytest_runs_other_than_in_its_last_step_alone_fails_naming_the_job(
+    tmp_path: Path, command: str
+) -> None:
+    """The probes model the job by the one step that runs pytest, so that step must be the last and the only one."""
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": command}))
+
+    with pytest.raises(AssertionError) as failure:
+        lane_job_steps(tmp_path, "probe")
+
+    assert "lane job 'probe'" in str(failure.value)
+
+
+def test_a_lane_job_with_an_empty_step_fails_naming_the_job(tmp_path: Path) -> None:
+    _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": "&& pytest"}))
+
+    with pytest.raises(AssertionError) as failure:
+        lane_job_steps(tmp_path, "probe")
+
+    assert "lane job 'probe'" in str(failure.value)
 
 
 def test_a_lane_jobs_outage_probe_is_its_yaml_string_verbatim_run_in_the_jobs_directory_offline(
