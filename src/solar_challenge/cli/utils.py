@@ -43,6 +43,7 @@ from rich.text import Text
 
 from solar_challenge.battery import has_battery
 from solar_challenge.config import load_config
+from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulate, FleetSummary, default_runner
 from solar_challenge.home import SummaryStatistics
@@ -84,10 +85,8 @@ def handle_errors(func: F) -> F:
 
 
 def _print_error_verbatim(label: str, error: Exception) -> None:
-    """Print label in red, then error's text exactly as it is, then each of its notes exactly as it is, on a line of its own."""
-    _print_verbatim(error_console, (f"{label}:", "red"), " ", str(error))
-    for note in getattr(error, "__notes__", ()):
-        _print_verbatim(error_console, note)
+    """Print label in red, then error's text and each of its __notes__ on a line of its own as error_text_with_notes reads them, none of it read as Rich markup."""
+    _print_verbatim(error_console, (f"{label}:", "red"), " ", error_text_with_notes(error))
 
 
 def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:

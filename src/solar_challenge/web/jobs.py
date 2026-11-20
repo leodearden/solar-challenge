@@ -22,7 +22,7 @@ import uuid
 import weakref
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Literal, TypeAlias
 
@@ -30,6 +30,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 import pandas as pd
 
+from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.web.run_names import is_run_name
@@ -111,37 +112,6 @@ _active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
 def _random_id() -> str:
     """Return a new random UUID as a string."""
     return str(uuid.uuid4())
-
-
-def _text_or(value: object, unreadable: str, read: Callable[[object], str] = str) -> str:
-    """*value* as *read* gives it, str by default, or *unreadable* when reading it raises an Exception."""
-    try:
-        return read(value)
-    except Exception:
-        return unreadable
-
-
-def _note_texts_of(error: BaseException) -> list[str]:
-    """The text of each of *error*'s notes.
-
-    add_note keeps __notes__ a list, but an assignment can leave it anything. One that is not a sequence of notes, a
-    str or bytes included, is shown as the interpreter's traceback shows it: as a single entry, its repr.
-    """
-    notes = getattr(error, "__notes__", ())
-    if isinstance(notes, Sequence) and not isinstance(notes, (str, bytes)):
-        return [_text_or(note, "A note whose text could not be read") for note in notes]
-    return [_text_or(notes, "A __notes__ whose text could not be read", read=repr)]
-
-
-def _message_of(error: BaseException) -> str:
-    """The message of a job that failed with *error*: the error's text, then each of its notes on a line of its own.
-
-    A text that cannot be read, the error's or a note's, is named as unreadable in its place. A __notes__ that is not a
-    sequence of notes is one line, as _note_texts_of gives it.
-    """
-    return "\n".join(
-        [_text_or(error, f"{type(error).__name__}, whose message could not be read"), *_note_texts_of(error)]
-    )
 
 
 def live_managers() -> "frozenset[JobManager]":
@@ -624,7 +594,7 @@ class JobManager:
                 error,
                 exc_info=error,
             )
-            self._fail_job(job_id, _message_of(error))
+            self._fail_job(job_id, error_text_with_notes(error))
         else:
             logger.error(
                 "Job %s of run %s ended without reporting an outcome, a defect in its runner", job_id, state.run_id
@@ -738,7 +708,7 @@ class JobManager:
         save the simulation returns writes the results of run *run_id*, the run is marked completed, and only then
         is the job reported completed. A cancelled job reports cancelled even if its simulation then raises an
         Exception. Otherwise an Exception the simulation or the completion raises fails the job, and its run is
-        recorded failed, with the message _message_of reads. An error that is not an Exception, other than
+        recorded failed, with the message error_text_with_notes reads. An error that is not an Exception, other than
         _JobCancelled, escapes to the done-callback, _on_job_done, which fails the job.
         """
         cancellation = self._cancellation_of(job_id)
@@ -761,7 +731,7 @@ class JobManager:
             if cancellation.is_cancelled:
                 self._report_cancelled_job(job_id)
             else:
-                self._fail_job(job_id, _message_of(exc))
+                self._fail_job(job_id, error_text_with_notes(exc))
 
     def _run_home_simulation(
         self,

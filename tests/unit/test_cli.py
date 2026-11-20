@@ -38,6 +38,7 @@ from solar_challenge.cli.utils import (
     status_console,
 )
 from solar_challenge.config import load_config, parse_finance_config
+from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
@@ -310,6 +311,16 @@ _HANDLED_ERRORS_AND_LABELS = [
 """Each error type handle_errors prints, with the label it prints it under."""
 
 
+def _an_error_whose_text_cannot_be_read(error_type: type[Exception]) -> Exception:
+    """An Unreadable: a subclass of *error_type* whose __str__ raises a RuntimeError, so its text cannot be read."""
+
+    def unreadable_text(error: Exception) -> str:
+        raise RuntimeError("the text of this error cannot be read")
+
+    unreadable: type[Exception] = type("Unreadable", (error_type,), {"__str__": unreadable_text})
+    return unreadable()
+
+
 class TestErrorHandling:
     """Tests for CLI error handling."""
 
@@ -505,6 +516,42 @@ class TestErrorHandling:
         assert exit_.value.exit_code == 1
         lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
         assert lines == [f"{label}: it failed", "first note", "second note [/b]"]
+
+    @pytest.mark.parametrize(("error_type", "label"), _HANDLED_ERRORS_AND_LABELS)
+    def test_an_error_whose_text_cannot_be_read_prints_under_its_label_as_error_text_with_notes_reads_it(
+        self, capsys: pytest.CaptureFixture[str], error_type: type[Exception], label: str
+    ) -> None:
+        """The RuntimeError its __str__ raises does not escape the handler."""
+        error = _an_error_whose_text_cannot_be_read(error_type)
+
+        @handle_errors
+        def fail() -> None:
+            raise error
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
+        assert lines == f"{label}: {error_text_with_notes(error)}".splitlines()
+
+    def test_notes_print_under_the_text_as_error_text_with_notes_reads_them(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """__notes__ is assigned a str, which a loop over the notes would print one character per line."""
+        error = ValueError("it failed")
+        setattr(error, "__notes__", "abc")
+
+        @handle_errors
+        def fail() -> None:
+            raise error
+
+        with pytest.raises(typer.Exit) as exit_:
+            fail()
+
+        assert exit_.value.exit_code == 1
+        lines = [line.strip() for line in capsys.readouterr().err.splitlines() if line.strip()]
+        assert lines == f"Invalid value: {error_text_with_notes(error)}".splitlines()
 
 
 class TestPrintHelpers:
