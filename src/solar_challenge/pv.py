@@ -84,7 +84,19 @@ _MODULE_KEYS_READ_AS_NUMBERS = (
     | _PVSYST_ONLY_MODULE_KEYS
     | _OPTIONAL_MODULE_KEYS
 )
-"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
+"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers, each inside its _MODULE_NUMBER_DOMAINS domain where it has one: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
+
+_ABSOLUTE_ZERO_C = -273.15
+"""Absolute zero in °C: pvlib adds 273.15 to a module's temp_ref to get kelvin."""
+
+_MODULE_NUMBER_DOMAINS: Mapping[str, Interval] = MappingProxyType(
+    {
+        "temp_ref": Interval(_ABSOLUTE_ZERO_C, math.inf, low_open=True),
+        "irrad_ref": POSITIVE,
+        "I_L_ref": POSITIVE,
+    }
+)
+"""The domains of the module numbers a model divides by or whose sign it assumes, inside which _require_module_values reads them: pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and _adjust_bracket's photocurrent-positive bracket needs a positive I_L_ref. The rule reads every other key of _MODULE_KEYS_READ_AS_NUMBERS as any finite number (docs/pv-module-settings.md §2)."""
 
 _MODULE_KEYS_READ_AS_FLAGS = frozenset({"cap_adjustment"})
 """The module parameters pvlib reads by their truthiness, which _require_module_values checks as true or false: pvwatts_dc's cap_adjustment, which applies its k adjustment only at and below 1000 W/m² when true."""
@@ -106,10 +118,14 @@ def _one_reader_per_key(
 
 
 _MODULE_VALUE_READERS = _one_reader_per_key(
-    (_MODULE_KEYS_READ_AS_NUMBERS, as_finite_real),
+    (_MODULE_KEYS_READ_AS_NUMBERS.difference(_MODULE_NUMBER_DOMAINS.keys()), as_finite_real),
+    *(
+        (frozenset({key}), functools.partial(as_finite_real, within=domain))
+        for key, domain in _MODULE_NUMBER_DOMAINS.items()
+    ),
     (_MODULE_KEYS_READ_AS_FLAGS, as_boolean),
 )
-"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, as_boolean for a flag."""
+"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, inside its _MODULE_NUMBER_DOMAINS domain for a key that has one, and as_boolean for a flag."""
 
 
 def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
@@ -123,7 +139,7 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
 
 
 def _require_module_values(module_params: Mapping[str, object]) -> None:
-    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
+    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or as one outside its _MODULE_NUMBER_DOMAINS domain, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
 
     A key the module lacks takes pvlib's default; one given as None is refused. The keys
     are read in sorted order, so when several are bad the first refusal does not vary with
@@ -187,7 +203,8 @@ class PVConfig:
             DEFAULT_CEC_MODULE's value for either key the module lacks
             (docs/pv-cell-temperature.md). Construction and use refuse custom
             parameters that give a key the number rule checks as anything but a
-            finite number, text that reads as one included, or cap_adjustment as
+            finite number, text that reads as one included, temp_ref at or below
+            -273.15, irrad_ref or I_L_ref at or below 0, or cap_adjustment as
             anything but true or false (_require_module_values;
             docs/pv-module-settings.md), even where a set field replaces that key.
             They also refuse
