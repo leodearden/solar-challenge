@@ -1258,6 +1258,58 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
             assert array.module_parameters["Technology"] == module["Technology"]
 
 
+class TestAModuleFlagAModelReadsIsTrueOrFalse:
+    """pvlib's pvwatts_dc reads the module's own cap_adjustment, a flag, so construction and use refuse one that is not true or false, naming its key and value."""
+
+    @pytest.mark.parametrize(
+        "temperature_coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
+    )
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("False", id="cap_adjustment-text-False"),
+            pytest.param("true", id="cap_adjustment-text-true"),
+            pytest.param(0.0, id="cap_adjustment-0.0"),
+            pytest.param(1, id="cap_adjustment-1"),
+            pytest.param(None, id="cap_adjustment-none"),
+        ],
+    )
+    def test_a_cap_adjustment_that_is_not_true_or_false_is_refused_at_construction_and_at_use_naming_its_value(
+        self, value: str | float | None, temperature_coefficient: float | None
+    ) -> None:
+        """pvlib reads the flag by its truthiness, so the text "False" would turn the cap on: with k=0.01 the clear day gives 25.5581 kWh for both True and "False", and 25.5765 kWh for False (measured)."""
+        module = {**pvwatts_300_w_module(), "k": 0.01}
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=module,
+            temperature_coefficient=temperature_coefficient,
+        )
+        module["cap_adjustment"] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert "cap_adjustment" in re.findall(r"\w+", message), message
+        assert repr(value) in message, message
+        assert "must be true or false" in message, message
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            pytest.param(True, id="True"),
+            pytest.param(False, id="False"),
+            pytest.param(np.True_, id="numpy-True"),
+        ],
+    )
+    def test_a_python_or_numpy_bool_cap_adjustment_is_kept(self, flag: bool | np.bool_) -> None:
+        """The number rule refuses a bool, so the flag is never one of the keys it checks."""
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params={**pvwatts_300_w_module(), "k": 0.01, "cap_adjustment": flag},
+        )
+
+        for array in create_pv_system(config).arrays:
+            assert array.module_parameters["cap_adjustment"] is flag
+
+
 LINEAR_INVERTER_CONFIG = PVConfig(
     capacity_kw=4.0,
     custom_inverter_params=create_simple_inverter_params(efficiency=0.96, capacity_w=8000.0),
