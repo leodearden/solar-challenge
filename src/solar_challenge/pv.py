@@ -4,9 +4,10 @@
 import functools
 import math
 import warnings
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -68,8 +69,8 @@ _SAPM_DC_MODULE_KEYS = frozenset(
 )
 """The module parameters pvlib's sapm reads into the power and voltages an inverter reads. IXO, IXXO and C4 to C7 are left out: pvlib marks them not required and reads them only into i_x and i_xx, which no inverter model reads, and 10 SandiaMod rows give them NaN."""
 
-_PVSYST_MODULE_KEYS = frozenset({"gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series"})
-"""calcparams_pvsyst's module parameters that _CEC_SINGLE_DIODE_MODULE_KEYS and _OPTIONAL_MODULE_KEYS leave out, which pvlib's PVsyst single-diode model reads."""
+_PVSYST_ONLY_MODULE_KEYS = frozenset({"gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series"})
+"""The module parameters only pvlib's PVsyst single-diode model reads: calcparams_pvsyst's, less those _CEC_SINGLE_DIODE_MODULE_KEYS and _OPTIONAL_MODULE_KEYS hold, so not the whole PVsyst form."""
 
 _OPTIONAL_MODULE_KEYS = frozenset(
     {"EgRef", "dEgdT", "irrad_ref", "temp_ref", "k", "FD", "n", "K", "L", "n_ar"}
@@ -80,13 +81,35 @@ _MODULE_KEYS_READ_AS_NUMBERS = (
     frozenset({"gamma_pdc", "T_NOCT", "A_c", "V_mp_ref"})
     | _CEC_SINGLE_DIODE_MODULE_KEYS
     | _SAPM_DC_MODULE_KEYS
-    | _PVSYST_MODULE_KEYS
+    | _PVSYST_ONLY_MODULE_KEYS
     | _OPTIONAL_MODULE_KEYS
 )
 """The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
 
 _MODULE_KEYS_READ_AS_FLAGS = frozenset({"cap_adjustment"})
 """The module parameters pvlib reads by their truthiness, which _require_module_values checks as true or false: pvwatts_dc's cap_adjustment, which applies its k adjustment only at and below 1000 W/m² when true."""
+
+_ModuleValueReader: TypeAlias = Callable[[object, str], object]
+"""A reader of a module parameter's value under its field name, refusing a value it does not admit with a ConfigurationError naming the field and the value."""
+
+
+def _one_reader_per_key(
+    *families: tuple[frozenset[str], _ModuleValueReader],
+) -> Mapping[str, _ModuleValueReader]:
+    """Each key of the (keys, reader) families mapped to its family's reader, refusing a key two families hold, whose second reader would silently replace the first."""
+    readers: dict[str, _ModuleValueReader] = {}
+    for keys, reader in families:
+        if shared := sorted(keys & readers.keys()):
+            raise RuntimeError(f"Module parameters {shared} are in two families of checked keys")
+        readers.update(dict.fromkeys(keys, reader))
+    return MappingProxyType(readers)
+
+
+_MODULE_VALUE_READERS = _one_reader_per_key(
+    (_MODULE_KEYS_READ_AS_NUMBERS, as_finite_real),
+    (_MODULE_KEYS_READ_AS_FLAGS, as_boolean),
+)
+"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, as_boolean for a flag."""
 
 
 def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
@@ -100,18 +123,14 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
 
 
 def _require_module_values(module_params: Mapping[str, object]) -> None:
-    """Refuse a module that gives one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
+    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
 
     A key the module lacks takes pvlib's default; one given as None is refused. The keys
     are read in sorted order, so when several are bad the first refusal does not vary with
-    PYTHONHASHSEED, as the iteration order of a frozenset of strings does.
+    PYTHONHASHSEED, as the iteration order of a set of strings does.
     """
-    for key in sorted((_MODULE_KEYS_READ_AS_NUMBERS | _MODULE_KEYS_READ_AS_FLAGS) & module_params.keys()):
-        field = f"Module parameter {key}"
-        if key in _MODULE_KEYS_READ_AS_FLAGS:
-            as_boolean(module_params[key], field)
-        else:
-            as_finite_real(module_params[key], field)
+    for key in sorted(_MODULE_VALUE_READERS.keys() & module_params.keys()):
+        _MODULE_VALUE_READERS[key](module_params[key], f"Module parameter {key}")
 
 
 def _require_template_takes_temperature_coefficient(
