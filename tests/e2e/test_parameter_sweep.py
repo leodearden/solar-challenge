@@ -36,8 +36,9 @@ region.
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
 wait for the page to fetch those results, when it times out, fails naming the
-jobs whose results it has not fetched; and that a real three-point sweep draws
-one chart per metric from its points' runs.
+jobs whose results it has not fetched, while a Playwright timeout raised inside
+that wait's block passes through it unchanged; and that a real three-point
+sweep draws one chart per metric from its points' runs.
 
 Each faked progress stream is answered with frames the server's own encoder
 builds from its catalogue (tests/e2e/_job_requests.py).
@@ -738,7 +739,7 @@ def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_j
 
 @contextmanager
 def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator[None]:
-    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched."""
+    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched. An exception the block raises, a Playwright timeout among them, passes through unchanged."""
     fetched: set[str] = set()
 
     def note_fetched_results(request: Request) -> None:
@@ -750,9 +751,11 @@ def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator
             for job_id in job_ids:
                 fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
             yield
-    except PlaywrightTimeoutError as timed_out:
-        unfetched = [job_id for job_id in job_ids if job_id not in fetched]
-        raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
+            try:
+                fetches_finished.close()
+            except PlaywrightTimeoutError as timed_out:
+                unfetched = [job_id for job_id in job_ids if job_id not in fetched]
+                raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
     finally:
         page.remove_listener("requestfinished", note_fetched_results)
 
@@ -819,7 +822,22 @@ def test_each_points_results_fetched_fails_naming_the_jobs_whose_results_the_pag
     ):
         page.evaluate("url => fetch(url).then(response => response.text())", f"/api/jobs/{fetched}/results")
 
-    assert (unfetched in str(failure.value), fetched in str(failure.value)) == (True, False)
+    message = str(failure.value)
+    assert unfetched in message
+    assert fetched not in message
+
+
+def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raises_through_unchanged(
+    page: Page, live_server: str
+) -> None:
+    """A Playwright timeout raised inside the block _each_points_results_fetched wraps, here a locator's wait for a selector the page never shows, comes out of it unchanged, not relabelled as its failure naming unfetched jobs."""
+    page.goto(live_server + "/scenarios/sweep")
+
+    with (
+        pytest.raises(PlaywrightTimeoutError, match="#the-blocks-own-wait"),
+        _each_points_results_fetched(page, ["job-a"]),
+    ):
+        page.locator("#the-blocks-own-wait").wait_for(timeout=100)
 
 
 # -- A real sweep's charts, drawn from its points' runs ---------------------
