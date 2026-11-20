@@ -910,6 +910,24 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_on_one_worker_a_failed_home_is_named_on_its_own_exception_and_no_later_home_starts(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = _uniform_fleet(5, "Five")
+        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"}), seconds=0.2)
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=1)
+
+        with pytest.raises(ValueError) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Five')"]
+        _assert_every_started_home_finished(tmp_path)
+        assert set(started(tmp_path)) == {"Home 1"}, (
+            "the pool was handed Home 1 alone, and is handed a later home only once a finished home's results have "
+            "been read here, so reading Home 1's failure raised before any later home was handed on"
+        )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
     def test_in_parallel_a_pool_a_worker_process_broke_names_a_home_only_as_unfinished(
         self, tmp_path: Path, worker_start_method: str
     ) -> None:
