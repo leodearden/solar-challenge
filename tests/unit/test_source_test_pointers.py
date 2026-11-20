@@ -12,7 +12,7 @@ names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked 
 docstrings and code alike, but a Python file under tests/ is read only in its comments and the strings it writes as
 statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A file
 that is not UTF-8 text holds none. A briefing that does not parse, or whose conventions are not a sequence of one or
-more entries that each have a scalar rule and a scalar why, is reported rather than read as holding none. The path is
+more entries that each write a rule and a why as text, is reported rather than read as holding none. The path is
 looked up in the files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its
 names are looked up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not
 UTF-8 text, or that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds,
@@ -310,11 +310,11 @@ def _conventions_rules_and_whys(source: PurePosixPath, text: str) -> list[tuple[
     They are in text order, whichever of its keys an entry writes first. Each is sliced from *text*, the briefing's
     text, at the marks of its composed node, as _string_statements slices a string, so a line counted within a passage
     is a line of the file. A text that does not parse, or whose conventions are not a sequence of one or more entries
-    that each have a scalar rule and a scalar why, raises ValueError, naming the file.
+    that each write a rule and a why as text, raises ValueError, naming the file.
     """
     entries = _convention_entries(source, _composed(source, text))
     scalars = sorted(
-        (_scalar_of(source, entry, key) for entry in entries for key in _CONVENTION_TEXTS),
+        (_text_node_of(source, entry, key) for entry in entries for key in _CONVENTION_TEXTS),
         key=lambda scalar: scalar.start_mark.index,
     )
     return [(scalar.start_mark.line + 1, text[scalar.start_mark.index : scalar.end_mark.index]) for scalar in scalars]
@@ -342,15 +342,18 @@ def _convention_entries(source: PurePosixPath, document: yaml.Node | None) -> li
     return conventions.value
 
 
-def _scalar_of(source: PurePosixPath, entry: yaml.Node, key: str) -> yaml.ScalarNode:
-    """Return the scalar node the conventions *entry* of the briefing *source* maps *key* to.
+_STRING_TAG = "tag:yaml.org,2002:str"
 
-    An entry that is no mapping, or has no scalar under *key*, raises ValueError, naming the file, the entry's line and
-    the key.
+
+def _text_node_of(source: PurePosixPath, entry: yaml.Node, key: str) -> yaml.ScalarNode:
+    """Return the scalar node of the text the conventions *entry* of the briefing *source* maps *key* to.
+
+    An entry that is no mapping, or maps *key* to no string, raises ValueError, naming the file, the entry's line and
+    the key. A value left empty or written as a number is no string, nor is a list.
     """
     scalar = _value_of(entry, key)
-    if not isinstance(scalar, yaml.ScalarNode):
-        raise ValueError(f"{source}:{entry.start_mark.line + 1}: a conventions entry has no scalar {key} to read")
+    if not isinstance(scalar, yaml.ScalarNode) or scalar.tag != _STRING_TAG:
+        raise ValueError(f"{source}:{entry.start_mark.line + 1}: a conventions entry has no text {key} to read")
     return scalar
 
 
@@ -1175,26 +1178,38 @@ def test_reads_a_conventions_entry_in_text_order_whichever_of_its_keys_it_writes
         ("project: pkg\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions: none\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions: []\n", "review/briefing.yaml has no conventions sequence"),
-        ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
+        ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no text rule"),
         (
             "conventions:\n  - rule: [a, b]\n    why: x\n",
-            "review/briefing.yaml:2: a conventions entry has no scalar rule",
+            "review/briefing.yaml:2: a conventions entry has no text rule",
+        ),
+        (
+            "conventions:\n  - rule:\n    why: x\n",
+            "review/briefing.yaml:2: a conventions entry has no text rule",
         ),
         (
             "conventions:\n  - rule: a\n    why: b\n  - why: x\n",
-            "review/briefing.yaml:4: a conventions entry has no scalar rule",
+            "review/briefing.yaml:4: a conventions entry has no text rule",
         ),
-        ("conventions:\n  - rule: a\n", "review/briefing.yaml:2: a conventions entry has no scalar why"),
+        ("conventions:\n  - rule: a\n", "review/briefing.yaml:2: a conventions entry has no text why"),
         (
             "conventions:\n  - rule: a\n    why: [a, b]\n",
-            "review/briefing.yaml:2: a conventions entry has no scalar why",
+            "review/briefing.yaml:2: a conventions entry has no text why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why:\n",
+            "review/briefing.yaml:2: a conventions entry has no text why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: 1\n",
+            "review/briefing.yaml:2: a conventions entry has no text why",
         ),
         (
             "conventions:\n  - rule: a\n    why: b\n  - rule: c\n",
-            "review/briefing.yaml:4: a conventions entry has no scalar why",
+            "review/briefing.yaml:4: a conventions entry has no text why",
         ),
-        ("conventions:\n  - x: 1\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
-        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no scalar why"),
+        ("conventions:\n  - x: 1\n", "review/briefing.yaml:2: a conventions entry has no text rule"),
+        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no text why"),
         ("conventions: [rule\n", "review/briefing.yaml does not parse"),
     ],
     ids=[
@@ -1203,9 +1218,12 @@ def test_reads_a_conventions_entry_in_text_order_whichever_of_its_keys_it_writes
         "empty-conventions",
         "entry-without-a-rule",
         "rule-not-text",
+        "rule-left-empty",
         "second-entry-without-a-rule",
         "entry-without-a-why",
         "why-not-text",
+        "why-left-empty",
+        "why-a-number",
         "second-entry-without-a-why",
         "entry-without-a-rule-or-a-why",
         "first-entry-without-a-why-second-without-a-rule",
