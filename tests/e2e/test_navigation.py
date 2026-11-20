@@ -202,18 +202,19 @@ def test_dark_mode_toggle(page: Page, live_server: str) -> None:
 
 
 def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
-    """Clicking the collapse toggle collapses the sidebar from w-64 to w-16, and clicking it again expands it back to w-64."""
+    """Clicking the collapse toggle collapses the sidebar from w-64 to w-16 and moves the main column with it, and clicking it again expands both back; each layout is read where the toggle's slide ends."""
     _open_with_the_sidebar_stored(page, live_server + "/", "true")
-    sidebar = _desktop_sidebar(page)
     toggle = _sidebar_toggle(page)
     expect(toggle).to_have_attribute("title", "Collapse sidebar")
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_OPEN
 
     toggle.click()
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_COLLAPSED['sidebar_width']}px")
+    expect(toggle).to_have_attribute("title", "Expand sidebar")
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_COLLAPSED
 
     toggle.click()
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
+    expect(toggle).to_have_attribute("title", "Collapse sidebar")
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_OPEN
 
 
 # ── Sidebar state on load ──────────────────────────────────────────────
@@ -243,11 +244,12 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const describe = target => target === sidebar() ? 'sidebar'
         : target.contains(content()) ? 'main column'
         : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
-    const transitions = () => document.getAnimations()
-        .filter(animation => animation instanceof CSSTransition)
+    const documentTransitions = () => document.getAnimations().filter(animation => animation instanceof CSSTransition);
+    const transitions = () => documentTransitions()
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    window.sidebarProbe = {drawn, transitions, load: {}};
+    const finishTransitions = () => documentTransitions().forEach(transition => transition.finish());
+    window.sidebarProbe = {drawn, transitions, finishTransitions, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
@@ -276,6 +278,16 @@ def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None
 def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, object]]:
     """What the recorder saw as the page loaded, and what is drawn now; it reads load on its own because the probe holds functions."""
     return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.drawn()")
+
+
+def _finish_the_transitions_and_read_the_layout(page: Page) -> dict[str, object]:
+    """Finish every CSS transition in the page, then return the desktop sidebar's width and #main-content's left edge, in px.
+
+    That is the layout the toggle's slide ends at, read without waiting for the frames that run the
+    slide, which a loaded host can withhold for seconds. The page is one _open_with_the_sidebar_stored
+    opened. No transition is left running, so the probe's transitions() reads empty afterwards.
+    """
+    return page.evaluate("() => { window.sidebarProbe.finishTransitions(); return window.sidebarProbe.drawn().layout; }")
 
 
 def _highlighted_groups_once_nothing_transitions(page: Page) -> list[str]:
