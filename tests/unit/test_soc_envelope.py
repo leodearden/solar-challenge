@@ -44,10 +44,15 @@ class TestSocEnvelope:
     def test_a_target_above_the_ceiling_is_the_ceiling(self) -> None:
         assert _ROW_11_ENVELOPE.target_kwh(0.95) == _ROW_11_ENVELOPE.max_soc_kwh == 5.6
 
+    def test_a_target_below_the_floor_is_not_raised_to_it(self) -> None:
+        target_kwh = _ROW_11_ENVELOPE.target_kwh(0.1)
+        assert target_kwh < _ROW_11_ENVELOPE.min_soc_kwh
+        assert target_kwh == pytest.approx(0.7)
+
     @pytest.mark.parametrize(
         ("fraction", "target_kwh"),
         [
-            pytest.param(0.1, 0.7, id="below-the-floor-is-not-raised-to-it"),
+            pytest.param(1e-9, 7e-9, id="just-above-0"),
             pytest.param(1.0, 5.6, id="1-is-the-ceiling"),
         ],
     )
