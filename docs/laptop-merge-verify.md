@@ -86,7 +86,7 @@ Task verifies joined merge verifies once Dark Factory's own window of remote tas
     so starting 16 workers does not take a verify past it. Nothing caps the worker count itself (measured in task 1467's
     commit, `git log --grep='(1467)'`). Task 1482 timed a cap of 8 workers (`PYTEST_XDIST_AUTO_NUM_WORKERS`, Dark
     Factory's mechanism). It ran faster only while `MemoryHigh` throttled the 16 workers; once `MemoryHigh` fitted
-    them, the 16 ran faster, so no cap is set. A cap in `dark-factory-orchestrator.yaml`'s `verify_env` would also
+    them, the 16 ran no slower, so no cap is set. A cap in `dark-factory-orchestrator.yaml`'s `verify_env` would also
     reach this workstation's verifies.
   - Read the files for the values and where each comes from.
   - They cap task-verify scopes as well as merge-verify ones, because the tag is the project's, not the role's.
