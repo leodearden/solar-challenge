@@ -150,3 +150,54 @@ class TestBatteryConfigSocEnvelope:
         """0.95 is above row 11's ceiling of 0.8, so both land on max_soc_kwh."""
         config = dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(target_soc_fraction))
         assert config.soc_envelope().target_kwh(target_soc_fraction) == Battery(config).grid_charge_target_kwh
+
+
+class TestBatterySocEnvelope:
+    """Battery.soc_envelope is the envelope at the battery's current SOC fractions, and its kWh answers derive from it."""
+
+    def test_a_new_battery_answers_its_configs_envelope(self) -> None:
+        assert Battery(_ROW_11_CONFIG).soc_envelope == _ROW_11_CONFIG.soc_envelope()
+
+    def test_fractions_the_constructor_is_given_move_the_batterys_envelope_and_not_its_configs(self) -> None:
+        battery = Battery(_ROW_11_CONFIG, min_soc_fraction=0.3, max_soc_fraction=0.7)
+        assert dataclasses.astuple(battery.soc_envelope) == pytest.approx((7.0, 2.1, 4.9))
+        assert dataclasses.astuple(_ROW_11_CONFIG.soc_envelope()) == pytest.approx((7.0, 1.4, 5.6))
+
+    def test_an_assigned_max_soc_fraction_moves_the_ceiling_it_answers(self) -> None:
+        battery = Battery(_ROW_11_CONFIG)
+        battery.max_soc_fraction = 0.6
+        envelope = battery.soc_envelope
+        assert envelope.max_soc_kwh == pytest.approx(4.2)
+        assert battery.max_soc_kwh == envelope.max_soc_kwh
+        assert battery.usable_capacity_kwh == envelope.max_soc_kwh - envelope.min_soc_kwh
+        assert _ROW_11_CONFIG.soc_envelope().max_soc_kwh == pytest.approx(5.6)
+
+    def test_an_assigned_min_soc_fraction_moves_the_floor_it_answers(self) -> None:
+        battery = Battery(_ROW_11_CONFIG)
+        battery.min_soc_fraction = 0.3
+        assert battery.soc_envelope.min_soc_kwh == pytest.approx(2.1)
+        assert battery.min_soc_kwh == battery.soc_envelope.min_soc_kwh
+
+    def test_a_grid_charge_target_above_an_assigned_ceiling_is_the_envelopes_ceiling(self) -> None:
+        battery = Battery(dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(0.95)))
+        battery.max_soc_fraction = 0.6
+        assert battery.grid_charge_target_kwh == battery.soc_envelope.target_kwh(0.95) == battery.soc_envelope.max_soc_kwh
+
+    @pytest.mark.parametrize("efficiency", ["charge_efficiency", "discharge_efficiency"])
+    def test_an_assigned_efficiency_leaves_the_envelope_as_it_was(self, efficiency: str) -> None:
+        battery = Battery(_ROW_11_CONFIG)
+        before = battery.soc_envelope
+        setattr(battery, efficiency, 0.9)
+        assert battery.soc_envelope == before
+
+    def test_a_refused_assignment_leaves_the_envelope_as_it_was(self) -> None:
+        battery = Battery(_ROW_11_CONFIG)
+        before = battery.soc_envelope
+        with pytest.raises(ConfigurationError):
+            battery.min_soc_fraction = 0.9
+        assert battery.soc_envelope == before
+
+    def test_the_soc_fraction_and_effective_capacity_are_the_envelopes(self) -> None:
+        battery = Battery(_ROW_11_CONFIG)
+        assert battery.soc_fraction == battery.soc_kwh / battery.soc_envelope.effective_capacity_kwh
+        assert battery.effective_capacity_kwh == battery.soc_envelope.effective_capacity_kwh
