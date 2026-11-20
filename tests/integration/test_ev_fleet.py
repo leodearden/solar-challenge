@@ -21,6 +21,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import TariffConfig
 from tests._computed_once import ComputedOnce
 from tests._june_fleet_runs import june_fleet_runs
 from tests._seeded_tmy import ClearJuneDays
@@ -81,7 +82,7 @@ class TestFleetWithEVs:
             name="Home 2 - 7kW EV solar",
         ))
 
-        # Home 2: 3.6kW slow charger, off-peak charging
+        # Home 2: 3.6kW slow charger, off-peak charging in Economy 7's cheap minutes
         homes.append(HomeConfig(
             pv_config=PVConfig(capacity_kw=3.5),
             load_config=LoadConfig(annual_consumption_kwh=2800.0),
@@ -95,6 +96,7 @@ class TestFleetWithEVs:
             ),
             location=Location.bristol(),
             name="Home 3 - 3.6kW EV off-peak",
+            tariff_config=TariffConfig.economy_7(),
         ))
 
         # Home 3: 22kW rapid charger, dumb charging
@@ -345,6 +347,7 @@ class TestFleetWithEVs:
                 ),
                 location=Location.bristol(),
                 name=f"Home {i+1} - Off-peak EV",
+                tariff_config=TariffConfig.economy_7(),
             ))
 
         fleet_config = FleetConfig(homes=homes, name="Off-peak EV fleet")
