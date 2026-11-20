@@ -372,10 +372,14 @@ def test_a_lane_job_whose_command_holds_an_operator_other_than_and_fails_naming_
 def test_a_lane_job_whose_command_is_not_spelled_as_its_steps_re_quoted_fails_naming_the_job_and_that_spelling(
     tmp_path: Path, command: str, re_quoted: str
 ) -> None:
-    """The probes run each step re-quoted, and sh reads each of these yaml spellings otherwise.
+    """The probes run each step re-quoted, so a yaml spelling other than the re-quote fails, even one sh reads alike.
 
-    It expands, globs or assigns what the re-quote keeps literal, reads a
-    comment, or takes a quoted `&&` for a word where the steps split.
+    sh reads most of these spellings otherwise: it expands, globs or assigns
+    what the re-quote keeps literal, reads a comment, or takes a quoted `&&`
+    for a word where the steps split. sh reads an in-word `#` as written,
+    since it takes a `#` as a comment only where a word starts; that spelling
+    fails because shlex.join quotes a word that holds a `#`, and its re-quote
+    shows the word kept whole.
     """
     _write_orchestrator_config(tmp_path, _with_lane_jobs({"name": "probe", "command": command}))
 
