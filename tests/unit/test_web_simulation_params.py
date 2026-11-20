@@ -632,7 +632,7 @@ class TestParseHomeConfigNestedBlockPresence:
 
 
 class TestParseHomeConfigBatteryEfficiency:
-    """The form's round-trip efficiency percentage reaches BatteryConfig as a fraction."""
+    """The form's round-trip efficiency percentage reaches BatteryConfig as the per-direction pair with_round_trip derives."""
 
     @pytest.mark.parametrize(
         ("efficiency_pct", "round_trip"),
@@ -644,13 +644,15 @@ class TestParseHomeConfigBatteryEfficiency:
     def test_efficiency_pct_becomes_round_trip_fraction(
         self, efficiency_pct: float, round_trip: float
     ) -> None:
-        """The percentage becomes the fraction of energy a full charge-discharge cycle keeps."""
+        """The percentage becomes the round trip, the fraction of energy a full charge-discharge cycle keeps, split into the pair by with_round_trip."""
         home_config, _start, _end, _name = parse_home_config(
             {**VALID_HOME_PAYLOAD, "battery_kwh": 5.0, "efficiency_pct": efficiency_pct}
         )
         battery = home_config.battery_config
         assert battery is not None
-        assert battery.efficiency == pytest.approx(round_trip)
+        assert battery.efficiency is None
+        assert battery.charge_efficiency == battery.discharge_efficiency == math.sqrt(round_trip)
+        assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
         assert battery.charge_efficiency * battery.discharge_efficiency == pytest.approx(round_trip)
 
     def test_out_of_range_efficiency_pct_is_refused_in_the_units_sent(self) -> None:
