@@ -30,6 +30,15 @@ _SOC_ORDER_REFUSAL = (
     "got min_soc_fraction={min_soc_fraction!r} and max_soc_fraction={max_soc_fraction!r}"
 )
 
+_ROUND_TRIP_0_81 = BatteryConfig(capacity_kwh=5.0, efficiency=0.81)
+"""A battery built with round-trip efficiency 0.81, so its per-direction pair is 0.9 and 0.9."""
+
+_CONTRADICTED_ROUND_TRIP_REFUSAL = (
+    "efficiency=0.81 makes charge_efficiency and discharge_efficiency each its square root, 0.9, "
+    "but got {contradictions}; use BatteryConfig.with_round_trip(0.81), "
+    "or pass charge_efficiency and discharge_efficiency without efficiency"
+)
+
 _NUMBER_FIELDS = (
     "capacity_kwh",
     "max_charge_kw",
@@ -323,19 +332,21 @@ class TestBatteryConfigRoundTripEfficiency:
         cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
         assert cfg.efficiency == 0.9
 
-    def test_efficiency_overrides_explicit_charge_discharge(self) -> None:
-        """efficiency takes precedence over explicit charge_efficiency/discharge_efficiency."""
-        cfg = BatteryConfig(
-            capacity_kwh=5.0,
-            efficiency=0.81,
-            charge_efficiency=0.99,
-            discharge_efficiency=0.99,
+    def test_explicit_per_direction_efficiencies_contradicting_it_are_refused(self) -> None:
+        """A round-trip efficiency beside per-direction efficiencies it contradicts is refused, naming each."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(
+                capacity_kwh=5.0,
+                efficiency=0.81,
+                charge_efficiency=0.99,
+                discharge_efficiency=0.99,
+            )
+        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
+            contradictions="charge_efficiency=0.99 and discharge_efficiency=0.99"
         )
-        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.81))
-        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.81))
 
     @pytest.mark.parametrize("field", ["charge_efficiency", "discharge_efficiency"])
-    def test_a_per_direction_efficiency_is_refused_even_where_a_round_trip_one_replaces_it(
+    def test_a_per_direction_efficiency_out_of_range_is_refused_before_the_round_trip_is_checked(
         self, field: str
     ) -> None:
         with pytest.raises(ConfigurationError) as exc_info:
@@ -370,6 +381,105 @@ class TestBatteryConfigRoundTripEfficiency:
         assert restored == cfg
         # After pickle, charge_efficiency should still equal sqrt(0.9)
         assert restored.charge_efficiency == pytest.approx(math.sqrt(0.9))
+
+
+class TestBatteryConfigWithRoundTrip:
+    """with_round_trip gives a battery the per-direction pair its round-trip efficiency splits into."""
+
+    def test_it_makes_each_direction_the_square_root_and_keeps_every_other_field(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0, max_charge_kw=3.0, name="Wall")
+
+        with_round_trip = battery.with_round_trip(0.95)
+
+        assert with_round_trip == dataclasses.replace(
+            battery, charge_efficiency=math.sqrt(0.95), discharge_efficiency=math.sqrt(0.95)
+        )
+        assert with_round_trip.efficiency is None
+
+    def test_it_clears_a_round_trip_efficiency_the_battery_was_built_with(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0, efficiency=0.81).with_round_trip(0.64)
+
+        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.8, 0.8)
+
+    @pytest.mark.parametrize("round_trip", [1e-9, 0.5, 0.81, 0.95, 1.0])
+    def test_it_splits_a_round_trip_as_the_efficiency_field_does(self, round_trip: float) -> None:
+        from_method = BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
+        from_field = BatteryConfig(capacity_kwh=5.0, efficiency=round_trip)
+
+        assert (from_method.charge_efficiency, from_method.discharge_efficiency) == (
+            from_field.charge_efficiency,
+            from_field.discharge_efficiency,
+        )
+
+    @pytest.mark.parametrize("round_trip", [0.0, 1.5, -0.5])
+    def test_a_round_trip_outside_its_range_is_refused_naming_it(self, round_trip: float) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
+        assert str(exc_info.value) == (
+            f"round-trip efficiency must be greater than 0 and at most 1, got {round_trip!r}"
+        )
+
+    @pytest.mark.parametrize("round_trip", [True, pytest.param("x", id="word")])
+    def test_a_round_trip_that_is_not_a_finite_number_is_refused_naming_it(self, round_trip: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
+        assert str(exc_info.value) == f"round-trip efficiency must be a finite number, got {round_trip!r}"
+
+    def test_a_lossless_round_trip_makes_each_direction_lossless(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0).with_round_trip(1.0)
+
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (1.0, 1.0)
+
+
+class TestBatteryConfigRefusesAContradictedRoundTrip:
+    """A round-trip efficiency is refused beside a per-direction efficiency that is neither its square root nor that field's default."""
+
+    def test_replacing_the_charge_efficiency_is_refused_naming_it_and_the_round_trip(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_ROUND_TRIP_0_81, charge_efficiency=0.99)
+        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
+            contradictions="charge_efficiency=0.99"
+        )
+
+    def test_both_per_direction_efficiencies_contradicting_it_are_refused_naming_each(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, efficiency=0.81, charge_efficiency=0.99, discharge_efficiency=0.7)
+        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
+            contradictions="charge_efficiency=0.99 and discharge_efficiency=0.7"
+        )
+
+    def test_a_discharge_efficiency_contradicting_it_is_refused_naming_only_that_field(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            dataclasses.replace(_ROUND_TRIP_0_81, discharge_efficiency=0.7)
+        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
+            contradictions="discharge_efficiency=0.7"
+        )
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            pytest.param({"soh": 0.7}, id="finance-aged-home"),
+            pytest.param({"capacity_kwh": 10.0}, id="optimize-install"),
+        ],
+    )
+    def test_replacing_another_field_keeps_the_pair_the_round_trip_derives(
+        self, changes: dict[str, float]
+    ) -> None:
+        battery = dataclasses.replace(_ROUND_TRIP_0_81, **changes)
+
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.9)
+
+    def test_clearing_the_round_trip_lets_a_replace_set_the_pair(self) -> None:
+        battery = dataclasses.replace(
+            _ROUND_TRIP_0_81, efficiency=None, charge_efficiency=0.99, discharge_efficiency=0.7
+        )
+
+        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.99, 0.7)
+
+    def test_a_per_direction_efficiency_at_its_default_gives_way_to_the_round_trip(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0, efficiency=0.81, charge_efficiency=0.975)
+
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.9)
 
 
 class TestBatteryConfigSOCEfficiencyValidation:

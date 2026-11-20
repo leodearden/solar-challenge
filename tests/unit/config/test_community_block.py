@@ -10,6 +10,7 @@ from typing import Any, TypeAlias
 import pytest
 import yaml
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig
 from solar_challenge.config import load_community_config
 from solar_challenge.errors import ConfigurationError
@@ -171,6 +172,48 @@ class TestCommunityBlockParsing:
         cfg = load_community_block({"sharing_mode": "p2p", "billing": {}})
         assert cfg is not None
         assert cfg.billing is None
+
+
+class TestCommunityBatteryEfficiency:
+    """A community_battery block's efficiency is the round trip, as a home battery block's is."""
+
+    def test_a_round_trip_efficiency_reads_as_the_pair_it_splits_into(
+        self, load_community_block: LoadCommunityBlock
+    ) -> None:
+        cfg = load_community_block(
+            {"sharing_mode": "community_battery", "community_battery": {"capacity_kwh": 10, "efficiency": 0.95}}
+        )
+        assert cfg is not None
+        assert cfg.community_battery == BatteryConfig(capacity_kwh=10).with_round_trip(0.95)
+        assert cfg.community_battery.efficiency is None
+
+    @pytest.mark.parametrize(
+        ("per_direction", "keys_named"),
+        [
+            pytest.param({"charge_efficiency": 0.975}, "charge_efficiency", id="charge-at-its-default"),
+            pytest.param({"discharge_efficiency": 0.7}, "discharge_efficiency", id="discharge"),
+            pytest.param(
+                {"charge_efficiency": 0.99, "discharge_efficiency": 0.7},
+                "charge_efficiency and discharge_efficiency",
+                id="both",
+            ),
+        ],
+    )
+    def test_a_block_setting_both_efficiency_forms_is_refused_naming_it_and_each_key(
+        self, load_community_block: LoadCommunityBlock, per_direction: dict[str, float], keys_named: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_block(
+                {
+                    "sharing_mode": "community_battery",
+                    "community_battery": {"capacity_kwh": 10, "efficiency": 0.95, **per_direction},
+                }
+            )
+        assert str(refusal.value) == (
+            "community.community_battery sets both forms of a battery's efficiency: "
+            f"efficiency and {keys_named}; "
+            "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
+        )
 
 
 class TestLoadCommunityConfig:

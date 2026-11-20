@@ -346,6 +346,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "nominal_usable_capacity_kwh": "property (self) -> float",
         "resolved_soh": "property (self) -> float",
         "soc_envelope": "(self) -> SocEnvelope",
+        "with_round_trip": "(self, round_trip_efficiency: float) -> BatteryConfig",
         "default_5kwh": "classmethod (cls) -> BatteryConfig",
     },
     # --- tariff (tariff.py) ---

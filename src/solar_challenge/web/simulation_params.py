@@ -249,7 +249,7 @@ def _read_power_limit(value: Any, direction: Literal["charge", "discharge"]) -> 
 
 
 def _read_efficiency(value: Any) -> float | None:
-    """Read a home body's round-trip efficiency percentage as the fraction BatteryConfig takes.
+    """Read a home body's round-trip efficiency percentage as the round-trip fraction BatteryConfig.with_round_trip takes.
 
     Null is unset; any other value must be a finite number, refused naming efficiency_pct,
     and a percentage outside (0, 100] is refused in the units sent.
@@ -273,14 +273,14 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
         settings["max_charge_kw"] = max_charge_kw
     if (max_discharge_kw := _read_power_limit(params["max_discharge_kw"], "discharge")) is not None:
         settings["max_discharge_kw"] = max_discharge_kw
-    if (efficiency := _read_efficiency(params["efficiency_pct"])) is not None:
-        settings["efficiency"] = efficiency
+    round_trip = _read_efficiency(params["efficiency_pct"])
     try:
         settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
     if has_battery(capacity_kwh, "battery_kwh"):
-        return BatteryConfig(capacity_kwh=capacity_kwh, **settings)
+        battery = BatteryConfig(capacity_kwh=capacity_kwh, **settings)
+        return battery if round_trip is None else battery.with_round_trip(round_trip)
     return None
 
 

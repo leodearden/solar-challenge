@@ -31,6 +31,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from tests._non_booleans import NON_BOOLEANS
+from tests._repository_paths import SCENARIOS_DIR
 
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
@@ -152,7 +153,7 @@ class TestBatterySOCEfficiencyParsing:
             _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
     def test_yaml_round_trip_efficiency(self, tmp_path: Path) -> None:
-        """YAML with battery.efficiency round-trips into home.battery_config.charge_efficiency."""
+        """YAML battery.efficiency is the round trip: the battery holds the pair with_round_trip splits it into, and no efficiency."""
         yaml_content = """
 home:
   pv:
@@ -166,11 +167,71 @@ home:
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
 
-        home = load_home_config(path)
-        assert home.battery_config is not None
-        assert home.battery_config.efficiency == 0.95
-        assert home.battery_config.charge_efficiency == pytest.approx(math.sqrt(0.95))
-        assert home.battery_config.discharge_efficiency == pytest.approx(math.sqrt(0.95))
+        battery = load_home_config(path).battery_config
+        assert battery is not None
+        assert battery.efficiency is None
+        assert (battery.charge_efficiency, battery.discharge_efficiency) == (math.sqrt(0.95), math.sqrt(0.95))
+        assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(0.95)
+
+    def test_the_economy_7_example_battery_holds_the_pair_its_round_trip_splits_into(self) -> None:
+        battery = load_home_config(SCENARIOS_DIR / "example-economy7.yaml").battery_config
+        assert battery is not None
+        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (
+            None,
+            math.sqrt(0.95),
+            math.sqrt(0.95),
+        )
+
+    @pytest.mark.parametrize(
+        ("per_direction", "keys_named"),
+        [
+            pytest.param({"charge_efficiency": 0.975}, "charge_efficiency", id="charge-at-its-default"),
+            pytest.param({"discharge_efficiency": 0.7}, "discharge_efficiency", id="discharge"),
+            pytest.param(
+                {"discharge_efficiency": 0.7, "charge_efficiency": 0.99},
+                "charge_efficiency and discharge_efficiency",
+                id="both",
+            ),
+        ],
+    )
+    def test_a_block_setting_both_efficiency_forms_is_refused_naming_it_and_each_key(
+        self, per_direction: dict[str, float], keys_named: str
+    ) -> None:
+        """The refusal is by key, whatever the values, and names the per-direction keys in the battery block's order."""
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": 0.95, **per_direction})
+        assert str(refusal.value) == (
+            f"home.battery sets both forms of a battery's efficiency: efficiency and {keys_named}; "
+            "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
+        )
+
+    @pytest.mark.parametrize(
+        ("efficiency", "refusal"),
+        [
+            pytest.param(1.5, "must be greater than 0 and at most 1, got 1.5", id="above-one"),
+            pytest.param(0, "must be greater than 0 and at most 1, got 0", id="zero"),
+            pytest.param("high", "must be a finite number, got 'high'", id="word"),
+            pytest.param(True, "must be a finite number, got True", id="boolean"),
+        ],
+    )
+    def test_an_efficiency_out_of_range_or_not_a_number_is_refused_naming_the_key_by_its_path(
+        self, efficiency: object, refusal: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": efficiency})
+        assert str(raised.value) == f"home.battery.efficiency: round-trip efficiency {refusal}"
+
+    def test_a_null_efficiency_beside_the_pair_reads_as_absent(self) -> None:
+        battery = _parsed_home(
+            battery={
+                "capacity_kwh": 5.0,
+                "efficiency": None,
+                "charge_efficiency": 0.96,
+                "discharge_efficiency": 0.97,
+            }
+        ).battery_config
+        assert battery is not None
+        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.96, 0.97)
 
     def test_yaml_round_trip_min_max_soc(self, tmp_path: Path) -> None:
         """YAML with battery.min_soc_fraction/max_soc_fraction round-trips correctly."""
