@@ -6,8 +6,8 @@ parse_location_block, parse_home_block and its block parsers, parse_tariff_confi
 custom type, and parse_seg_rate.  location: and each component block carry every
 key of config.py's table for that component, in field order, an unset value as
 null, which the reader reads as absent.  A field the grammar has no key for is
-refused unless it is at its default.  A battery with a round-trip efficiency omits
-the pair it derives.
+refused unless it is at its default.  A battery block is written without
+efficiency, as the charge_efficiency and discharge_efficiency it holds.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -32,8 +32,8 @@ from solar_challenge.tariff import TariffConfig
 
 _Component = TypeVar("_Component", bound=DataclassInstance)
 
-_PAIR_DERIVED_FROM_EFFICIENCY: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")
-"""The per-direction efficiencies BatteryConfig derives from a round-trip efficiency, until S28 retires it."""
+_ROUND_TRIP_EFFICIENCY_KEY: tuple[str, ...] = ("efficiency",)
+"""The round-trip form config.py's reader reads through BatteryConfig.with_round_trip; a battery is written as the per-direction pair it holds."""
 
 
 def scenario_yaml(document: Mapping[str, Any]) -> str:
@@ -108,11 +108,7 @@ def _home_block(home: HomeConfig) -> dict[str, Any]:
         "battery": (
             None
             if battery is None
-            else _component_block(
-                BATTERY_BLOCK,
-                battery,
-                omit=_PAIR_DERIVED_FROM_EFFICIENCY if battery.efficiency is not None else (),
-            )
+            else _component_block(BATTERY_BLOCK, battery, omit=_ROUND_TRIP_EFFICIENCY_KEY)
         ),
         "load": _component_block(LOAD_BLOCK, home.load_config),
         "tariff": None if home.tariff_config is None else _tariff_block(home.tariff_config),
