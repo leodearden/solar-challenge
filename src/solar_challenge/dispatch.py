@@ -310,8 +310,8 @@ def _grid_power_to_target_kw(
     return min(gap_kwh / ctx.charge_efficiency / dt_h, _charge_headroom_kw(ctx.max_charge_kw, pv_charge_kw))
 
 
-_TARGET_SOC_FRACTION = FRACTION
-"""The grid-charge targets, as fractions of the battery's effective (SOH-derated) capacity, that GridChargeConfig and ChargeWindow admit."""
+TARGET_SOC_FRACTION: Final = FRACTION
+"""The grid-charge targets a battery may be given, as fractions of its effective (SOH-derated) capacity: greater than 0 and at most 1."""
 
 
 @dataclass(frozen=True)
@@ -335,7 +335,7 @@ class GridChargeConfig:
 
     def __post_init__(self) -> None:
         """Read target_soc_fraction, and hold the float read."""
-        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
+        read_field(self, "target_soc_fraction", as_finite_float, TARGET_SOC_FRACTION)
 
 
 _PEAK_WINDOW_HOURS = Interval(0, 24)
@@ -970,7 +970,7 @@ class ChargeWindow:
 
     def __post_init__(self) -> None:
         """Read target_soc_fraction as GridChargeConfig does, then refuse a field the window cannot schedule, naming the field and its value."""
-        read_field(self, "target_soc_fraction", as_finite_float, _TARGET_SOC_FRACTION)
+        read_field(self, "target_soc_fraction", as_finite_float, TARGET_SOC_FRACTION)
         if not _are_opening_days(self.days):
             raise ConfigurationError.must_be(
                 "days", "'daily' or a non-empty frozenset of date.weekday() numbers from 0 to 6", got=self.days

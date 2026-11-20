@@ -13,6 +13,7 @@ import pytest
 from solar_challenge.battery import Battery, BatteryConfig, SocEnvelope, compute_soh
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
+from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _ROW_11_ENVELOPE = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=1.4, max_soc_kwh=5.6)
@@ -43,24 +44,53 @@ class TestSocEnvelope:
     def test_a_target_above_the_ceiling_is_the_ceiling(self) -> None:
         assert _ROW_11_ENVELOPE.target_kwh(0.95) == _ROW_11_ENVELOPE.max_soc_kwh == 5.6
 
+    def test_a_target_below_the_floor_is_not_raised_to_it(self) -> None:
+        target_kwh = _ROW_11_ENVELOPE.target_kwh(0.1)
+        assert target_kwh < _ROW_11_ENVELOPE.min_soc_kwh
+        assert target_kwh == pytest.approx(0.7)
+
     @pytest.mark.parametrize(
         ("fraction", "target_kwh"),
         [
-            pytest.param(0.0, 0.0, id="0-is-an-empty-battery"),
+            pytest.param(1e-9, 7e-9, id="just-above-0"),
             pytest.param(1.0, 5.6, id="1-is-the-ceiling"),
         ],
     )
-    def test_a_target_fraction_of_0_or_1_is_accepted(self, fraction: float, target_kwh: float) -> None:
-        assert _ROW_11_ENVELOPE.target_kwh(fraction) == target_kwh
+    def test_a_target_fraction_above_0_and_at_most_1_is_accepted(self, fraction: float, target_kwh: float) -> None:
+        assert _ROW_11_ENVELOPE.target_kwh(fraction) == pytest.approx(target_kwh)
 
     @pytest.mark.parametrize(
-        "fraction", [*UNUSABLE_NUMBERS, pytest.param(-0.1, id="below-0"), pytest.param(1.5, id="above-1")]
+        "fraction",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param(-0.1, id="below-0"),
+            pytest.param(0.0, id="0"),
+            pytest.param(1.5, id="above-1"),
+        ],
     )
-    def test_a_target_fraction_that_is_not_a_finite_number_from_0_to_1_is_refused_naming_it(
+    def test_a_target_fraction_that_is_not_a_finite_number_above_0_and_at_most_1_is_refused_naming_it(
         self, fraction: float
     ) -> None:
         with pytest.raises(ConfigurationError, match=_refusal_of("fraction", fraction)):
             _ROW_11_ENVELOPE.target_kwh(fraction)
+
+    @pytest.mark.parametrize(
+        "fraction",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param(-1e-9, id="just-below-0"),
+            pytest.param(0.0, id="0"),
+            pytest.param(1e-9, id="just-above-0"),
+            pytest.param(0.5, id="0.5"),
+            pytest.param(1.0, id="1"),
+            pytest.param(1.0 + 1e-9, id="just-above-1"),
+        ],
+    )
+    def test_it_admits_the_target_fractions_grid_charge_config_admits(self, fraction: float) -> None:
+        """Driven through both public readers, so it holds whatever bound GridChargeConfig owns and fails if either reader drifts alone."""
+        envelope_refuses = outcome_of(lambda: _ROW_11_ENVELOPE.target_kwh(fraction))[0] is ConfigurationError
+        grid_charge_config_refuses = outcome_of(lambda: GridChargeConfig(fraction))[0] is ConfigurationError
+        assert envelope_refuses == grid_charge_config_refuses
 
     def test_a_field_cannot_be_assigned(self) -> None:
         envelope = SocEnvelope(effective_capacity_kwh=7.0, min_soc_kwh=1.4, max_soc_kwh=5.6)
