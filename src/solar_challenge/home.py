@@ -513,7 +513,9 @@ def _heat_pump_load(
 
 def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow) -> _Demand:
     """The home's demand on window's rows, with any heat pump run on weather."""
-    household_kw = generate_load_profile(config.load_config, window, ev_config=config.ev_config)
+    household_kw = generate_load_profile(
+        config.load_config, window, ev_config=config.ev_config, tariff=config.tariff_config
+    )
     if config.heat_pump_config is None:
         return _Demand(household_kw, None)
     heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)

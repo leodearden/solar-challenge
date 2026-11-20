@@ -11,6 +11,7 @@ import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number, read_field
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 _MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
@@ -38,7 +39,7 @@ class SmartChargingMode(str, Enum):
 
     - NONE: Dumb charging - start immediately on arrival
     - SOLAR: Solar-aware - shift charging to daylight hours
-    - OFF_PEAK: Off-peak tariff - shift charging to cheapest hours
+    - OFF_PEAK: Off-peak tariff - shift charging to the home tariff's cheap minutes
     """
 
     NONE = "none"
@@ -49,9 +50,13 @@ class SmartChargingMode(str, Enum):
 _PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
     SmartChargingMode.NONE: (),
     SmartChargingMode.SOLAR: ((10 * MINUTES_PER_HOUR, 16 * MINUTES_PER_HOUR),),
-    SmartChargingMode.OFF_PEAK: ((30, 7 * MINUTES_PER_HOUR + 30),),
 }
-"""Each mode's preferred charging windows, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times."""
+"""The preferred charging windows of none and solar, the modes that read no tariff, as [start, end) minutes of the day; generate_ev_charging_profile's docstring states them as clock times. Off_peak prefers its tariff's cheap minutes."""
+
+_OFF_PEAK_WITHOUT_A_TARIFF = (
+    "smart_charging_mode 'off_peak' charges the EV in the tariff's cheap periods, "
+    "but the home has no tariff; add a tariff or use smart_charging_mode 'none'"
+)
 
 
 _HOUR_OF_DAY = Interval(0, 23)
@@ -153,9 +158,28 @@ class EVConfig:
         return self._calculate_available_hours()
 
 
-def _preferred_minutes(mode: SmartChargingMode) -> _MinuteFlags:
-    """One flag for each minute of the day, set where *mode* prefers to charge."""
+def require_tariff_for_smart_charging(ev_config: EVConfig, tariff: TariffConfig | None) -> None:
+    """Refuse an EV whose smart charging mode reads the tariff, off_peak, when there is no tariff to read.
+
+    Raises:
+        ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and tariff is None.
+    """
+    if SmartChargingMode(ev_config.smart_charging_mode) is SmartChargingMode.OFF_PEAK and tariff is None:
+        raise ConfigurationError(_OFF_PEAK_WITHOUT_A_TARIFF)
+
+
+def _preferred_minutes(mode: SmartChargingMode, tariff: TariffConfig | None) -> _MinuteFlags:
+    """One flag for each minute of the day, set where *mode* prefers to charge: off_peak at *tariff*'s cheap minutes, the other modes in their _PREFERRED_WINDOWS row.
+
+    Raises:
+        ConfigurationError: *mode* is off_peak and *tariff* is None.
+    """
     preferred = np.zeros(MINUTES_PER_DAY, dtype=np.bool_)
+    if mode is SmartChargingMode.OFF_PEAK:
+        if tariff is None:
+            raise ConfigurationError(_OFF_PEAK_WITHOUT_A_TARIFF)
+        preferred[list(tariff.cheap_minutes_of_day)] = True
+        return preferred
     for start, end in _PREFERRED_WINDOWS[mode]:
         preferred[start:end] = True
     return preferred
@@ -168,14 +192,14 @@ def _earliest_best_start(preferred: _MinuteFlags, charge_minutes: int) -> int:
     return int(np.argmax(coverage))
 
 
-def _daily_session(config: EVConfig) -> range:
-    """The minutes of one day's charging session, counted from the midnight before arrival."""
+def _daily_session(config: EVConfig, tariff: TariffConfig | None) -> range:
+    """The minutes of one day's charging session, counted from the midnight before arrival; an off_peak EV prefers *tariff*'s cheap minutes."""
     arrival = config.arrival_hour * MINUTES_PER_HOUR
     stay_minutes = round(config.get_available_charging_hours() * MINUTES_PER_HOUR)
     hours_needed = config.required_charge_kwh / config.get_charger_power_kw()
     charge_minutes = min(math.ceil(hours_needed * MINUTES_PER_HOUR), stay_minutes)
     stay = (arrival + np.arange(stay_minutes)) % MINUTES_PER_DAY
-    preferred = _preferred_minutes(SmartChargingMode(config.smart_charging_mode))[stay]
+    preferred = _preferred_minutes(SmartChargingMode(config.smart_charging_mode), tariff)[stay]
     start = arrival + _earliest_best_start(preferred, charge_minutes)
     return range(start, start + charge_minutes)
 
@@ -185,6 +209,8 @@ def generate_ev_charging_profile(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     timezone: str | None = "Europe/London",
+    *,
+    tariff: TariffConfig | None = None,
 ) -> pd.Series:
     """Generate EV charging load profile.
 
@@ -193,12 +219,14 @@ def generate_ev_charging_profile(
     ``arrival_hour``. It charges in one unbroken session at the charger's full
     power, for as many whole minutes as ``required_charge_kwh`` needs. The
     session lies inside that stay, so the charge is always delivered before
-    departure. Of all such sessions it is the one covering the most minutes of
-    the mode's preferred window, on either day of an overnight stay, and the
-    earliest on a tie. "solar" prefers 10:00-16:00 and "off_peak" Economy 7's
-    00:30-07:30, the windows ``_PREFERRED_WINDOWS`` holds; "none" prefers no
-    time, so it charges from arrival. A stay holding one window too short for
-    the charge uses it whole, charging the rest just before it opens, or from
+    departure. Of all such sessions it is the one covering the most minutes the
+    mode prefers, on either day of an overnight stay, and the earliest on a
+    tie. "solar" prefers 10:00-16:00, the window ``_PREFERRED_WINDOWS`` holds.
+    "off_peak" prefers the tariff's cheap minutes,
+    ``TariffConfig.cheap_minutes_of_day``. "none" prefers no time, so it
+    charges from arrival, and so does "off_peak" on a tariff with no cheap
+    minute, such as a flat rate. A stay holding one window too short for the
+    charge uses it whole, charging the rest just before it opens, or from
     arrival when that is later.
 
     The period is laid out as 1,440 minutes a day from its first midnight, so
@@ -212,10 +240,18 @@ def generate_ev_charging_profile(
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         timezone: Timezone for the simulation, None for a naive index
+        tariff: The home's tariff, whose cheap minutes an "off_peak" EV charges
+            in; the other modes do not read it
 
     Returns:
         Time series of charging power in kW at 1-minute resolution
+
+    Raises:
+        ConfigurationError: The EV's smart_charging_mode is "off_peak" and
+            there is no tariff (require_tariff_for_smart_charging), before
+            anything is built.
     """
+    require_tariff_for_smart_charging(config, tariff)
     date_range = pd.date_range(
         start=start_date,
         end=end_date,
@@ -223,7 +259,7 @@ def generate_ev_charging_profile(
         tz=timezone,
     )
     n_minutes = len(date_range) * MINUTES_PER_DAY
-    session = _daily_session(config)
+    session = _daily_session(config, tariff)
 
     # One spare day holds the last day's session whole, until the cut below.
     power_kw = np.zeros(n_minutes + MINUTES_PER_DAY, dtype=np.float64)
