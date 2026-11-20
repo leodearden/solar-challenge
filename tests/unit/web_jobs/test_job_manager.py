@@ -71,20 +71,6 @@ _a_simulation_that_exits = _a_simulation_raising(lambda: SystemExit("the simulat
 _a_simulation_raising_an_error_whose_message_cannot_be_read = _a_simulation_raising(_AnErrorWhoseMessageCannotBeRead)
 
 
-class _AnUnreadableNote(str):
-    """A note whose text cannot be read, so the message of a job whose error carries it names that note as unreadable in its place."""
-
-    def __str__(self) -> str:
-        raise RuntimeError("the text of this note cannot be read")
-
-
-class _AnObjectWhoseReprCannotBeRead:
-    """An object whose repr cannot be read, so the message of a job whose error has it for its __notes__ names those notes as unreadable in their place."""
-
-    def __repr__(self) -> str:
-        raise RuntimeError("the repr of this object cannot be read")
-
-
 class _AnInterruption(BaseException):
     """An error that is not an Exception."""
 
@@ -104,19 +90,6 @@ def _released_then_raising(blocking_simulation: BlockingSimulation, error: Calla
         raise error()
 
     return simulate
-
-
-def _with_notes(error: BaseException, *notes: str) -> BaseException:
-    """*error*, once each of *notes* has been added to it."""
-    for note in notes:
-        error.add_note(note)
-    return error
-
-
-def _with_notes_assigned(error: BaseException, notes: object) -> BaseException:
-    """*error*, once *notes* is assigned to its __notes__: add_note keeps __notes__ a list, so only an assignment leaves it anything else."""
-    setattr(error, "__notes__", notes)
-    return error
 
 
 @pytest.fixture
