@@ -905,9 +905,8 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Seven')"]
         _assert_every_started_home_finished(tmp_path)
         assert len(started(tmp_path)) < len(fleet.homes), (
-            "when Home 1 failed, the two workers had started at most it, Home 2 (held until Home 1 finished), the "
-            "home Home 1's worker took next and the three queued behind those (max_workers + 1), so the seventh "
-            "home was cancelled"
+            "a later home reaches the pool only once another home's results are read here, so the seventh home "
+            "never started"
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)

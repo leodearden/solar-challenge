@@ -2,9 +2,10 @@
 """Fleet simulation for multiple homes."""
 
 import contextlib
+import itertools
 import math
 import os
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
@@ -347,7 +348,8 @@ class FleetRunner:
 
         A home that fails re-raises its own exception, with a note naming the home and its fleet; an
         exception progress raises propagates as raised. Either, or closing the iterator early, cancels
-        the homes not yet started, and the call ends once the homes already running have finished. A
+        the homes not yet started, since a parallel call hands its pool one home per worker, and the call
+        ends once the homes already running have finished. A
         worker process that ends abruptly breaks the pool, and the BrokenProcessPool raised then carries
         a note naming one home it left unfinished, which need not be the home whose process ended.
         """
@@ -405,23 +407,36 @@ def _homes_in_a_pool(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
 ) -> _FinishedHomes:
-    """Each job with its home's results as the home finishes in one process pool; however the generator stops, the homes not yet started are cancelled and those running waited for.
+    """Each job with its home's results as the home finishes in one process pool holding at most one home per worker; however the generator stops, no home not yet handed to the pool starts, and those handed to it are waited for.
 
-    A job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner and its
-    weather provider are never pickled.
+    The pool is handed the next home from this process as a finished home's results are read, before that home is
+    yielded. A job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner
+    and its weather provider are never pickled.
     """
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
+    waiting = iter(jobs)
     pool = ProcessPoolExecutor(max_workers=workers)
-    try:
-        futures = {
-            pool.submit(
+
+    def submitted(job: _HomeJob) -> Future[SimulationResults]:
+        """job's home submitted to the pool; a BrokenProcessPool the submit raises carries _naming_the_home's note for job."""
+        with _naming_the_home(job):
+            return pool.submit(
                 runner.home_simulator, job.home, start_date, end_date, weather=_job_weather(weather, job.home)
-            ): job
-            for job in jobs
-        }
-        for future in as_completed(futures):
-            job = futures[future]
-            yield job, _result_naming_the_home(job, future)
+            )
+
+    def handed_on(count: int) -> dict[Future[SimulationResults], _HomeJob]:
+        """The next count waiting jobs, or those left, each by the future of its home, now submitted to the pool."""
+        return {submitted(job): job for job in itertools.islice(waiting, count)}
+
+    try:
+        running = handed_on(workers)
+        while running:
+            done, _ = wait(running, return_when=FIRST_COMPLETED)
+            for future in done:
+                job = running.pop(future)
+                results = _result_naming_the_home(job, future)
+                running |= handed_on(1)
+                yield job, results
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
 
