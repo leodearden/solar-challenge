@@ -398,26 +398,42 @@ class TestACoefficientNoAdjustReachesIsRefused:
 
 
 _NUMBERS_OUTSIDE_THEIR_DOMAIN = [
-    pytest.param("temp_ref", -273.15, "greater than -273.15", id="temp_ref-at-absolute-zero"),
-    pytest.param("temp_ref", -300.0, "greater than -273.15", id="temp_ref-below-absolute-zero"),
-    pytest.param("irrad_ref", 0.0, "greater than 0", id="irrad_ref-0"),
-    pytest.param("irrad_ref", -1000.0, "greater than 0", id="irrad_ref-negative"),
-    pytest.param("I_L_ref", 0.0, "greater than 0", id="I_L_ref-0"),
-    pytest.param("I_L_ref", -1.0, "greater than 0", id="I_L_ref-negative"),
+    pytest.param(
+        default_module, "temp_ref", -273.15, "greater than -273.15", id="temp_ref-at-absolute-zero"
+    ),
+    pytest.param(
+        default_module, "temp_ref", -300.0, "greater than -273.15", id="temp_ref-below-absolute-zero"
+    ),
+    pytest.param(default_module, "irrad_ref", 0.0, "greater than 0", id="irrad_ref-0"),
+    pytest.param(default_module, "irrad_ref", -1000.0, "greater than 0", id="irrad_ref-negative"),
+    pytest.param(default_module, "I_L_ref", 0.0, "greater than 0", id="I_L_ref-0"),
+    pytest.param(default_module, "I_L_ref", -1.0, "greater than 0", id="I_L_ref-negative"),
+    pytest.param(
+        pvwatts_300_w_module,
+        "temp_ref",
+        -273.15,
+        "greater than -273.15",
+        id="pvwatts-temp_ref-at-absolute-zero",
+    ),
 ]
 
 
 class TestAModuleNumberOutsideItsDomainIsRefused:
-    """pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and the reach check's photocurrent-positive Adjust bracket needs a positive I_L_ref, so construction and use refuse a finite value outside those domains, naming its key and value, whether or not a temperature coefficient is set."""
+    """pvlib's single-diode models divide by temp_ref in kelvin and by irrad_ref, and the reach check's photocurrent-positive Adjust bracket needs a positive I_L_ref, so construction and use refuse a finite value outside those domains, naming its key and value, in every module form and whether or not a temperature coefficient is set."""
 
     @pytest.mark.parametrize(
         "coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
     )
-    @pytest.mark.parametrize(("key", "value", "domain"), _NUMBERS_OUTSIDE_THEIR_DOMAIN)
+    @pytest.mark.parametrize(("build", "key", "value", "domain"), _NUMBERS_OUTSIDE_THEIR_DOMAIN)
     def test_at_construction_and_at_use_naming_its_key_and_value(
-        self, key: str, value: float, domain: str, coefficient: float | None
+        self,
+        build: Callable[[], dict[str, float]],
+        key: str,
+        value: float,
+        domain: str,
+        coefficient: float | None,
     ) -> None:
-        module = default_module()
+        module = build()
         config = PVConfig(
             capacity_kw=4.0, temperature_coefficient=coefficient, custom_module_params=module
         )
