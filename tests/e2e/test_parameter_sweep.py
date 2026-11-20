@@ -739,7 +739,7 @@ def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_j
 
 @contextmanager
 def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator[None]:
-    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched."""
+    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order; if Playwright's default timeout runs out first, fail naming the jobs whose results it has not fetched. An exception the block raises, a Playwright timeout among them, passes through unchanged."""
     fetched: set[str] = set()
 
     def note_fetched_results(request: Request) -> None:
@@ -751,9 +751,11 @@ def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator
             for job_id in job_ids:
                 fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
             yield
-    except PlaywrightTimeoutError as timed_out:
-        unfetched = [job_id for job_id in job_ids if job_id not in fetched]
-        raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
+            try:
+                fetches_finished.close()
+            except PlaywrightTimeoutError as timed_out:
+                unfetched = [job_id for job_id in job_ids if job_id not in fetched]
+                raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
     finally:
         page.remove_listener("requestfinished", note_fetched_results)
 
