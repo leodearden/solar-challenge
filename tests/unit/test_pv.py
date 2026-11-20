@@ -33,11 +33,12 @@ from solar_challenge.pv import (
 from tests._pv_modules import (
     default_module,
     default_module_beyond_every_mppt_window,
+    pvsyst_module,
     pvwatts_300_w_module,
     sapm_library_module,
 )
 from tests._pv_refusals import one_refusal_at_construction_and_at_use
-from tests._pv_runs import per_array
+from tests._pv_runs import clear_day_kwh, per_array
 
 
 class TestCreatePVSystem:
@@ -425,10 +426,14 @@ CLEAR_AND_OVERCAST_DAYS = [
 ]
 
 
+def with_stc_at_its_maximum_power(sapm_module: dict[str, float]) -> dict[str, float]:
+    """The SAPM module rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
+    return {**sapm_module, "STC": sapm_module["Impo"] * sapm_module["Vmpo"]}
+
+
 def rated_sapm_module() -> dict[str, float]:
-    """sapm_library_module() rated at its maximum power at reference conditions, Impo x Vmpo, as its STC."""
-    module = sapm_library_module()
-    return {**module, "STC": module["Impo"] * module["Vmpo"]}
+    """sapm_library_module() rated at its maximum power at reference conditions (with_stc_at_its_maximum_power)."""
+    return with_stc_at_its_maximum_power(sapm_library_module())
 
 
 class TestInverterMatchesStringVoltage:
@@ -1041,6 +1046,42 @@ CHECKED_KEYS_OF_THE_DEFAULT_MODULE = (
 )
 """The module parameters default_module() gives that the number rule checks, each a finite float in pvlib's CECMod row."""
 
+OPTIONAL_KEYS_OF_A_CEC_MODULE_AS_TEXT = (
+    ("EgRef", "1.121"),
+    ("dEgdT", "-0.0002677"),
+    ("irrad_ref", "1000"),
+    ("temp_ref", "25"),
+    ("FD", "1"),
+    ("n", "1.526"),
+    ("K", "4"),
+    ("L", "0.002"),
+    ("n_ar", "1.3"),
+)
+"""Keys that pvlib defaults when a CEC module lacks them (calcparams_cec's, the effective irradiance's FD and the physical IAM's), each with the text of a number pvlib reads there: its default, or for n_ar, whose default None applies no anti-reflective coating, a coating's refractive index."""
+
+SAPM_DC_KEYS = (
+    "C0",
+    "C1",
+    "C2",
+    "C3",
+    "Isco",
+    "Impo",
+    "Voco",
+    "Vmpo",
+    "Aisc",
+    "Aimp",
+    "Bvoco",
+    "Mbvoc",
+    "Bvmpo",
+    "Mbvmp",
+    "N",
+    "Cells_in_Series",
+)
+"""The SAPM module parameters that pvlib's sapm reads into the power and voltages an inverter reads."""
+
+PVSYST_KEYS = ("gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series")
+"""The module parameters that pvlib's calcparams_pvsyst reads and its calcparams_cec does not."""
+
 _REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT = """
 import sys
 
@@ -1072,7 +1113,7 @@ def _refusal_in_a_process_under_hash_seed(hash_seed: str, keys_as_text: tuple[st
 
 
 class TestAModuleParameterAModelReadsIsAFiniteNumber:
-    """pvlib's DC models, NOCT-SAM and the string wiring read the module's own gamma_pdc, CEC single-diode parameters, T_NOCT, A_c and V_mp_ref, so construction and use refuse one that is not a finite number, naming its key and value."""
+    """pvlib's model chain, NOCT-SAM and the string wiring read the module's own gamma_pdc, CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults when a module lacks them, T_NOCT, A_c and V_mp_ref, so construction and use refuse one that is not a finite number, naming its key and value; SAPM's i_x and i_xx parameters, which no inverter reads, stay unchecked."""
 
     @pytest.mark.parametrize(
         "temperature_coefficient", [None, -0.004], ids=["no-set-coefficient", "set-coefficient"]
@@ -1091,16 +1132,29 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
             pytest.param(default_module, "A_c", math.nan, id="A_c-nan"),
             pytest.param(default_module, "R_s", True, id="R_s-bool"),
             pytest.param(default_module, "Adjust", np.True_, id="Adjust-numpy-bool"),
+            *[
+                pytest.param(default_module, key, text, id=f"{key}-text")
+                for key, text in OPTIONAL_KEYS_OF_A_CEC_MODULE_AS_TEXT
+            ],
+            pytest.param(default_module, "EgRef", math.nan, id="EgRef-nan"),
+            pytest.param(default_module, "temp_ref", math.nan, id="temp_ref-nan"),
+            pytest.param(default_module, "FD", math.nan, id="FD-nan"),
+            pytest.param(default_module, "n", math.nan, id="n-nan"),
+            pytest.param(default_module, "irrad_ref", math.inf, id="irrad_ref-inf"),
+            pytest.param(pvwatts_300_w_module, "temp_ref", "25", id="pvwatts-temp_ref-text"),
+            pytest.param(pvwatts_300_w_module, "k", "0.01", id="k-text"),
+            pytest.param(pvwatts_300_w_module, "k", math.nan, id="k-nan"),
+            pytest.param(pvwatts_300_w_module, "k", None, id="k-none"),
         ],
     )
     def test_one_that_is_not_is_refused_at_construction_and_at_use_naming_its_key_and_value(
         self,
         build: Callable[[], dict[str, float]],
         key: str,
-        value: float | str | np.bool_,
+        value: float | str | np.bool_ | None,
         temperature_coefficient: float | None,
     ) -> None:
-        """A set temperature coefficient replaces a module's Adjust or gamma_pdc, and its reach check reads the CEC parameters, yet the module's own key is refused first."""
+        """A set temperature coefficient replaces a module's Adjust or gamma_pdc, and its reach check's calcparams_cec reads the CEC parameters and the keys pvlib defaults, yet the module's own key is refused first."""
         module = build()
         config = PVConfig(
             capacity_kw=4.0,
@@ -1113,6 +1167,52 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
         assert key in re.findall(r"\w+", message), message
         assert repr(value) in message, message
         assert "must be a finite number" in message, message
+
+    @pytest.mark.parametrize(
+        ("build", "key", "value"),
+        [
+            *[
+                pytest.param(rated_sapm_module, key, str(rated_sapm_module()[key]), id=f"sapm-{key}-text")
+                for key in SAPM_DC_KEYS
+            ],
+            pytest.param(rated_sapm_module, "C0", math.nan, id="sapm-C0-nan"),
+            pytest.param(rated_sapm_module, "N", math.nan, id="sapm-N-nan"),
+            *[
+                pytest.param(pvsyst_module, key, str(pvsyst_module()[key]), id=f"pvsyst-{key}-text")
+                for key in PVSYST_KEYS
+            ],
+            pytest.param(pvsyst_module, "gamma_ref", math.nan, id="pvsyst-gamma_ref-nan"),
+        ],
+    )
+    def test_a_sapm_or_pvsyst_dc_parameter_that_is_not_is_refused_at_construction_and_at_use_naming_its_key_and_value(
+        self, build: Callable[[], dict[str, float]], key: str, value: float | str
+    ) -> None:
+        """Neither form takes a set temperature coefficient, and a SAPM module has no V_mp_ref to pick a CEC inverter by, so each runs with the simple inverter."""
+        module = build()
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=module,
+            custom_inverter_params=create_simple_inverter_params(),
+        )
+        module[key] = value
+
+        message = one_refusal_at_construction_and_at_use(config)
+        assert key in re.findall(r"\w+", message), message
+        assert repr(value) in message, message
+        assert "must be a finite number" in message, message
+
+    def test_a_sapm_module_whose_i_x_and_i_xx_parameters_are_nan_simulates(self) -> None:
+        """pvlib's sapm reads IXO, IXXO and C4 to C7 only into i_x and i_xx, which no inverter reads, and 10 SandiaMod rows give them NaN, so the rule leaves them unchecked: this row yields 27.0011 kWh on the clear day (measured)."""
+        row = dict(pvlib.pvsystem.retrieve_sam("SandiaMod")["Panasonic_VBHN235SA06B__2013_"])
+        assert all(math.isnan(row[key]) for key in ("IXO", "IXXO", "C4", "C5", "C6", "C7")), row
+        config = PVConfig(
+            capacity_kw=4.0,
+            custom_module_params=with_stc_at_its_maximum_power(row),
+            custom_inverter_params=create_simple_inverter_params(),
+        )
+
+        kwh = clear_day_kwh(config)
+        assert math.isfinite(kwh) and kwh > 0, kwh
 
     @pytest.mark.parametrize("hash_seed", ["0", "1"], ids=["hash-seed-0", "hash-seed-1"])
     def test_several_that_are_not_are_refused_naming_the_first_in_sorted_order_under_any_hash_seed(

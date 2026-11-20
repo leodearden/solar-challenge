@@ -45,9 +45,9 @@ def cec_module_with_a_wide_band_gap() -> dict[str, float]:
     return {**default_module(), "EgRef": 3.0}
 
 
-def cec_module_with_a_nan_band_gap() -> dict[str, float]:
-    """DEFAULT_CEC_MODULE's row with a NaN band gap: its bracket's ends are finite, but the modelled coefficient at each is NaN, which straddles no coefficient."""
-    return {**default_module(), "EgRef": math.nan}
+def cec_module_with_a_negative_shunt_resistance() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row with a negative shunt resistance: its bracket's ends are finite, but pvlib's single-diode solution at each is NaN, so its modelled coefficient straddles no coefficient."""
+    return {**default_module(), "R_sh_ref": -1.0}
 
 
 @pytest.fixture(scope="module")
@@ -328,10 +328,10 @@ _COEFFICIENTS_NO_ADJUST_REACHES = [
         id="cec_module_with_a_wide_band_gap--0.0005",
     ),
     pytest.param(
-        cec_module_with_a_nan_band_gap,
+        cec_module_with_a_negative_shunt_resistance,
         -0.004,
         "beyond the module's reach",
-        id="cec_module_with_a_nan_band_gap--0.004",
+        id="cec_module_with_a_negative_shunt_resistance--0.004",
     ),
 ]
 
