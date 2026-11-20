@@ -206,15 +206,15 @@ def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
     _open_with_the_sidebar_stored(page, live_server + "/", "true")
     toggle = _sidebar_toggle(page)
     expect(toggle).to_have_attribute("title", "Collapse sidebar")
-    assert _layout_once_the_slide_ends(page) == _SIDEBAR_OPEN
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_OPEN
 
     toggle.click()
     expect(toggle).to_have_attribute("title", "Expand sidebar")
-    assert _layout_once_the_slide_ends(page) == _SIDEBAR_COLLAPSED
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_COLLAPSED
 
     toggle.click()
     expect(toggle).to_have_attribute("title", "Collapse sidebar")
-    assert _layout_once_the_slide_ends(page) == _SIDEBAR_OPEN
+    assert _finish_the_transitions_and_read_the_layout(page) == _SIDEBAR_OPEN
 
 
 # ── Sidebar state on load ──────────────────────────────────────────────
@@ -244,11 +244,12 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const describe = target => target === sidebar() ? 'sidebar'
         : target.contains(content()) ? 'main column'
         : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
-    const transitions = () => document.getAnimations()
-        .filter(animation => animation instanceof CSSTransition)
+    const documentTransitions = () => document.getAnimations().filter(animation => animation instanceof CSSTransition);
+    const transitions = () => documentTransitions()
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    window.sidebarProbe = {drawn, transitions, load: {}};
+    const finishTransitions = () => documentTransitions().forEach(transition => transition.finish());
+    window.sidebarProbe = {drawn, transitions, finishTransitions, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
@@ -265,13 +266,6 @@ _CLICK_AND_READ_THE_TRANSITIONS = """async toggle => {
     return window.sidebarProbe.transitions();
 }"""
 
-# Finishes every running CSS transition, then returns the probe's layout: where the toggle's slide ends,
-# read without waiting for the frames that run it, which a loaded host can withhold for seconds.
-_LAYOUT_ONCE_THE_SLIDE_ENDS = """() => {
-    document.getAnimations().filter(animation => animation instanceof CSSTransition).forEach(transition => transition.finish());
-    return window.sidebarProbe.drawn().layout;
-}"""
-
 
 def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None) -> None:
     """Open url with localStorage's sidebarOpen set to stored_state (left unset if None), recording how the sidebar loads."""
@@ -286,9 +280,14 @@ def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, ob
     return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.drawn()")
 
 
-def _layout_once_the_slide_ends(page: Page) -> dict[str, object]:
-    """The desktop sidebar's width and #main-content's left edge, in px, once every running transition is finished; the page is one _open_with_the_sidebar_stored opened."""
-    return page.evaluate(_LAYOUT_ONCE_THE_SLIDE_ENDS)
+def _finish_the_transitions_and_read_the_layout(page: Page) -> dict[str, object]:
+    """Finish every CSS transition in the page, then return the desktop sidebar's width and #main-content's left edge, in px.
+
+    That is the layout the toggle's slide ends at, read without waiting for the frames that run the
+    slide, which a loaded host can withhold for seconds. The page is one _open_with_the_sidebar_stored
+    opened. No transition is left running, so the probe's transitions() reads empty afterwards.
+    """
+    return page.evaluate("() => { window.sidebarProbe.finishTransitions(); return window.sidebarProbe.drawn().layout; }")
 
 
 def _highlighted_groups_once_nothing_transitions(page: Page) -> list[str]:
