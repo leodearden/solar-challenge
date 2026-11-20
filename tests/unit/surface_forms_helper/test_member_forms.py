@@ -14,7 +14,7 @@ import re
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import ClassVar, NamedTuple, Optional
+from typing import ClassVar, NamedTuple, Optional, Self
 
 import pytest
 
@@ -65,13 +65,13 @@ def test_a_method_member_is_spelled_by_its_signature_self_included() -> None:
 def test_a_classmethod_or_staticmethod_member_is_spelled_by_its_kind_then_its_function() -> None:
     class Meter:
         @classmethod
-        def default(cls) -> "Meter": ...
+        def default(cls) -> Self: ...
 
         @staticmethod
         def scale(kwh: float) -> float: ...
 
     assert member_forms(Meter) == {
-        "default": "classmethod (cls) -> Meter",
+        "default": "classmethod (cls) -> typing.Self",
         "scale": "staticmethod (kwh: float) -> float",
     }
 
@@ -144,14 +144,14 @@ def test_an_abstract_member_form_begins_with_abstract() -> None:
 
         @classmethod
         @abc.abstractmethod
-        def default(cls) -> "Strategy": ...
+        def default(cls) -> Self: ...
 
         def describe(self) -> str: ...
 
     assert member_forms(Strategy) == {
         "decide": "abstract (self, demand_kw: float) -> str",
         "name": "abstract property (self) -> str",
-        "default": "abstract classmethod (cls) -> Strategy",
+        "default": "abstract classmethod (cls) -> typing.Self",
         "describe": "(self) -> str",
     }
 
@@ -194,6 +194,38 @@ def test_an_attribute_the_class_body_only_annotates_is_spelled_attribute_then_it
         "site": "attribute Path",
         "reading": "attribute float | None",
     }
+
+
+def test_a_string_attribute_annotation_or_a_forward_reference_in_one_is_spelled_as_what_it_evaluates_to_in_the_module_of_the_class_declaring_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = (
+        "from typing import Optional\n"
+        "\n"
+        "class A: ...\n"
+        "\n"
+        "class Held:\n"
+        "    x: Optional[A]\n"
+        "    y: A | None\n"
+        '    z: "Optional[A]"\n'
+        '    w: list["A"]\n'
+    )
+    attributespelling = imported_module(tmp_path, monkeypatch, "attributespelling", source)
+    futureattributespelling = imported_module(
+        tmp_path,
+        monkeypatch,
+        "futureattributespelling",
+        "from __future__ import annotations\n" + source,
+    )
+    forms = {
+        "x": "attribute A | None",
+        "y": "attribute A | None",
+        "z": "attribute A | None",
+        "w": "attribute list[A]",
+    }
+
+    assert member_forms(attributespelling.Held) == forms
+    assert member_forms(futureattributespelling.Held) == forms
 
 
 def test_an_attribute_the_class_body_annotates_and_lists_in_its_slots_is_spelled_and_names_classes_by_its_annotation_not_its_slot() -> None:
@@ -311,6 +343,23 @@ def test_a_class_body_string_annotation_of_a_class_whose_module_another_module_o
     with pytest.raises(LookupError) as raised:
         member_forms(earlier.Plain)
 
+    assert later.__file__ in str(raised.value)
+
+
+def test_a_class_body_annotation_holding_no_string_is_spelled_without_looking_up_the_module_of_its_class_though_another_module_of_the_same_name_has_replaced_it_in_sys_modules_where_named_classes_raises_the_lookup_error(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "from fractions import Fraction\n\nclass Plain:\n    share: Fraction\n"
+    earlier = imported_module(
+        tmp_path_factory.mktemp("earlier"), monkeypatch, "stringlessauditing", source
+    )
+    later = imported_module(
+        tmp_path_factory.mktemp("later"), monkeypatch, "stringlessauditing", source
+    )
+
+    assert member_forms(earlier.Plain) == {"share": "attribute Fraction"}
+    with pytest.raises(LookupError) as raised:
+        named_classes(earlier.Plain)
     assert later.__file__ in str(raised.value)
 
 

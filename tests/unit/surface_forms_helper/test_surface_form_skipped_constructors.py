@@ -380,9 +380,9 @@ def test_a_class_whose_metaclass_call_new_or_init_is_a_method_wrapper_or_a_class
         def __init__(self, share: "fractions.Fraction") -> None: ...
 
     for cls, form, classes in (
-        (Reinitialised, "(share: fractions.Fraction) -> None", {fractions.Fraction}),
-        (Made, "(share: fractions.Fraction) -> object", {fractions.Fraction, object}),
-        (Initialised, "(share: fractions.Fraction) -> None", {fractions.Fraction}),
+        (Reinitialised, "(share: Fraction) -> None", {fractions.Fraction}),
+        (Made, "(share: Fraction) -> object", {fractions.Fraction, object}),
+        (Initialised, "(share: Fraction) -> None", {fractions.Fraction}),
     ):
         assert surface_form(cls) == form
         assert named_classes(cls) == classes
@@ -468,10 +468,10 @@ def test_a_class_whose_new_or_init_inspect_skips_as_defined_in_c_is_spelled_by_t
         def __new__(cls, share: "fractions.Fraction") -> object: ...
 
     base, form, classes = {
-        "__new__": (Initialised, "(share: fractions.Fraction) -> None", {fractions.Fraction}),
+        "__new__": (Initialised, "(share: Fraction) -> None", {fractions.Fraction}),
         "__init__": (
             Created,
-            "(share: fractions.Fraction) -> object",
+            "(share: Fraction) -> object",
             {fractions.Fraction, object},
         ),
     }[name]

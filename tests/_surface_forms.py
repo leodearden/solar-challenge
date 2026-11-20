@@ -16,6 +16,11 @@ every module of the helper, bottom first.
 
 Usage::
 
+    from pathlib import Path
+    from typing import List, Optional
+
+    from pandas import Series
+
     from tests._surface_forms import member_forms, named_classes, surface_form, undeclared_attributes
 
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
@@ -41,6 +46,7 @@ import abc
 import ast
 import collections
 import dataclasses
+import functools
 import inspect
 import itertools
 import types
@@ -99,8 +105,12 @@ def surface_form(obj: object) -> str:
     in C, which inspect reads before any __new__ or __init__, else the __new__ or
     __init__ it reads. A dataclass's signature follows its kind: dataclass, then in
     brackets those of eq, order, unsafe_hash and frozen that are on, whether set on the
-    class or on the base it inherits them from. An annotation in that signature which it
-    has no rule for, such as a type alias, raises TypeError naming it and its type.
+    class or on the base it inherits them from. Each annotation in that signature is
+    spelled as what it evaluates to: a string annotation or a forward reference is
+    evaluated as named_classes reads one, in the module that spells it, which is looked up
+    only then, and reading it raises what named_classes raises for it; one met again
+    inside its own evaluation raises TypeError naming it. An annotation which it has no
+    rule for, such as a type alias, raises TypeError naming it and its type.
 
     A class whose constructor inspect reads differently by minor, or cannot read on any,
     and a routine whose signature inspect reads differently by minor, raise TypeError
@@ -128,16 +138,17 @@ def surface_form(obj: object) -> str:
     if not _is_class_or_routine(obj):
         return _constant(obj).text()
     signature = signature_of(obj)
+    constructs = _signature_constructs(obj, signature, _looked_up_when_read)
     text = str(
         signature.replace(
             parameters=[
                 parameter.replace(
-                    annotation=_spelled_annotation(parameter.annotation),
+                    annotation=_spelled_annotation(constructs.get(name)),
                     default=_spelled_default(parameter.default),
                 )
-                for parameter in signature.parameters.values()
+                for name, parameter in signature.parameters.items()
             ],
-            return_annotation=_spelled_annotation(signature.return_annotation),
+            return_annotation=_spelled_annotation(constructs.get("return")),
         )
     )
     if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
@@ -172,12 +183,13 @@ def member_forms(cls: type) -> dict[str, str]:
     tuple. Where that class holds anything but a tuple of strings, TypeError names
     *cls*, that class and the type of what it holds. The attributes the body declares
     come first, in annotation order, then the other names it defines, in class-body
-    order. A ClassVar annotation declares a class variable, not an instance attribute; a
-    string annotation is read as named_classes reads one, so a name its module does not
-    bind raises NameError, a module inspect reads no source for raises TypeError while
-    its imports are unread, as evaluated_in in tests/_surface_forms_module_lookup.py
-    says, and a module another of the same name has replaced in sys.modules raises
-    LookupError. A class whose metaclass shadows __dict__ or overrides type's
+    order. A ClassVar annotation declares a class variable, not an instance attribute. An
+    attribute's annotation is spelled as what it evaluates to, a string annotation read as
+    named_classes reads one, so a name its module does not bind raises NameError, a
+    module inspect reads no source for raises TypeError while its imports are unread, as
+    evaluated_in in tests/_surface_forms_module_lookup.py says, and a module another of
+    the same name has replaced in sys.modules raises LookupError. A class whose metaclass
+    shadows __dict__ or overrides type's
     __getattribute__ raises the TypeError own_namespace raises for it. A public name the
     body binds to a class, by a nested class statement or an alias, raises TypeError
     naming *cls*, the name and that class, whose own members it would leave unpinned. A
@@ -187,7 +199,7 @@ def member_forms(cls: type) -> dict[str, str]:
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
-    return {name: _member_form(member) for name, member in _public_members(cls).items()}
+    return {name: _member_form(member, cls) for name, member in _public_members(cls).items()}
 
 
 def named_classes(obj: object) -> set[type]:
@@ -242,9 +254,9 @@ def named_classes(obj: object) -> set[type]:
     Enum and the string; docs/surface-forms-inspect-readings.md §4.2 says why. A
     signature that annotates nothing, as that of each routine CPython defines in C such
     as str.join, names no class, and no module is looked up for it.
-    Met again inside its own evaluation in the same module, as each "JSON" is in
-    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], a string names no class
-    there: that evaluation names them all.
+    A string met again inside its own evaluation, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], raises TypeError naming it,
+    as no rule spells a recursive alias.
     An annotation none of these rules reads, such as a type alias, raises TypeError
     naming it and its type; a class or routine whose signature surface_form refuses
     raises the TypeError surface_form raises for it, and a class member_forms refuses,
@@ -364,12 +376,6 @@ class _Spelling(str):
         return str(self)
 
 
-def _spelled_annotation(annotation: object) -> object:
-    if annotation is inspect.Parameter.empty:
-        return annotation
-    return _Spelling(_parsed(annotation, frozenset()).text())
-
-
 def _spelled_default(default: object) -> object:
     if default is inspect.Parameter.empty:
         return default
@@ -381,47 +387,16 @@ def _spelled_value(value: object) -> str:
     return ascii(value)
 
 
-@dataclasses.dataclass(frozen=True)
-class _Evaluation:
-    """A string evaluated in a module, held in *enclosing* while what it evaluates to is read, so that the same string met again there, in the same module, names no class."""
-
-    source: str
-    module: types.ModuleType
-
-
-_Enclosing: typing.TypeAlias = frozenset[_Evaluation]
-
-
 class _Construct(abc.ABC):
-    """An annotation parsed as the construct it is, the annotations inside it parsed in turn: the one grammar both its spelling and the classes it names are read by."""
+    """An annotation parsed as the construct it is, the annotations inside it parsed in turn and each string in it evaluated where it was parsed: the one reading both its spelling and the classes it names are taken from."""
 
     @abc.abstractmethod
     def text(self) -> str:
         """The spelling, alike on every admitted minor."""
 
     @abc.abstractmethod
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
-        """The classes it names, a name in it resolved in *module*; a string raises TypeError where *module* is Unspelled, as no module is known to spell it."""
-
-
-@dataclasses.dataclass(frozen=True)
-class _Unevaluated(_Construct):
-    """A string annotation or a forward reference: spelled as written, naming the classes of the annotation it evaluates to, read inside the evaluations that enclose it where it is written; inside its own evaluation in the same module it names no class."""
-
-    source: str
-    enclosing: _Enclosing
-
-    def text(self) -> str:
-        return self.source
-
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
-        if isinstance(module, Unspelled):
-            raise module.refusal(self.source)
-        evaluation = _Evaluation(self.source, module)
-        if evaluation in self.enclosing:
-            return set()
-        evaluated = evaluated_in(self.source, module)
-        return _parsed(evaluated, self.enclosing | {evaluation}).classes(module)
+    def classes(self) -> set[type]:
+        """The classes it names, read in no module, as each string in it was evaluated where it was parsed."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -434,7 +409,7 @@ class _Leaf(_Construct):
     def text(self) -> str:
         return self.spelling
 
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
+    def classes(self) -> set[type]:
         return set(self.named)
 
 
@@ -447,8 +422,8 @@ class _Union(_Construct):
     def text(self) -> str:
         return " | ".join(member.text() for member in self.members)
 
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
-        return _classes_of(self.members, module)
+    def classes(self) -> set[type]:
+        return _classes_of(self.members)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -462,8 +437,8 @@ class _Subscripted(_Construct):
         inside = _texts_of(self.arguments) if self.arguments else "()"
         return f"{self.origin.text()}[{inside}]"
 
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
-        return self.origin.classes(module) | _classes_of(self.arguments, module)
+    def classes(self) -> set[type]:
+        return self.origin.classes() | _classes_of(self.arguments)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -475,39 +450,69 @@ class _ParameterTypes(_Construct):
     def text(self) -> str:
         return f"[{_texts_of(self.members)}]"
 
-    def classes(self, module: ModuleOrUnspelled) -> set[type]:
-        return _classes_of(self.members, module)
+    def classes(self) -> set[type]:
+        return _classes_of(self.members)
 
 
 def _texts_of(constructs: Iterable[_Construct]) -> str:
     return ", ".join(construct.text() for construct in constructs)
 
 
-def _classes_of(constructs: Iterable[_Construct], module: ModuleOrUnspelled) -> set[type]:
-    return set().union(*(construct.classes(module) for construct in constructs))
+def _classes_of(constructs: Iterable[_Construct]) -> set[type]:
+    return set().union(*(construct.classes() for construct in constructs))
+
+
+def _spelled_annotation(construct: _Construct | None) -> object:
+    """*construct*'s spelling, as a _Spelling, which inspect prints as given; inspect's empty annotation where the signature gives none, so the walk holds no construct."""
+    if construct is None:
+        return inspect.Parameter.empty
+    return _Spelling(construct.text())
 
 
 _CLASSLESS_NAME_KINDS: tuple[type, ...] = (typing._SpecialForm,)
 
+_ModuleLookup: typing.TypeAlias = Callable[[], ModuleOrUnspelled]
 
-def _parsed(annotation: object, enclosing: _Enclosing) -> _Construct:
-    """The construct *annotation* is, read inside the evaluations of the strings in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
+_Found = typing.TypeVar("_Found")
+
+
+class _LookupTiming(typing.Protocol):
+    """When a reader looks up the module that spells an annotation: from *lookup*, the thunk the reader gives _parsed, which calls it only when it reads a string; _looked_up_now looks up at once, _looked_up_when_read only once that thunk is first called."""
+
+    def __call__(self, lookup: Callable[[], _Found], /) -> Callable[[], _Found]: ...
+
+
+def _looked_up_now(lookup: Callable[[], _Found]) -> Callable[[], _Found]:
+    """What *lookup* finds, looked up before any annotation is read, as named_classes looks up the module that spells one, so that it raises what the lookup raises whatever the annotation holds."""
+    found = lookup()
+    return lambda: found
+
+
+def _looked_up_when_read(lookup: Callable[[], _Found]) -> Callable[[], _Found]:
+    """What *lookup* finds, looked up only once the thunk is first called and kept for each call after, as surface_form and member_forms look up the module that spells an annotation, so that one holding no string is spelled whatever the lookup would raise."""
+    return functools.cache(lookup)
+
+
+def _parsed(
+    annotation: object, module_of: _ModuleLookup, enclosing: frozenset[str] = frozenset()
+) -> _Construct:
+    """The construct *annotation* is, each string in it evaluated as _parsed_string evaluates one in the module *module_of* gives, inside the evaluations of the strings in *enclosing*; raises TypeError naming it and its type if no construct reads it."""
     if isinstance(annotation, str):
-        return _Unevaluated(annotation, enclosing)
+        return _parsed_string(annotation, module_of, enclosing)
     if isinstance(annotation, typing.ForwardRef):
-        return _Unevaluated(annotation.__forward_arg__, enclosing)
+        return _parsed_string(annotation.__forward_arg__, module_of, enclosing)
     if annotation is None or annotation is type(None):
         return _Leaf("None")
     if annotation is Ellipsis:
         return _Leaf("...")
     if isinstance(annotation, list):
-        return _ParameterTypes(_each_parsed(annotation, enclosing))
+        return _ParameterTypes(_each_parsed(annotation, module_of, enclosing))
     if _is_bare_alias(annotation):
-        return _parsed(typing.get_origin(annotation), enclosing)
+        return _parsed(typing.get_origin(annotation), module_of, enclosing)
     if isinstance(annotation, _CLASSLESS_NAME_KINDS):
         return _Leaf(repr(annotation))
     if _is_subscription_a_construct_reads(annotation):
-        return _parsed_subscription(annotation, enclosing)
+        return _parsed_subscription(annotation, module_of, enclosing)
     if inspect.isclass(annotation):
         return _Leaf(annotation.__qualname__, frozenset({annotation}))
     kind = f"{type(annotation).__module__}.{type(annotation).__qualname__}"
@@ -516,6 +521,27 @@ def _parsed(annotation: object, enclosing: _Enclosing) -> _Construct:
         "_Construct that spells it and names its classes, or, if it is a name and no "
         "class, add its type to _CLASSLESS_NAME_KINDS"
     )
+
+
+def _parsed_string(source: str, module_of: _ModuleLookup, enclosing: frozenset[str]) -> _Construct:
+    """The construct that *source*, a string annotation or a forward reference's, evaluates to as evaluated_in evaluates it in the module *module_of* gives, which is asked for only now, parsed in turn inside its own evaluation.
+
+    An Unspelled given in that module's place raises its refusal of *source*. *source* met
+    again inside its own evaluation, as each "JSON" is in
+    JSON = Union[dict[str, "JSON"], list["JSON"], str, None], raises TypeError naming it,
+    as no rule spells the recursive alias it spells.
+    """
+    module = module_of()
+    if isinstance(module, Unspelled):
+        raise module.refusal(source)
+    if source in enclosing:
+        raise TypeError(
+            f"The string annotation or forward reference {source!r}, read in the module "
+            f"{module.__name__!r}, is met again inside its own evaluation, so it spells a "
+            "recursive alias, which no rule spells: annotate with a type that does not refer "
+            "to itself, or make the name private"
+        )
+    return _parsed(evaluated_in(source, module), module_of, enclosing | {source})
 
 
 def _is_bare_alias(annotation: object) -> bool:
@@ -538,20 +564,24 @@ def _is_subscription_a_construct_reads(annotation: object) -> bool:
     return is_read_origin and origin is not typing.Annotated
 
 
-def _parsed_subscription(annotation: object, enclosing: _Enclosing) -> _Construct:
+def _parsed_subscription(
+    annotation: object, module_of: _ModuleLookup, enclosing: frozenset[str]
+) -> _Construct:
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin in (typing.Union, types.UnionType):
-        return _Union(_each_parsed(arguments, enclosing))
+        return _Union(_each_parsed(arguments, module_of, enclosing))
     if origin is typing.Literal:
         return _Subscripted(_Leaf("Literal"), _value_leaves(arguments))
-    return _Subscripted(_parsed(origin, enclosing), _each_parsed(arguments, enclosing))
+    return _Subscripted(
+        _parsed(origin, module_of, enclosing), _each_parsed(arguments, module_of, enclosing)
+    )
 
 
 def _each_parsed(
-    annotations: Iterable[object], enclosing: _Enclosing
+    annotations: Iterable[object], module_of: _ModuleLookup, enclosing: frozenset[str]
 ) -> tuple[_Construct, ...]:
-    return tuple(_parsed(annotation, enclosing) for annotation in annotations)
+    return tuple(_parsed(annotation, module_of, enclosing) for annotation in annotations)
 
 
 def _value_leaves(values: Iterable[object]) -> tuple[_Leaf, ...]:
@@ -676,16 +706,7 @@ def _form_classes(obj: object) -> set[type]:
         return set()
     if not _is_class_or_routine(obj):
         return _constant(obj).classes()
-    annotations = _signature_annotations(signature_of(obj))
-    if not annotations:
-        return set()
-    modules = spelling_modules(obj, annotations)
-    return set().union(
-        *(
-            _parsed(annotation, frozenset()).classes(modules[name])
-            for name, annotation in annotations.items()
-        )
-    )
+    return _classes_of(_signature_constructs(obj, signature_of(obj), _looked_up_now).values())
 
 
 def _is_class_or_routine(obj: object) -> typing.TypeGuard[Callable[..., object]]:
@@ -705,10 +726,31 @@ def _signature_annotations(signature: inspect.Signature) -> dict[str, object]:
     return annotations
 
 
+def _signature_constructs(
+    obj: object, signature: inspect.Signature, timing: _LookupTiming
+) -> dict[str, _Construct]:
+    """Each annotation *signature*, signature_of(obj)'s, gives, by parameter name or "return", parsed as the construct it is, each string in it evaluated in the module spelling_modules finds for that name, looked up as *timing* says; none, and no module looked up, where *signature* annotates nothing."""
+    annotations = _signature_annotations(signature)
+    if not annotations:
+        return {}
+    modules = timing(functools.partial(spelling_modules, obj, annotations))
+    return {
+        name: _parsed(annotation, _spelling_module_under(name, modules))
+        for name, annotation in annotations.items()
+    }
+
+
+def _spelling_module_under(
+    name: str, modules: Callable[[], Mapping[str, ModuleOrUnspelled]]
+) -> _ModuleLookup:
+    """The lookup of what the mapping *modules* gives holds under *name*, which asks *modules* for that mapping only when it is called."""
+    return lambda: modules()[name]
+
+
 def _member_form_classes(member: object, cls: type) -> set[type]:
     """The classes the form of *member*, one of *cls*'s, names."""
     if isinstance(member, _AnnotatedAttribute):
-        return _parsed(member.annotation, frozenset()).classes(defining_module(cls))
+        return _attribute_construct(member, cls, _looked_up_now).classes()
     function = spelled_function(member)
     return _form_classes(member if function is None else function)
 
@@ -830,6 +872,13 @@ class _AnnotatedAttribute:
     annotation: object
 
 
+def _attribute_construct(
+    attribute: _AnnotatedAttribute, cls: type, timing: _LookupTiming
+) -> _Construct:
+    """The construct the annotation of *attribute*, which *cls*'s body declares, is, each string in it evaluated in *cls*'s module, looked up as *timing* says."""
+    return _parsed(attribute.annotation, timing(functools.partial(defining_module, cls)))
+
+
 def _public_members(cls: type) -> dict[str, object]:
     """The members member_forms(cls) spells, by name: the public names *cls*'s own body defines or declares, less those surface_form(cls) pins.
 
@@ -898,16 +947,17 @@ def _is_class_var(annotation: object, cls: type) -> bool:
     return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
-def _member_form(member: object) -> str:
-    form = _form_by_kind(member)
+def _member_form(member: object, cls: type) -> str:
+    form = _form_by_kind(member, cls)
     if getattr(member, "__isabstractmethod__", False):
         return f"abstract {form}"
     return form
 
 
-def _form_by_kind(member: object) -> str:
+def _form_by_kind(member: object, cls: type) -> str:
+    """The form of *member*, one of *cls*'s, by its kind."""
     if isinstance(member, _AnnotatedAttribute):
-        return f"attribute {_parsed(member.annotation, frozenset()).text()}"
+        return f"attribute {_attribute_construct(member, cls, _looked_up_when_read).text()}"
     function = spelled_function(member)
     if function is None:
         return surface_form(member)

@@ -11,7 +11,7 @@ import re
 import sys
 import types
 import warnings
-from typing import Callable
+from typing import Callable, Self
 
 import pytest
 
@@ -104,7 +104,7 @@ def test_a_class_decorated_with_warnings_deprecated_raises_the_type_error_naming
 
 def test_a_wrapper_of_a_callable_defined_in_c_that_inspect_reads_after_another_constructor_leaves_the_class_spelled_by_that_constructor() -> None:
     class Paired:
-        def __new__(cls, rate: int) -> "Paired":
+        def __new__(cls, rate: int) -> Self:
             return object.__new__(cls)
 
         @functools.wraps(object.__init__)
@@ -112,13 +112,13 @@ def test_a_wrapper_of_a_callable_defined_in_c_that_inspect_reads_after_another_c
 
     class Wrapping:
         @functools.wraps(object.__new__)
-        def __new__(cls, *args: object, **kwargs: object) -> "Wrapping":
+        def __new__(cls, *args: object, **kwargs: object) -> Self:
             return object.__new__(cls)
 
     class Overriding(Wrapping):
         def __init__(self, rate: int) -> None: ...
 
-    assert surface_form(Paired) == "(rate: int) -> Paired"
+    assert surface_form(Paired) == "(rate: int) -> typing.Self"
     assert surface_form(Overriding) == "(rate: int) -> None"
 
 
