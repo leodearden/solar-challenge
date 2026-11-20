@@ -12,17 +12,15 @@ holds when addopts are cleared, as dark-factory's serial recovery run clears
 them with `-o addopts=`.
 """
 
-from pathlib import Path
-
 import pytest
 
 
+@pytest.mark.usefixtures("pytester_sessions_read_the_project_ini")
 @pytest.mark.parametrize("pytest_args", [(), ("-o", "addopts=")], ids=["as-configured", "addopts-cleared"])
 def test_a_module_carrying_an_unregistered_mark_fails_collection_naming_the_mark(
-    pytester_under_root_conftest: pytest.Pytester, project_root: Path, pytest_args: tuple[str, ...]
+    pytester_under_root_conftest: pytest.Pytester, pytest_args: tuple[str, ...]
 ) -> None:
     """The module is collected in a session of its own, under copies of this project's pyproject.toml and root conftest."""
-    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     module = pytester_under_root_conftest.makepyfile(
         """
         import pytest
@@ -40,11 +38,11 @@ def test_a_module_carrying_an_unregistered_mark_fails_collection_naming_the_mark
     result.stdout.fnmatch_lines(["*ERROR collecting*", "*'slwo'*"])
 
 
+@pytest.mark.usefixtures("pytester_sessions_read_the_project_ini")
 def test_the_xdist_group_mark_collects_with_pytest_xdist_disabled(
-    pytester_under_root_conftest: pytest.Pytester, project_root: Path
+    pytester_under_root_conftest: pytest.Pytester,
 ) -> None:
     """With xdist disabled, as dark-factory's serial recovery run disables it, the plugin that registers xdist_group is gone, so under strict_markers the mark resolves only if pyproject.toml registers it."""
-    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     module = pytester_under_root_conftest.makepyfile(
         """
         import pytest
@@ -59,3 +57,4 @@ def test_the_xdist_group_mark_collects_with_pytest_xdist_disabled(
     result = pytester_under_root_conftest.runpytest_subprocess("-p", "no:xdist", "-o", "addopts=", module)
 
     result.assert_outcomes(passed=1)
+    result.stdout.no_fnmatch_line("*PytestUnknownMarkWarning*")

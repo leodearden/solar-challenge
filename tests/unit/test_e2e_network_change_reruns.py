@@ -74,14 +74,13 @@ def page(context):
 
 @pytest.fixture
 def e2e_suite(
-    pytester_importing_test_helpers: pytest.Pytester, project_root: Path, e2e_conftest: Path
+    pytester_importing_test_helpers: pytest.Pytester, pytester_sessions_read_the_project_ini: None, e2e_conftest: Path
 ) -> pytest.Pytester:
     """pytester, whose sessions read this project's pytest ini and run under the e2e conftest, with a stub browser context and page.
 
     The pytest ini is the one the offline lane's e2e job reads, so a pytest
     deprecation on the rerun path is an error here too.
     """
-    pytester_importing_test_helpers.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
     pytester_importing_test_helpers.makeconftest(e2e_conftest.read_text(encoding="utf-8") + PLAYWRIGHT_FIXTURE_STUBS)
     return pytester_importing_test_helpers
 

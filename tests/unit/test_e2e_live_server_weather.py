@@ -8,42 +8,20 @@
 - A session whose last test is slow leaves CACHE_DIR_VARIABLE at
   pytest_sessionfinish with the value it had before the session.
 
-Each scenario runs in a session of its own, laid out as the offline lane's e2e
-job runs tests/e2e: copies of pyproject.toml and tests/conftest.py, with the e2e
-conftest's copy in e2e/. An override changes the app of the whole session, and
-the slow test must run last, so no two scenarios share one. The session names
-e2e/, as the lane's job names tests/e2e, because the root conftest's
-collect_ignore keeps it out of any other collection. Like the lane's, it starts
-with no weather cache directory named, not with the variable of the window that
-runs the test here.
+Each scenario runs in a session of its own, which tests/conftest.py's
+pytester_laid_out_as_the_e2e_suite lays out as the offline lane's e2e job runs
+tests/e2e. An override changes the app of the whole session, and the slow test
+must run last, so no two scenarios share one.
 """
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 
 from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR
 
 pytest.importorskip("flask")
-
-
-@pytest.fixture
-def pytester_laid_out_as_the_e2e_suite(
-    pytester_under_root_conftest: pytest.Pytester,
-    project_root: Path,
-    e2e_conftest: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> pytest.Pytester:
-    """pytester_under_root_conftest, with a copy of pyproject.toml beside the root conftest's and the e2e conftest's copy in e2e/.
-
-    Its sessions start with no weather cache directory named.
-    """
-    monkeypatch.delenv(CACHE_DIR_VARIABLE, raising=False)
-    pytester_under_root_conftest.makepyprojecttoml((project_root / "pyproject.toml").read_text(encoding="utf-8"))
-    pytester_under_root_conftest.makepyfile(**{"e2e/conftest": e2e_conftest.read_text(encoding="utf-8")})
-    return pytester_under_root_conftest
 
 
 HOME_JOBS_AT_EVERY_LOCATION_PRESET = """
