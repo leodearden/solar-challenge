@@ -830,10 +830,7 @@ def test_each_points_results_fetched_fails_naming_the_jobs_whose_results_the_pag
 def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raises_through_unchanged(
     page: Page, live_server: str
 ) -> None:
-    """A Playwright timeout raised inside the block _each_points_results_fetched wraps, here a locator's wait, comes out of it unchanged, not relabelled as its failure naming unfetched jobs.
-
-    The selector is one the page never shows, and Playwright's timeout names it in its call log, so matching it proves the exception that came out is the block's own and not the helper's waiters'.
-    """
+    """A Playwright timeout raised inside the block _each_points_results_fetched wraps, here a locator's wait for a selector the page never shows, comes out of it unchanged, not relabelled as its failure naming unfetched jobs."""
     page.goto(live_server + "/scenarios/sweep")
 
     with (
