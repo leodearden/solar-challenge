@@ -879,7 +879,7 @@ def _raising_its_own_broken_process_pool(
 
 
 class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
-    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start and the call ends only once the homes already running have finished; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
+    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way no home not yet handed to the pool starts and the call ends only once every home started has finished; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
     def test_in_parallel_a_failed_home_is_named_on_its_own_exception_and_the_homes_still_pending_are_cancelled(
@@ -905,9 +905,26 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Seven')"]
         _assert_every_started_home_finished(tmp_path)
         assert len(started(tmp_path)) < len(fleet.homes), (
-            "when Home 1 failed, the two workers had started at most it, Home 2 (held until Home 1 finished), the "
-            "home Home 1's worker took next and the three queued behind those (max_workers + 1), so the seventh "
-            "home was cancelled"
+            "a later home reaches the pool only once another home's results are read here, so the seventh home "
+            "never started"
+        )
+
+    @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
+    def test_in_parallel_on_one_worker_a_failed_home_is_named_on_its_own_exception_and_no_later_home_starts(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = _uniform_fleet(5, "Five")
+        home_simulator = MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"}), seconds=0.2)
+        runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=1)
+
+        with pytest.raises(ValueError) as caught:
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert caught.value.__notes__ == ["simulating home 0 ('Home 1') of fleet 0 ('Five')"]
+        _assert_every_started_home_finished(tmp_path)
+        assert set(started(tmp_path)) == {"Home 1"}, (
+            "the pool was handed Home 1 alone, and is handed a later home only once a finished home's results have "
+            "been read here, so reading Home 1's failure raised before any later home was handed on"
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
@@ -1007,14 +1024,15 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
         assert caught.value is raised
         assert getattr(caught.value, "__notes__", []) == []
         _assert_every_started_home_finished(tmp_path)
-        assert len(started(tmp_path)) < len(fleet.homes), (
-            "when the second home finished, the one worker had started at most the two finished homes, the home "
-            "it took next and the two queued behind that one, so the sixth home was cancelled"
+        assert set(started(tmp_path)) == {"Home 1", "Home 2", "Home 3"}, (
+            "the pool holds one home per worker, and the next home is handed to it from this process only as a "
+            "finished home's results are read, so when the sink raised at the second home only the third had been "
+            "handed on"
         )
 
 
 class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
-    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started and returns once those running have finished."""
+    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and once the iterator is closed early no home not yet handed to the pool starts and the call returns once every home started has finished."""
 
     def test_in_turn_each_fleet_is_yielded_once_its_last_home_finishes_and_before_a_later_home_starts(
         self, tmp_path: Path
@@ -1066,9 +1084,9 @@ class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
         assert index == 0
         _assert_marked_results_of(results, fleets[0])
         _assert_every_started_home_finished(tmp_path)
-        assert len(started(tmp_path)) < sum(len(fleet.homes) for fleet in fleets), (
-            "when the first fleet was yielded, the one worker had started at most its home, the home it took next "
-            "and the two queued behind that one, so the fifth and sixth homes were cancelled"
+        assert set(started(tmp_path)) == {"Alone", "Home 1"}, (
+            "when fleet One was yielded, only Home 1 had been handed to the one worker, so closing the iterator left "
+            "Home 2 onward unstarted"
         )
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
