@@ -76,11 +76,11 @@ tasks:
           paths: ["src/solar_challenge/fleet.py"]
           expect: present
       - name: "cli-prints-notes"
-        binding: "grep:cli/utils.py::_print_error_verbatim prints str(error) only today; α prints each note"
+        binding: "grep:cli/utils.py::_print_error_verbatim prints error_text_with_notes(error), the error's text then each note (notes since α, the shared reader since task 1449)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "__notes__"
+          pattern: "error_text_with_notes\\("
           paths: ["src/solar_challenge/cli/utils.py"]
           expect: present
       - name: "fleet-tests-drive-the-runner"
