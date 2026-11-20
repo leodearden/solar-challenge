@@ -1,7 +1,7 @@
 """End-to-end tests for dark mode class propagation across pages.
 
-Verifies that setting localStorage theme=dark and reloading causes
-<html class="dark"> on every main page.
+Verifies that each main page opened with localStorage theme=dark has
+<html class="dark">.
 The module also toggles the theme live on a results page, to check what the toggle does to the page's charts.
 It checks that every grid, zero and polar axis line of each chart on the results and compare pages takes the
 dark theme's grid colour, whether the page loads dark or is switched to dark.
@@ -16,24 +16,6 @@ import pytest
 from playwright.sync_api import Locator, Page, expect
 
 from tests.e2e._chart_tabs import open_chart_tab
-
-
-def _enable_dark_mode_and_reload(page: Page, url: str) -> None:
-    """Navigate to url, set localStorage theme to dark, then reload."""
-    page.goto(url)
-    page.wait_for_load_state("domcontentloaded")
-    page.evaluate("() => localStorage.setItem('theme', 'dark')")
-    page.reload()
-    page.wait_for_load_state("networkidle")
-
-
-def _assert_dark_class_on_html(page: Page, page_name: str) -> None:
-    """Assert that <html> element has the 'dark' class."""
-    html_class = page.evaluate("() => document.documentElement.classList.contains('dark')")
-    assert html_class is True, (
-        f"Expected <html class='dark'> on {page_name}, "
-        f"but dark class is missing"
-    )
 
 
 def _plotly_background_colors(page: Page) -> list[str]:
@@ -73,6 +55,11 @@ def _open_in_theme(page: Page, url: str, theme: str) -> None:
     """Open url in theme: base.html's inline script reads localStorage before first paint."""
     page.add_init_script(f"localStorage.setItem('theme', '{theme}')")
     page.goto(url)
+
+
+def _expect_dark_class_on_html(page: Page) -> None:
+    """Wait until the <html> element of page has the 'dark' class."""
+    expect(page.locator("html"), f"Expected <html class='dark'> on {page.url}").to_contain_class("dark")
 
 
 def _toggle_theme(page: Page) -> None:
@@ -125,9 +112,9 @@ def _layout_features(page: Page, chart_id: str) -> dict[str, object]:
 
 
 def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
-    """Set localStorage theme=dark, reload -> <html class='dark'>."""
-    _enable_dark_mode_and_reload(page, live_server + "/simulate/home")
-    _assert_dark_class_on_html(page, "/simulate/home")
+    """/simulate/home opened with localStorage theme=dark has <html class='dark'>."""
+    _open_in_theme(page, live_server + "/simulate/home", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /simulate/fleet ------------------------------------------
@@ -135,8 +122,8 @@ def test_dark_mode_simulate_home(page: Page, live_server: str) -> None:
 
 def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
     """Same check on /simulate/fleet."""
-    _enable_dark_mode_and_reload(page, live_server + "/simulate/fleet")
-    _assert_dark_class_on_html(page, "/simulate/fleet")
+    _open_in_theme(page, live_server + "/simulate/fleet", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /scenarios/builder ----------------------------------------
@@ -144,8 +131,8 @@ def test_dark_mode_simulate_fleet(page: Page, live_server: str) -> None:
 
 def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
     """Same check on /scenarios/builder."""
-    _enable_dark_mode_and_reload(page, live_server + "/scenarios/builder")
-    _assert_dark_class_on_html(page, "/scenarios/builder")
+    _open_in_theme(page, live_server + "/scenarios/builder", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on /history/runs --------------------------------------------
@@ -153,8 +140,8 @@ def test_dark_mode_scenario_builder(page: Page, live_server: str) -> None:
 
 def test_dark_mode_history_page(page: Page, live_server: str) -> None:
     """Same check on /history/runs."""
-    _enable_dark_mode_and_reload(page, live_server + "/history/runs")
-    _assert_dark_class_on_html(page, "/history/runs")
+    _open_in_theme(page, live_server + "/history/runs", "dark")
+    _expect_dark_class_on_html(page)
 
 
 # -- Dark mode on results page charts --------------------------------------
@@ -170,8 +157,8 @@ def test_dark_mode_results_page_charts(
     chart-renderer.js defers the other tabs' charts until shown, so they are not checked.
     """
     run_id, _ = seeded_home_run
-    _enable_dark_mode_and_reload(page, live_server + f"/results/home/{run_id}")
-    _assert_dark_class_on_html(page, f"/results/home/{run_id}")
+    _open_in_theme(page, live_server + f"/results/home/{run_id}", "dark")
+    _expect_dark_class_on_html(page)
 
     opening_panel = _chart_tab_panels(page.get_by_role("tablist", name="Chart tabs")).first
     _expect_each_chart_titled_in(opening_panel, "dark")
