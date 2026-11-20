@@ -56,6 +56,7 @@ from playwright.sync_api import BrowserContext, Locator, Page, Request, Route, e
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from tests._server_drawn_badges import server_drawn_classes
+from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
@@ -99,8 +100,7 @@ def test_sweep_no_js_errors(
     attribute before the component function is registered, which throws
     an uncaught ReferenceError.
     """
-    page.goto(live_server + "/scenarios/sweep")
-    page.wait_for_load_state("networkidle")
+    open_once_alpine_has_started(page, live_server + "/scenarios/sweep")
 
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
