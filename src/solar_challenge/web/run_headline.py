@@ -25,9 +25,9 @@ class RunHeadline:
     figure. pv_stored_share is None for a fleet run, as FleetSummary carries no battery totals.
 
     Raises:
-        ConfigurationError: A figure is not a finite number a float can hold, e.g. None, a text,
-            a bool, NaN, an infinity or an int too large for a float; the message names the figure
-            and its value. A pv_stored_share of None is not refused. It is a ValueError.
+        ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses a figure;
+            the message names it RunHeadline.<figure>. A pv_stored_share of None is not refused. A
+            ConfigurationError is a ValueError.
     """
 
     generation_kwh: float
@@ -49,11 +49,11 @@ class RunHeadline:
 
 
 def _read_figure(name: str, value: object) -> float:
-    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it; a refusal names the figure RunHeadline.<name>.
+    """*value* as the float of RunHeadline's figure *name*, as as_finite_real reads it.
 
     Raises:
-        ConfigurationError: *value* is not a finite number a float can hold, e.g. None, a text,
-            a bool, NaN, an infinity or an int too large for a float.
+        ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses *value*;
+            the message names RunHeadline.<name>.
     """
     return as_finite_real(value, f"RunHeadline.{name}")
 
@@ -65,9 +65,9 @@ def _share_of_generation(figure: str, kwh: float, generation_kwh: float) -> floa
     number a total is, a Fraction included.
 
     Raises:
-        ConfigurationError: *generation_kwh* or *kwh* is not a finite number a float can hold,
-            as as_finite_real refuses it, naming generation_kwh or *figure*, before anything is
-            divided.
+        ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses
+            *generation_kwh* or *kwh*, before anything is divided; the message names
+            RunHeadline.generation_kwh or RunHeadline.<figure>.
     """
     generation = _read_figure("generation_kwh", generation_kwh)
     share_kwh = _read_figure(figure, kwh)
@@ -84,10 +84,10 @@ def run_headline(summary: SummaryStatistics | FleetSummary) -> RunHeadline:
     total_pv_charge_kwh counts without the grid charge. A fleet's pv_stored_share is None.
 
     Raises:
-        ConfigurationError: A figure of the summary that the headline holds, or that a share is
-            derived from, is not a finite number a float can hold, e.g. None, a text, a bool, NaN,
-            an infinity or an int too large for a float, as RunHeadline refuses it. It is a
-            ValueError.
+        ConfigurationError: :func:`~solar_challenge.number_fields.as_finite_real` refuses a figure
+            of the summary that the headline holds, or that a share is derived from; the message
+            names the headline figure it is read for, RunHeadline.<figure>. A ConfigurationError is
+            a ValueError.
     """
     match summary:
         case SummaryStatistics():
