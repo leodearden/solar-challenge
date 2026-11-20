@@ -822,7 +822,9 @@ def test_each_points_results_fetched_fails_naming_the_jobs_whose_results_the_pag
     ):
         page.evaluate("url => fetch(url).then(response => response.text())", f"/api/jobs/{fetched}/results")
 
-    assert (unfetched in str(failure.value), fetched in str(failure.value)) == (True, False)
+    message = str(failure.value)
+    assert unfetched in message
+    assert fetched not in message
 
 
 def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raises_through_unchanged(
