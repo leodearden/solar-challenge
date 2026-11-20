@@ -50,6 +50,16 @@ def cec_module_with_a_negative_shunt_resistance() -> dict[str, float]:
     return {**default_module(), "R_sh_ref": -1.0}
 
 
+def cec_module_with_a_vanishing_photocurrent() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row with an I_L_ref inside its domain but too small for pvlib's single-diode P_mp at STC to be above 0 W."""
+    return {**default_module(), "I_L_ref": 1e-300}
+
+
+def cec_module_with_a_shorting_shunt() -> dict[str, float]:
+    """DEFAULT_CEC_MODULE's row whose shunt shorts its cells, so its P_mp at STC is 0 W."""
+    return {**default_module(), "R_sh_ref": 1e-300}
+
+
 @pytest.fixture(scope="module")
 def default_clear_day_kwh() -> float:
     """The default 4 kW's energy on the clear day: 26.8194 kWh."""
@@ -332,6 +342,18 @@ _COEFFICIENTS_NO_ADJUST_REACHES = [
         -0.004,
         "its modelled temperature coefficient runs only from nan to nan per K",
         id="cec_module_with_a_negative_shunt_resistance--0.004",
+    ),
+    pytest.param(
+        cec_module_with_a_vanishing_photocurrent,
+        -0.004,
+        "its modelled temperature coefficient runs only from nan to nan per K",
+        id="cec_module_with_a_vanishing_photocurrent--0.004",
+    ),
+    pytest.param(
+        cec_module_with_a_shorting_shunt,
+        -0.004,
+        "its modelled temperature coefficient runs only from nan to nan per K",
+        id="cec_module_with_a_shorting_shunt--0.004",
     ),
 ]
 
