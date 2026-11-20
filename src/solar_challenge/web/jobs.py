@@ -246,9 +246,9 @@ class JobManager:
 
     Uses a ThreadPoolExecutor to run simulations in background threads.
     Each job has a versioned in-memory JobSnapshot of its state, which its
-    progress streams read with job_snapshot (web/sse.py's
-    job_progress_frames), and a run the manager records through its
-    RunStorage. A job's status moves only along
+    progress streams read with job_snapshot and wait on with
+    wait_for_job_snapshot (web/sse.py's job_progress_frames), and a run the
+    manager records through its RunStorage. A job's status moves only along
     LEGAL_JOB_TRANSITIONS (docs/prds/job-events-and-sse-framing.md §3.4),
     through one writer, _move_job, which refuses any other move with
     IllegalJobTransition.
@@ -291,6 +291,7 @@ class JobManager:
         self._clock = clock
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
+        self._job_moved = threading.Condition(self._lock)
         self._unfinished_job_count = 0
         self._jobs: dict[str, _TrackedJob] = {}
         _active_managers.add(self)
@@ -430,6 +431,22 @@ class JobManager:
             if this manager does not track the job.
         """
         with self._lock:
+            job = self._jobs.get(job_id)
+            return None if job is None else job.snapshot
+
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None:
+        """Return job *job_id*'s snapshot once its version is newer than *newer_than*, waiting at most *timeout* seconds for the job to move.
+
+        When the wait ends, it is the snapshot as it then stands, which is no newer if the job did not move. Every
+        move of a job wakes its waiters (web/sse.py's job_progress_frames waits here between polls).
+
+        Returns:
+            The job's frozen JobSnapshot.  None if this manager does not track the job, as job_snapshot says.
+        """
+        with self._job_moved:
+            self._job_moved.wait_for(
+                lambda: job_id not in self._jobs or self._jobs[job_id].snapshot.version > newer_than, timeout
+            )
             job = self._jobs.get(job_id)
             return None if job is None else job.snapshot
 
@@ -633,7 +650,7 @@ class JobManager:
         The job keeps its progress unless *progress_pct* and *current_step* are given. Under one hold of the lock the
         move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored in the job's snapshot at the next
         version, and finished_at is stamped when the new status is terminal, so a reader sees each state with its
-        own version.
+        own version. Every wait_for_job_snapshot caller is then woken.
 
         Raises:
             RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
@@ -659,6 +676,7 @@ class JobManager:
             job.snapshot = JobSnapshot(previous.version + 1, state)
             if to_status in TERMINAL_JOB_STATUSES:
                 job.finished_at = self._clock()
+            self._job_moved.notify_all()
             return state
 
     def _report_cancelled_job(self, job_id: str) -> None:
