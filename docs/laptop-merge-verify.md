@@ -72,17 +72,17 @@ Task verifies joined merge verifies once Dark Factory's own window of remote tas
     5415's rule.
   - `cpu-quota.conf` is the 8-thread cap of dark-factory's 2026-09-11 ruling Q2
     (`plans/verify-speed-synthesis-2026-09-11.md`). The ruling splits the laptop's 16 threads 8/8 between dark-factory
-    and Reify, so one verify of each fills it. This project adopted the same 8-thread figure later. The drop-in caps
-    each verify's scope on its own: a merge verify and a task verify of this project that run at once (§1) are capped
-    separately and may take all 16 threads together. A quota is the one cap that binds everything in a scope: the
-    pytest-xdist workers, the process pools `fleet.py` starts in them, and their BLAS threads. The laptop also runs
+    and reify, so one verify of each fills it. This project adopted the same 8-thread figure later. A quota is the one
+    cap that binds everything in a scope: the pytest-xdist workers, the process pools `fleet.py` starts in them, and
+    their BLAS threads. The drop-in caps each verify's scope on its own: a merge verify and a task verify of this
+    project that run at once (§1) are capped separately and may take all 16 threads together. The laptop also runs
     dark-factory's, reify's and solar-challenge-platform's verifies (the gate checkouts below), so any verify that runs
     beside two capped ones oversubscribes it.
   - `-n auto` starts 16 workers in a scope, one per laptop thread, because pytest-xdist counts the CPUs a process may
     run on and a quota does not change that. The count assumes psutil is not installed (`uv.lock` has none): with it,
-    `-n auto` would start 8 workers, one per physical core. The 16 share 8 threads' worth of CPU time, so each verify
-    stays within the scope's 8-thread quota. Nothing caps the worker count itself (measured in task 1467's commit,
-    `git log --grep='(1467)'`).
+    `-n auto` would start 8 workers, one per physical core. The quota makes the 16 share 8 threads' worth of CPU time,
+    so starting 16 workers does not take a verify past it. Nothing caps the worker count itself (measured in task 1467's
+    commit, `git log --grep='(1467)'`).
   - Read the files for the values and where each comes from.
   - They cap task-verify scopes as well as merge-verify ones, because the tag is the project's, not the role's.
   - The tag is Dark Factory's slug plus a hash of the resolved `project_root`. The hash keeps these drop-ins off
