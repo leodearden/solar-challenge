@@ -347,11 +347,11 @@ class FleetRunner:
         after each home finishes: (homes finished, homes in the call).
 
         A home that fails re-raises its own exception, with a note naming the home and its fleet; an
-        exception progress raises propagates as raised. Either, or closing the iterator early, cancels
-        the homes not yet started, since a parallel call hands its pool one home per worker, and the call
-        ends once the homes already running have finished. A
-        worker process that ends abruptly breaks the pool, and the BrokenProcessPool raised then carries
-        a note naming one home it left unfinished, which need not be the home whose process ended.
+        exception progress raises propagates as raised. After either, or once the iterator is closed
+        early, no home not yet handed to the pool starts (a parallel call hands it one home per worker),
+        and the call ends once every home started has finished. A worker process that ends abruptly
+        breaks the pool, and the BrokenProcessPool raised then carries a note naming one home it left
+        unfinished, which need not be the home whose process ended.
         """
         return _simulate_fleets(self, fleets, start_date, end_date, progress)
 
@@ -407,7 +407,7 @@ def _homes_in_a_pool(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
 ) -> _FinishedHomes:
-    """Each job with its home's results as the home finishes in one process pool holding at most one home per worker; however the generator stops, no home not yet handed to the pool starts, and those handed to it are waited for.
+    """Each job with its home's results as the home finishes in one process pool holding at most one home per worker; however the generator stops, no home not yet handed to the pool starts, and every home started is waited for.
 
     The pool is handed the next home from this process as a finished home's results are read, before that home is
     yielded. A job carries runner.home_simulator, the home, the window and the home's weather alone, so the runner

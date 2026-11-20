@@ -879,7 +879,7 @@ def _raising_its_own_broken_process_pool(
 
 
 class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
-    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way the homes not yet started never start and the call ends only once the homes already running have finished; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
+    """A home's failure re-raises its own exception with a note naming the home and its fleet, a progress sink's exception propagates as it was raised, and either way no home not yet handed to the pool starts and the call ends only once every home started has finished; a BrokenProcessPool, whether a worker process broke the pool or a home raised it, in parallel or in turn, names a home only as one left unfinished."""
 
     @pytest.mark.parametrize("worker_start_method", ["forkserver"], indirect=True)
     def test_in_parallel_a_failed_home_is_named_on_its_own_exception_and_the_homes_still_pending_are_cancelled(
@@ -1032,7 +1032,7 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
 
 
 class TestFleetRunnerYieldsEachFleetAsItsLastHomeFinishes:
-    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and closing the iterator early cancels the homes not yet started and returns once those running have finished."""
+    """simulate_each yields each fleet as its last home finishes, not at the end of the call, and once the iterator is closed early no home not yet handed to the pool starts and the call returns once every home started has finished."""
 
     def test_in_turn_each_fleet_is_yielded_once_its_last_home_finishes_and_before_a_later_home_starts(
         self, tmp_path: Path
