@@ -26,7 +26,7 @@ from solar_challenge.output import (
     generate_summary_report,
 )
 from solar_challenge.timebase import SimulationWindow
-from tests._factories import make_bill_distribution, make_config_result
+from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_window
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
@@ -461,13 +461,7 @@ def _annualised_from(window: SimulationWindow | None) -> BillDistribution:
 def _one_config_sweep(window: SimulationWindow | None) -> RankedSweep:
     """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
     cr = make_config_result(outlay=_annualised_from(window))
-    return RankedSweep(
-        results=(cr,),
-        infeasible=(),
-        retained_cash_floor_gbp=27.0,
-        cheapest_feasible=cr.config,
-        pareto_baseline=(),
-    )
+    return make_ranked_sweep((cr,))
 
 
 class TestExtrapolationNotice:

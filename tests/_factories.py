@@ -26,10 +26,11 @@ Usage::
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
-from solar_challenge.optimize import ConfigPoint, ConfigResult
+from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
 
 DEFAULT_VAT_RATE = 0.05
 """VAT rate the default line items are internally consistent with."""
@@ -224,4 +225,25 @@ def make_config_result(
         payback_years=payback_years,
         baseline_outlay_gbp=baseline_outlay_gbp,
         baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
+    )
+
+
+def make_ranked_sweep(
+    results: Sequence[ConfigResult],
+    *,
+    infeasible: Sequence[ConfigPoint] = (),
+    pareto: Sequence[ConfigPoint] = (),
+    floor: float = 27.0,
+) -> RankedSweep:
+    """Build a RankedSweep whose cheapest_feasible is results[0].config, None when *results* is empty.
+
+    That is the rule ``RankedSweep.__post_init__`` enforces, so the factory
+    cannot build a sweep that breaks it; ``floor`` is the retained-cash floor.
+    """
+    return RankedSweep(
+        results=tuple(results),
+        infeasible=tuple(infeasible),
+        retained_cash_floor_gbp=floor,
+        cheapest_feasible=results[0].config if results else None,
+        pareto_baseline=tuple(pareto),
     )
