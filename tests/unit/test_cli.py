@@ -399,6 +399,7 @@ class TestErrorHandling:
             ),
             pytest.param(
                 {
+                    "grid_services_model": "capacity_at_events",
                     "grid_services_events": {
                         "event_windows": [
                             {"months": [13], "weekdays": [0], "hours": [17], "events_per_year": 1, "event_hours": 1.0}
@@ -410,6 +411,7 @@ class TestErrorHandling:
             ),
             pytest.param(
                 {
+                    "grid_services_model": "capacity_at_events",
                     "grid_services_events": {
                         "event_windows": [
                             {
