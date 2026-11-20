@@ -104,6 +104,17 @@ class TestRunHeadline:
         assert isinstance(share, float)
         assert share == 0.1
 
+    @pytest.mark.parametrize("value", [pytest.param(Fraction(1, 4), id="fraction"), pytest.param(2, id="int")])
+    def test_a_headline_holds_each_figure_as_the_float_it_equals(self, value: Fraction | int) -> None:
+        """as_finite_real admits any numbers.Real, so a headline given a Fraction or an int holds the float it equals, as its annotation says."""
+        headline = RunHeadline(**{figure.name: value for figure in dataclasses.fields(RunHeadline)})
+
+        figures = {figure.name: getattr(headline, figure.name) for figure in dataclasses.fields(headline)}
+
+        assert {name: (type(held), held) for name, held in figures.items()} == {
+            name: (float, float(value)) for name in figures
+        }
+
     def test_a_headline_with_no_pv_stored_share_is_a_headline(self) -> None:
         headline = dataclasses.replace(run_headline(home_summary()), pv_stored_share=None)
 
