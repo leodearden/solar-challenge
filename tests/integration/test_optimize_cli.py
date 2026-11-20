@@ -367,6 +367,19 @@ class TestGenerateConfigRankingReportTable1:
             f"Infeasible Configurations heading rendered with no infeasible configs:\n{report}"
         )
 
+    def test_no_feasible_config_renders_a_none_found_note_and_the_infeasible_list(self) -> None:
+        """With every config infeasible, Table 1 is a none-found note alone, no table and no RECOMMENDATION, and the infeasible configs are still listed."""
+        infeasible_pt = ConfigPoint(pv_kwp=6.0, battery_kwh=10.0, inverter_kw=5.0)
+        sweep = make_ranked_sweep((), infeasible=(infeasible_pt,))
+        report = generate_config_ranking_report(sweep)
+
+        table1 = _section(report, "## Cost-Recovery Rank")
+        assert table1.strip() == "*No feasible configurations found.*", (
+            f"'## Cost-Recovery Rank' is not the none-found note alone:\n{report}"
+        )
+        row = _config_row(report, "### Infeasible Configurations", self.INFEASIBLE)
+        assert row["Config"] == self.INFEASIBLE, f"infeasible config's Config cell is not exactly its dims:\n{report}"
+
 
 # ---------------------------------------------------------------------------
 # §D — generate_config_ranking_report Table (2)
@@ -534,6 +547,17 @@ class TestGenerateConfigRankingReportTable2:
         assert infeasible in infeasible_section, f"infeasible config {infeasible!r} not listed under '### Infeasible Configurations':\n{infeasible_section}"
         table2 = _section(report, "## Fixed-15p Trade-Off")
         assert infeasible not in table2, f"infeasible config {infeasible!r} listed under '## Fixed-15p Trade-Off':\n{table2}"
+
+    def test_no_feasible_config_renders_a_nothing_to_compare_note_even_with_a_pareto_front(self) -> None:
+        """With every config infeasible, Table 2 is a nothing-to-compare note alone, though run_sweep's Pareto front, taken over all configs, holds the infeasible one."""
+        infeasible_pt = ConfigPoint(pv_kwp=9.9, battery_kwh=15.0, inverter_kw=5.0)
+        sweep = make_ranked_sweep((), infeasible=(infeasible_pt,), pareto=(infeasible_pt,))
+        report = generate_config_ranking_report(sweep)
+
+        table2 = _section(report, "## Fixed-15p Trade-Off")
+        assert table2.strip() == "*No feasible configurations to compare.*", (
+            f"'## Fixed-15p Trade-Off' is not the nothing-to-compare note alone:\n{report}"
+        )
 
     def test_two_tables_both_present(self) -> None:
         """Both Table 1 and Table 2 headings must appear in the same report."""
