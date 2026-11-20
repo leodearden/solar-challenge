@@ -894,7 +894,6 @@ class TestFleetRunnerNamesAFailedHomeAndCancelsTheRest:
                 ("Home 1", start_marker(tmp_path, "Home 2")),
                 ("Home 2", finish_marker(tmp_path, "Home 1")),
             ),
-            hold_limit_seconds=10,
         )
         runner = FleetRunner(weather=_CountingWeather(), home_simulator=home_simulator, parallel=True, max_workers=2)
 
