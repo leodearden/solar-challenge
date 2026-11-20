@@ -43,7 +43,8 @@ builds from its catalogue (tests/e2e/_job_requests.py).
 
 import itertools
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -732,6 +733,15 @@ def test_a_sweep_point_whose_progress_stream_times_out_keeps_running_until_its_j
 # -- Other requests still load while a large sweep runs --------------------
 
 
+@contextmanager
+def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator[None]:
+    """Leave the block only once the page has finished fetching the results of every job in job_ids, in any order."""
+    with ExitStack() as fetches_finished:
+        for job_id in job_ids:
+            fetches_finished.enter_context(page.expect_request_finished(is_job_request(job_id, "results")))
+        yield
+
+
 def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
     page: Page,
     context: BrowserContext,
@@ -766,7 +776,8 @@ def test_another_tab_loads_run_history_while_an_eight_point_sweep_runs(
         run_history.get_by_role("heading", name="Run History", exact=True)
     ).to_be_visible()
 
-    release_held_simulations()
+    with _each_points_results_fetched(page, job_ids):
+        release_held_simulations()
     for n in range(1, 9):
         expect(rows.nth(n - 1).get_by_role("cell")).to_have_text(
             [str(n), "72.0", "33.3%", "12.0", "completed"]
