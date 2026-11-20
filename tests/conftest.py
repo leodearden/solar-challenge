@@ -28,6 +28,15 @@ pytest_plugins = ["pytester"]
 collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Drop COLUMNS and LINES, so each process of the suite, an xdist worker included, imports the CLI with no terminal size in its environment, as a serial session does, and a console built at import reads COLUMNS when it prints.
+
+    tests/unit/test_parallel_suite.py says where a worker's come from.
+    """
+    for name in ("COLUMNS", "LINES"):
+        os.environ.pop(name, None)
+
+
 def pytest_collection_finish(session: pytest.Session) -> None:
     """Freeze the heap collection built, once per process, so the full collections during the run scan only what the tests create."""
     freeze_the_heap_once()
