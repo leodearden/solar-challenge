@@ -26,11 +26,11 @@
   server-to-browser protocol written in two languages, and its history is a bug cluster: tasks
   533, 564, 638, 641, 648 and 649 each fixed one side of it.
 - **Amendment (2026-11-20, task 1520):** a job progress stream waits on its job between polls
-  instead of sleeping. `JobManager.wait_for_job_snapshot` returns once the job's version passes
-  the stream's cursor, and every move of a job wakes it, with `heartbeat_seconds` as the longest
-  wait. `JobStreamPolicy` loses `sleep`. The sweep page follows its points one at a time (task
-  649), so a fixed 2 s poll added up to 2 s per point between a job's end and its row; §12's
-  first row is superseded.
+  instead of sleeping. `JobManager.wait_for_job_snapshot` returns as soon as the job moves past
+  the version the stream last read or the manager stops tracking it, and at the latest after
+  `heartbeat_seconds`. `JobStreamPolicy` loses `sleep`. The sweep page follows its points one
+  at a time (task 649), so a fixed 2 s poll added up to 2 s per point between a job's end and
+  its row; §12's first row is superseded.
 
 ---
 
@@ -154,9 +154,9 @@ line, because `json.dumps` escapes newlines inside strings (probed).
   deque, `JobEvent` and `JobEventType` are deleted.
 - Each stream keeps its own cursor, starting at the request's `Last-Event-ID` (absent → none).
 - On each poll the stream sends the current state if its version is newer than the cursor.
-  Between polls it waits on `JobManager.wait_for_job_snapshot` for a version newer than its
-  cursor, at most `heartbeat_seconds`, and every move of the job wakes it (task 1520). A stream
-  ends with exactly one ending frame:
+  Between polls it waits on `JobManager.wait_for_job_snapshot` for a version newer than the one
+  it last read, at most `heartbeat_seconds`, so every move of the job wakes it, its end included,
+  whatever the cursor (task 1520). A stream ends with exactly one ending frame:
   - the terminal state's frame, always sent even when its version equals the cursor, so a reopened
     stream on a finished job never loops;
   - `timeout`;
@@ -306,7 +306,7 @@ class JobSnapshot: version: int; state: JobState                                
 class JobManager:
     def job_state(self, job_id: str) -> JobState | None: ...                       # unchanged
     def job_snapshot(self, job_id: str) -> JobSnapshot | None: ...                 # γ; never mutates
-    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None: ...  # 1520; a move wakes it
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None: ...  # 1520; a move or untracking wakes it
     # deleted: get_events (or take_events), JobEvent, JobEventType, _TrackedJob.events
 
 # web/storage.py — after S19

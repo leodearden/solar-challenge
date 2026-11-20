@@ -172,7 +172,7 @@ def _waited_for_snapshot(
 
 
 class TestJobManagerSnapshotWaits:
-    """Tests for wait_for_job_snapshot, which returns a job's snapshot once the job has moved past a version, waiting at most a timeout.
+    """Tests for wait_for_job_snapshot, which returns a job's snapshot once the job has moved past a version, or None once the manager stops tracking it, waiting at most a timeout.
 
     A home job held in its simulation is at version 3. A wait given 60 s that returns in under 30 s did not wait its
     timeout out.
@@ -228,8 +228,36 @@ class TestJobManagerSnapshotWaits:
         assert untracked is None
         assert waited < 30.0
 
+    def test_a_waiter_is_woken_with_none_as_soon_as_the_manager_stops_tracking_its_job(
+        self, blocking_simulation: BlockingSimulation, storage: RunStorage
+    ) -> None:
+        """The waiter's job was cancelled in the queue a day before a later submit, which stops tracking it.
 
-_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+        The job that submit queues waits behind the held one, so no job moves while the waiter waits. The waiter wakes
+        before that submit has queued its job, so the test waits for the submit to return before the manager shuts down.
+        """
+        clock = ManualClock()
+        manager = JobManager(storage, max_workers=1, simulate_home=blocking_simulation, clock=clock)
+        _submit_home_job(manager)
+        blocking_simulation.wait_until_started()
+        cancelled = _submit_home_job(manager)
+        assert manager.cancel_run(_run_of_job(manager, cancelled, storage).id)
+        final = manager.job_snapshot(cancelled)
+        assert final is not None and final.state.status == "cancelled"
+        clock.advance(_A_DAY)
+        later_submit = threading.Timer(0.2, _submit_home_job, args=(manager,))
+        later_submit.start()
+        try:
+            untracked, waited = _waited_for_snapshot(manager, cancelled, newer_than=final.version, timeout=60.0)
+        finally:
+            later_submit.cancel()
+            later_submit.join()
+
+        assert untracked is None
+        assert waited < 30.0
+
+
+_A_HOME =HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
 _JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
 _JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
 

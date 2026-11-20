@@ -209,13 +209,14 @@ def job_progress_frames(
     The stream keeps its own cursor, the version of the last state it sent, which starts at
     *last_event_id*. Each poll sends the job's state when the cursor is None or the state's
     version is newer, then a ``HEARTBEAT``. The first poll reads the job at once; between
-    polls the stream waits on *jobs* for a version newer than its cursor, at most
-    policy.heartbeat_seconds, so it sends a move of the job, its end included, as soon as the
-    job makes it. So a stream opened afresh sends the job's current state at once, a reopened
-    one resumes after the version its ``Last-Event-ID`` names, and the states a job moves
-    through before the stream wakes collapse into the newest. Every frame carries
-    policy.retry_ms as its retry, and only a state's frame carries an id, the state's version.
-    The stream ends with exactly one of three frames:
+    polls the stream waits on *jobs* for a version newer than the one it last read, at most
+    policy.heartbeat_seconds, so it polls again as soon as the job moves, whatever its cursor,
+    and sends the job's end as soon as the job makes it. So a stream opened afresh sends the
+    job's current state at once, a reopened one resumes after the version its
+    ``Last-Event-ID`` names, and the states a job moves through before the stream wakes
+    collapse into the newest. Every frame carries policy.retry_ms as its retry, and only a
+    state's frame carries an id, the state's version. The stream ends with exactly one of
+    three frames:
 
     - a terminal state's frame, sent whatever the cursor, so a reopened stream on a finished
       job ends at once;
@@ -238,7 +239,7 @@ def job_progress_frames(
             yield _job_state_frame(current, retry_ms=policy.retry_ms)
             cursor = current.version
         yield HEARTBEAT
-        current = jobs.wait_for_job_snapshot(job_id, newer_than=cursor, timeout=policy.heartbeat_seconds)
+        current = jobs.wait_for_job_snapshot(job_id, newer_than=current.version, timeout=policy.heartbeat_seconds)
         if policy.clock() - started > policy.limit_seconds:
             yield sse_frame(JOB_STREAM_TIMED_OUT, StreamTimedOut(policy.limit_seconds), retry_ms=policy.retry_ms)
             return

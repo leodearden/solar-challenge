@@ -355,7 +355,7 @@ def test_a_stream_sends_an_unfinished_jobs_state_on_open_then_waits_on_the_job_b
     assert list(first_poll[0].data) == [field.name for field in dataclasses.fields(JobState)]
     assert job.waits == []
     assert _next_poll(stream) == [HEARTBEAT]
-    assert job.waits == [(3, 2.0)], "the stream waits for a version newer than the one it sent, at most its heartbeat"
+    assert job.waits == [(3, 2.0)], "the stream waits for a version newer than the one it read, at most its heartbeat"
 
 
 @pytest.mark.parametrize("last_event_id", [None, 5], ids=["opened", "reopened-at-its-version"])
@@ -382,6 +382,19 @@ def test_a_stream_reopened_at_the_jobs_version_sends_no_state_until_the_job_move
 
     assert _read(_next_poll(stream)) == [_frame_of(saving, policy), HEARTBEAT]
     assert job.waits == [(3, 2.0)]
+
+
+def test_a_stream_reopened_past_its_jobs_version_waits_for_the_job_to_move_on_from_the_version_it_read_so_its_end_wakes_it(
+    policy: JobStreamPolicy,
+) -> None:
+    job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
+    stream = job_progress_frames(job, "job-1", last_event_id=7, policy=policy)
+    assert _next_poll(stream) == [HEARTBEAT]
+
+    completed = job.move(status="completed", progress_pct=100.0, current_step="Done", message="Simulation complete")
+
+    assert _read(stream) == [_frame_of(completed, policy)]
+    assert job.waits == [(3, 2.0)], "a wait for a version past the cursor, 7, would sleep through the job's end at 4"
 
 
 def test_a_stream_reopened_at_an_earlier_version_sends_the_jobs_current_state_on_open(policy: JobStreamPolicy) -> None:

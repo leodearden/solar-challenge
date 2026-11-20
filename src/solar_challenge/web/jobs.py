@@ -291,7 +291,7 @@ class JobManager:
         self._clock = clock
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
-        self._job_moved = threading.Condition(self._lock)
+        self._job_changed = threading.Condition(self._lock)
         self._unfinished_job_count = 0
         self._jobs: dict[str, _TrackedJob] = {}
         _active_managers.add(self)
@@ -437,14 +437,15 @@ class JobManager:
     def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None:
         """Return job *job_id*'s snapshot once its version is newer than *newer_than*, waiting at most *timeout* seconds for the job to move.
 
-        When the wait ends, it is the snapshot as it then stands, which is no newer if the job did not move. Every
-        move of a job wakes its waiters (web/sse.py's job_progress_frames waits here between polls).
+        Only a move of the job past *newer_than*, or this manager ceasing to track the job, ends the wait early.
+        Otherwise it returns, once *timeout* has passed, the snapshot as it then stands, no newer than *newer_than*.
+        web/sse.py's job_progress_frames waits here between polls.
 
         Returns:
             The job's frozen JobSnapshot.  None if this manager does not track the job, as job_snapshot says.
         """
-        with self._job_moved:
-            self._job_moved.wait_for(
+        with self._job_changed:
+            self._job_changed.wait_for(
                 lambda: job_id not in self._jobs or self._jobs[job_id].snapshot.version > newer_than, timeout
             )
             job = self._jobs.get(job_id)
@@ -490,7 +491,7 @@ class JobManager:
             )
 
     def _stop_tracking_jobs_finished_long_ago(self) -> None:
-        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago; a queued or running job stays tracked."""
+        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago, waking every wait_for_job_snapshot caller as each one goes; a queued or running job stays tracked."""
         now = self._clock()
         with self._lock:
             expired = [
@@ -500,6 +501,7 @@ class JobManager:
             ]
             for job_id in expired:
                 del self._jobs[job_id]
+                self._job_changed.notify_all()
 
     def _submit_job(
         self,
@@ -626,9 +628,10 @@ class JobManager:
                 self._idle.notify_all()
 
     def _forget_job(self, job_id: str, run_id: str) -> None:
-        """Erase every record of a job that the executor refused to schedule: stop tracking it, and delete its run."""
+        """Erase every record of a job that the executor refused to schedule: stop tracking it, waking every wait_for_job_snapshot caller, and delete its run."""
         with self._lock:
             self._jobs.pop(job_id, None)
+            self._job_changed.notify_all()
         self._storage.delete_run(run_id)
 
     def _cancellation_of(self, job_id: str) -> _Cancellation:
@@ -676,7 +679,7 @@ class JobManager:
             job.snapshot = JobSnapshot(previous.version + 1, state)
             if to_status in TERMINAL_JOB_STATUSES:
                 job.finished_at = self._clock()
-            self._job_moved.notify_all()
+            self._job_changed.notify_all()
             return state
 
     def _report_cancelled_job(self, job_id: str) -> None:
