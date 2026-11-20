@@ -142,7 +142,13 @@
   not taken as absent: `custom_module_params` is a `dict[str, float]`, and leaving a
   key out is how a module takes pvlib's default, so taking `None` as absent for the
   keys whose pvlib default is `None` (`k`, `n_ar`) would be a per-key special case
-  that accepts a value the type refuses.
+  that accepts a value the type refuses. The type does not admit the rule's flag
+  either: the stored-run reader, `web/field_tree.py`'s `read_field_tree`, reads
+  `custom_module_params` by that annotation, so it refuses a run whose module gives
+  `cap_adjustment` true or false (`FieldTreeRefused` "is true, not a number a float can
+  hold"; measured on 2026-11-20 at fbdaccd1). No web path sets `custom_module_params`,
+  so no stored run carries such a module; a typed module specification (§4) would let
+  the type and the rule agree.
 - **The domains.** 0.9 is NOCT-SAM's transmittance–absorptance, read from the one
   constant the model reads. −0.01 per K (−1 %/K) is steeper than every catalogue row's
   modelled coefficient (−0.68 %/K), and the old (−1, 0) admitted values no model can
@@ -190,21 +196,21 @@ this branch at 695d386 and reproduce exactly.
   dafc05d, its GREEN commit, at a load average of ~95: a `PVConfig` of the default row
   as custom parameters took 12.3 ms with −0.004 per K and 0.019 ms without it.
 - **What the module-value rule's keys do unchecked**, measured on 2026-11-20 with pvlib
-  0.15.1 by task 1440's implementer on its branch, 4 kW at Bristol over the synthetic
-  clear June day. At 10fbdfe9, with `_require_module_values` patched out in a scratch
+  0.15.1 by task 1440's implementer on its branch at fbdaccd1, whose `pv.py` is that of
+  f0c89546, the branch's GREEN commit for `cap_adjustment`; 4 kW at Bristol over the
+  synthetic clear June day. With `_require_module_values` patched out in a scratch
   script: a NaN `EgRef`, `temp_ref`, `FD` or `n` on the default row gives 0.0 kWh
   (26.8194 kWh as it is), a NaN `k` or `temp_ref` on a 300 W PVWatts module 0.0 kWh
   (25.7703), a NaN `C0` or `N` on SandiaMod's first row, rated at Impo × Vmpo with the
   simple inverter, 0.0 kWh (25.9264), and a NaN `gamma_ref` on the PVsyst module
-  `tests/_pv_modules.py` builds 0.0 kWh (25.6956), none with an error. With the rule
-  in place, that SAPM row with `A0` to `A4`, `B0` to `B5`, `A`, `B` and `DTC` as text
-  still gives 25.9264 kWh, and with `C4` or `IXO` as text raises numpy's
-  `UFuncTypeError`, a `TypeError`. At f3c8e063, before `cap_adjustment` was checked: a
-  PVWatts module with `k` 0.01 gives 25.5765 kWh with `cap_adjustment` False and
-  25.5581 with True or the text "False"; with `k` −0.05, 26.7387, 26.8307 and 26.8307.
-  At 10fbdfe9: 10 of SandiaMod's 523 rows give NaN in `IXO`, `IXXO` or `C4` to `C7`,
-  and one, `Panasonic_VBHN235SA06B__2013_`, rated so, gives 27.0011 kWh; the rule
-  refuses none of CECMod's 21,535 rows nor SandiaMod's 523.
+  `tests/_pv_modules.py` builds 0.0 kWh (25.6956), none with an error; a PVWatts
+  module with `k` 0.01 gives 25.5765 kWh with `cap_adjustment` False and 25.5581 with
+  True or the text "False", and with `k` −0.05, 26.7387, 26.8307 and 26.8307. With the
+  rule in place, that SAPM row with `A0` to `A4`, `B0` to `B5`, `A`, `B` and `DTC` as
+  text still gives 25.9264 kWh, and with `C4` or `IXO` as text raises numpy's
+  `UFuncTypeError`, a `TypeError`; 10 of SandiaMod's 523 rows give NaN in `IXO`,
+  `IXXO` or `C4` to `C7`, and one, `Panasonic_VBHN235SA06B__2013_`, rated so, gives
+  27.0011 kWh; the rule refuses none of CECMod's 21,535 rows nor SandiaMod's 523.
 
 ## 4. When to Revisit
 
@@ -215,7 +221,12 @@ this branch at 695d386 and reproduce exactly.
   the `pv:` block has no key for custom module parameters.
 - pvlib adds or renames a module key one of the chain's models reads, or this code
   changes the chain's aoi, spectral or temperature model, which changes which keys are
-  read (§1, the module-value rule).
+  read (§1, the module-value rule). A parameter a pvlib release adds to
+  `calcparams_cec`, `calcparams_desoto`, `calcparams_pvsyst`, `pvwatts_dc` or the
+  physical IAM fails `tests/unit/test_pv.py`'s
+  `test_each_module_parameter_a_pvlib_reader_takes_by_name_is_refused_as_text`, which
+  reads their signatures; nothing flags a key `sapm` or the effective irradiance
+  starts reading.
 - A typed module specification replaces the trio of `module_efficiency`,
   `temperature_coefficient` and `custom_module_params`.
 - Module data from outside pvlib's CECMod library becomes a template, whose rows the
