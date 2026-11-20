@@ -29,8 +29,12 @@ def built_once(directory: Path, build: Callable[[Path], object]) -> Path:
     is returned only once its marker exists, and the marker is written only after build returned. So
     a build that raised, or whose process was killed, is never handed out. A build that raised an
     Exception is not run again either: every later call raises its traceback, kept beside
-    *directory*, so a failing build costs one attempt however many processes ask. A killed build
-    leaves no record, so the next call empties *directory* and builds it afresh. build must not
+    *directory*, so a failing build costs one attempt however many processes ask. A killed build, or
+    one stopped by a BaseException that is not an Exception, such as the Skipped and Failed that
+    pytest.skip and pytest.fail raise, or KeyboardInterrupt, leaves no record, so the next call
+    empties *directory* and builds it afresh: a skip kept as a failure would be an error on every
+    later call. So a build reports its failure by raising an Exception, as a failed assert does, not
+    by pytest.fail, or each process that asks would run the failing build again. build must not
     itself wait on a built_once, in this process or another, since that call could be waiting for
     the lock this one holds.
     """
@@ -43,7 +47,7 @@ def built_once(directory: Path, build: Callable[[Path], object]) -> Path:
 
 
 def _build_unless_an_earlier_build_raised(directory: Path, build: Callable[[Path], object]) -> None:
-    """Build *directory* from empty and mark it built, keeping the traceback of a build that raises; raise an earlier build's kept traceback instead of building."""
+    """Build *directory* from empty and mark it built, keeping the traceback of a build that raises an Exception; raise an earlier build's kept traceback instead of building."""
     raised = _beside(directory, "raised")
     if raised.exists():
         raise RuntimeError(
