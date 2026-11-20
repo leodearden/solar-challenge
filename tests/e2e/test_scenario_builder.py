@@ -256,6 +256,11 @@ def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_s
     section_to_open = "Period"
     stretched_section = {"closing": section_open_on_load, "opening": section_to_open}[stretched_panel]
     page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        section_open_on_load,
+        message=f"the test takes {section_open_on_load}'s panel to be the closing one, so {section_open_on_load}'s header alone should be exposed as expanded when the page loads",
+    )
     panels = {section: _panel_of(page, section) for section in _ACCORDION_SECTIONS}
     page.add_style_tag(content=f"#{_panel_id_of(page, stretched_section)} {{ transition-duration: 3s !important; }}")
     _open_section(page, section_to_open)
