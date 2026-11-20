@@ -34,6 +34,11 @@ def sapm_library_module() -> dict[str, float]:
     return dict(pvlib.pvsystem.retrieve_sam("SandiaMod").iloc[:, 0])
 
 
+def desoto_module() -> dict[str, float]:
+    """default_module() without its Adjust: a module in pvlib's De Soto single-diode form, which pvlib infers as 'desoto'."""
+    return {key: value for key, value in default_module().items() if key != "Adjust"}
+
+
 def pvsyst_module() -> dict[str, float]:
     """A module in pvlib's PVsyst single-diode form, which pvlib infers as 'pvsyst', its STC and V_mp_ref its own P_mp (146.95 W) and V_mp (26.57 V) at 1000 W/m² and 25 °C; a 4 kW PVConfig of it wires a CEC inverter and simulates."""
     return {

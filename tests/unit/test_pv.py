@@ -1,6 +1,7 @@
 """Tests for the pvlib system and model chain built from a PVConfig, from the module, inverter and wiring create_pv_system picks to the AC power simulate_pv_output returns."""
 
 import dataclasses
+import inspect
 import math
 import os
 import re
@@ -33,6 +34,7 @@ from solar_challenge.pv import (
 from tests._pv_modules import (
     default_module,
     default_module_beyond_every_mppt_window,
+    desoto_module,
     pvsyst_module,
     pvwatts_300_w_module,
     sapm_library_module,
@@ -1079,8 +1081,30 @@ SAPM_DC_KEYS = (
 )
 """The SAPM module parameters that pvlib's sapm reads into the power and voltages an inverter reads."""
 
-PVSYST_KEYS = ("gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series")
+PVSYST_ONLY_KEYS = ("gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series")
 """The module parameters that pvlib's calcparams_pvsyst reads and its calcparams_cec does not."""
+
+PVLIB_READERS_OF_NAMED_MODULE_PARAMETERS = (
+    (pvlib.pvsystem.calcparams_cec, default_module),
+    (pvlib.pvsystem.calcparams_desoto, desoto_module),
+    (pvlib.pvsystem.calcparams_pvsyst, pvsyst_module),
+    (pvlib.pvsystem.pvwatts_dc, pvwatts_300_w_module),
+    (pvlib.iam.physical, default_module),
+)
+"""The pvlib functions the chain runs that take module parameters as named arguments, each with a builder of a module the chain runs it on; pvlib's sapm takes the module whole, so SAPM_DC_KEYS names its keys."""
+
+READER_ARGUMENTS_NOT_READ_AS_MODULE_NUMBERS = frozenset(
+    {"effective_irradiance", "temp_cell", "aoi", "cap_adjustment"}
+)
+"""The readers' arguments that are not module parameters read as numbers: the irradiance, cell temperature and angle of incidence the chain computes, and pvwatts_dc's flag cap_adjustment (TestAModuleFlagAModelReadsIsTrueOrFalse)."""
+
+MODULE_NUMBERS_PVLIB_READERS_TAKE_BY_NAME = [
+    pytest.param(build, key, id=f"{reader.__name__}-{key}")
+    for reader, build in PVLIB_READERS_OF_NAMED_MODULE_PARAMETERS
+    for key in inspect.signature(reader).parameters
+    if key not in READER_ARGUMENTS_NOT_READ_AS_MODULE_NUMBERS
+]
+"""Each module parameter that one of those readers takes by name, as the installed pvlib's signature names it, with the builder of the reader's module."""
 
 _REFUSAL_OF_THE_DEFAULT_MODULE_WITH_KEYS_AS_TEXT = """
 import sys
@@ -1110,6 +1134,35 @@ def _refusal_in_a_process_under_hash_seed(hash_seed: str, keys_as_text: tuple[st
     )
     assert child.returncode == 0, child.stderr
     return child.stdout
+
+
+def _assert_refused_naming_key_and_value(
+    build: Callable[[], dict[str, Any]],
+    key: str,
+    value: object,
+    wording: str,
+    *,
+    temperature_coefficient: float | None = None,
+    custom_inverter_params: dict[str, float] | None = None,
+) -> None:
+    """Assert that once build()'s module gives key as value, construction and use refuse a 4 kW PVConfig of it with one message, which names the key and the value and holds wording.
+
+    The module is edited after construction, since PVConfig keeps the caller's dict, so
+    that use meets the value too (tests/_pv_refusals.py).
+    """
+    module = build()
+    config = PVConfig(
+        capacity_kw=4.0,
+        custom_module_params=module,
+        temperature_coefficient=temperature_coefficient,
+        custom_inverter_params=custom_inverter_params,
+    )
+    module[key] = value
+
+    message = one_refusal_at_construction_and_at_use(config)
+    assert key in re.findall(r"\w+", message), message
+    assert repr(value) in message, message
+    assert wording in message, message
 
 
 class TestAModuleParameterAModelReadsIsAFiniteNumber:
@@ -1155,18 +1208,16 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
         temperature_coefficient: float | None,
     ) -> None:
         """A set temperature coefficient replaces a module's Adjust or gamma_pdc, and its reach check's calcparams_cec reads the CEC parameters and the keys pvlib defaults, yet the module's own key is refused first."""
-        module = build()
-        config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params=module,
-            temperature_coefficient=temperature_coefficient,
+        _assert_refused_naming_key_and_value(
+            build, key, value, "must be a finite number", temperature_coefficient=temperature_coefficient
         )
-        module[key] = value
 
-        message = one_refusal_at_construction_and_at_use(config)
-        assert key in re.findall(r"\w+", message), message
-        assert repr(value) in message, message
-        assert "must be a finite number" in message, message
+    @pytest.mark.parametrize(("build", "key"), MODULE_NUMBERS_PVLIB_READERS_TAKE_BY_NAME)
+    def test_each_module_parameter_a_pvlib_reader_takes_by_name_is_refused_as_text(
+        self, build: Callable[[], dict[str, float]], key: str
+    ) -> None:
+        """The chain passes these readers the module's own values by name, so a parameter a pvlib release adds or renames gets a case here, which fails until the rule checks it (docs/pv-module-settings.md §4)."""
+        _assert_refused_naming_key_and_value(build, key, "1", "must be a finite number")
 
     @pytest.mark.parametrize(
         ("build", "key", "value"),
@@ -1179,7 +1230,7 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
             pytest.param(rated_sapm_module, "N", math.nan, id="sapm-N-nan"),
             *[
                 pytest.param(pvsyst_module, key, str(pvsyst_module()[key]), id=f"pvsyst-{key}-text")
-                for key in PVSYST_KEYS
+                for key in PVSYST_ONLY_KEYS
             ],
             pytest.param(pvsyst_module, "gamma_ref", math.nan, id="pvsyst-gamma_ref-nan"),
         ],
@@ -1188,21 +1239,33 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
         self, build: Callable[[], dict[str, float]], key: str, value: float | str
     ) -> None:
         """Neither form takes a set temperature coefficient, and a SAPM module has no V_mp_ref to pick a CEC inverter by, so each runs with the simple inverter."""
-        module = build()
-        config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params=module,
+        _assert_refused_naming_key_and_value(
+            build,
+            key,
+            value,
+            "must be a finite number",
             custom_inverter_params=create_simple_inverter_params(),
         )
-        module[key] = value
 
-        message = one_refusal_at_construction_and_at_use(config)
-        assert key in re.findall(r"\w+", message), message
-        assert repr(value) in message, message
-        assert "must be a finite number" in message, message
+    @pytest.mark.parametrize(
+        ("build", "dc_model"),
+        [
+            pytest.param(desoto_module, "desoto", id="desoto"),
+            pytest.param(pvsyst_module, "pvsyst", id="pvsyst"),
+        ],
+    )
+    def test_a_desoto_or_pvsyst_module_runs_that_dc_model_and_simulates(
+        self, build: Callable[[], dict[str, float]], dc_model: str
+    ) -> None:
+        """The refusals of these forms' keys edit these modules, so pvlib must read each in its form: its chain runs that DC model, and the clear day yields a positive, finite energy."""
+        config = PVConfig(capacity_kw=4.0, custom_module_params=build())
+
+        assert create_model_chain(config, Location.bristol()).dc_model.__name__ == dc_model
+        kwh = clear_day_kwh(config)
+        assert math.isfinite(kwh) and kwh > 0, kwh
 
     def test_a_sapm_module_whose_i_x_and_i_xx_parameters_are_nan_simulates(self) -> None:
-        """pvlib's sapm reads IXO, IXXO and C4 to C7 only into i_x and i_xx, which no inverter reads, and 10 SandiaMod rows give them NaN, so the rule leaves them unchecked: this row yields 27.0011 kWh on the clear day (measured)."""
+        """pvlib's sapm reads IXO, IXXO and C4 to C7 only into i_x and i_xx, which no inverter reads, and 10 SandiaMod rows give them NaN, so the rule leaves them unchecked and this row, one of them, simulates (docs/pv-module-settings.md §3)."""
         row = dict(pvlib.pvsystem.retrieve_sam("SandiaMod")["Panasonic_VBHN235SA06B__2013_"])
         assert all(math.isnan(row[key]) for key in ("IXO", "IXXO", "C4", "C5", "C6", "C7")), row
         config = PVConfig(
@@ -1258,6 +1321,11 @@ class TestAModuleParameterAModelReadsIsAFiniteNumber:
             assert array.module_parameters["Technology"] == module["Technology"]
 
 
+def pvwatts_300_w_module_with_a_k() -> dict[str, float]:
+    """pvwatts_300_w_module() with pvwatts_dc's k at 0.01: pvwatts_dc reads cap_adjustment only when a module gives k."""
+    return {**pvwatts_300_w_module(), "k": 0.01}
+
+
 class TestAModuleFlagAModelReadsIsTrueOrFalse:
     """pvlib's pvwatts_dc reads the module's own cap_adjustment, a flag, so construction and use refuse one that is not true or false, naming its key and value."""
 
@@ -1277,19 +1345,14 @@ class TestAModuleFlagAModelReadsIsTrueOrFalse:
     def test_a_cap_adjustment_that_is_not_true_or_false_is_refused_at_construction_and_at_use_naming_its_value(
         self, value: str | float | None, temperature_coefficient: float | None
     ) -> None:
-        """pvlib reads the flag by its truthiness, so the text "False" would turn the cap on: with k=0.01 the clear day gives 25.5581 kWh for both True and "False", and 25.5765 kWh for False (measured)."""
-        module = {**pvwatts_300_w_module(), "k": 0.01}
-        config = PVConfig(
-            capacity_kw=4.0,
-            custom_module_params=module,
+        """pvlib reads the flag by its truthiness, so the text "False" would turn the cap on (docs/pv-module-settings.md §3)."""
+        _assert_refused_naming_key_and_value(
+            pvwatts_300_w_module_with_a_k,
+            "cap_adjustment",
+            value,
+            "must be true or false",
             temperature_coefficient=temperature_coefficient,
         )
-        module["cap_adjustment"] = value
-
-        message = one_refusal_at_construction_and_at_use(config)
-        assert "cap_adjustment" in re.findall(r"\w+", message), message
-        assert repr(value) in message, message
-        assert "must be true or false" in message, message
 
     @pytest.mark.parametrize(
         "flag",
@@ -1303,7 +1366,7 @@ class TestAModuleFlagAModelReadsIsTrueOrFalse:
         """The number rule refuses a bool, so the flag is never one of the keys it checks."""
         config = PVConfig(
             capacity_kw=4.0,
-            custom_module_params={**pvwatts_300_w_module(), "k": 0.01, "cap_adjustment": flag},
+            custom_module_params={**pvwatts_300_w_module_with_a_k(), "cap_adjustment": flag},
         )
 
         for array in create_pv_system(config).arrays:

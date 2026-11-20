@@ -330,7 +330,7 @@ _COEFFICIENTS_NO_ADJUST_REACHES = [
     pytest.param(
         cec_module_with_a_negative_shunt_resistance,
         -0.004,
-        "beyond the module's reach",
+        "its modelled temperature coefficient runs only from nan to nan per K",
         id="cec_module_with_a_negative_shunt_resistance--0.004",
     ),
 ]
