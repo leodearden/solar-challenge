@@ -14,6 +14,7 @@ Usage::
 
 import fcntl
 import shutil
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -26,21 +27,43 @@ def built_once(directory: Path, build: Callable[[Path], object]) -> Path:
     Callers take turns under a flock on a lock file beside *directory*, which the kernel frees when
     its holder closes it or dies, and a marker beside it records that a build returned. *directory*
     is returned only once its marker exists, and the marker is written only after build returned. So
-    a build that raised, or whose process was killed, is never handed out: the next call empties
-    *directory* and builds it afresh. build must not itself wait on a built_once, in this process or
-    another, since that call could be waiting for the lock this one holds.
+    a build that raised, or whose process was killed, is never handed out. A build that raised an
+    Exception is not run again either: every later call raises its traceback, kept beside
+    *directory*, so a failing build costs one attempt however many processes ask. A killed build
+    leaves no record, so the next call empties *directory* and builds it afresh. build must not
+    itself wait on a built_once, in this process or another, since that call could be waiting for
+    the lock this one holds.
     """
     directory.parent.mkdir(parents=True, exist_ok=True)
-    with open(directory.parent / f"{directory.name}.lock", "a") as lock:
+    with open(_beside(directory, "lock"), "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        built = directory.parent / f"{directory.name}.built"
-        if not built.exists():
-            if directory.exists():
-                shutil.rmtree(directory)
-            directory.mkdir()
-            build(directory)
-            built.touch()
+        if not _beside(directory, "built").exists():
+            _build_unless_an_earlier_build_raised(directory, build)
     return directory
+
+
+def _build_unless_an_earlier_build_raised(directory: Path, build: Callable[[Path], object]) -> None:
+    """Build *directory* from empty and mark it built, keeping the traceback of a build that raises; raise an earlier build's kept traceback instead of building."""
+    raised = _beside(directory, "raised")
+    if raised.exists():
+        raise RuntimeError(
+            f"{directory} is not built again, since its build raised in an earlier call, in this process or "
+            f"another:\n{raised.read_text()}"
+        )
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir()
+    try:
+        build(directory)
+    except Exception:
+        raised.write_text(traceback.format_exc())
+        raise
+    _beside(directory, "built").touch()
+
+
+def _beside(directory: Path, suffix: str) -> Path:
+    """Return the file beside *directory* named for it with *suffix*, which stays out of what its build writes."""
+    return directory.parent / f"{directory.name}.{suffix}"
 
 
 def run_shared_path(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory, name: str) -> Path:

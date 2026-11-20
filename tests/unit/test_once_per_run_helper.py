@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_once_per_run.py, through which the processes of one pytest run build a directory they share once."""
 
+import os
 import shlex
+import signal
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -53,15 +57,73 @@ def test_concurrent_callers_build_once_and_each_gets_the_complete_directory(tmp_
     )
 
 
-def test_a_build_that_raised_is_never_returned_and_the_next_call_builds_into_an_empty_directory(tmp_path: Path) -> None:
+def test_a_build_that_raised_is_never_returned_nor_run_again_and_each_later_call_raises_its_error(
+    tmp_path: Path,
+) -> None:
+    """So a run pays for a failing build once, however many of its processes ask for the directory."""
     shared = tmp_path / "shared"
 
     def failing_build(directory: Path) -> None:
-        (directory / "partial").write_text("partial")
         raise RuntimeError("the build failed")
 
     with pytest.raises(RuntimeError, match="the build failed"):
         built_once(shared, failing_build)
+
+    builds: list[Path] = []
+
+    def build(directory: Path) -> None:
+        builds.append(directory)
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError) as raised_again:
+            built_once(shared, build)
+        assert str(shared) in str(raised_again.value), "a later call's error must name the directory whose build raised"
+        assert "RuntimeError: the build failed" in str(raised_again.value), (
+            "a later call's error must carry the error the build raised"
+        )
+
+    assert builds == [], "a call after a build that raised must raise that build's error, never build again"
+
+
+_BUILD_KILLED_MIDWAY = """
+import sys
+from pathlib import Path
+
+from tests._once_per_run import built_once
+
+
+def build(directory):
+    (directory / "partial").write_text("partial")
+    print("building", flush=True)
+    sys.stdin.read()
+
+
+built_once(Path(sys.argv[1]), build)
+"""
+
+
+def test_a_build_whose_process_was_killed_is_never_returned_and_the_next_call_builds_into_an_empty_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    """The kernel frees the lock of a builder that dies, and its build wrote no marker, so the next call builds afresh."""
+    shared = tmp_path / "shared"
+    monkeypatch.setenv("PYTHONPATH", str(project_root), prepend=os.pathsep)
+
+    with subprocess.Popen(
+        [sys.executable, "-c", _BUILD_KILLED_MIDWAY, str(shared)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    ) as builder:
+        try:
+            assert builder.stdout is not None
+            assert builder.stdout.readline() == "building\n", "the builder process ended before its build began"
+        finally:
+            builder.kill()
+    assert builder.returncode == -signal.SIGKILL, f"the builder process was not killed midway: it ended with {builder.returncode}"
+    assert _files_in(shared) == {"partial": "partial"}, (
+        "the killed build left nothing in the directory, so this test cannot tell whether the next call empties it"
+    )
 
     held_on_entry: list[dict[str, str]] = []
 
@@ -70,7 +132,7 @@ def test_a_build_that_raised_is_never_returned_and_the_next_call_builds_into_an_
         (directory / "built").write_text("built")
 
     assert built_once(shared, build) == shared
-    assert held_on_entry == [{}], "the build after one that raised must start from an empty directory"
+    assert held_on_entry == [{}], "the build after one whose process was killed must start from an empty directory"
 
     assert built_once(shared, build) == shared
     assert len(held_on_entry) == 1, "the directory, once built, must not be built again"
