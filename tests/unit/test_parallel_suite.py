@@ -7,13 +7,14 @@ import pytest
 def test_a_console_the_cli_builds_at_import_follows_a_columns_set_after_it_on_an_xdist_worker(
     pytester_under_root_conftest: pytest.Pytester,
 ) -> None:
-    """An xdist worker starts with COLUMNS=80 and LINES=24 in its environment, which a serial session lacks, and rich.Console fixes its width from COLUMNS when it is built.
+    """An xdist worker would start with COLUMNS=80 and LINES=24 in os.environ, which a serial session's lacks, and rich.Console fixes its width from COLUMNS when it is built.
 
     They come from the controller: pytest imports readline at startup, which
-    exports them to every child started without an environment of its own, as
-    execnet starts each worker. So the CLI's module-level consoles would ignore
-    the COLUMNS a CliRunner test passes. tests/unit/test_cli_web_store_versions.py
-    and tests/integration/test_web_store_upgrade.py failed that way under -n auto.
+    sets them in the C environment, and every child started without an
+    environment of its own inherits that, as execnet starts each worker. So the
+    CLI's module-level consoles would ignore the COLUMNS a CliRunner test passes.
+    tests/unit/test_cli_web_store_versions.py and
+    tests/integration/test_web_store_upgrade.py failed that way under -n auto.
     """
     pytester_under_root_conftest.makepyfile(
         """
@@ -27,6 +28,40 @@ def test_a_console_the_cli_builds_at_import_follows_a_columns_set_after_it_on_an
     )
 
     result = pytester_under_root_conftest.runpytest_subprocess("-n", "1", "-p", "no:cacheprovider")
+
+    result.assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize("workers", ["0", "1"], ids=["serially", "on-a-worker"])
+def test_a_child_a_test_starts_inherits_no_terminal_size(
+    pytester_under_root_conftest: pytest.Pytester, workers: str
+) -> None:
+    """A child that a test starts with no environment of its own inherits neither COLUMNS nor LINES, serially as on a worker.
+
+    readline, which pytest imports at startup, sets both in the C environment
+    beneath os.environ, and such a child inherits that environment.
+    """
+    pytester_under_root_conftest.makepyfile(
+        """
+        import json
+        import subprocess
+        import sys
+
+        REPORTS_ITS_TERMINAL_SIZE = (
+            "import json, os; print(json.dumps({name: os.environ.get(name) for name in ('COLUMNS', 'LINES')}))"
+        )
+
+
+        def test_starts_a_child_with_no_terminal_size():
+            child = subprocess.run(
+                [sys.executable, "-c", REPORTS_ITS_TERMINAL_SIZE], capture_output=True, text=True, check=True
+            )
+
+            assert json.loads(child.stdout) == {"COLUMNS": None, "LINES": None}
+        """
+    )
+
+    result = pytester_under_root_conftest.runpytest_subprocess("-n", workers, "-p", "no:cacheprovider")
 
     result.assert_outcomes(passed=1)
 

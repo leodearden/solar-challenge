@@ -29,12 +29,14 @@ collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Drop COLUMNS and LINES, so each process of the suite, an xdist worker included, imports the CLI with no terminal size in its environment, as a serial session does, and a console built at import reads COLUMNS when it prints.
+    """Drop COLUMNS and LINES from os.environ and from the C environment beneath it, so no process of the suite, serial or an xdist worker, holds a terminal size, and no child a test starts inherits one.
 
-    tests/unit/test_parallel_suite.py says where a worker's come from.
+    A console the CLI builds at import then reads COLUMNS when it prints.
+    tests/unit/test_parallel_suite.py says where the two come from.
     """
     for name in ("COLUMNS", "LINES"):
         os.environ.pop(name, None)
+        os.unsetenv(name)
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
