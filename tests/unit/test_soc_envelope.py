@@ -217,6 +217,30 @@ class TestBatterySocEnvelope:
         battery.max_soc_fraction = 0.6
         assert battery.grid_charge_target_kwh == battery.soc_envelope.target_kwh(0.95) == battery.soc_envelope.max_soc_kwh
 
+    def test_reading_the_grid_charge_target_does_not_recompute_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """flow.py reads the target once per timestep, so it is built with the envelope and a read costs an attribute read."""
+        battery = Battery(dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(0.5)))
+        expected = battery.soc_envelope.target_kwh(0.5)
+
+        def recomputed(self: SocEnvelope, fraction: float) -> float:
+            raise AssertionError(
+                "grid_charge_target_kwh recomputed SocEnvelope.target_kwh on a read; "
+                "the target is built when the envelope is, so a read is an attribute read"
+            )
+
+        monkeypatch.setattr(SocEnvelope, "target_kwh", recomputed)
+
+        assert [battery.grid_charge_target_kwh for _ in range(3)] == [expected] * 3
+
+    def test_a_grid_charge_target_follows_a_ceiling_raised_again(self) -> None:
+        """The target is rebuilt on every assignment, not only when the ceiling falls below it."""
+        battery = Battery(dataclasses.replace(_ROW_11_CONFIG, grid_charging=GridChargeConfig(0.7)))
+        battery.max_soc_fraction = 0.6
+        assert battery.grid_charge_target_kwh == battery.soc_envelope.max_soc_kwh
+        battery.max_soc_fraction = 0.8
+        assert battery.grid_charge_target_kwh == pytest.approx(0.7 * 7.0)
+        assert battery.grid_charge_target_kwh == battery.soc_envelope.target_kwh(0.7)
+
     @pytest.mark.parametrize("efficiency", ["charge_efficiency", "discharge_efficiency"])
     def test_an_assigned_efficiency_leaves_the_envelope_as_it_was(self, efficiency: str) -> None:
         battery = Battery(_ROW_11_CONFIG)
