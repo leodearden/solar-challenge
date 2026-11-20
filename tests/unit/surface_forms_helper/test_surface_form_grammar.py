@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's surface_form for how an annotation is spelled by its construct, and an object by its kind, one per test.
 
+The module a string annotation is evaluated in, and the errors raised where it cannot be
+evaluated there, have their rules in
+tests/unit/surface_forms_helper/test_surface_form_module_lookup.py.
+
 Wrapper is defined at module level, where its qualified name carries no '<locals>'.
 """
 
@@ -38,15 +42,11 @@ import pytest
 
 from tests._surface_forms import member_forms, named_classes, surface_form
 from tests.unit.surface_forms_helper._fixtures import (
-    MAKE_DATACLASS_MADE_SOURCE,
-    NEW_CLASS_MADE_SOURCE,
     CallableGetterDeleter,
     GetterDeleter,
     Outer,
     Preset,
     imported_module,
-    made_not_bound_in,
-    make_dataclass_records,
 )
 
 
@@ -189,13 +189,6 @@ def test_a_forward_reference_inside_an_alias_is_spelled_as_what_it_evaluates_to(
     def f(a: Optional["Preset"], b: List["pathlib.Path"], c: list["Optional[int]"]) -> None: ...
 
     assert surface_form(f) == "(a: Preset | None, b: list[Path], c: list[int | None]) -> None"
-
-
-def test_a_string_annotation_naming_what_its_module_does_not_bind_raises_name_error() -> None:
-    def f(a: "Unbound") -> None: ...  # noqa: F821
-
-    with pytest.raises(NameError, match="Unbound"):
-        surface_form(f)
 
 
 def test_a_string_met_again_inside_its_own_evaluation_raises_a_type_error_naming_it(
@@ -395,31 +388,6 @@ def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inhe
         def scaled(self, factor: float) -> float: ...
 
     assert surface_form(Scaled) == "dataclass[eq, frozen] (kwh: float) -> None"
-
-
-def test_a_dataclass_types_new_class_makes_raises_the_lookup_error_named_classes_raises_for_it_naming_it_and_the_module_types(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    spellednewclassing = imported_module(
-        tmp_path, monkeypatch, "spellednewclassing", NEW_CLASS_MADE_SOURCE
-    )
-
-    with pytest.raises(LookupError, match=made_not_bound_in("types")):
-        surface_form(spellednewclassing.Made)
-
-
-def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_naming_the_module_types_on_python_3_11_and_from_python_3_12_is_spelled_by_its_kind_then_its_constructor_signature_with_its_string_annotation_evaluated(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    spelledmaking = imported_module(
-        tmp_path, monkeypatch, "spelledmaking", MAKE_DATACLASS_MADE_SOURCE
-    )
-
-    if make_dataclass_records("spelledmaking") == "types":
-        with pytest.raises(LookupError, match=made_not_bound_in("types")):
-            surface_form(spelledmaking.Made)
-    else:
-        assert surface_form(spelledmaking.Made) == "dataclass[eq] (spare: Decimal) -> None"
 
 
 def test_an_enum_form_is_its_members_in_definition_order() -> None:
