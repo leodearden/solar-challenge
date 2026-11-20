@@ -328,6 +328,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "charge_efficiency": "property[settable] (self) -> float",
         "discharge_efficiency": "property[settable] (self) -> float",
         "soh": "property (self) -> float",
+        "soc_envelope": "property (self) -> SocEnvelope",
         "effective_capacity_kwh": "property (self) -> float",
         "soc_kwh": "property (self) -> float",
         "soc_fraction": "property (self) -> float",
