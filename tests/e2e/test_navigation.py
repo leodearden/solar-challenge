@@ -202,18 +202,19 @@ def test_dark_mode_toggle(page: Page, live_server: str) -> None:
 
 
 def test_sidebar_collapse_expand(page: Page, live_server: str) -> None:
-    """Clicking the collapse toggle collapses the sidebar from w-64 to w-16, and clicking it again expands it back to w-64."""
+    """Clicking the collapse toggle collapses the sidebar from w-64 to w-16 and moves the main column with it, and clicking it again expands both back; each layout is read where the toggle's slide ends."""
     _open_with_the_sidebar_stored(page, live_server + "/", "true")
-    sidebar = _desktop_sidebar(page)
     toggle = _sidebar_toggle(page)
     expect(toggle).to_have_attribute("title", "Collapse sidebar")
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
+    assert _layout_once_the_slide_ends(page) == _SIDEBAR_OPEN
 
     toggle.click()
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_COLLAPSED['sidebar_width']}px")
+    expect(toggle).to_have_attribute("title", "Expand sidebar")
+    assert _layout_once_the_slide_ends(page) == _SIDEBAR_COLLAPSED
 
     toggle.click()
-    expect(sidebar).to_have_css("width", f"{_SIDEBAR_OPEN['sidebar_width']}px")
+    expect(toggle).to_have_attribute("title", "Collapse sidebar")
+    assert _layout_once_the_slide_ends(page) == _SIDEBAR_OPEN
 
 
 # ── Sidebar state on load ──────────────────────────────────────────────
@@ -264,6 +265,13 @@ _CLICK_AND_READ_THE_TRANSITIONS = """async toggle => {
     return window.sidebarProbe.transitions();
 }"""
 
+# Finishes every running CSS transition, then returns the probe's layout: where the toggle's slide ends,
+# read without waiting for the frames that run it, which a loaded host can withhold for seconds.
+_LAYOUT_ONCE_THE_SLIDE_ENDS = """() => {
+    document.getAnimations().filter(animation => animation instanceof CSSTransition).forEach(transition => transition.finish());
+    return window.sidebarProbe.drawn().layout;
+}"""
+
 
 def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None) -> None:
     """Open url with localStorage's sidebarOpen set to stored_state (left unset if None), recording how the sidebar loads."""
@@ -276,6 +284,11 @@ def _open_with_the_sidebar_stored(page: Page, url: str, stored_state: str | None
 def _how_the_sidebar_loaded(page: Page) -> tuple[dict[str, object], dict[str, object]]:
     """What the recorder saw as the page loaded, and what is drawn now; it reads load on its own because the probe holds functions."""
     return page.evaluate("() => window.sidebarProbe.load"), page.evaluate("() => window.sidebarProbe.drawn()")
+
+
+def _layout_once_the_slide_ends(page: Page) -> dict[str, object]:
+    """The desktop sidebar's width and #main-content's left edge, in px, once every running transition is finished; the page is one _open_with_the_sidebar_stored opened."""
+    return page.evaluate(_LAYOUT_ONCE_THE_SLIDE_ENDS)
 
 
 def _highlighted_groups_once_nothing_transitions(page: Page) -> list[str]:
