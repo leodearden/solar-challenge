@@ -311,7 +311,7 @@ def _grid_power_to_target_kw(
 
 
 TARGET_SOC_FRACTION: Final = FRACTION
-"""The grid-charge targets, as fractions of the battery's effective (SOH-derated) capacity, that GridChargeConfig and ChargeWindow admit and battery.SocEnvelope.target_kwh reads its fraction under."""
+"""The grid-charge targets a battery may be given, as fractions of its effective (SOH-derated) capacity: greater than 0 and at most 1."""
 
 
 @dataclass(frozen=True)
