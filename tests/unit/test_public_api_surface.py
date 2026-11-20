@@ -11,8 +11,8 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   current forms.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
-  names, and an unknown name raises AttributeError; and EXPECTED_KIND's three names
-  resolve to the kind their spelling misleads about.
+  names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
+  to the kind its spelling misleads about.
 - The runtime tables, __all__, _SYMBOL_MODULE and _SOURCE_NAME, agree at import.
 - The package imports without pvlib, and the first access of a name loads pvlib exactly
   when the submodule its typed import comes from is in PVLIB_IMPORTING_SUBMODULES.
