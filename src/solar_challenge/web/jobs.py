@@ -246,9 +246,9 @@ class JobManager:
 
     Uses a ThreadPoolExecutor to run simulations in background threads.
     Each job has a versioned in-memory JobSnapshot of its state, which its
-    progress streams read with job_snapshot (web/sse.py's
-    job_progress_frames), and a run the manager records through its
-    RunStorage. A job's status moves only along
+    progress streams read with job_snapshot and wait on with
+    wait_for_job_snapshot (web/sse.py's job_progress_frames), and a run the
+    manager records through its RunStorage. A job's status moves only along
     LEGAL_JOB_TRANSITIONS (docs/prds/job-events-and-sse-framing.md §3.4),
     through one writer, _move_job, which refuses any other move with
     IllegalJobTransition.
@@ -291,6 +291,7 @@ class JobManager:
         self._clock = clock
         self._lock = threading.Lock()
         self._idle = threading.Condition(self._lock)
+        self._job_changed = threading.Condition(self._lock)
         self._unfinished_job_count = 0
         self._jobs: dict[str, _TrackedJob] = {}
         _active_managers.add(self)
@@ -433,6 +434,23 @@ class JobManager:
             job = self._jobs.get(job_id)
             return None if job is None else job.snapshot
 
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None:
+        """Return job *job_id*'s snapshot once its version is newer than *newer_than*, waiting at most *timeout* seconds for the job to move.
+
+        Only a move of the job past *newer_than*, or this manager ceasing to track the job, ends the wait early.
+        Otherwise it returns, once *timeout* has passed, the snapshot as it then stands, no newer than *newer_than*.
+        web/sse.py's job_progress_frames waits here between polls.
+
+        Returns:
+            The job's frozen JobSnapshot.  None if this manager does not track the job, as job_snapshot says.
+        """
+        with self._job_changed:
+            self._job_changed.wait_for(
+                lambda: job_id not in self._jobs or self._jobs[job_id].snapshot.version > newer_than, timeout
+            )
+            job = self._jobs.get(job_id)
+            return None if job is None else job.snapshot
+
     def cancel_run(self, run_id: str) -> bool:
         """Cancel the queued or running job of run *run_id*, as the run's delete does before it removes the run.
 
@@ -473,7 +491,7 @@ class JobManager:
             )
 
     def _stop_tracking_jobs_finished_long_ago(self) -> None:
-        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago; a queued or running job stays tracked."""
+        """Stop tracking every job that finished more than _FINISHED_JOB_TTL_SECONDS ago, waking every wait_for_job_snapshot caller as each one goes; a queued or running job stays tracked."""
         now = self._clock()
         with self._lock:
             expired = [
@@ -483,6 +501,7 @@ class JobManager:
             ]
             for job_id in expired:
                 del self._jobs[job_id]
+                self._job_changed.notify_all()
 
     def _submit_job(
         self,
@@ -609,9 +628,10 @@ class JobManager:
                 self._idle.notify_all()
 
     def _forget_job(self, job_id: str, run_id: str) -> None:
-        """Erase every record of a job that the executor refused to schedule: stop tracking it, and delete its run."""
+        """Erase every record of a job that the executor refused to schedule: stop tracking it, waking every wait_for_job_snapshot caller, and delete its run."""
         with self._lock:
             self._jobs.pop(job_id, None)
+            self._job_changed.notify_all()
         self._storage.delete_run(run_id)
 
     def _cancellation_of(self, job_id: str) -> _Cancellation:
@@ -633,7 +653,7 @@ class JobManager:
         The job keeps its progress unless *progress_pct* and *current_step* are given. Under one hold of the lock the
         move is checked against LEGAL_JOB_TRANSITIONS, the new state is stored in the job's snapshot at the next
         version, and finished_at is stamped when the new status is terminal, so a reader sees each state with its
-        own version.
+        own version. Every wait_for_job_snapshot caller is then woken.
 
         Raises:
             RuntimeError: The manager no longer tracks the job, though it tracks each job until it finishes.
@@ -659,6 +679,7 @@ class JobManager:
             job.snapshot = JobSnapshot(previous.version + 1, state)
             if to_status in TERMINAL_JOB_STATUSES:
                 job.finished_at = self._clock()
+            self._job_changed.notify_all()
             return state
 
     def _report_cancelled_job(self, job_id: str) -> None:

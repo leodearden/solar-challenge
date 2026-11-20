@@ -2,14 +2,15 @@
 """Tests for web/sse.py: the encoder, the event catalogue, and the job progress stream of the dashboard's event streams with the policy that paces it.
 
 The job progress stream's tests run job_progress_frames on a _ScriptedJob, which stands in
-for a JobManager's job_snapshot, under a JobStreamPolicy that never sleeps: each sleep is
-recorded, or moves the policy's ManualClock on, and the clock stands still otherwise.
+for a JobManager's job_snapshot and wait_for_job_snapshot. Its waits never block: each one
+is recorded, and moves the policy's ManualClock on only when a test asks it to, so the
+clock stands still otherwise.
 """
 
 import dataclasses
 import math
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import Any, get_args
 
 import pytest
@@ -260,19 +261,27 @@ def test_the_heartbeat_is_an_sse_comment() -> None:
 
 
 class _ScriptedJob:
-    """Stands in for JobManager.job_snapshot on one job: snapshot(job_id) answers the job's current JobSnapshot for the job's own id, and None for any other id or once forget() is called.
+    """Stands in for a JobManager's job_snapshot and wait_for_job_snapshot on one job, answering its current JobSnapshot for its own id, and None for any other id or once forget() is called.
 
-    move(**changes) replaces the job's state with the state so changed, at the next version.
+    A wait never blocks: it records its (newer_than, timeout) in waits and runs *pass_time* on its timeout before it answers.
     """
 
-    def __init__(self, snapshot: JobSnapshot) -> None:
+    def __init__(self, snapshot: JobSnapshot, pass_time: Callable[[float], None] = lambda _timeout: None) -> None:
         self._job_id = snapshot.state.job_id
         self._current: JobSnapshot | None = snapshot
+        self._pass_time = pass_time
+        self.waits: list[tuple[int, float]] = []
 
-    def snapshot(self, job_id: str) -> JobSnapshot | None:
+    def job_snapshot(self, job_id: str) -> JobSnapshot | None:
         return self._current if job_id == self._job_id else None
 
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None:
+        self.waits.append((newer_than, timeout))
+        self._pass_time(timeout)
+        return self.job_snapshot(job_id)
+
     def move(self, **changes: Any) -> JobSnapshot:
+        """Replace the job's state with the state so changed, at the next version."""
         current = self._current
         assert current is not None, "a job no longer tracked does not move"
         self._current = JobSnapshot(current.version + 1, dataclasses.replace(current.state, **changes))
@@ -283,24 +292,18 @@ class _ScriptedJob:
 
 
 @pytest.fixture
-def sleeps() -> list[float]:
-    """The seconds of each sleep the stream under test took, in order."""
-    return []
-
-
-@pytest.fixture
 def clock() -> ManualClock:
     """The clock the stream under test times its limit on."""
     return ManualClock()
 
 
 @pytest.fixture
-def policy(sleeps: list[float], clock: ManualClock) -> JobStreamPolicy:
-    """The policy of the stream under test: each sleep is recorded in sleeps, not slept, and its limit is timed on clock.
+def policy(clock: ManualClock) -> JobStreamPolicy:
+    """The policy of the stream under test: its limit is timed on clock.
 
     Its retry is not the default one, so a frame that carries it took it from the policy.
     """
-    return JobStreamPolicy(sleep=sleeps.append, clock=clock, retry_ms=1500)
+    return JobStreamPolicy(clock=clock, retry_ms=1500)
 
 
 def _next_poll(stream: Iterator[str]) -> list[str]:
@@ -336,13 +339,12 @@ def _frame_of(snapshot: JobSnapshot, policy: JobStreamPolicy) -> SseFrame:
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])
-def test_a_stream_sends_an_unfinished_jobs_state_on_open_then_only_heartbeats_while_the_job_is_unchanged(
-    status: JobStatus, sleeps: list[float], policy: JobStreamPolicy
+def test_a_stream_sends_an_unfinished_jobs_state_on_open_then_waits_on_the_job_between_polls_sending_only_heartbeats_while_it_is_unchanged(
+    status: JobStatus, policy: JobStreamPolicy
 ) -> None:
     state = dataclasses.replace(_A_RUNNING_JOB, status=status)
-    stream = job_progress_frames(
-        _ScriptedJob(JobSnapshot(3, state)).snapshot, "job-1", last_event_id=None, policy=policy
-    )
+    job = _ScriptedJob(JobSnapshot(3, state))
+    stream = job_progress_frames(job, "job-1", last_event_id=None, policy=policy)
 
     first_poll = _read(_next_poll(stream))
 
@@ -351,46 +353,61 @@ def test_a_stream_sends_an_unfinished_jobs_state_on_open_then_only_heartbeats_wh
         HEARTBEAT,
     ]
     assert list(first_poll[0].data) == [field.name for field in dataclasses.fields(JobState)]
-    assert sleeps == []
+    assert job.waits == []
     assert _next_poll(stream) == [HEARTBEAT]
-    assert sleeps == [2.0]
+    assert job.waits == [(3, 2.0)], "the stream waits for a version newer than the one it read, at most its heartbeat"
 
 
 @pytest.mark.parametrize("last_event_id", [None, 5], ids=["opened", "reopened-at-its-version"])
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
 def test_a_finished_jobs_stream_sends_its_final_state_once_and_ends(
-    status: JobStatus, last_event_id: int | None, sleeps: list[float], policy: JobStreamPolicy
+    status: JobStatus, last_event_id: int | None, policy: JobStreamPolicy
 ) -> None:
     final = JobSnapshot(5, dataclasses.replace(_A_RUNNING_JOB, status=status))
+    job = _ScriptedJob(final)
 
-    stream = job_progress_frames(_ScriptedJob(final).snapshot, "job-1", last_event_id=last_event_id, policy=policy)
+    stream = job_progress_frames(job, "job-1", last_event_id=last_event_id, policy=policy)
 
     assert _read(stream) == [_frame_of(final, policy)]
-    assert sleeps == []
+    assert job.waits == []
 
 
 def test_a_stream_reopened_at_the_jobs_version_sends_no_state_until_the_job_moves_on(policy: JobStreamPolicy) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=3, policy=policy)
+    stream = job_progress_frames(job, "job-1", last_event_id=3, policy=policy)
 
     assert _next_poll(stream) == [HEARTBEAT]
 
     saving = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
 
     assert _read(_next_poll(stream)) == [_frame_of(saving, policy), HEARTBEAT]
+    assert job.waits == [(3, 2.0)]
+
+
+def test_a_stream_reopened_past_its_jobs_version_waits_for_the_job_to_move_on_from_the_version_it_read_so_its_end_wakes_it(
+    policy: JobStreamPolicy,
+) -> None:
+    job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
+    stream = job_progress_frames(job, "job-1", last_event_id=7, policy=policy)
+    assert _next_poll(stream) == [HEARTBEAT]
+
+    completed = job.move(status="completed", progress_pct=100.0, current_step="Done", message="Simulation complete")
+
+    assert _read(stream) == [_frame_of(completed, policy)]
+    assert job.waits == [(3, 2.0)], "a wait for a version past the cursor, 7, would sleep through the job's end at 4"
 
 
 def test_a_stream_reopened_at_an_earlier_version_sends_the_jobs_current_state_on_open(policy: JobStreamPolicy) -> None:
     current = JobSnapshot(3, _A_RUNNING_JOB)
 
-    stream = job_progress_frames(_ScriptedJob(current).snapshot, "job-1", last_event_id=2, policy=policy)
+    stream = job_progress_frames(_ScriptedJob(current), "job-1", last_event_id=2, policy=policy)
 
     assert _read(_next_poll(stream)) == [_frame_of(current, policy), HEARTBEAT]
 
 
 def test_the_states_a_job_moves_through_between_two_polls_collapse_into_the_newest(policy: JobStreamPolicy) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
+    stream = job_progress_frames(job, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.move(progress_pct=50.0, message="Halfway through the simulation...")
@@ -403,7 +420,9 @@ def test_the_states_a_job_moves_through_between_two_polls_collapse_into_the_newe
 def test_a_stream_on_a_job_its_source_does_not_track_sends_only_the_untracked_frame_naming_the_job(
     policy: JobStreamPolicy,
 ) -> None:
-    stream = job_progress_frames(lambda _job_id: None, "job-9", last_event_id=None, policy=policy)
+    stream = job_progress_frames(
+        _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB)), "job-9", last_event_id=None, policy=policy
+    )
 
     assert _read(stream) == [SseFrame("untracked", {"job_id": "job-9"}, id=None, retry=policy.retry_ms)]
 
@@ -412,7 +431,7 @@ def test_a_stream_whose_job_stops_being_tracked_ends_with_the_untracked_frame_na
     policy: JobStreamPolicy,
 ) -> None:
     job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
+    stream = job_progress_frames(job, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.forget()
@@ -430,18 +449,18 @@ _POLICIES_AND_THEIR_LIMITS = [
 """A policy and the limit in seconds a stream under it must keep: D21's ten minutes by default, or the policy's own."""
 
 
-def _with_every_sleep_lasting(seconds: float, clock: ManualClock, policy: JobStreamPolicy) -> JobStreamPolicy:
-    """*policy*, but timing its limit on *clock*, and with every sleep moving *clock* on by *seconds* at once, whatever heartbeat it sleeps for."""
-    return dataclasses.replace(policy, sleep=lambda _heartbeat_seconds: clock.advance(seconds), clock=clock)
+def _a_running_job_whose_every_wait_lasts(seconds: float, clock: ManualClock) -> _ScriptedJob:
+    """A running job at version 3 whose every wait moves *clock* on by *seconds* at once, whatever timeout it is given."""
+    return _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB), pass_time=lambda _timeout: clock.advance(seconds))
 
 
 @pytest.mark.parametrize(("policy_of_its_limit", "limit_seconds"), _POLICIES_AND_THEIR_LIMITS)
 def test_a_stream_open_for_exactly_its_limit_still_sends_the_jobs_next_state(
     policy_of_its_limit: JobStreamPolicy, limit_seconds: float, clock: ManualClock
 ) -> None:
-    job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    policy = _with_every_sleep_lasting(limit_seconds, clock, policy_of_its_limit)
-    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
+    job = _a_running_job_whose_every_wait_lasts(limit_seconds, clock)
+    policy = dataclasses.replace(policy_of_its_limit, clock=clock)
+    stream = job_progress_frames(job, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     saving = job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
@@ -453,10 +472,10 @@ def test_a_stream_open_for_exactly_its_limit_still_sends_the_jobs_next_state(
 def test_a_stream_open_past_its_limit_sends_only_the_timeout_frame_naming_the_limit_and_ends_without_the_jobs_state(
     policy_of_its_limit: JobStreamPolicy, limit_seconds: float, clock: ManualClock
 ) -> None:
-    """Each sleep lasts the least time past the limit that a clock reading float seconds can show."""
-    job = _ScriptedJob(JobSnapshot(3, _A_RUNNING_JOB))
-    policy = _with_every_sleep_lasting(math.nextafter(limit_seconds, math.inf), clock, policy_of_its_limit)
-    stream = job_progress_frames(job.snapshot, "job-1", last_event_id=None, policy=policy)
+    """Each wait lasts the least time past the limit that a clock reading float seconds can show."""
+    job = _a_running_job_whose_every_wait_lasts(math.nextafter(limit_seconds, math.inf), clock)
+    policy = dataclasses.replace(policy_of_its_limit, clock=clock)
+    stream = job_progress_frames(job, "job-1", last_event_id=None, policy=policy)
     _next_poll(stream)
 
     job.move(progress_pct=90.0, current_step="Saving", message="Persisting results to storage...")
@@ -488,7 +507,7 @@ def test_a_stream_open_past_its_limit_sends_only_the_timeout_frame_naming_the_li
 def test_a_policy_whose_field_would_break_every_stream_is_refused_naming_the_field_and_its_value(
     field: str, value: float
 ) -> None:
-    """Each would break every stream: a limit of zero or less ends a stream at its first poll, a limit that is not a number never ends one, time.sleep raises on a negative or NaN heartbeat, and EventSource ignores a negative retry."""
+    """Each would break every stream: a limit of zero or less ends a stream at its first poll, a limit that is not a number never ends one, a negative or NaN heartbeat is no length of wait, and EventSource ignores a negative retry."""
     with pytest.raises(ValueError, match=rf"\b{field}\b.*{re.escape(repr(value))}"):
         JobStreamPolicy(**{field: value})
 

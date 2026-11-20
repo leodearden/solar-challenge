@@ -9,7 +9,8 @@ send a job's state and which ``JOB_STATE_EVENTS`` names by job status, and the t
 endings that send none, ``JOB_STREAM_TIMED_OUT`` and ``JOB_UNTRACKED``.
 ``HEARTBEAT`` is the comment a stream sends between events, and ``event_stream`` the
 response that sends a stream's frames. The job stream's frames come from
-``job_progress_frames``, paced and bounded by a ``JobStreamPolicy``.
+``job_progress_frames``, which reads its job from a ``JobSnapshotSource`` and waits there
+for the job to move, paced and bounded by a ``JobStreamPolicy``.
 docs/prds/job-events-and-sse-framing.md §4 states the contract.
 """
 
@@ -18,7 +19,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
-from typing import Final, Generic, TypeVar
+from typing import Final, Generic, Protocol, TypeVar
 
 from flask import Response
 
@@ -145,13 +146,21 @@ JOB_STREAM_TIMED_OUT: Final = SseEvent("timeout", StreamTimedOut)
 JOB_UNTRACKED: Final = SseEvent("untracked", JobUntracked)
 
 
+class JobSnapshotSource(Protocol):
+    """Where a job progress stream reads its job's snapshot, at once or once the job has moved past a version; JobManager is one."""
+
+    def job_snapshot(self, job_id: str) -> JobSnapshot | None: ...
+
+    def wait_for_job_snapshot(self, job_id: str, *, newer_than: int, timeout: float) -> JobSnapshot | None: ...
+
+
 @dataclass(frozen=True)
 class JobStreamPolicy:
     """How a job progress stream is paced and bounded.
 
-    The stream sleeps *heartbeat_seconds* on *sleep* between two polls, ends once it has been
-    open longer than *limit_seconds* on *clock*, and asks the browser, in every frame's retry,
-    to wait *retry_ms* before it reopens the stream.
+    Between two polls the stream waits at most *heartbeat_seconds* for its job to move. It ends
+    once it has been open longer than *limit_seconds* on *clock*, and it asks the browser, in
+    every frame's retry, to wait *retry_ms* before it reopens the stream.
 
     Raises:
         ValueError: a field would break every stream: a *limit_seconds* that is not more
@@ -162,7 +171,6 @@ class JobStreamPolicy:
     heartbeat_seconds: float = 2.0
     retry_ms: int = 1000
     clock: Callable[[], float] = time.monotonic
-    sleep: Callable[[float], None] = time.sleep
 
     def __post_init__(self) -> None:
         if not self.limit_seconds > 0:
@@ -190,37 +198,37 @@ def parse_last_event_id(header: str | None) -> int | None:
 
 
 def job_progress_frames(
-    job_snapshot: Callable[[str], JobSnapshot | None],
+    jobs: JobSnapshotSource,
     job_id: str,
     *,
     last_event_id: int | None,
     policy: JobStreamPolicy,
 ) -> Iterator[str]:
-    """Yield the frames of job *job_id*'s progress stream, polling *job_snapshot* for the job's snapshot.
+    """Yield the frames of job *job_id*'s progress stream, reading the job's snapshot from *jobs*.
 
     The stream keeps its own cursor, the version of the last state it sent, which starts at
     *last_event_id*. Each poll sends the job's state when the cursor is None or the state's
-    version is newer, then a ``HEARTBEAT``, and the stream sleeps policy.heartbeat_seconds
-    before the next poll. So a stream opened afresh sends the job's current state at once, a
-    reopened one resumes after the version its ``Last-Event-ID`` names, and the states a job
-    moves through between two polls collapse into the newest. Every frame carries
-    policy.retry_ms as its retry, and only a state's frame carries an id, the state's version.
-    The stream ends with exactly one of three frames:
+    version is newer, then a ``HEARTBEAT``. The first poll reads the job at once; between
+    polls the stream waits on *jobs* for a version newer than the one it last read, at most
+    policy.heartbeat_seconds, so it polls again as soon as the job moves, whatever its cursor,
+    and sends the job's end as soon as the job makes it. So a stream opened afresh sends the
+    job's current state at once, a reopened one resumes after the version its
+    ``Last-Event-ID`` names, and the states a job moves through before the stream wakes
+    collapse into the newest. Every frame carries policy.retry_ms as its retry, and only a
+    state's frame carries an id, the state's version. The stream ends with exactly one of
+    three frames:
 
     - a terminal state's frame, sent whatever the cursor, so a reopened stream on a finished
       job ends at once;
-    - ``JOB_UNTRACKED``, naming the job, once *job_snapshot* answers None for it;
+    - ``JOB_UNTRACKED``, naming the job, once *jobs* answers None for it;
     - ``JOB_STREAM_TIMED_OUT``, naming the limit, at the first poll after the stream has been
       open longer than policy.limit_seconds on policy.clock. The job goes on, and a browser
       reopens the stream after the retry, resuming from the last state it was sent.
     """
     started = policy.clock()
     cursor = last_event_id
+    current = jobs.job_snapshot(job_id)
     while True:
-        if policy.clock() - started > policy.limit_seconds:
-            yield sse_frame(JOB_STREAM_TIMED_OUT, StreamTimedOut(policy.limit_seconds), retry_ms=policy.retry_ms)
-            return
-        current = job_snapshot(job_id)
         if current is None:
             yield sse_frame(JOB_UNTRACKED, JobUntracked(job_id), retry_ms=policy.retry_ms)
             return
@@ -231,7 +239,10 @@ def job_progress_frames(
             yield _job_state_frame(current, retry_ms=policy.retry_ms)
             cursor = current.version
         yield HEARTBEAT
-        policy.sleep(policy.heartbeat_seconds)
+        current = jobs.wait_for_job_snapshot(job_id, newer_than=current.version, timeout=policy.heartbeat_seconds)
+        if policy.clock() - started > policy.limit_seconds:
+            yield sse_frame(JOB_STREAM_TIMED_OUT, StreamTimedOut(policy.limit_seconds), retry_ms=policy.retry_ms)
+            return
 
 
 def _job_state_frame(snapshot: JobSnapshot, *, retry_ms: int) -> str:

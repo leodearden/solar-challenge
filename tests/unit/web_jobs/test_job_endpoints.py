@@ -2,10 +2,11 @@
 """Tests for the endpoints that submit and report jobs, driven through the web app against a real JobManager.
 
 A progress stream's first chunks are read from the endpoint; its later polls are driven
-through job_progress_frames, the stream the endpoint serves, read poll by poll without
-sleeping between polls.
+through job_progress_frames, the stream the endpoint serves, read poll by poll under a
+heartbeat of 0 s, so no poll waits for the job to move.
 """
 
+import inspect
 import itertools
 import threading
 from collections.abc import Callable, Iterator
@@ -160,16 +161,20 @@ _SERVED_RETRY_MS = JobStreamPolicy().retry_ms
 
 @contextmanager
 def _progress_stream(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> Iterator[Iterator[str]]:
-    """Open job *job_id*'s progress stream unbuffered, with *last_event_id* as its Last-Event-ID header when given; yield its chunks as the server sends them, and close it on exit.
+    """Open job *job_id*'s progress stream unbuffered, with *last_event_id* as its Last-Event-ID header when given; yield its chunks as the server sends them, and close it on exit unless another thread is still reading them.
 
     A test reads only the chunks it asserts, so a stream that heartbeats until its job ends does not hold the test up.
+    Closing a stream another thread is still reading would raise ValueError, generator already executing, in place of
+    the test's own failure.
     """
     headers = {} if last_event_id is None else {"Last-Event-ID": last_event_id}
     response = client.get(f"/api/jobs/{job_id}/progress", headers=headers, buffered=False)
+    chunks = (chunk.decode() for chunk in response.response)
     try:
-        yield (chunk.decode() for chunk in response.response)
+        yield chunks
     finally:
-        response.close()
+        if inspect.getgeneratorstate(chunks) != inspect.GEN_RUNNING:
+            response.close()
 
 
 def _first_chunk(client: FlaskClient, job_id: str, last_event_id: str | None = None) -> str:
@@ -179,17 +184,17 @@ def _first_chunk(client: FlaskClient, job_id: str, last_event_id: str | None = N
 
 
 class _LiveStream:
-    """A progress stream on job *job_id* of *manager*, as the progress endpoint serves it, read here poll by poll without sleeping between polls.
+    """A progress stream on job *job_id* of *manager*, as the progress endpoint serves it, read here poll by poll under a heartbeat of 0 s, so no poll waits for the job to move.
 
     sent holds each chunk it has sent so far but its heartbeats, a frame each.
     """
 
     def __init__(self, manager: JobManager, job_id: str) -> None:
         self._chunks = job_progress_frames(
-            manager.job_snapshot,
+            manager,
             job_id,
             last_event_id=None,
-            policy=JobStreamPolicy(sleep=lambda _seconds: None),
+            policy=JobStreamPolicy(heartbeat_seconds=0.0),
         )
         self.sent: list[str] = []
 
@@ -684,22 +689,54 @@ class TestJobProgressEndpoint:
         assert reopened == opened
         assert [frame.event for frame in parse_sse_events(reopened)] == ["completed"]
 
+    def test_a_held_jobs_stream_sends_its_completed_frame_as_soon_as_the_job_ends_not_at_its_next_heartbeat(
+        self, app: Flask, blocking_simulation: BlockingSimulation
+    ) -> None:
+        """A stream that slept out its 600 s heartbeat would still be asleep when the reader gives up, 30 s on.
+
+        The rest of the stream is read in a daemon thread, so such a stream fails the test instead of holding it up.
+        """
+        manager, client = _a_held_job(app, blocking_simulation)
+        serve_job_streams_under(app, JobStreamPolicy(heartbeat_seconds=600.0))
+        rest: list[str] = []
+
+        with _progress_stream(client, "id-1") as chunks:
+            assert [frame.event for frame in parse_sse_events(next(chunks))] == ["progress"]
+            assert next(chunks) == HEARTBEAT
+            reader = threading.Thread(target=lambda: rest.extend(chunks), daemon=True)
+            release = threading.Timer(0.2, blocking_simulation.release)
+            release.start()
+            try:
+                reader.start()
+                reader.join(timeout=30)
+            finally:
+                release.cancel()
+            assert not reader.is_alive(), "the stream did not send the job's end within 30 s of its release"
+
+        *before, last = rest
+        assert parse_sse_events(last) == [
+            SseFrame(
+                "completed", client.get("/api/jobs/id-1").get_json(), id=_version_of(manager, "id-1"), retry=_SERVED_RETRY_MS
+            )
+        ]
+        assert all(
+            chunk == HEARTBEAT or [frame.event for frame in parse_sse_events(chunk)] == ["progress"] for chunk in before
+        )
+
     def test_a_running_jobs_stream_open_past_its_policys_limit_ends_with_the_timeout_naming_the_limit_and_the_job_runs_on(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        """Task 564's ten-minute test, with no real waiting: the stream's first sleep moves its clock past the limit.
+        """Task 564's ten-minute test, with no real waiting: the test moves the stream's clock past the limit after its first poll.
 
         Only the chunks the test asserts are read, one by one, since a stream that heartbeats
-        until its job ends never ends while the job is held.
+        until its job ends never ends while the job is held. A heartbeat of 0 s ends each of
+        the stream's waits for the job to move at once.
         """
         manager, client = _a_held_job(app, blocking_simulation)
         running = client.get("/api/jobs/id-1").get_json()
         clock = ManualClock()
         serve_job_streams_under(
-            app,
-            JobStreamPolicy(
-                limit_seconds=30.0, retry_ms=1500, clock=clock, sleep=lambda _seconds: clock.advance(31.0)
-            ),
+            app, JobStreamPolicy(limit_seconds=30.0, heartbeat_seconds=0.0, retry_ms=1500, clock=clock)
         )
 
         with _progress_stream(client, "id-1") as chunks:
@@ -707,6 +744,7 @@ class TestJobProgressEndpoint:
                 SseFrame("progress", running, id=_version_of(manager, "id-1"), retry=1500)
             ]
             assert next(chunks) == HEARTBEAT
+            clock.advance(31.0)
             assert parse_sse_events(next(chunks)) == [
                 SseFrame("timeout", {"limit_seconds": 30.0}, id=None, retry=1500)
             ]
