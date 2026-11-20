@@ -4,9 +4,10 @@
 import functools
 import math
 import warnings
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Optional, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,7 @@ from pvlib.modelchain import ModelChain
 from pvlib.pvsystem import Array, FixedMount, PVSystem
 from scipy.optimize import brentq
 
+from solar_challenge.boolean_fields import as_boolean
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
@@ -59,10 +61,55 @@ _CEC_SINGLE_DIODE_MODULE_KEYS = frozenset(
 )
 """calcparams_cec's module parameters, which pvlib's CEC single-diode model reads."""
 
-_MODULE_KEYS_READ_AS_NUMBERS = (
-    frozenset({"gamma_pdc", "T_NOCT", "A_c", "V_mp_ref"}) | _CEC_SINGLE_DIODE_MODULE_KEYS
+_SAPM_DC_MODULE_KEYS = frozenset(
+    {
+        "C0", "C1", "C2", "C3", "Isco", "Impo", "Voco", "Vmpo",
+        "Aisc", "Aimp", "Bvoco", "Mbvoc", "Bvmpo", "Mbvmp", "N", "Cells_in_Series",
+    }
 )
-"""The module parameters besides its rating (_module_rating_w) that _require_module_numbers checks: PVWatts' gamma_pdc, the CEC single-diode parameters, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. pvlib reads other numbers that are not checked yet: the optional keys it defaults (calcparams_cec's EgRef, dEgdT, irrad_ref and temp_ref, pvwatts_dc's temp_ref and k) and a SAPM module's DC parameters."""
+"""The module parameters pvlib's sapm reads into the power and voltages an inverter reads. IXO, IXXO and C4 to C7 are left out: pvlib marks them not required and reads them only into i_x and i_xx, which no inverter model reads, and 10 SandiaMod rows give them NaN."""
+
+_PVSYST_ONLY_MODULE_KEYS = frozenset({"gamma_ref", "mu_gamma", "R_sh_0", "R_sh_exp", "cells_in_series"})
+"""The module parameters only pvlib's PVsyst single-diode model reads: calcparams_pvsyst's, less those _CEC_SINGLE_DIODE_MODULE_KEYS and _OPTIONAL_MODULE_KEYS hold, so not the whole PVsyst form."""
+
+_OPTIONAL_MODULE_KEYS = frozenset(
+    {"EgRef", "dEgdT", "irrad_ref", "temp_ref", "k", "FD", "n", "K", "L", "n_ar"}
+)
+"""The module parameters pvlib defaults when a module lacks them: calcparams_cec and calcparams_desoto read EgRef, dEgdT, irrad_ref and temp_ref, and calcparams_pvsyst all but dEgdT; pvwatts_dc reads temp_ref and k; ModelChain's effective irradiance reads FD; the physical IAM reads n, K, L and n_ar."""
+
+_MODULE_KEYS_READ_AS_NUMBERS = (
+    frozenset({"gamma_pdc", "T_NOCT", "A_c", "V_mp_ref"})
+    | _CEC_SINGLE_DIODE_MODULE_KEYS
+    | _SAPM_DC_MODULE_KEYS
+    | _PVSYST_ONLY_MODULE_KEYS
+    | _OPTIONAL_MODULE_KEYS
+)
+"""The module parameters besides its rating (_module_rating_w) that pvlib's model chain, NOCT-SAM and the string wiring read as numbers, which _require_module_values checks as finite numbers: PVWatts' gamma_pdc, the CEC single-diode, SAPM DC and PVsyst parameters, the keys pvlib defaults, NOCT-SAM's T_NOCT and A_c, and the V_mp_ref that wires the strings. No other key is read as a number: SAPM's i_x and i_xx parameters, which no inverter model reads (_SAPM_DC_MODULE_KEYS), go unchecked; so do keys this chain's models never read, such as SAPM's A0 to A4, B0 to B5, A, B and DTC, read only by SAPM's spectral, IAM and temperature models, none of which the chain runs, and a CECMod row's Technology; and pvwatts_dc's cap_adjustment is a flag (_MODULE_KEYS_READ_AS_FLAGS)."""
+
+_MODULE_KEYS_READ_AS_FLAGS = frozenset({"cap_adjustment"})
+"""The module parameters pvlib reads by their truthiness, which _require_module_values checks as true or false: pvwatts_dc's cap_adjustment, which applies its k adjustment only at and below 1000 W/m² when true."""
+
+_ModuleValueReader: TypeAlias = Callable[[object, str], object]
+"""A reader of a module parameter's value under its field name, refusing a value it does not admit with a ConfigurationError naming the field and the value."""
+
+
+def _one_reader_per_key(
+    *families: tuple[frozenset[str], _ModuleValueReader],
+) -> Mapping[str, _ModuleValueReader]:
+    """Each key of the (keys, reader) families mapped to its family's reader, refusing a key two families hold, whose second reader would silently replace the first."""
+    readers: dict[str, _ModuleValueReader] = {}
+    for keys, reader in families:
+        if shared := sorted(keys & readers.keys()):
+            raise RuntimeError(f"Module parameters {shared} are in two families of checked keys")
+        readers.update(dict.fromkeys(keys, reader))
+    return MappingProxyType(readers)
+
+
+_MODULE_VALUE_READERS = _one_reader_per_key(
+    (_MODULE_KEYS_READ_AS_NUMBERS, as_finite_real),
+    (_MODULE_KEYS_READ_AS_FLAGS, as_boolean),
+)
+"""The reader with which _require_module_values reads each module parameter it checks: as_finite_real for a number, as_boolean for a flag."""
 
 
 def _is_pvwatts_module(module_params: Mapping[str, float]) -> bool:
@@ -75,14 +122,15 @@ def _is_cec_single_diode_module(module_params: Mapping[str, float]) -> bool:
     return _CEC_SINGLE_DIODE_MODULE_KEYS <= module_params.keys()
 
 
-def _require_module_numbers(module_params: Mapping[str, object]) -> None:
-    """Refuse a module that gives one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
+def _require_module_values(module_params: Mapping[str, object]) -> None:
+    """Refuse a module that gives a key _MODULE_VALUE_READERS names a value its reader refuses: one of _MODULE_KEYS_READ_AS_NUMBERS as anything but a finite number, text that reads as one included, or one of _MODULE_KEYS_READ_AS_FLAGS as anything but true or false, since pvlib, NOCT-SAM and the wiring read the module's own values; no other key is checked, such as a CECMod row's Technology text, which no model reads.
 
-    The keys are read in sorted order, so when several are bad the first refusal does not
-    vary with PYTHONHASHSEED, as the iteration order of a frozenset of strings does.
+    A key the module lacks takes pvlib's default; one given as None is refused. The keys
+    are read in sorted order, so when several are bad the first refusal does not vary with
+    PYTHONHASHSEED, as the iteration order of a set of strings does.
     """
-    for key in sorted(_MODULE_KEYS_READ_AS_NUMBERS & module_params.keys()):
-        as_finite_real(module_params[key], f"Module parameter {key}")
+    for key in sorted(_MODULE_VALUE_READERS.keys() & module_params.keys()):
+        _MODULE_VALUE_READERS[key](module_params[key], f"Module parameter {key}")
 
 
 def _require_template_takes_temperature_coefficient(
@@ -138,9 +186,11 @@ class PVConfig:
             temperature from the module's T_NOCT and its rating / (A_c × 1000), with
             DEFAULT_CEC_MODULE's value for either key the module lacks
             (docs/pv-cell-temperature.md). Construction and use refuse custom
-            parameters that give a key the number rule checks (docs/pv-module-settings.md)
-            as anything but a finite number, text that reads as one included, even
-            where a set field replaces that key. They also refuse
+            parameters that give a key the number rule checks as anything but a
+            finite number, text that reads as one included, or cap_adjustment as
+            anything but true or false (_require_module_values;
+            docs/pv-module-settings.md), even where a set field replaces that key.
+            They also refuse
             custom parameters with no rating or a rating (pdc0 or STC) that is not a
             finite number above 0, or whose cells NOCT-SAM cannot heat, reading the
             area a set module_efficiency gives
@@ -186,7 +236,7 @@ class PVConfig:
     system_losses: float = PVWATTS_DEFAULT_SYSTEM_LOSSES
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse custom module parameters that give a key _require_module_numbers checks as anything but a finite number, that cannot take a set temperature coefficient (_require_template_takes_temperature_coefficient), or that have no rating, or one that is not a finite number above 0, or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat); use runs these rules too."""
+        """Read each number setting, then refuse custom module parameters that give a key a value _require_module_values refuses, that cannot take a set temperature coefficient (_require_template_takes_temperature_coefficient), or that have no rating, or one that is not a finite number above 0, or cells NOCT-SAM cannot heat (_require_cells_noct_sam_can_heat); use runs these rules too."""
         read_field(self, "capacity_kw", as_finite_float, POSITIVE)
         read_field(self, "azimuth", as_finite_float, Interval(0, 360))
         read_field(self, "tilt", as_finite_float, Interval(0, 90))
@@ -204,7 +254,7 @@ class PVConfig:
         read_field(self, "degradation_rate_per_year", as_finite_float, _DEGRADATION_RATE_PER_YEAR)
         read_field(self, "system_losses", as_finite_float, Interval(0, 1, high_open=True))
         if self.custom_module_params is not None:
-            _require_module_numbers(self.custom_module_params)
+            _require_module_values(self.custom_module_params)
             if self.temperature_coefficient is not None:
                 _require_template_takes_temperature_coefficient(
                     self.custom_module_params, self.temperature_coefficient
@@ -558,11 +608,10 @@ def _module_parameters(config: PVConfig) -> dict[str, float]:
     The template is a copy of the custom module parameters, or DEFAULT_CEC_MODULE's
     row (_template_with_set_efficiency). An unset field leaves the template as it is
     (docs/pv-module-settings.md). Custom parameters are first refused, as at
-    construction, if they give a key _require_module_numbers checks as anything but
-    a finite number.
+    construction, if they give a key a value _require_module_values refuses.
     """
     if config.custom_module_params is not None:
-        _require_module_numbers(config.custom_module_params)
+        _require_module_values(config.custom_module_params)
     module_params = _template_with_set_efficiency(config)
     if config.temperature_coefficient is None:
         return module_params
@@ -891,8 +940,8 @@ def create_pv_system(config: PVConfig) -> PVSystem:
         inverter parameters
 
     Raises:
-        ValueError: If custom module parameters give a key
-            _require_module_numbers checks as anything but a finite number, if
+        ValueError: If custom module parameters give a key a value
+            _require_module_values refuses, if
             the module parameters rate the module by neither a PVWatts module's
             pdc0 nor an STC, or by one that is not a finite number above 0, if
             they have neither PVWatts parameters nor a V_mp_ref and no custom
@@ -903,8 +952,8 @@ def create_pv_system(config: PVConfig) -> PVSystem:
             temperature_coefficient cannot derive the module: no Adjust in
             _adjust_bracket reaches it for a custom CEC module, or the
             module's alpha_sc is 0 (_with_temperature_coefficient). The
-            number, rating, NOCT-SAM and temperature-coefficient refusals are
-            ConfigurationError, as at PVConfig's construction.
+            module-value, rating, NOCT-SAM and temperature-coefficient refusals
+            are ConfigurationError, as at PVConfig's construction.
 
     Example:
         >>> config = PVConfig(capacity_kw=4.0, azimuth=180.0, tilt=35.0)
@@ -1011,8 +1060,8 @@ def create_model_chain_picking_from(
         ModelChain ready to run simulations with weather data
 
     Raises:
-        ValueError: If custom module parameters give a key
-            _require_module_numbers checks as anything but a finite number, if
+        ValueError: If custom module parameters give a key a value
+            _require_module_values refuses, if
             the module parameters rate the module by neither a PVWatts module's
             pdc0 nor an STC, or by one that is not a finite number above 0, if
             they have neither PVWatts parameters nor a V_mp_ref and no custom
@@ -1023,8 +1072,9 @@ def create_model_chain_picking_from(
             (_with_temperature_coefficient, as for create_pv_system), or if
             pvlib infers an inverter model that can not read its DC model's
             output, e.g. custom Sandia inverter parameters with PVWatts module
-            parameters. The number, rating, NOCT-SAM and temperature-coefficient
-            refusals are ConfigurationError, as for create_pv_system.
+            parameters. The module-value, rating, NOCT-SAM and
+            temperature-coefficient refusals are ConfigurationError, as for
+            create_pv_system.
     """
     pv_system = _pv_system(config, candidates)
 
