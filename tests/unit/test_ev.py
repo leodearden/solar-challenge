@@ -17,6 +17,7 @@ from solar_challenge.ev import (
     require_tariff_for_smart_charging,
 )
 from solar_challenge.tariff import TariffConfig
+from tests._ev_sessions import charging_sessions
 from tests._off_peak_ev_on_each_tariff import FIRST_SESSION_ON_EACH_TARIFF, JANUARY_DAYS, OFF_PEAK_EV
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import whole_number_forms
@@ -36,17 +37,6 @@ OFF_PEAK_WITHOUT_A_TARIFF = (
 def _at(text: str) -> pd.Timestamp:
     """The time *text* in Europe/London, generate_ev_charging_profile's default timezone."""
     return pd.Timestamp(text, tz="Europe/London")
-
-
-def _sessions(profile: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    """The (first minute, minute after the last) of each unbroken run of charging in *profile*.
-
-    The minute after a run is counted from the profile's start, since a run can
-    end with the profile, where the index has no entry.
-    """
-    charging = np.concatenate(([False], profile.to_numpy() > 0, [False]))
-    edges = profile.index[0] + pd.to_timedelta(np.flatnonzero(np.diff(charging)), unit="min")
-    return list(zip(edges[::2], edges[1::2]))
 
 
 def _grid_configs(charger_type: str, mode: str) -> Iterator[EVConfig]:
@@ -84,7 +74,7 @@ def _contract_breaches(config: EVConfig, tariff: TariffConfig | None) -> list[st
     if not config.required_charge_kwh - 1e-9 <= delivered_kwh <= config.required_charge_kwh + rating_kw / 60 + 1e-9:
         breaches.append(f"first stay delivers {delivered_kwh:.3f} kWh")
 
-    runs = len(_sessions(first_stay))
+    runs = len(charging_sessions(first_stay))
     if runs != 1:
         breaches.append(f"first stay charges in {runs} runs")
     return breaches
@@ -457,7 +447,7 @@ class TestOffPeakChargingMode:
         profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY, tariff=ECONOMY_7)
 
         # The second day's session falls on the morning after the period.
-        assert _sessions(profile) == [(_at("2024-06-22 00:30"), _at("2024-06-22 05:30"))]
+        assert charging_sessions(profile) == [(_at("2024-06-22 00:30"), _at("2024-06-22 05:30"))]
 
     def test_delivers_required_energy(self, config):
         """Off-peak charging delivers the required energy."""
@@ -508,7 +498,7 @@ class TestOvernightCharging:
 
         profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY)
 
-        assert _sessions(profile)[0] == (_at("2024-06-21 22:00"), _at("2024-06-22 02:00"))
+        assert charging_sessions(profile)[0] == (_at("2024-06-21 22:00"), _at("2024-06-22 02:00"))
 
     def test_delivers_energy_across_midnight(self):
         """Overnight charging delivers required energy."""
@@ -633,7 +623,7 @@ class TestChargingSessions:
         """The session covers as much of the mode's window as it can, as early as it can."""
         profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY, tariff=tariff)
 
-        assert _sessions(profile)[0] == first_session
+        assert charging_sessions(profile)[0] == first_session
 
     @pytest.mark.parametrize(
         ("config", "tariff", "window_overlap", "departure"),
@@ -657,7 +647,7 @@ class TestChargingSessions:
     def test_measured_configs_finish_by_departure(self, config, tariff, window_overlap, departure):
         """A window too short for the charge is used whole, and the session still ends by departure."""
         profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY, tariff=tariff)
-        start, end = _sessions(profile)[0]
+        start, end = charging_sessions(profile)[0]
         overlap_start, overlap_end = window_overlap
         minute = pd.Timedelta(minutes=1)
 
@@ -671,7 +661,7 @@ class TestChargingSessions:
 
         profile = generate_ev_charging_profile(config, FIRST_DAY, FIRST_DAY)
 
-        assert _sessions(profile)[-1] == (_at("2024-06-21 22:00"), _at("2024-06-22 00:00"))
+        assert charging_sessions(profile)[-1] == (_at("2024-06-21 22:00"), _at("2024-06-22 00:00"))
 
     def test_the_first_morning_holds_no_session_from_the_evening_before(self):
         """A known limitation, not a requirement: no session carries over from the evening before the period.
@@ -693,13 +683,13 @@ class TestOffPeakReadsTheTariff:
     def test_the_first_session_covers_the_most_cheap_minutes_it_can_as_early_as_it_can(self, tariff, first_session):
         profile = generate_ev_charging_profile(OFF_PEAK_EV, *JANUARY_DAYS, tariff=tariff)
 
-        assert _sessions(profile)[0] == first_session
+        assert charging_sessions(profile)[0] == first_session
 
     def test_on_economy_10_no_minute_of_the_session_is_at_the_peak_rate(self):
         """Economy 7's 00:30-07:30 would put 30 of the 300 minutes in Economy 10's peak from 05:00."""
         economy_10 = TariffConfig.economy_10()
         profile = generate_ev_charging_profile(OFF_PEAK_EV, *JANUARY_DAYS, tariff=economy_10)
-        start, end = _sessions(profile)[0]
+        start, end = charging_sessions(profile)[0]
 
         rates = [economy_10.get_rate(minute) for minute in pd.date_range(start, end, freq="1min", inclusive="left")]
 
@@ -720,7 +710,7 @@ class TestOffPeakReadsTheTariff:
 
         profile = generate_ev_charging_profile(config, FIRST_DAY, SECOND_DAY, tariff=TariffConfig.economy_10())
 
-        assert _sessions(profile)[0] == (_at("2024-06-21 10:00"), _at("2024-06-21 12:00"))
+        assert charging_sessions(profile)[0] == (_at("2024-06-21 10:00"), _at("2024-06-21 12:00"))
 
     def test_an_off_peak_ev_with_no_tariff_is_refused_naming_the_mode_and_the_missing_tariff(self):
         with pytest.raises(ConfigurationError) as exc_info:

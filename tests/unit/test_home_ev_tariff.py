@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """§9 row 15 of docs/prds/tariff-coverage-classifier-presets.md at the home: simulate_home charges an off_peak EV in its tariff's cheap minutes, and HomeConfig refuses one with no tariff."""
 
-import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
@@ -11,6 +10,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from tests._ev_sessions import charging_sessions
 from tests._off_peak_ev_on_each_tariff import FIRST_SESSION_ON_EACH_TARIFF, JANUARY_DAYS, OFF_PEAK_EV
 from tests._synthetic_weather import synthetic_tmy, weather_for
 
@@ -32,9 +32,7 @@ def _simulated(home: HomeConfig) -> SimulationResults:
 def _first_charging_session(home: HomeConfig, results: SimulationResults) -> tuple[pd.Timestamp, pd.Timestamp]:
     """The (first minute, minute after the last) of the first unbroken run of minutes whose demand exceeds the household's by more than half the 7 kW charger."""
     ev_kw = results.demand - generate_load_profile(home.load_config, results.window)
-    charging = np.concatenate(([False], ev_kw.to_numpy() > 3.5, [False]))
-    start, stop = np.flatnonzero(np.diff(charging))[:2]
-    return ev_kw.index[start], ev_kw.index[0] + pd.Timedelta(minutes=int(stop))
+    return charging_sessions(ev_kw, above_kw=3.5)[0]
 
 
 @pytest.mark.parametrize(("tariff", "first_session"), FIRST_SESSION_ON_EACH_TARIFF)
