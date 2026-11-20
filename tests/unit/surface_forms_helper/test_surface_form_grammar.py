@@ -214,10 +214,21 @@ def test_a_string_met_again_inside_its_own_evaluation_raises_a_type_error_naming
         "def send(document: 'JSON') -> None: ...\n",
     )
 
-    with pytest.raises(TypeError, match=r"'JSON'"):
+    met_again = r"'JSON', read in the module 'spelledrecursion', is met again inside its own evaluation\b"
+    with pytest.raises(TypeError, match=met_again):
         surface_form(spelledrecursion.store)
-    with pytest.raises(TypeError, match=r"'JSON'"):
+    with pytest.raises(TypeError, match=met_again):
         surface_form(spelledrecursion.send)
+
+
+def test_a_string_met_again_outside_its_own_evaluation_is_spelled_as_what_it_evaluates_to_each_time() -> None:
+    def f(
+        a: dict["Preset", "Preset"], b: "tuple['Preset', 'Preset']", c: Tuple["Preset", "Preset"]
+    ) -> None: ...
+
+    assert surface_form(f) == (
+        "(a: dict[Preset, Preset], b: tuple[Preset, Preset], c: tuple[Preset, Preset]) -> None"
+    )
 
 
 def test_any_is_spelled_by_its_name() -> None:

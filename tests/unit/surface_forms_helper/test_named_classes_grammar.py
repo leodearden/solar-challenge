@@ -21,6 +21,7 @@ from typing import (
     NoReturn,
     Optional,
     Self,
+    Tuple,
     Type,
     Union,
 )
@@ -175,12 +176,23 @@ def test_a_string_met_again_inside_its_own_evaluation_raises_a_type_error_naming
         "def plant(tree: Tree) -> None: ...\n",
     )
 
-    with pytest.raises(TypeError, match=r"'JSON'"):
+    def met_again(source: str) -> str:
+        return rf"'{source}', read in the module 'documents', is met again inside its own evaluation\b"
+
+    with pytest.raises(TypeError, match=met_again("JSON")):
         named_classes(documents.store)
-    with pytest.raises(TypeError, match=r"'JSON'"):
+    with pytest.raises(TypeError, match=met_again("JSON")):
         named_classes(documents.send)
-    with pytest.raises(TypeError, match=r"'Forest'"):
+    with pytest.raises(TypeError, match=met_again("Forest")):
         named_classes(documents.plant)
+
+
+def test_a_string_met_again_outside_its_own_evaluation_names_the_class_it_evaluates_to_each_time() -> None:
+    def f(
+        a: dict["Preset", "Preset"], b: "tuple['Preset', 'Preset']", c: Tuple["Preset", "Preset"]
+    ) -> None: ...
+
+    assert named_classes(f) == {dict, tuple, Preset}
 
 
 def test_a_string_annotation_evaluating_to_an_annotation_no_construct_reads_raises_a_type_error_naming_that_annotation_and_its_type() -> None:

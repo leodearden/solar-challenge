@@ -536,10 +536,10 @@ def _parsed_string(source: str, module_of: _ModuleLookup, enclosing: frozenset[s
         raise module.refusal(source)
     if source in enclosing:
         raise TypeError(
-            f"The string annotation {source!r}, read in the module {module.__name__!r}, is met "
-            "again inside its own evaluation, so it spells a recursive alias, which no rule "
-            "spells: annotate with a type that does not refer to itself, or make the name "
-            "private"
+            f"The string annotation or forward reference {source!r}, read in the module "
+            f"{module.__name__!r}, is met again inside its own evaluation, so it spells a "
+            "recursive alias, which no rule spells: annotate with a type that does not refer "
+            "to itself, or make the name private"
         )
     return _parsed(evaluated_in(source, module), module_of, enclosing | {source})
 
