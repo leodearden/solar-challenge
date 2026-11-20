@@ -155,6 +155,5 @@ def test_dist_loadgroup_spreads_the_tests_of_an_xdist_group_over_workers(pyteste
     workers = sorted({path.read_text() for path in pytester.path.glob("worker-of-case-*")})
     assert workers == ["gw0", "gw1"], (
         f"the four tests of one xdist_group ran on {workers}: a release honours the group again, so lock it, "
-        "drop the caveats in CLAUDE.md's parallel-suite bullet and in tests/integration/test_external_install.py's "
-        "docstring, and assert here that the four share one worker"
+        "drop the caveat in CLAUDE.md's parallel-suite bullet, and assert here that the four share one worker"
     )
