@@ -243,14 +243,18 @@ def _open_section(page: Page, section: str) -> None:
         ) from timeout
 
 
-def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str) -> None:
+@pytest.mark.parametrize(
+    "stretched_section",
+    [pytest.param("General", id="general_closes_in_3s"), pytest.param("Period", id="period_opens_in_3s")],
+)
+def test_opening_a_section_returns_with_the_accordion_at_rest(page: Page, live_server: str, stretched_section: str) -> None:
     """When _open_section returns, Playwright shows only the panel of the section it opened, laid out as tall as its content to within half a pixel, so the next click meets no header or control still moving.
 
-    General's panel is made to take 3 s to close, far longer than the accordion's own transition, so a helper that returns before it has closed is caught by any read that follows within 3 s of the click, not only by one that beats the transition.
+    *stretched_section*'s panel is made to take 3 s to move, far longer than the accordion's own transition. With General's close stretched, a helper that returns while a closing panel is still displayed is caught by `shown`. With Period's open stretched, a helper that returns while the opened panel is still growing is caught by the height read. Either is caught by any read within 3 s of the click, not only by one that beats the transition.
     """
     page.goto(live_server + "/scenarios/builder")
     panels = {section: _panel_of(page, section) for section in _ACCORDION_SECTIONS}
-    page.add_style_tag(content=f"#{_panel_id_of(page, 'General')} {{ transition-duration: 3s !important; }}")
+    page.add_style_tag(content=f"#{_panel_id_of(page, stretched_section)} {{ transition-duration: 3s !important; }}")
     _open_section(page, "Period")
 
     shown = {section for section, panel in panels.items() if panel.is_visible()}
