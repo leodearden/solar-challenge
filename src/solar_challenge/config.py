@@ -1095,9 +1095,10 @@ def _parse_battery_config(
     """Parse a battery: block into a BatteryConfig by BATTERY_BLOCK, its efficiency the round trip BatteryConfig.with_round_trip reads; a null block is no battery.
 
     Raises:
-        ConfigurationError: as _read_component_block refuses a block, or for one setting
+        ConfigurationError: as _read_component_block refuses a block; for one setting
             efficiency beside charge_efficiency or discharge_efficiency, naming the block and
-            each key.
+            each key; or as with_round_trip refuses the efficiency it sets, naming that key by
+            its path.
     """
     if data is None:
         return None
@@ -1107,7 +1108,11 @@ def _parse_battery_config(
         return _built_component(BATTERY_BLOCK, set_keys, block_path)
     _refuse_both_efficiency_forms(block_path, set_keys)
     other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
-    return _built_component(BATTERY_BLOCK, other_keys, block_path).with_round_trip(round_trip)
+    battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
+    try:
+        return battery.with_round_trip(round_trip)
+    except ConfigurationError as refusal:
+        raise ConfigurationError(f"{_child_path(block_path, 'efficiency')}: {refusal}") from refusal
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:

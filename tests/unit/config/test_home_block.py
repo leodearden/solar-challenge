@@ -205,6 +205,22 @@ home:
             "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
         )
 
+    @pytest.mark.parametrize(
+        ("efficiency", "refusal"),
+        [
+            pytest.param(1.5, "must be greater than 0 and at most 1, got 1.5", id="above-one"),
+            pytest.param(0, "must be greater than 0 and at most 1, got 0", id="zero"),
+            pytest.param("high", "must be a finite number, got 'high'", id="word"),
+            pytest.param(True, "must be a finite number, got True", id="boolean"),
+        ],
+    )
+    def test_an_efficiency_out_of_range_or_not_a_number_is_refused_naming_the_key_by_its_path(
+        self, efficiency: object, refusal: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": efficiency})
+        assert str(raised.value) == f"home.battery.efficiency: round-trip efficiency {refusal}"
+
     def test_a_null_efficiency_beside_the_pair_reads_as_absent(self) -> None:
         battery = _parsed_home(
             battery={
