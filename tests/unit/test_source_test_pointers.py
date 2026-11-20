@@ -3,22 +3,23 @@
 
 The scanned files are those git lists outside RECORD_DIRECTORIES, plus review/briefing.yaml. The records, such as the
 PRDs and research notes under docs/ and the rest of review/, name tests as they were when written, so they are left
-unread. The briefing is read only in the rule of each of its conventions, the present-tense claims whose cited test
-enforces them; the rest of its text is left unread as a record.
+unread. The briefing is read only in the rule and the why of each of its conventions, the present-tense claims and
+reasons whose cited tests enforce them. Its comments and the rest of its text, such as its subprojects' key_decisions,
+are left unread, so a key_decision's test citation is checked by running its node-id with pytest.
 
 A pointer is written from the project root: a path rooted at tests/, optionally followed by the ::<Class> and ::<test>
 names of a pytest node-id, as in tests/<file>.py::<Class>::<test>. It is looked for in a file's whole text, comments,
 docstrings and code alike, but a Python file under tests/ is read only in its comments and the strings it writes as
 statements, such as docstrings, since its other strings are its tests' data, such as a throwaway project's files. A file
 that is not UTF-8 text holds none. A briefing that does not parse, or whose conventions are not a sequence of one or
-more entries that each have a scalar rule, is reported rather than read as holding none. The path is looked up in the
-files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its names are looked
-up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not UTF-8 text, or
-that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds, is written
-from that tree's name, as in reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted at tests/. A
-path names its test file up to its .py if the first word joined after the .py is test_<name> or Test<Name>, as in
-test_<name>.py.<Class>, each word after the .py then being a name, up to a hyphen that joins one that is not, as in
-<Class>-based; otherwise it names its file whole, so a backup's test_<name>.py.bak names the backup. A path rooted at
+more entries that each write a rule and a why as text, is reported rather than read as holding none. The path is
+looked up in the files git lists, as a fresh clone would hold them, so a file git ignores is not there to point at. Its
+names are looked up in the syntax tree of the Python file there, so a pointer naming a test in a Python file that is not
+UTF-8 text, or that does not parse, is reported. A path in another repository, or in a throwaway checkout a test builds,
+is written from that tree's name, as in reify/tests/infra/run_all.sh or <project>/tests/<file>.py, so it is not rooted
+at tests/. A path names its test file up to its .py if the first word joined after the .py is test_<name> or Test<Name>,
+as in test_<name>.py.<Class>, each word after the .py then being a name, up to a hyphen that joins one that is not, as
+in <Class>-based; otherwise it names its file whole, so a backup's test_<name>.py.bak names the backup. A path rooted at
 tests/ is read so only where git lists its test file and the tree holds nothing by the whole path, as in
 tests/<file>.py.<Class>, and is then refused, naming the node-id to write. A path not rooted at tests/ whose file ends a
 test file tests/ holds, as test_<name>.py or <dir>/test_<name>.py does, is refused the same way. One whose file ends no
@@ -59,6 +60,8 @@ from tests._working_tree import WorkingTreePaths, working_tree_files, working_tr
 _TESTS = PurePosixPath("tests")
 
 _BRIEFING = PurePosixPath("review/briefing.yaml")
+
+_CONVENTION_KEYS_READ = ("rule", "why")
 
 
 def _is_python_file_under_tests(path: PurePosixPath) -> bool:
@@ -247,11 +250,11 @@ def _passages(checkout: _Checkout, source: PurePosixPath, text: str) -> list[tup
 
     A Python file under tests/ gives each of its comments and each string it writes as a statement, in text order, a
     string statement before a comment on a line they share. They are read from its raw text, so a line counted within a
-    passage is a line of the file. The briefing gives the rule of each of its conventions, as _conventions_rules reads
-    them, and any other file gives its whole text.
+    passage is a line of the file. The briefing gives the rule and the why of each of its conventions, as
+    _conventions_rules_and_whys reads them, and any other file gives its whole text.
     """
     if source == _BRIEFING:
-        return _conventions_rules(source, text)
+        return _conventions_rules_and_whys(source, text)
     if not _is_python_file_under_tests(source):
         return [(1, text)]
     strings = _string_statements(_parsed_source(checkout, source), text)
@@ -301,17 +304,20 @@ def _statements(node: ast.AST) -> Iterator[ast.stmt]:
             yield from _statements(child)
 
 
-def _conventions_rules(source: PurePosixPath, text: str) -> list[tuple[int, str]]:
-    """Return the rule of each conventions entry of the briefing *source*, after its first line's number.
+def _conventions_rules_and_whys(source: PurePosixPath, text: str) -> list[tuple[int, str]]:
+    """Return the rule and the why of each conventions entry of the briefing *source*, after its first line's number.
 
-    The rules are in text order. Each is sliced from *text*, the briefing's text, at the marks of its composed node, as
-    _string_statements slices a string, so a line counted within a passage is a line of the file. A text that does not
-    parse, or whose conventions are not a sequence of one or more entries that each have a scalar rule, raises
-    ValueError, naming the file.
+    They are in text order, whichever of its keys an entry writes first. Each is sliced from *text*, the briefing's
+    text, at the marks of its composed node, as _string_statements slices a string, so a line counted within a passage
+    is a line of the file. A text that does not parse, or whose conventions are not a sequence of one or more entries
+    that each write a rule and a why as text, raises ValueError, naming the file.
     """
     entries = _convention_entries(source, _composed(source, text))
-    rules = [_rule_scalar(source, entry) for entry in entries]
-    return [(rule.start_mark.line + 1, text[rule.start_mark.index : rule.end_mark.index]) for rule in rules]
+    scalars = sorted(
+        (_text_node_of(source, entry, key) for entry in entries for key in _CONVENTION_KEYS_READ),
+        key=lambda scalar: scalar.start_mark.index,
+    )
+    return [(scalar.start_mark.line + 1, text[scalar.start_mark.index : scalar.end_mark.index]) for scalar in scalars]
 
 
 def _composed(source: PurePosixPath, text: str) -> yaml.Node | None:
@@ -332,19 +338,24 @@ def _convention_entries(source: PurePosixPath, document: yaml.Node | None) -> li
     """
     conventions = _value_of(document, "conventions")
     if not isinstance(conventions, yaml.SequenceNode) or not conventions.value:
-        raise ValueError(f"{source} has no conventions sequence with an entry, so it holds no rule to read")
+        keys = " or ".join(_CONVENTION_KEYS_READ)
+        raise ValueError(f"{source} has no conventions sequence with an entry, so it holds no {keys} to read")
     return conventions.value
 
 
-def _rule_scalar(source: PurePosixPath, entry: yaml.Node) -> yaml.ScalarNode:
-    """Return the scalar node of the rule of the conventions *entry* of the briefing *source*.
+_STRING_TAG = "tag:yaml.org,2002:str"
 
-    An entry that is no mapping, or has no scalar rule, raises ValueError, naming the file and the entry's line.
+
+def _text_node_of(source: PurePosixPath, entry: yaml.Node, key: str) -> yaml.ScalarNode:
+    """Return the scalar node of the text the conventions *entry* of the briefing *source* maps *key* to.
+
+    An entry that is no mapping, or maps *key* to no string, raises ValueError, naming the file, the entry's line and
+    the key. A value left empty or written as a number is no string, nor is a list.
     """
-    rule = _value_of(entry, "rule")
-    if not isinstance(rule, yaml.ScalarNode):
-        raise ValueError(f"{source}:{entry.start_mark.line + 1}: a conventions entry has no scalar rule to read")
-    return rule
+    scalar = _value_of(entry, key)
+    if not isinstance(scalar, yaml.ScalarNode) or scalar.tag != _STRING_TAG:
+        raise ValueError(f"{source}:{entry.start_mark.line + 1}: a conventions entry has no text {key} to read")
+    return scalar
 
 
 def _value_of(node: yaml.Node | None, key: str) -> yaml.Node | None:
@@ -641,7 +652,7 @@ def test_every_pointer_from_the_scanned_files_into_tests_resolves(project_root: 
     records = ", ".join(f"{directory}/" for directory in RECORD_DIRECTORIES)
     assert pointers, (
         f"found no pointer into tests/ in any file git lists outside the records ({records}), nor in the briefing's"
-        " conventions rules, so this gate would pass vacuously; fix the listing or the grammar"
+        " conventions rules and whys, so this gate would pass vacuously; fix the listing or the grammar"
     )
 
     dangling = _dangling(checkout, pointers)
@@ -1107,7 +1118,7 @@ def test_reads_a_file_under_tests_that_is_not_python_whole(project: Path) -> Non
     ]
 
 
-def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None:
+def test_reads_the_briefing_only_in_its_conventions_rules_and_whys(project: Path) -> None:
     briefing = write_file(
         project,
         "review/briefing.yaml",
@@ -1117,7 +1128,7 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         '  - rule: "A rule pinned by tests/unit/test_absent_c.py and by tests/unit/test_pointed_at.py::test_top"\n'
         "    why: >\n"
         "      A why naming tests/unit/test_absent_d.py and a placeholder,\n"
-        "      tests/fixtures/databases/schema_v<N>.sql.\n"
+        "      schema_v<N>.sql in tests/unit.\n"
         "  - rule: >\n"
         "      A folded rule\n"
         "      pinned by test_top and by\n"
@@ -1134,9 +1145,31 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
     assert _dangling(checkout, _pointers(checkout, [briefing])) == [
         "review/briefing.yaml:4: tests/unit/test_absent_c.py:"
         " tests/unit/test_absent_c.py does not exist, or git ignores it",
+        "review/briefing.yaml:6: tests/unit/test_absent_d.py:"
+        " tests/unit/test_absent_d.py does not exist, or git ignores it",
         "review/briefing.yaml:10: test_top: " + _named_without_its_path(["tests/unit/test_pointed_at.py::test_top"]),
         "review/briefing.yaml:11: tests/unit/test_absent_e.py:"
         " tests/unit/test_absent_e.py does not exist, or git ignores it",
+        "review/briefing.yaml:12: test_member: "
+        + _named_without_its_path(["tests/unit/test_pointed_at.py::TestGroup::test_member"]),
+    ]
+
+
+def test_reads_a_conventions_entry_in_text_order_whichever_of_its_keys_it_writes_first(project: Path) -> None:
+    briefing = write_file(
+        project,
+        "review/briefing.yaml",
+        "conventions:\n"
+        '  - why: "Pinned by tests/unit/test_absent_a.py."\n'
+        '    rule: "Pinned by tests/unit/test_absent_b.py."\n',
+    )
+    checkout = _Checkout(project)
+
+    assert _dangling(checkout, _pointers(checkout, [briefing])) == [
+        "review/briefing.yaml:2: tests/unit/test_absent_a.py:"
+        " tests/unit/test_absent_a.py does not exist, or git ignores it",
+        "review/briefing.yaml:3: tests/unit/test_absent_b.py:"
+        " tests/unit/test_absent_b.py does not exist, or git ignores it",
     ]
 
 
@@ -1146,9 +1179,38 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         ("project: pkg\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions: none\n", "review/briefing.yaml has no conventions sequence"),
         ("conventions: []\n", "review/briefing.yaml has no conventions sequence"),
-        ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
-        ("conventions:\n  - rule: [a, b]\n", "review/briefing.yaml:2: a conventions entry has no scalar rule"),
-        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:3: a conventions entry has no scalar rule"),
+        ("conventions:\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no text rule"),
+        (
+            "conventions:\n  - rule: [a, b]\n    why: x\n",
+            "review/briefing.yaml:2: a conventions entry has no text rule",
+        ),
+        (
+            "conventions:\n  - rule:\n    why: x\n",
+            "review/briefing.yaml:2: a conventions entry has no text rule",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: b\n  - why: x\n",
+            "review/briefing.yaml:4: a conventions entry has no text rule",
+        ),
+        ("conventions:\n  - rule: a\n", "review/briefing.yaml:2: a conventions entry has no text why"),
+        (
+            "conventions:\n  - rule: a\n    why: [a, b]\n",
+            "review/briefing.yaml:2: a conventions entry has no text why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why:\n",
+            "review/briefing.yaml:2: a conventions entry has no text why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: 1\n",
+            "review/briefing.yaml:2: a conventions entry has no text why",
+        ),
+        (
+            "conventions:\n  - rule: a\n    why: b\n  - rule: c\n",
+            "review/briefing.yaml:4: a conventions entry has no text why",
+        ),
+        ("conventions:\n  - x: 1\n", "review/briefing.yaml:2: a conventions entry has no text rule"),
+        ("conventions:\n  - rule: a\n  - why: x\n", "review/briefing.yaml:2: a conventions entry has no text why"),
         ("conventions: [rule\n", "review/briefing.yaml does not parse"),
     ],
     ids=[
@@ -1157,11 +1219,21 @@ def test_reads_the_briefing_only_in_its_conventions_rules(project: Path) -> None
         "empty-conventions",
         "entry-without-a-rule",
         "rule-not-text",
+        "rule-left-empty",
         "second-entry-without-a-rule",
+        "entry-without-a-why",
+        "why-not-text",
+        "why-left-empty",
+        "why-a-number",
+        "second-entry-without-a-why",
+        "entry-without-a-rule-or-a-why",
+        "first-entry-without-a-why-second-without-a-rule",
         "does-not-parse",
     ],
 )
-def test_refuses_a_briefing_whose_conventions_rules_cannot_be_read(project: Path, text: str, refusal: str) -> None:
+def test_refuses_a_briefing_whose_conventions_rules_or_whys_cannot_be_read(
+    project: Path, text: str, refusal: str
+) -> None:
     briefing = write_file(project, "review/briefing.yaml", text)
     checkout = _Checkout(project)
 
