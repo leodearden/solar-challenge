@@ -197,7 +197,7 @@ def test_the_apps_run_store_keeps_its_runs_in_the_apps_database(tmp_path: Path) 
 
 
 def test_the_app_serves_its_job_progress_streams_under_the_default_policy(tmp_path: Path) -> None:
-    """Two default policies compare equal: each one's clock and sleep are the same builtins, time.monotonic and time.sleep."""
+    """Two default policies compare equal: each one's clock is the same builtin, time.monotonic."""
     app = build_test_app(tmp_path)
 
     with app.app_context():
