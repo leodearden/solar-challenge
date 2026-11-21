@@ -7,6 +7,7 @@ from typing import Any, Callable
 import pytest
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.community import CommunityConfig
 from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -17,10 +18,13 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     constructed,
+    parse_community_config,
     parse_home_block,
     parse_location_block,
+    parse_seg_rate,
     parse_tariff_config,
 )
+from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig, TariffPeriod
 from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 
@@ -233,7 +237,61 @@ _TARIFF_ROWS = [
 ]
 
 
-@pytest.mark.parametrize(("read", "label", "construct"), [*_COMPONENT_BLOCK_ROWS, *_HOME_ROWS, *_TARIFF_ROWS])
+def _community(block: dict[str, Any]) -> Callable[[], object]:
+    """Read *block* as a community: block at "community", the path load_community_config reads it at."""
+    return lambda: parse_community_config(block, block_path="community")
+
+
+_SEG_AND_COMMUNITY_ROWS = [
+    pytest.param(
+        lambda: parse_seg_rate({"rate_pence_per_kwh": True}),
+        "seg",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=True),
+        id="seg-rate-boolean",
+    ),
+    pytest.param(
+        lambda: parse_seg_rate({"rate_pence_per_kwh": -1}),
+        "seg",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=-1),
+        id="seg-rate-negative",
+    ),
+    pytest.param(
+        lambda: parse_seg_rate({"rate_pence_per_kwh": True}, block_path="scenario.seg"),
+        "scenario.seg",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=True),
+        id="scenario-seg-rate-boolean",
+    ),
+    pytest.param(
+        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": None}}),
+        "community.billing.seg_rate_pence_per_kwh",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=None),
+        id="billing-scalar-rate-null",
+    ),
+    pytest.param(
+        _community({"sharing_mode": "p2p", "billing": {"seg_rate_pence_per_kwh": True}}),
+        "community.billing.seg_rate_pence_per_kwh",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=True),
+        id="billing-scalar-rate-boolean",
+    ),
+    pytest.param(
+        _community({"sharing_mode": "p2p", "billing": {"seg": {"rate_pence_per_kwh": True}}}),
+        "community.billing.seg",
+        lambda: SEGTariff(name="", rate_pence_per_kwh=True),
+        id="billing-seg-rate-boolean",
+    ),
+    pytest.param(
+        _community({"sharing_mode": "p3"}),
+        "community",
+        lambda: CommunityConfig(sharing_mode="p3"),
+        id="community-sharing-mode-unknown",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("read", "label", "construct"),
+    [*_COMPONENT_BLOCK_ROWS, *_HOME_ROWS, *_TARIFF_ROWS, *_SEG_AND_COMMUNITY_ROWS],
+)
 def test_a_value_its_blocks_type_refuses_is_refused_prefixed_by_the_blocks_path(
     read: Callable[[], object], label: str, construct: Callable[[], object]
 ) -> None:
