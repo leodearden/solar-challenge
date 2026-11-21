@@ -1274,6 +1274,24 @@ def test_an_upward_grammar_import_and_a_runner_import_are_reported_with_their_fi
         ),
         pytest.param(
             "fleet_distribution.py",
+            "from solar_challenge import simulate_community\n",
+            [("simulate_community", 1, _GrammarRule.NO_RUNNER)],
+            id="a-runner-through-the-package",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from . import simulate_pv_output as pv\n",
+            [("simulate_pv_output", 1, _GrammarRule.NO_RUNNER)],
+            id="a-runner-through-the-package-relatively-named-by-its-name-not-its-alias",
+        ),
+        pytest.param(
+            "fleet_distribution.py",
+            "from solar_challenge import home\n",
+            [],
+            id="a-module-through-the-package-is-no-runner",
+        ),
+        pytest.param(
+            "fleet_distribution.py",
             "from solar_challenge.fleet import fleet_home_seed\n",
             [],
             id="not-a-runner",
@@ -1295,12 +1313,28 @@ def test_an_upward_grammar_import_and_a_runner_import_are_reported_with_their_fi
 def test_the_scan_finds_grammar_imports_against_the_direction_or_of_a_runner_at_any_scope(
     tmp_path: Path, module: str, source: str, expected: list[tuple[str, int, _GrammarRule]]
 ) -> None:
-    """The scan finds, at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package, an import against the grammar's direction, from a leaf or a grammar module of a module of a stratum above its own, and a grammar module's import of a simulate_* name from a module of the package, named by the name it imports, not its alias. It finds none of a module below the importer's stratum or merely named config_tools, none of a name that is no runner, and none of a runner that a module outside the grammar imports or that a module outside the package defines."""
+    """The scan finds, at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package, an import against the grammar's direction, from a leaf or a grammar module of a module of a stratum above its own, and a grammar module's import of a simulate_* name from a module of the package, or through the package itself, named by the name it imports, not its alias. It finds none of a module below the importer's stratum or merely named config_tools, none of a name that is no runner, and none of a runner that a module outside the grammar imports or that a module outside the package defines."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
     found = _grammar_layering_violations(_import_sites(src_dir))
 
     assert [(violation.subject, violation.line, violation.rule) for violation in found] == expected
+
+
+def test_a_runner_imported_through_the_package_is_reported_as_imported_from_the_package(
+    tmp_path: Path,
+) -> None:
+    """A grammar module's import of a runner through the package root is reported as an import of that name from the package, never of a module solar_challenge.simulate_community, which does not exist."""
+    src_dir = _write_package(
+        tmp_path / "src", {"fleet_distribution.py": "from solar_challenge import simulate_community\n"}
+    )
+
+    found = _grammar_layering_violations(_import_sites(src_dir))
+
+    assert [str(violation) for violation in found] == [
+        "src/solar_challenge/fleet_distribution.py:1: solar_challenge.fleet_distribution imports "
+        f"simulate_community from solar_challenge ({_GrammarRule.NO_RUNNER.value})"
+    ]
 
 
 #: A package of the three grammar modules, scenario_blocks defining parse_home_block and config
