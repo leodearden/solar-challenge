@@ -32,6 +32,7 @@ from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_home_block,
 )
+from tests._construction_refusals import prefixed_construction_refusal
 from tests._non_booleans import NON_BOOLEANS
 from tests._repository_paths import SCENARIOS_DIR
 
@@ -571,7 +572,10 @@ class TestDispatchStrategyParsing:
     def test_a_window_its_variant_refuses_is_refused_as_constructing_the_variant_refuses_it(self) -> None:
         block = {"strategy_type": "tou_optimized", "peak_hours": [[20, 16]]}
 
-        assert _refusal(lambda: _parsed_strategy(block)) == _refusal(lambda: TOUOptimizedStrategyConfig(((20, 16),)))
+        assert _refusal(lambda: _parsed_strategy(block)) == (
+            ConfigurationError,
+            prefixed_construction_refusal(_DISPATCH_STRATEGY_PATH, lambda: TOUOptimizedStrategyConfig(((20, 16),))),
+        )
 
 
 class TestLoadHomeConfig:

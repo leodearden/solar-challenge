@@ -223,16 +223,11 @@ def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
         raise ConfigurationError(f"Missing required keys in {block_label(block_path)}: {missing}")
 
 
-def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
-    """The config *config_type* builds from *values*, the block at *block_path*'s.
-
-    Raises:
-        ConfigurationError: naming the block, for a value of a type *config_type* cannot use,
-            which building it refuses with a TypeError.
-    """
+def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -> _Built:
+    """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
-        return config_type(**values)
-    except TypeError as refusal:
+        return cls(**values)
+    except (ConfigurationError, TypeError) as refusal:
         raise ConfigurationError(f"{block_label(block_path)}: {refusal}") from refusal
 
 
@@ -246,8 +241,8 @@ def _built_component(
 
     Raises:
         ConfigurationError: naming by its path each key the block leaves out that has neither a
-            declared default nor a when-omitted value; or naming the block, for a value of a
-            type its dataclass cannot use, which building it refuses with a TypeError.
+            declared default nor a when-omitted value; or as its dataclass refuses the values,
+            prefixed by the block's path.
     """
     refuse_missing_keys(
         block_path,
@@ -258,7 +253,7 @@ def _built_component(
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    return _built_from(block.config_type, {**block.when_omitted, **set_keys, **sub_block_configs}, block_path)
+    return constructed(block_path, block.config_type, **{**block.when_omitted, **set_keys, **sub_block_configs})
 
 
 def _read_component_block(
@@ -268,8 +263,8 @@ def _read_component_block(
 
     A key outside the table's keys is refused, null or not; a null key reads as absent; an
     omitted key takes the table's when-omitted value, else the dataclass's declared default; a
-    key with neither is refused by its path; and a value of a type the dataclass cannot use is
-    refused naming the block.
+    key with neither is refused by its path; and a value the dataclass refuses is refused as it
+    refuses it, prefixed by the block's path.
     """
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 
@@ -440,8 +435,8 @@ def parse_dispatch_strategy_config(
         ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
             or names no variant, naming its path, its value and the variants' tags; a key the
             variant does not read, unless it is null and another strategy reads it; a key the
-            variant needs, left out or null, naming its path; a value of a type the variant
-            cannot use, naming the block; and a value the variant refuses, as it refuses it.
+            variant needs, left out or null, naming its path; and a value the variant refuses,
+            as it refuses it, prefixed by the block's path.
     """
     if data is None:
         return None
@@ -462,7 +457,8 @@ def parse_dispatch_strategy_config(
         ],
     )
     values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
-    return _built_from(variant, values, block_path)
+    build_variant: Callable[..., DispatchStrategyConfig] = variant
+    return constructed(block_path, build_variant, **values)
 
 
 def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]:
