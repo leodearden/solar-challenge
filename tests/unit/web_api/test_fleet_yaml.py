@@ -498,7 +498,10 @@ class TestFleetPresetEndpoint:
             ),
             pytest.param(
                 "bristol-phase1-flex",
-                {"battery": {"capacity_kwh": 5.0}},
+                {
+                    "battery": {"capacity_kwh": 5.0},
+                    "tariff": {"type": "economy_7", "peak_rate": 0.25, "off_peak_rate": 0.09},
+                },
                 (
                     "fleet_distribution.battery.max_charge_kw",
                     "fleet_distribution.battery.max_discharge_kw",

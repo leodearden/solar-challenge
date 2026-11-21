@@ -14,6 +14,7 @@ from solar_challenge.config import parse_dispatch_strategy_config, parse_tariff_
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_writer import location_block
+from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
@@ -676,6 +677,32 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=("tariff.off_peak_start",)
         )
 
+    def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:
+        """An Economy 10 tariff that sets no rate loads the rates the loaders charge it, its PRESET_RATES row."""
+        imported = fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": {"type": "economy_10"}})
+
+        assert imported.form["tariff"] == {
+            "type": "economy_10",
+            "peak_rate": PRESET_RATES["economy_10"].peak_rate,
+            "off_peak_rate": PRESET_RATES["economy_10"].off_peak_rate,
+        }
+        assert imported.not_loaded == ()
+
+    def test_an_economy_tariff_that_sets_one_rate_loads_it_and_the_preset_rate_for_the_other(
+        self,
+    ) -> None:
+        """An Economy 7 tariff that sets only its off-peak rate loads that rate, and its PRESET_RATES row's peak rate."""
+        imported = fleet_form_from_scenario(
+            {**_FLEET_SCENARIO, "tariff": {"type": "economy_7", "off_peak_rate": 0.1}}
+        )
+
+        assert imported.form["tariff"] == {
+            "type": "economy_7",
+            "peak_rate": PRESET_RATES["economy_7"].peak_rate,
+            "off_peak_rate": 0.1,
+        }
+        assert imported.not_loaded == ()
+
     @pytest.mark.parametrize(
         ("document", "reason"),
         [
@@ -739,11 +766,6 @@ class TestFleetFormFromScenario:
                 },
                 "tariff.type",
                 id="custom-tariff",
-            ),
-            pytest.param(
-                {**_FLEET_SCENARIO, "tariff": {"type": "economy_7", "off_peak_rate": 0.1}},
-                "tariff.peak_rate",
-                id="economy-7-without-a-peak-rate",
             ),
             pytest.param(
                 _with_fleet_distribution(
