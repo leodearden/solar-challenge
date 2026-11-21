@@ -38,7 +38,7 @@ config, so no module that scenario_blocks imports reaches them either.
 """
 
 import ast
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import astuple, dataclass
 from enum import Enum
 from pathlib import Path
@@ -518,12 +518,18 @@ def test_the_scan_reads_the_imports_of_every_grammar_module(
     )
 
 
+def _write_files(root: Path, files: Mapping[str, str]) -> Path:
+    """Write each of *files*, keyed by its path under *root*, and return *root*."""
+    for relative_path, source in files.items():
+        file = root / relative_path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(source, encoding="utf-8")
+    return root
+
+
 def _write_package(src_dir: Path, modules: dict[str, str]) -> Path:
     """Write each of *modules*, keyed by its path in the package, under src_dir/solar_challenge, and return *src_dir*."""
-    for relative_path, source in modules.items():
-        module = src_dir / _PACKAGE / relative_path
-        module.parent.mkdir(parents=True, exist_ok=True)
-        module.write_text(source, encoding="utf-8")
+    _write_files(src_dir / _PACKAGE, modules)
     return src_dir
 
 
@@ -1088,3 +1094,150 @@ def test_the_scan_finds_grammar_imports_against_the_direction_or_of_a_runner_at_
     found = _grammar_layering_violations(_import_sites(src_dir))
 
     assert [(violation.subject, violation.line, violation.rule) for violation in found] == expected
+
+
+#: A package of the three grammar modules, scenario_blocks defining parse_home_block and config
+#: importing it, with an empty tests package: the root the one-spelling tests seed.
+_ONE_SPELLING_ROOT: Mapping[str, str] = {
+    "src/solar_challenge/__init__.py": "",
+    "src/solar_challenge/scenario_blocks.py": "def parse_home_block(data):\n    return data\n",
+    "src/solar_challenge/fleet_distribution.py": "",
+    "src/solar_challenge/config.py": "from solar_challenge.scenario_blocks import parse_home_block\n",
+    "tests/__init__.py": "",
+    "tests/unit/__init__.py": "",
+}
+
+
+def _one_spelling_violations_under(root: Path) -> list[_GrammarViolation]:
+    """Return the one-spelling violations of the src/solar_challenge and tests trees under *root*."""
+    return _one_spelling_violations(_src_and_test_import_sites(root), root / "src")
+
+
+def test_a_grammar_name_imported_from_a_module_that_does_not_define_it_is_reported_naming_its_definer(
+    tmp_path: Path,
+) -> None:
+    """A seeded test module importing parse_home_block from config, which only imports it, is reported by its file, line and rule, naming the module that defines it; config's own import from scenario_blocks is not: the real-tree test passes for a scan that finds nothing."""
+    root = _write_files(
+        tmp_path,
+        {
+            **_ONE_SPELLING_ROOT,
+            "tests/unit/test_homes.py": "import json\nfrom solar_challenge.config import parse_home_block\n",
+        },
+    )
+
+    found = _one_spelling_violations_under(root)
+
+    assert [(violation.path.as_posix(), violation.line, violation.rule) for violation in found] == [
+        ("tests/unit/test_homes.py", 2, _GrammarRule.ONE_SPELLING)
+    ]
+    report = str(found[0])
+    assert "parse_home_block" in report
+    assert "solar_challenge.config" in report
+    assert "solar_challenge.scenario_blocks" in report
+
+
+def test_a_grammar_name_no_module_defines_is_reported_saying_so(tmp_path: Path) -> None:
+    """A name imported from a grammar module that no module of the package defines is reported saying so, not naming a definer."""
+    root = _write_files(
+        tmp_path,
+        {**_ONE_SPELLING_ROOT, "tests/unit/test_missing.py": "from solar_challenge.config import Missing\n"},
+    )
+
+    [violation] = _one_spelling_violations_under(root)
+
+    assert violation.rule is _GrammarRule.ONE_SPELLING
+    assert "Missing" in str(violation)
+    assert "no module of the package defines it" in str(violation)
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "src/solar_challenge/fleet_distribution.py": "class _DistributionSampler:\n    pass\n",
+                "tests/unit/test_sampler.py": "from solar_challenge.fleet_distribution import _DistributionSampler\n",
+            },
+            [("tests/unit/test_sampler.py", 1, _GrammarRule.NO_PRIVATE_NAME)],
+            id="an-underscore-name-its-module-defines-in-a-test",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/scenario_blocks.py": (
+                    "def parse_home_block(data):\n    return data\n\n\ndef _read_name(block):\n    return block\n"
+                ),
+                "src/solar_challenge/fleet_distribution.py": (
+                    "def read(block):\n"
+                    "    from solar_challenge.scenario_blocks import _read_name\n"
+                    "    return _read_name(block)\n"
+                ),
+            },
+            [("src/solar_challenge/fleet_distribution.py", 2, _GrammarRule.NO_PRIVATE_NAME)],
+            id="an-underscore-name-in-a-function-of-src",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/cli/__init__.py": "",
+                "src/solar_challenge/cli/home.py": "from ..config import parse_home_block\n",
+            },
+            [("src/solar_challenge/cli/home.py", 1, _GrammarRule.ONE_SPELLING)],
+            id="relative-from-a-subpackage",
+        ),
+        pytest.param(
+            {"tests/unit/test_missing.py": "from solar_challenge.config import Missing\n"},
+            [("tests/unit/test_missing.py", 1, _GrammarRule.ONE_SPELLING)],
+            id="a-name-no-module-defines",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/config.py": "def load_config(path):\n    return path\n",
+                "tests/unit/test_load.py": "from solar_challenge.config import load_config\n",
+            },
+            [],
+            id="a-name-its-module-defines",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/config.py": (
+                    "try:\n"
+                    "    import yaml\n"
+                    "except ImportError:\n"
+                    "    LOADER = None\n"
+                    "else:\n"
+                    "    LOADER = yaml.SafeLoader\n"
+                    "finally:\n"
+                    "    READ_MODE: str = 'r'\n"
+                    "\n"
+                    "if LOADER is not None:\n"
+                    "    def load_config(path):\n"
+                    "        return path\n"
+                ),
+                "tests/unit/test_load.py": "from solar_challenge.config import LOADER, READ_MODE, load_config\n",
+            },
+            [],
+            id="names-defined-in-a-top-level-if-or-try",
+        ),
+        pytest.param(
+            {"tests/unit/test_config_module.py": "from solar_challenge import config\n"},
+            [],
+            id="a-module-not-a-name",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/home.py": "from solar_challenge.load import HomeConfig\n",
+                "tests/unit/test_home.py": "from solar_challenge.home import HomeConfig\n",
+            },
+            [],
+            id="not-a-grammar-module",
+        ),
+    ],
+)
+def test_the_one_spelling_scan_reads_src_and_tests_at_any_scope(
+    tmp_path: Path, files: dict[str, str], expected: list[tuple[str, int, _GrammarRule]]
+) -> None:
+    """The scan reads the from-imports of src and tests at any scope, a relative one resolved, and reports an underscore name imported from a grammar module, even one it defines, and a public name imported from a grammar module that does not define it, at top level or in a top-level if or try. It reports no import of a module and none from a module outside the grammar."""
+    root = _write_files(tmp_path, {**_ONE_SPELLING_ROOT, **files})
+
+    found = _one_spelling_violations_under(root)
+
+    assert [(violation.path.as_posix(), violation.line, violation.rule) for violation in found] == expected
