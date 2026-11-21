@@ -14,8 +14,15 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
+from solar_challenge.ev import EVConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import EventWindow
+from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_tariff_config
+from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
+from tests._construction_refusals import prefixed_construction_refusal
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
@@ -361,7 +368,7 @@ home:
         [
             pytest.param(
                 "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 2.5}\n",
-                "household_occupants must be a whole number, got 2.5",
+                "home.load: household_occupants must be a whole number, got 2.5",
                 id="home-occupants-not-whole",
             ),
             pytest.param(
@@ -378,7 +385,7 @@ home:
             ),
             pytest.param(
                 "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
-                "household_occupants must be between 1 and 10, got 11",
+                "load: household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
             ),
             pytest.param(
@@ -412,7 +419,7 @@ home:
                 "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
                 "  homes:\n"
                 "    - load: {household_occupants: 2.5}\n",
-                "household_occupants must be a whole number, got 2.5",
+                "scenario.homes[0].load: household_occupants must be a whole number, got 2.5",
                 id="scenario",
             ),
             pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),
@@ -425,6 +432,70 @@ home:
 
         assert result.exit_code == 1
         assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        ("document", "label", "construct"),
+        [
+            pytest.param(
+                "home:\n  pv: {capacity_kw: true}\n",
+                "home.pv",
+                lambda: PVConfig(capacity_kw=True),
+                id="home-pv-capacity-boolean",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\n  ev: {charger_type: 7kW, arrival_hour: 18.9}\n",
+                "home.ev",
+                lambda: EVConfig(charger_type="7kW", arrival_hour=18.9),
+                id="home-ev-arrival-not-whole",
+            ),
+            pytest.param(
+                "homes:\n  - {}\n  - pv: {capacity_kw: true}\n",
+                "homes[1].pv",
+                lambda: PVConfig(capacity_kw=True),
+                id="homes-entry-pv-capacity-boolean",
+            ),
+            pytest.param(
+                "pv: {capacity_kw: 4.0, azimuth: south}\n",
+                "pv",
+                lambda: PVConfig(capacity_kw=4.0, azimuth="south"),
+                id="flat-home-pv-azimuth-word",
+            ),
+            pytest.param(
+                "location: {latitude: 51.45, longitude: -2.58, altitude: .nan}\n"
+                "home:\n  pv: {capacity_kw: 4.0}\n",
+                "location",
+                lambda: Location(latitude=51.45, longitude=-2.58, altitude=float("nan")),
+                id="location-altitude-nan",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\n  tariff: {type: flat_rate, rate_per_kwh: true}\n",
+                "home.tariff",
+                lambda: TariffConfig.flat_rate(rate_per_kwh=True),
+                id="home-flat-rate-boolean",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\nfinance: {standing_charge_pence_per_day: 60.0, vat_rate: true}\n",
+                "finance",
+                lambda: FinanceConfig(standing_charge_pence_per_day=60.0, vat_rate=True),
+                id="finance-vat-rate-boolean",
+            ),
+            pytest.param(
+                yaml.safe_dump(_flex_document_with_infinite_event_hours()),
+                "finance.grid_services_events.event_windows[0]",
+                lambda: EventWindow(
+                    **_flex_document_with_infinite_event_hours()["finance"]["grid_services_events"]["event_windows"][0]
+                ),
+                id="flex-fleet-event-hours-infinite",
+            ),
+        ],
+    )
+    def test_a_value_its_blocks_type_refuses_is_an_error_row_prefixed_by_the_blocks_path(
+        self, tmp_path: Path, document: str, label: str, construct: Callable[[], object]
+    ) -> None:
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        assert f"ERROR {prefixed_construction_refusal(label, construct)}" in table_text(result.stdout)
 
     @pytest.mark.parametrize(
         ("document", "refusal"),

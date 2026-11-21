@@ -32,6 +32,7 @@ from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_home_block,
 )
+from tests._construction_refusals import prefixed_construction_refusal
 from tests._non_booleans import NON_BOOLEANS
 from tests._repository_paths import SCENARIOS_DIR
 
@@ -309,8 +310,9 @@ class TestOmittedAndNullKeys:
 
     An omitted key takes the dataclass's declared default, or the table's when-omitted value where
     the dataclass declares none, and a key written as null reads as absent; tests/unit/config/test_component_blocks.py
-    sweeps every key of every table. One null is a kept gap, owned by a task: a null grid_charging
-    target_soc_fraction is refused by GridChargeConfig itself (task 866).
+    sweeps every key of every table. One null is refused rather than read as absent: a null
+    grid_charging target_soc_fraction reaches GridChargeConfig, which refuses it, prefixed by the
+    block's path.
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:
@@ -390,11 +392,11 @@ class TestOmittedAndNullKeys:
             parse_home_block({"dispatch_strategy": "tou_optimised"}, Location.bristol(), block_path="homes[0]")
 
     def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
-        """Kept gap, task 866's: the null reaches GridChargeConfig, whose refusal names its key but not its block."""
         grid_charging = {"target_soc_fraction": None}
 
-        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == _refusal(
-            lambda: GridChargeConfig(**grid_charging)
+        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == (
+            ConfigurationError,
+            prefixed_construction_refusal("home.battery.grid_charging", lambda: GridChargeConfig(**grid_charging)),
         )
 
     def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:
@@ -571,7 +573,10 @@ class TestDispatchStrategyParsing:
     def test_a_window_its_variant_refuses_is_refused_as_constructing_the_variant_refuses_it(self) -> None:
         block = {"strategy_type": "tou_optimized", "peak_hours": [[20, 16]]}
 
-        assert _refusal(lambda: _parsed_strategy(block)) == _refusal(lambda: TOUOptimizedStrategyConfig(((20, 16),)))
+        assert _refusal(lambda: _parsed_strategy(block)) == (
+            ConfigurationError,
+            prefixed_construction_refusal(_DISPATCH_STRATEGY_PATH, lambda: TOUOptimizedStrategyConfig(((20, 16),))),
+        )
 
 
 class TestLoadHomeConfig:

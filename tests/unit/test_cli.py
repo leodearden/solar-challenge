@@ -419,7 +419,7 @@ class TestErrorHandling:
         [
             pytest.param(
                 {"loan_term_years": float("inf")},
-                "loan_term_years must be a finite number, got inf",
+                "finance: loan_term_years must be a finite number, got inf",
                 id="infinite-loan-term",
             ),
             pytest.param(
@@ -431,7 +431,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "months[0] must be between 1 and 12, got 13",
+                "finance.grid_services_events.event_windows[0]: months[0] must be between 1 and 12, got 13",
                 id="event-window-month-13",
             ),
             pytest.param(
@@ -449,7 +449,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "event_hours must be a finite number, got inf",
+                "finance.grid_services_events.event_windows[0]: event_hours must be a finite number, got inf",
                 id="event-window-infinite-event-hours",
             ),
         ],
@@ -469,7 +469,7 @@ class TestErrorHandling:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A finance command on a scenario whose finance block a type refuses exits 1, printing nothing on stdout and one configuration-error line on stderr: the refusal as the refusing type words it. It raises nothing."""
+        """A finance command on a scenario whose finance block a type refuses exits 1, printing nothing on stdout and one configuration-error line on stderr: the refusal as the refusing type words it, prefixed by the refused block's path. It raises nothing."""
         monkeypatch.chdir(tmp_path)
         self._write_one_home_scenario(finance={"standing_charge_pence_per_day": 28.0, **finance})
 

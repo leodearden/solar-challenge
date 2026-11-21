@@ -5,7 +5,6 @@ The component tables it reads blocks by also carry each key's fleet row and each
 writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
 """
 
-import math
 from dataclasses import MISSING, asdict, dataclass, fields
 from enum import Enum
 from types import MappingProxyType
@@ -35,7 +34,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig, TariffPeriod
 
 
 #: The value a fleet gives every home for a SETTING or FLAG key: a SETTING's as written or as its
@@ -223,16 +222,20 @@ def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
         raise ConfigurationError(f"Missing required keys in {block_label(block_path)}: {missing}")
 
 
-def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
-    """The config *config_type* builds from *values*, the block at *block_path*'s.
+def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
+    """The keys a block building *config_type* must set: its init fields with neither a default nor a default factory, in field order."""
+    return tuple(
+        each.name
+        for each in fields(config_type)
+        if each.init and each.default is MISSING and each.default_factory is MISSING
+    )
 
-    Raises:
-        ConfigurationError: naming the block, for a value of a type *config_type* cannot use,
-            which building it refuses with a TypeError.
-    """
+
+def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -> _Built:
+    """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
-        return config_type(**values)
-    except TypeError as refusal:
+        return cls(**values)
+    except (ConfigurationError, TypeError) as refusal:
         raise ConfigurationError(f"{block_label(block_path)}: {refusal}") from refusal
 
 
@@ -246,8 +249,8 @@ def _built_component(
 
     Raises:
         ConfigurationError: naming by its path each key the block leaves out that has neither a
-            declared default nor a when-omitted value; or naming the block, for a value of a
-            type its dataclass cannot use, which building it refuses with a TypeError.
+            declared default nor a when-omitted value; or as its dataclass refuses the values,
+            prefixed by the block's path.
     """
     refuse_missing_keys(
         block_path,
@@ -258,7 +261,7 @@ def _built_component(
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    return _built_from(block.config_type, {**block.when_omitted, **set_keys, **sub_block_configs}, block_path)
+    return constructed(block_path, block.config_type, **{**block.when_omitted, **set_keys, **sub_block_configs})
 
 
 def _read_component_block(
@@ -268,8 +271,8 @@ def _read_component_block(
 
     A key outside the table's keys is refused, null or not; a null key reads as absent; an
     omitted key takes the table's when-omitted value, else the dataclass's declared default; a
-    key with neither is refused by its path; and a value of a type the dataclass cannot use is
-    refused naming the block.
+    key with neither is refused by its path; and a value the dataclass refuses is refused as it
+    refuses it, prefixed by the block's path.
     """
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 
@@ -277,18 +280,6 @@ def _read_component_block(
 def float_or_none(value: Any) -> Optional[float]:
     """Coerce *value* to a float, keeping a null as None."""
     return None if value is None else float(value)
-
-
-def _number(value: Any) -> float:
-    """Coerce *value* to a float as float() does, refusing a boolean, which float() would read as 1.0 or 0.0."""
-    if isinstance(value, bool):
-        raise TypeError(f"{value!r} is a boolean, not a number")
-    return float(value)
-
-
-def _number_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* as :func:`_number` does, keeping a null as None."""
-    return None if value is None else _number(value)
 
 
 def parse_location_block(
@@ -332,11 +323,14 @@ def parse_grid_charge_config(
 
     Raises:
         ConfigurationError: If data is present but not a mapping, or carries a key
-            other than ``target_soc_fraction``.
+            other than ``target_soc_fraction``; or as GridChargeConfig refuses its
+            target, prefixed by the block's path.
     """
     if data is None:
         return None
-    return GridChargeConfig(**refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS))
+    return constructed(
+        block_path, GridChargeConfig, **refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS)
+    )
 
 
 def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
@@ -379,10 +373,9 @@ def _parse_battery_config(
     _refuse_both_efficiency_forms(block_path, set_keys)
     other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
     battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
-    try:
-        return battery.with_round_trip(round_trip)
-    except ConfigurationError as refusal:
-        raise ConfigurationError(f"{child_path(block_path, 'efficiency')}: {refusal}") from refusal
+    return constructed(
+        child_path(block_path, "efficiency"), battery.with_round_trip, round_trip_efficiency=round_trip
+    )
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
@@ -440,8 +433,8 @@ def parse_dispatch_strategy_config(
         ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
             or names no variant, naming its path, its value and the variants' tags; a key the
             variant does not read, unless it is null and another strategy reads it; a key the
-            variant needs, left out or null, naming its path; a value of a type the variant
-            cannot use, naming the block; and a value the variant refuses, as it refuses it.
+            variant needs, left out or null, naming its path; and a value the variant refuses,
+            as it refuses it, prefixed by the block's path.
     """
     if data is None:
         return None
@@ -453,16 +446,10 @@ def parse_dispatch_strategy_config(
         {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
         {"strategy_type", *(each.name for each in variant_fields)},
     )
-    refuse_missing_keys(
-        block_path,
-        [
-            each.name
-            for each in variant_fields
-            if each.name not in set_keys and each.default is MISSING and each.default_factory is MISSING
-        ],
-    )
+    refuse_missing_keys(block_path, [key for key in _required_keys(variant) if key not in set_keys])
     values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
-    return _built_from(variant, values, block_path)
+    build_variant: Callable[..., DispatchStrategyConfig] = variant
+    return constructed(block_path, build_variant, **values)
 
 
 def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]:
@@ -614,7 +601,7 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
 
-_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset({"off_peak_rate", "peak_rate"})
+_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset(each.name for each in fields(PresetRates))
 
 
 def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
@@ -622,50 +609,59 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
     rate = data.get("rate_per_kwh")
     if rate is None:
         raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
-    return TariffConfig.flat_rate(
-        rate_per_kwh=float(rate),
-        name=_read_name(data, block_path=block_path)
+    return constructed(
+        block_path, TariffConfig.flat_rate, rate_per_kwh=rate, name=_read_name(data, block_path=block_path)
     )
 
 
-def _preset_tariff_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the keyword overrides a preset tariff block sets, its rates read as floats.
+def _preset_tariff(
+    data: dict[str, Any],
+    block_path: str,
+    factory: Callable[..., TariffConfig],
+    preset_rates: PresetRates,
+) -> TariffConfig:
+    """The tariff *factory* builds for the preset block at *block_path*: its rates as PresetRates reads them over *preset_rates*, its times as written.
 
-    Reads a block that parse_tariff_config has already confined to its type's keys.
+    Reads a block that parse_tariff_config has already confined to its type's keys, so a rate
+    PresetRates refuses is named by the key the block sets.
     """
-    return {
-        key: float(value) if key in _PRESET_TARIFF_RATE_KEYS else value
-        for key, value in data.items()
-        if key != "type"
-    }
+    rates = constructed(
+        block_path,
+        PresetRates,
+        **{**asdict(preset_rates), **{key: data[key] for key in _PRESET_TARIFF_RATE_KEYS if key in data}},
+    )
+    times = {key: value for key, value in data.items() if key != "type" and key not in _PRESET_TARIFF_RATE_KEYS}
+    return constructed(block_path, factory, **asdict(rates), **times)
 
 
 def _build_economy_7_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the Economy 7 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_7(**_preset_tariff_overrides(data))
+    return _preset_tariff(data, block_path, TariffConfig.economy_7, PRESET_RATES["economy_7"])
 
 
 def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the Economy 10 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_10(**_preset_tariff_overrides(data))
+    return _preset_tariff(data, block_path, TariffConfig.economy_10, PRESET_RATES["economy_10"])
 
 
 def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
-    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate."""
+    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate, and as TariffPeriod refuses it, prefixed by its path."""
     period = refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
     for key in ("start_time", "end_time", "rate_per_kwh"):
         if key not in period:
             raise ConfigurationError(f"Tariff period requires '{key}' field")
-    return TariffPeriod(
+    return constructed(
+        block_path,
+        TariffPeriod,
         start_time=period["start_time"],
         end_time=period["end_time"],
-        rate_per_kwh=float(period["rate_per_kwh"]),
-        name=_read_name(period, block_path=block_path)
+        rate_per_kwh=period["rate_per_kwh"],
+        name=_read_name(period, block_path=block_path),
     )
 
 
 def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the custom tariff a block names from its periods, refusing it unless it gives some."""
+    """Build the custom tariff a block names from its periods, refusing it unless it gives some, and as TariffConfig refuses its periods, prefixed by the block's path."""
     if "periods" not in data:
         raise ConfigurationError("custom tariff requires 'periods' field")
 
@@ -673,13 +669,11 @@ def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     if not periods_data:
         raise ConfigurationError("custom tariff must have at least one period")
 
-    return TariffConfig(
-        periods=tuple(
-            _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
-            for index, period in enumerate(periods_data)
-        ),
-        name=_read_name(data, block_path=block_path)
+    periods = tuple(
+        _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
+        for index, period in enumerate(periods_data)
     )
+    return constructed(block_path, TariffConfig, periods=periods, name=_read_name(data, block_path=block_path))
 
 
 _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
@@ -688,14 +682,12 @@ _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
         _build_flat_rate_tariff,
     ),
     "economy_7": BlockType(
-        frozenset({
-            "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
-        }),
+        frozenset({"type", *_PRESET_TARIFF_RATE_KEYS, "off_peak_start", "off_peak_end"}),
         _build_economy_7_tariff,
     ),
     "economy_10": BlockType(
         frozenset({
-            "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+            "type", *_PRESET_TARIFF_RATE_KEYS, "night_start", "night_end", "afternoon_start",
             "afternoon_end", "evening_start", "evening_end",
         }),
         _build_economy_10_tariff,
@@ -725,7 +717,9 @@ def parse_tariff_config(
     Raises:
         ConfigurationError: If tariff specification is invalid, including a
             block or custom period that is not a mapping or carries a key its
-            type does not read
+            type does not read; a value the tariff, a custom period or an
+            economy preset's rates refuse is refused as they refuse it,
+            prefixed by the path of the block or period
     """
     if data is None:
         return None
@@ -787,9 +781,15 @@ def parse_home_block(
 
     A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
     omitted pv or load block reads as an empty one.
+
+    Raises:
+        ConfigurationError: as each of its blocks' readers refuses that block; or as
+            HomeConfig refuses the home its blocks describe, prefixed by the block's path.
     """
     home = refuse_unrecognised_keys(block_path, data, HOME_BLOCK_KEYS)
-    return HomeConfig(
+    return constructed(
+        block_path,
+        HomeConfig,
         pv_config=_parse_pv_config(home.get("pv", {}), block_path=child_path(block_path, "pv")),
         battery_config=_parse_battery_config(
             home.get("battery"), block_path=child_path(block_path, "battery")
@@ -824,7 +824,8 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
     ``preset`` or a ``rate_pence_per_kwh`` that :func:`_parse_seg_rate_scalar`
     accepts.  ``None`` means no SEG; any other shape raises
-    :exc:`ConfigurationError` naming *block_path*.
+    :exc:`ConfigurationError` naming *block_path*, and a rate SEGTariff refuses is
+    refused as it refuses it, prefixed by *block_path*.
     """
     if data is None:
         return None
@@ -835,103 +836,40 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
             f"'rate_pence_per_kwh', got {data!r}"
         )
     if "rate_pence_per_kwh" in data:
-        return _parse_seg_rate_scalar(
-            data["rate_pence_per_kwh"], key_path=f"{block_path}.rate_pence_per_kwh"
-        )
+        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], path=block_path)
     try:
         return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
 
 
-def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
-    """Read a SEG export rate in pence/kWh: a finite number that :class:`SEGTariff` accepts."""
-    try:
-        rate = float(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"'{key_path}' must be a number, got {value!r}") from exc
-    if isinstance(value, bool) or not math.isfinite(rate):
-        raise ConfigurationError(f"'{key_path}' must be a finite number, got {value!r}")
-    try:
-        return SEGTariff(name="", rate_pence_per_kwh=rate).rate_pence_per_kwh
-    except ValueError as exc:
-        raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
+def _parse_seg_rate_scalar(value: Any, *, path: str) -> float:
+    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *path*, the rate's place in its file."""
+    return constructed(path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
 
 
-# Rows follow FinanceConfig's field order, which decides the first bad value reported.
-_FINANCE_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "standing_charge_pence_per_day": _number,
-    "vat_rate": _number,
-    "retail_baseline_rate_pence_per_kwh": _number,
-    "self_consumption_override": _number_or_none,
-    "pv_cost_per_kwp_gbp": _number,
-    "roof_fit_cost_gbp": _number,
-    "battery_cost_per_kwh_gbp": _number,
-    "inverter_cost_per_kw_gbp": _number,
-    "grant_gbp": _number,
-    "equity_fraction": _number,
-    "loan_term_years": _number,
-    "loan_rate": _number,
-    "opex_per_home_per_year_gbp": _number,
-    "asset_life_years": _number,
-    "own_use_rate_pence_per_kwh": _number,
-    "retained_cash_floor_per_home_per_year_gbp": _number,
-    "grid_services_income_per_kw_per_year_gbp": _number,
-    "grid_services_model": str,
-})
+_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset(each.name for each in fields(FinanceConfig) if each.init)
 
-_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
-})
+_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset(
+    each.name for each in fields(GridServicesEventsConfig) if each.init
+)
 
-# Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
-_GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "band": str,
-    "aggregator_share": _number,
-    "utilisation_factor": _number,
-    "availability_gbp_per_kw_per_event": _number_or_none,
-    "utilisation_gbp_per_mwh": _number_or_none,
-    "delivery_baseline": str,
-})
-
-_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
-})
-
-
-def _int_tuple(values: Any) -> tuple[int, ...]:
-    """Coerce each of *values* to an int as int() does, keeping their order."""
-    return tuple(int(value) for value in values)
-
-
-# Rows follow EventWindow's field order, which decides the first bad value reported.
-_EVENT_WINDOW_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "months": _int_tuple,
-    "weekdays": _int_tuple,
-    "hours": _int_tuple,
-    "events_per_year": int,
-    "event_hours": _number,
-})
+_EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(EventWindow) if each.init)
+"""The keys an event window recognises: EventWindow's init fields."""
 
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
-    """Parse the event_windows list at *block_path* into EventWindows."""
+    """Parse the event_windows list at *block_path* into EventWindows, each refused as EventWindow refuses it, prefixed by its path."""
     if not isinstance(data, list):
         raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
     for i, ew_dict in enumerate(data):
         window_path = f"{block_path}[{i}]"
-        refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_COERCIONS)
-        for req_key in _EVENT_WINDOW_COERCIONS:
-            if req_key not in ew_dict:
+        window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
+        for req_key in _required_keys(EventWindow):
+            if req_key not in window:
                 raise ConfigurationError(f"{window_path} requires '{req_key}' field")
-        try:
-            fields = {key: coerce(ew_dict[key]) for key, coerce in _EVENT_WINDOW_COERCIONS.items()}
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise ConfigurationError(
-                f"{window_path} contains a non-numeric value: {exc}"
-            ) from exc
-        parsed_windows.append(EventWindow(**fields))
+        parsed_windows.append(constructed(window_path, EventWindow, **window))
     return tuple(parsed_windows)
 
 
@@ -941,27 +879,23 @@ def _parse_grid_services_events_config(
     """Parse a finance block's grid_services_events block; absent or null is no events config.
 
     A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
-    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS.
+    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS. Its event windows are read
+    first, then a value GridServicesEventsConfig refuses is refused as it refuses it, prefixed
+    by the block's path.
     """
     if data is None:
         return None
     gs_data = refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
-    fields: dict[str, Any] = {}
-    if "event_windows" in gs_data:
-        fields["event_windows"] = _parse_event_windows(
-            gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
-        )
-    try:
-        fields.update(
-            (key, coerce(gs_data[key]))
-            for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
-            if key in gs_data
-        )
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(
-            f"grid_services_events block contains a non-numeric value: {exc}"
-        ) from exc
-    return GridServicesEventsConfig(**fields)
+    event_windows = (
+        {
+            "event_windows": _parse_event_windows(
+                gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
+            )
+        }
+        if "event_windows" in gs_data
+        else {}
+    )
+    return constructed(block_path, GridServicesEventsConfig, **{**gs_data, **event_windows})
 
 
 def parse_finance_config(
@@ -979,11 +913,11 @@ def parse_finance_config(
         FinanceConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__), if a numeric value
-            is a boolean or a value float() cannot read, or if the block, its
-            grid_services_events block or an event window is not a mapping or
-            carries a key it does not read
+        ConfigurationError: If the block, its grid_services_events block or an
+            event window is not a mapping or carries a key it does not read, or
+            leaves out a key it requires; or for a value FinanceConfig,
+            GridServicesEventsConfig or an EventWindow refuses, as it refuses
+            it, prefixed by its block's path
     """
     if data is None:
         return None
@@ -997,15 +931,7 @@ def parse_finance_config(
         data.get("grid_services_events"),
         block_path=child_path(block_path, "grid_services_events"),
     )
-    try:
-        scalars = {
-            key: coerce(data[key])
-            for key, coerce in _FINANCE_SCALAR_COERCIONS.items()
-            if key in data
-        }
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"finance block contains a non-numeric value: {exc}") from exc
-    return FinanceConfig(**scalars, grid_services_events=grid_services_events)
+    return constructed(block_path, FinanceConfig, **{**data, "grid_services_events": grid_services_events})
 
 
 # ---------------------------------------------------------------------------
@@ -1041,8 +967,10 @@ def _parse_community_billing_config(
 
     Raises:
         ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, an ambiguous SEG specification, a malformed ``seg``
-            block or an invalid ``seg_rate_pence_per_kwh``.
+            does not read, an ambiguous SEG specification or a malformed ``seg``
+            block; for a ``seg_rate_pence_per_kwh``, null or not, that SEGTariff
+            refuses, as it refuses it, prefixed by the key's path; or as
+            CommunityBillingConfig refuses the block, prefixed by its path.
     """
     if data is None:
         return None
@@ -1055,7 +983,7 @@ def _parse_community_billing_config(
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            key_path=child_path(block_path, "seg_rate_pence_per_kwh"),
+            path=child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
@@ -1077,7 +1005,7 @@ def _parse_community_billing_config(
     # absent key.
     if tariff is None and seg_rate is None:
         return None
-    return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
+    return constructed(block_path, CommunityBillingConfig, tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
 
 
 _COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1099,8 +1027,10 @@ def parse_community_config(
 
     Raises:
         ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, missing/invalid ``sharing_mode``, p2p+battery,
-            community_battery-without-battery, or any nested config error.
+            does not read, or a missing ``sharing_mode``; as a nested block's reader
+            refuses that block; or as CommunityConfig refuses the block, such as an
+            unknown ``sharing_mode``, p2p+battery or community_battery-without-battery,
+            prefixed by its path.
     """
     if data is None:
         return None
@@ -1120,11 +1050,10 @@ def parse_community_config(
         data.get("billing"), block_path=child_path(block_path, "billing")
     )
 
-    try:
-        return CommunityConfig(
-            sharing_mode=sharing_mode,
-            community_battery=community_battery,
-            billing=billing,
-        )
-    except ValueError as exc:
-        raise ConfigurationError(str(exc)) from exc
+    return constructed(
+        block_path,
+        CommunityConfig,
+        sharing_mode=sharing_mode,
+        community_battery=community_battery,
+        billing=billing,
+    )
