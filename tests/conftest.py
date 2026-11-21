@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 import tempfile
@@ -14,7 +15,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pathlib import Path
 
+from tests._collect_only import Collection
+from tests._computed_once import ComputedOnce
 from tests._heap_freeze import freeze_the_heap_once
+from tests._lane_collection import collect_lane_job
 from tests._network_guard import refusing_network
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
@@ -97,6 +101,19 @@ def shared_uv_probe_environments(tmp_path_factory: pytest.TempPathFactory) -> Sh
     what a fresh one would for each.
     """
     return SharedUvEnvironments(tmp_path_factory.mktemp("uv-probe-environments"))
+
+
+@pytest.fixture(scope="session")
+def lane_job_collection(shared_uv_probe_environments: SharedUvEnvironments) -> ComputedOnce[Collection]:
+    """Return each offline-lane job's collection as the lane runs it, read as lane_job_collection(project_root, name).
+
+    The first test of the session, so of an xdist worker, that asks for a job
+    collects it through collect_lane_job, in the environment
+    shared_uv_probe_environments builds at that call, and later tests read that
+    collection. Any test that calls it may be the one that collects, so each
+    carries @requires_uv and @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen").
+    """
+    return ComputedOnce(functools.partial(collect_lane_job, env_for=shared_uv_probe_environments.for_command))
 
 
 @pytest.fixture

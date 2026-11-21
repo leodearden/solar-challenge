@@ -11,7 +11,6 @@ One test checks that every slow test runs in some LANE_JOBS job, unless
 SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
 
-import functools
 import os
 import shlex
 from collections import defaultdict
@@ -25,7 +24,6 @@ from tests._collect_only import Collection, requires_uv
 from tests._command_runner import describe_outcome, run_command
 from tests._computed_once import ComputedOnce
 from tests._lane_collection import (
-    collect_lane_job,
     default_collection_node_ids_under,
     every_test_matching,
     suite_node_ids_matching,
@@ -252,12 +250,6 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
         f"git.offline_lane_commands runs {rowless}, with no row in LANE_JOBS, so none of the lane contracts is "
         "checked for them; add a row naming each job's suite and the contracts it keeps"
     )
-
-
-@pytest.fixture(scope="module")
-def lane_job_collection(shared_uv_probe_environments: SharedUvEnvironments) -> ComputedOnce[Collection]:
-    """Each lane job collected as the lane runs it, by the first test that asks, and shared by the rest."""
-    return ComputedOnce(functools.partial(collect_lane_job, env_for=shared_uv_probe_environments.for_command))
 
 
 @requires_uv
