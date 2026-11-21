@@ -20,7 +20,6 @@ from solar_challenge.finance import (
     BillBreakdown,
     BillDistribution,
     FinanceConfig,
-    _cbs_own_use_kwh,
     bill,
     bill_distribution,
     householder_bill,
@@ -672,9 +671,9 @@ class TestBillDistribution:
         CR3: per_home_net_bill_gbp name retained (back-compat §12-Q4), value
         redefined to per-home total_outlay_gbp.
 
-        Basis C (task-84 §6): bill_distribution uses _cbs_own_use_kwh (demand −
-        import) as annual_self_consumption_kwh.  The expected bill must use the
-        same basis so the assertion reflects the actual contract.
+        Basis C (task-84 §6): bill_distribution bills each home's demand −
+        import as its annual_self_consumption_kwh.  The expected bill must use
+        the same basis so the assertion reflects the actual contract.
         """
         summaries = self._make_fleet()
         finance = _make_finance()
@@ -684,7 +683,7 @@ class TestBillDistribution:
             expected_bill = householder_bill(
                 summary=s,
                 # Basis C: matches what bill_distribution passes internally
-                annual_self_consumption_kwh=_cbs_own_use_kwh(s),
+                annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                 finance=finance,
                 simulation_days=365,
             )

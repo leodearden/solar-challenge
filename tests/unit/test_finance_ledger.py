@@ -7,17 +7,27 @@ record every billed figure of the home is read from.  A :class:`HomeLedger` is
 the home's year as the CBS bills it, and refuses a year whose balances break:
 L1 every figure finite and >= 0, L2 own-use within demand, L3 own-use and import
 covering demand, and L4, on the override's basis, own-use + import = demand and
-own-use + export = generation, each to a relative 1e-12.
+own-use + export = generation, each to a relative 1e-12.  ``home_ledger`` is the
+one assembly of a ledger from a home's AnnualPhysics, holding every pricing rule
+of the PRD's table and warning about nothing.
 """
 from __future__ import annotations
 
 import dataclasses
 import math
+import warnings
 from typing import Any
 
 import pytest
 
-from solar_challenge.finance import AnnualPhysics, HomeLedger, OwnUseBasis, annualise
+from solar_challenge.finance import (
+    AnnualPhysics,
+    FinanceConfig,
+    HomeLedger,
+    OwnUseBasis,
+    annualise,
+    home_ledger,
+)
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
 from tests._finance_builders import make_sim_results, make_window
 
@@ -208,3 +218,145 @@ class TestHomeLedgerBalances:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(ledger, "own_use_kwh", 0.0)
+
+
+def _physics(**overrides: Any) -> AnnualPhysics:
+    """A year over make_window(), scale 1, with *overrides* in place of its figures.
+
+    It generates 4000 kWh and demands 3400, imports 1200 at 30 p/kWh (£360) and
+    exports 1800, its run priced at _PRICING.
+    """
+    figures: dict[str, Any] = {
+        "window": make_window(),
+        "generation_kwh": 4000.0,
+        "demand_kwh": 3400.0,
+        "import_kwh": 1200.0,
+        "import_cost_gbp": 360.0,
+        "export_kwh": 1800.0,
+        "battery_discharge_kwh": 0.0,
+        "pricing": _PRICING,
+    }
+    return AnnualPhysics(**{**figures, **overrides})
+
+
+_RETAIL_PENCE_PER_KWH = 23.0
+
+
+def _finance(self_consumption_override: float | None = None) -> FinanceConfig:
+    """A FinanceConfig at a 23 p/kWh retail baseline, with *self_consumption_override*."""
+    return FinanceConfig(
+        standing_charge_pence_per_day=28.0,
+        retail_baseline_rate_pence_per_kwh=_RETAIL_PENCE_PER_KWH,
+        self_consumption_override=self_consumption_override,
+    )
+
+
+class TestHomeLedgerPricingRules:
+    """home_ledger holds each pricing rule of PRD §5.2's table, one case per row, and warns about nothing."""
+
+    def test_without_an_own_use_figure_the_simulated_own_use_is_basis_c(self) -> None:
+        ledger = home_ledger(_physics(), _finance())
+
+        assert ledger.basis is OwnUseBasis.SIMULATED
+        assert ledger.own_use_kwh == 3400.0 - 1200.0
+        assert (ledger.import_kwh, ledger.export_kwh) == (1200.0, 1800.0)
+        assert ledger.own_use_capped is False
+
+    def test_an_own_use_figure_is_the_simulated_own_use(self) -> None:
+        assert home_ledger(_physics(), _finance(), simulated_own_use_kwh=2500.0).own_use_kwh == 2500.0
+
+    def test_basis_c_is_zero_without_a_warning_when_the_import_is_above_the_demand(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ledger = home_ledger(_physics(import_kwh=3600.0), _finance())
+
+        assert ledger.own_use_kwh == 0.0
+
+    def test_a_priced_simulated_import_costs_what_its_run_paid(self) -> None:
+        ledger = home_ledger(_physics(), _finance())
+
+        assert ledger.import_cost_gbp == 360.0
+        assert ledger.import_at_retail is False
+
+    def test_a_simulated_import_priced_at_zero_costs_nothing(self) -> None:
+        ledger = home_ledger(_physics(import_cost_gbp=0.0, pricing=RunPricing(0.0, None)), _finance())
+
+        assert ledger.import_cost_gbp == 0.0
+        assert ledger.import_at_retail is False
+
+    @pytest.mark.parametrize(
+        ("override", "billed_import_kwh"), [(None, 1200.0), (0.7, 600.0)], ids=["simulated", "override"]
+    )
+    def test_an_unpriced_import_is_billed_at_retail_on_either_basis(
+        self, override: float | None, billed_import_kwh: float
+    ) -> None:
+        unpriced = _physics(import_cost_gbp=0.0, pricing=RunPricing(None, 4.1))
+
+        ledger = home_ledger(unpriced, _finance(override))
+
+        assert ledger.import_cost_gbp == pytest.approx(billed_import_kwh * _RETAIL_PENCE_PER_KWH / 100)
+        assert ledger.import_at_retail is True
+
+    def test_an_override_splits_the_generation_and_the_demand(self) -> None:
+        ledger = home_ledger(_physics(), _finance(0.7))
+
+        assert ledger.basis is OwnUseBasis.OVERRIDE
+        assert ledger.own_use_kwh == pytest.approx(0.7 * 4000.0)
+        assert ledger.import_kwh == pytest.approx(3400.0 - 2800.0)
+        assert ledger.export_kwh == pytest.approx(4000.0 - 2800.0)
+        assert ledger.own_use_capped is False
+
+    def test_an_override_own_use_above_the_demand_is_capped_at_the_demand(self) -> None:
+        ledger = home_ledger(_physics(), _finance(0.9))
+
+        assert (ledger.own_use_kwh, ledger.import_kwh, ledger.export_kwh) == (3400.0, 0.0, 600.0)
+        assert ledger.own_use_capped is True
+
+    def test_a_priced_override_import_costs_its_runs_price_per_kwh_imported(self) -> None:
+        ledger = home_ledger(_physics(), _finance(0.7))
+
+        assert ledger.import_cost_gbp == pytest.approx(600.0 * 360.0 / 1200.0)
+
+    def test_a_priced_override_import_costs_the_tariffs_mean_rate_when_its_run_imported_nothing(self) -> None:
+        ledger = home_ledger(_physics(import_kwh=0.0, import_cost_gbp=0.0), _finance(0.7))
+
+        assert ledger.import_cost_gbp == pytest.approx(600.0 * 0.30)
+
+    @pytest.mark.parametrize(
+        ("override", "billed_export_kwh"), [(None, 1800.0), (0.7, 1200.0)], ids=["simulated", "override"]
+    )
+    def test_seg_income_is_the_billed_export_at_the_runs_seg_rate(
+        self, override: float | None, billed_export_kwh: float
+    ) -> None:
+        ledger = home_ledger(_physics(), _finance(override))
+
+        assert ledger.seg_income_gbp == pytest.approx(billed_export_kwh * 4.1 / 100)
+
+    def test_a_run_no_seg_tariff_priced_earns_no_seg_income(self) -> None:
+        assert home_ledger(_physics(pricing=RunPricing(0.30, None)), _finance()).seg_income_gbp == 0.0
+
+    def test_home_ledger_warns_about_nothing(self) -> None:
+        """An unpriced home and a capped override build silently: householder_bill warns its caller instead."""
+        unpriced = _physics(import_cost_gbp=0.0, pricing=RunPricing(None, None))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            at_retail = home_ledger(unpriced, _finance())
+            capped = home_ledger(_physics(), _finance(0.9))
+
+        assert at_retail.import_at_retail is True
+        assert capped.own_use_capped is True
+
+    @pytest.mark.parametrize("override", [None, 0.3], ids=["simulated", "override"])
+    @pytest.mark.parametrize(
+        ("own_use_kwh", "invariant"),
+        [(-0.1, "L1"), (math.nan, "L1"), (3400.1, "L2")],
+        ids=["below-zero", "nan", "above-the-demand"],
+    )
+    def test_an_own_use_figure_outside_the_years_demand_is_refused_on_either_basis(
+        self, own_use_kwh: float, invariant: str, override: float | None
+    ) -> None:
+        with pytest.raises(ValueError, match=invariant) as refusal:
+            home_ledger(_physics(), _finance(override), simulated_own_use_kwh=own_use_kwh)
+
+        assert repr(own_use_kwh) in str(refusal.value)
