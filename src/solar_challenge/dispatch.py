@@ -965,8 +965,8 @@ def build_dispatch_strategy(
         ConfigurationError: The strategy's constructor refuses the variant at tariff: a
             tou_optimized variant with no peak_hours and no tariff, or with peak_hours that
             reach a cheap minute of tariff. Then grid_charging is set, but the strategy would
-            ignore it: its variant does not charge from the grid, or there is no tariff to
-            find a cheap period in.
+            ignore it: its variant does not charge from the grid, there is no tariff to find a
+            cheap period in, or the tariff has no cheap period.
     """
     strategy: DispatchStrategy
     match config:
@@ -982,6 +982,7 @@ def build_dispatch_strategy(
             assert_never(config)
     if grid_charging is not None:
         _refuse_grid_charging_it_would_ignore(config, tariff)
+        _require_cheap_minutes_for_grid_charging(config.strategy_type, grid_charging, tariff)
     return strategy
 
 
@@ -1006,6 +1007,26 @@ def _refuse_grid_charging_it_would_ignore(config: DispatchStrategyConfig, tariff
             f"grid_charging is set, but there is no tariff, so dispatch strategy {tag!r} has no cheap period "
             "to charge in; add a tariff or remove grid_charging"
         )
+
+
+def _require_cheap_minutes_for_grid_charging(
+    tag: str, grid_charging: GridChargeConfig | None, tariff: TariffConfig | None
+) -> None:
+    """Refuse grid_charging under dispatch strategy *tag*, a variant that charges from the grid, when tariff has no cheap minute to charge in.
+
+    _refuse_grid_charging_it_would_ignore makes the variant's other refusals first, so a
+    variant that does not grid-charge, or a home with no tariff, is told that instead.
+
+    Raises:
+        ConfigurationError: grid_charging is set and tariff's cheap_minutes_of_day is empty,
+            naming grid_charging, the tariff, the strategy and what to change.
+    """
+    if grid_charging is None or tariff is None or tariff.cheap_minutes_of_day:
+        return
+    raise ConfigurationError(
+        f"grid_charging is set, but tariff {tariff.name!r} has no cheap period, so dispatch strategy {tag!r} "
+        "never charges from the grid; remove grid_charging or use a time-of-use tariff"
+    )
 
 
 _ONE_DAY = timedelta(days=1)

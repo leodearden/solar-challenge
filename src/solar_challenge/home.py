@@ -11,7 +11,12 @@ import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
+from solar_challenge.dispatch import (
+    DispatchStrategy,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+    build_dispatch_strategy,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
@@ -63,7 +68,8 @@ class HomeConfig:
             ev_config's smart_charging_mode is 'off_peak' and there is no tariff_config whose
             cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
             battery whose dispatch would ignore a setting: tou_optimized with no tariff to
-            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
+            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy), a
+            tariff with no cheap period included.
     """
 
     pv_config: PVConfig
@@ -94,6 +100,9 @@ class HomeConfig:
                     "dispatch_strategy 'tou_optimized' dispatches the battery by the tariff's rates, "
                     "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
                 )
+            build_dispatch_strategy(
+                TOUOptimizedStrategyConfig(), grid_charging=self.battery_config.grid_charging, tariff=self.tariff_config
+            )
             return
         _configured_strategy(self)
 
@@ -101,7 +110,9 @@ class HomeConfig:
 def _runs_tariff_tou(config: HomeConfig) -> bool:
     """Whether the home asks for the tariff-rate TOU path: tou_optimized, and its battery, if any, names no strategy of its own.
 
-    The home runs that path only when it has a tariff.
+    The home runs that path only when it has a tariff. It dispatches as a battery
+    TOUOptimizedStrategyConfig() does (tests/unit/test_tou_tariff_clock.py, Row 6), so its
+    grid_charging is refused as that variant's is.
     """
     return config.dispatch_strategy == "tou_optimized" and (
         config.battery_config is None or config.battery_config.dispatch_strategy is None
