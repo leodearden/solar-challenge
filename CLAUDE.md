@@ -44,8 +44,10 @@ uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 # sized per collected test as docs/orchestrator-config.md §8 says. If the tool
 # running it caps a command below that, even one run in its background mode,
 # start the run outside the tool's supervision, under coreutils `timeout` set to
-# the e2e suite step's `timeout` and writing to a log file, then read the log,
-# e.g. `setsid nohup timeout -k 60 <secs> <the command below> > <log> 2>&1 &`;
+# the e2e suite step's `timeout`, writing its output to a log file that ends
+# with `exit <status>` (a run the `timeout` stops prints no pytest summary, and
+# its log ends `exit 124`), and read the log once that last line is there,
+# e.g. `setsid nohup sh -c 'timeout -k 60 <secs> "$@"; printf "\nexit $?\n"' sh <the command below> > <log> 2>&1 &`;
 # or run only the failing node-ids with the reproduce command in the Dark
 # Factory section's e2e bullet
 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
