@@ -129,10 +129,10 @@
     }
 
     /**
-     * Calls plotlyCall, which throws or returns the promise of a Plotly call,
-     * and then onSuccess, if given, once that promise resolves. Either failure,
-     * a throw or a rejection, logs one console error naming the activity and
-     * the id of container.
+     * Calls plotlyCall, which throws or returns the promise of a Plotly call
+     * or of the wait for one, and then onSuccess, if given, once that promise
+     * resolves. Either failure, a throw or a rejection, logs one console error
+     * naming the activity and the id of container.
      */
     function _attempt(container, activity, plotlyCall, onSuccess) {
         new Promise(function (resolve) {
@@ -178,13 +178,6 @@
     function _recolour(container) {
         _attempt(container, 'recolour the chart of', function () {
             return Plotly.relayout(container, _chrome(_drawn.get(container), _chromeColours(container)));
-        });
-    }
-
-    /** Fits the chart of container, which is drawn, to the container's size. */
-    function _fit(container) {
-        _attempt(container, 'fit the chart of', function () {
-            return Plotly.Plots.resize(container);
         });
     }
 
@@ -240,12 +233,15 @@
      * The CSS transitions running on container or on an ancestor of it,
      * whatever property each animates, such as base.html's main column
      * sliding when the sidebar is toggled. Any of them can change container's
-     * size on any frame until it ends.
+     * size on any frame until it ends. One whose effect or target a script has
+     * removed changes nothing, so it is not listed.
      */
     function _transitionsAround(container) {
         return document.getAnimations().filter(function (animation) {
             return animation instanceof CSSTransition
                 && animation.playState === 'running'
+                && animation.effect
+                && animation.effect.target
                 && animation.effect.target.contains(container);
         });
     }
@@ -253,32 +249,31 @@
     /**
      * Fits the chart of container, which is drawn, once no CSS transition runs
      * around it, so a slide is fitted once, at the size it settles at, however
-     * far apart its frames are. Plotly.Plots.resize waits only 100 ms for its
-     * next call, so a fit at every frame of a slower slide redraws the chart
-     * at each width the container passes through:
+     * far apart its frames are:
      * tests/e2e/test_results_page.py::test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_redraws_each_shown_chart_only_at_its_settled_width
-     * says why. A container hidden by the time the transitions end is fitted
-     * by _fitWhileShown when it is shown again. A cancelled transition
-     * rejects its finished promise, so the wait is on Promise.allSettled, and
-     * the check is made again after it, for a transition started meanwhile.
+     * says why. The transitions are looked for again once they have ended, for
+     * one started meanwhile. A cancelled transition rejects its finished
+     * promise, so the wait is on Promise.allSettled. A container hidden by
+     * then is fitted by _fitWhileShown when it is shown again.
      */
     function _fitOnceSettled(container) {
         if (_fittingOnceSettled.has(container)) {
             return;
         }
-        var running = _transitionsAround(container);
-        if (running.length === 0) {
-            _fit(container);
-            return;
-        }
-        _fittingOnceSettled.add(container);
-        Promise.allSettled(running.map(function (transition) {
-            return transition.finished;
-        })).then(function () {
-            _fittingOnceSettled.delete(container);
-            if (_drawn.has(container) && _isShown(container)) {
-                _fitOnceSettled(container);
+        _attempt(container, 'fit the chart of', function () {
+            var running = _transitionsAround(container);
+            if (running.length === 0) {
+                return Plotly.Plots.resize(container);
             }
+            _fittingOnceSettled.add(container);
+            return Promise.allSettled(running.map(function (transition) {
+                return transition.finished;
+            })).then(function () {
+                _fittingOnceSettled.delete(container);
+                if (_drawn.has(container) && _isShown(container)) {
+                    _fitOnceSettled(container);
+                }
+            });
         });
     }
 
