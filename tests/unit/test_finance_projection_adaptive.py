@@ -13,15 +13,21 @@ import math
 import warnings
 from typing import TYPE_CHECKING, Callable
 
+import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
-from tests._finance_builders import make_fleet_results, make_home_config, make_period
+from solar_challenge.home import RunPricing
+from tests._finance_builders import (
+    make_fleet_results,
+    make_fleet_results_of,
+    make_home_config,
+    make_period,
+    make_sim_results,
+)
 
 if TYPE_CHECKING:
-    import pandas as pd
-
     from solar_challenge.fleet import FleetConfig, FleetResults
 
 
@@ -53,19 +59,39 @@ def _make_seg_income_simulate(seg_income_at_age_0_gbp: float) -> Callable:
     """Return a synthetic simulate whose homes earn SEG income seg_income_at_age_0_gbp × exp(-0.05 × age).
 
     Every home's energy is the same at every age, so revenue is the only metric
-    that varies with age.
+    that varies with age.  Each home's 800 kWh of export earns that income at the
+    SEG rate its results record.
     """
 
     def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
         homes = fleet_config.homes
         mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+        seg_income_gbp = seg_income_at_age_0_gbp * math.exp(-0.05 * mean_age)
         return make_fleet_results(
             homes=homes,
             self_kwh=100.0,
             export_kwh=800.0,
             import_kwh=300.0,
-            export_revenue_gbp=seg_income_at_age_0_gbp * math.exp(-0.05 * mean_age),
+            pricing=RunPricing(None, seg_income_gbp * 100.0 / 800.0),
         )
+
+    return _simulate
+
+
+def _make_export_revenue_simulate(export_revenue_at_age_0_gbp: float) -> Callable:
+    """Return _make_seg_income_simulate's simulate, but each home's export_revenue series sums to export_revenue_at_age_0_gbp × exp(-0.05 × age) and its results record no SEG rate.
+
+    A negative revenue is a loss no SEG rate earns.
+    """
+
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        homes = fleet_config.homes
+        mean_age = sum(h.pv_config.system_age_years for h in homes) / len(homes)
+        results = make_sim_results(self_kwh=100.0, export_kwh=800.0, import_kwh=300.0)
+        rows = results.export_revenue.index
+        revenue_gbp = export_revenue_at_age_0_gbp * math.exp(-0.05 * mean_age)
+        with_revenue = dataclasses.replace(results, export_revenue=pd.Series(revenue_gbp / len(rows), index=rows))
+        return make_fleet_results_of([with_revenue for _ in homes], homes=homes)
 
     return _simulate
 
@@ -178,7 +204,7 @@ class TestProjectMultiYearAdaptive:
         earning = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(50.0))
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            losing = project_multi_year(scenario, finance, simulate=_make_seg_income_simulate(-50.0))
+            losing = project_multi_year(scenario, finance, simulate=_make_export_revenue_simulate(-50.0))
 
         assert losing.points[0].fleet_revenue_gbp == pytest.approx(-50.0), "premise: the fleet loses £50 at age 0"
         assert [str(w.message) for w in record if issubclass(w.category, UserWarning)] == []

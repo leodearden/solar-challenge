@@ -25,7 +25,7 @@ from solar_challenge.finance import (
     bill_distribution,
     householder_bill,
 )
-from solar_challenge.home import SummaryStatistics
+from solar_challenge.home import RunPricing, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_window
@@ -47,8 +47,9 @@ def _make_summary(
     net_cost_gbp: float = 202.2,             # 276.0 - 73.8
     simulation_days: int = 365,
     seg_revenue_gbp: Optional[float] = 73.8,
+    pricing: Optional[RunPricing] = RunPricing(0.23, 4.1),
 ) -> SummaryStatistics:
-    """Build a synthetic SummaryStatistics for finance tests."""
+    """Build a synthetic SummaryStatistics for finance tests, its run priced at *pricing*: by default the 23 p import and 4.1 p SEG rates its £ totals are."""
     sc_ratio = total_self_consumption_kwh / max(total_generation_kwh, 1e-9)
     gd_ratio = total_grid_import_kwh / max(total_demand_kwh, 1e-9)
     ex_ratio = total_grid_export_kwh / max(total_generation_kwh, 1e-9)
@@ -71,6 +72,7 @@ def _make_summary(
         net_cost_gbp=net_cost_gbp,
         seg_revenue_gbp=seg_revenue_gbp,
         window=make_window(days=simulation_days),
+        pricing=pricing,
     )
 
 
@@ -249,6 +251,7 @@ class TestHouseholderBillPhysics:
             total_export_revenue_gbp=0.0,
             net_cost_gbp=0.0,
             seg_revenue_gbp=None,
+            pricing=RunPricing(None, None),
         )
         finance = _make_finance(retail_baseline_rate_pence_per_kwh=23.0)
 
@@ -483,6 +486,7 @@ class TestOverrideExactValues:
             total_export_revenue_gbp=0.0,
             net_cost_gbp=0.0,
             seg_revenue_gbp=None,
+            pricing=RunPricing(None, None),
         )
         with pytest.warns(UserWarning, match="no tariff configured"):
             return householder_bill(

@@ -22,7 +22,7 @@ import pandas as pd
 from solar_challenge.config import load_config, load_fleet_config
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
-from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
 from solar_challenge.tariff import PRESET_RATES
 from tests._finance_builders import make_window
@@ -209,6 +209,7 @@ def test_finance_report_renders_flex_value_block() -> None:
         net_cost_gbp=202.2,
         seg_revenue_gbp=73.8,
         window=make_window(days=365),
+        pricing=RunPricing(0.23, 4.1),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,

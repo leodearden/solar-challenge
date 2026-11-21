@@ -25,7 +25,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import calculate_summary
+from solar_challenge.home import RunPricing, calculate_summary
 from solar_challenge.optimize import (
     ConfigPoint,
     ConfigResult,
@@ -46,14 +46,17 @@ from tests._fleet_simulate_stand_in import answering_with
 # ---------------------------------------------------------------------------
 
 
-def _make_fleet_results(n_homes: int = 5, export_revenue_gbp: float = 0.0) -> FleetResults:
-    """*n_homes* default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year."""
+def _make_fleet_results(n_homes: int = 5, seg_rate_pence_per_kwh: float | None = None) -> FleetResults:
+    """*n_homes* default homes, each self-consuming 2,000 kWh, exporting 800 and importing 1,200 a year.
+
+    Each home's export earns SEG income at *seg_rate_pence_per_kwh*, and no tariff prices its import.
+    """
     return make_fleet_results(
         n_homes=n_homes,
         self_kwh=2000.0,
         export_kwh=800.0,
         import_kwh=1200.0,
-        export_revenue_gbp=export_revenue_gbp,
+        pricing=RunPricing(None, seg_rate_pence_per_kwh),
     )
 
 
@@ -678,7 +681,7 @@ class TestRunSweepRateClampedZero:
             retail_baseline_rate=30.0,
         )
         scenario = _make_scenario(n_homes=5, finance=finance)
-        fr = _make_fleet_results(n_homes=5, export_revenue_gbp=200.0)
+        fr = _make_fleet_results(n_homes=5, seg_rate_pence_per_kwh=25.0)  # £200 a home on 800 kWh
         configs = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
         )

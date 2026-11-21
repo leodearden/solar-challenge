@@ -20,7 +20,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.gridservices import GridServicesEventsConfig
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import RunPricing, SimulationResults
 from solar_challenge.optimize import (
     ConfigPoint,
     SensitivityAxis,
@@ -143,7 +143,7 @@ class _SegPricingSimulate:
                 self_kwh=_SELF_KWH,
                 export_kwh=_EXPORT_KWH,
                 import_kwh=_IMPORT_KWH,
-                export_revenue_gbp=_EXPORT_KWH * (rate or 0.0) / 100.0,
+                pricing=RunPricing(None, rate),
             )
         return self._results_by_rate[rate]
 

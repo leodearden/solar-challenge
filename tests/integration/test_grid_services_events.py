@@ -53,7 +53,7 @@ from solar_challenge.gridservices import (
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
-from solar_challenge.home import SimulationResults, SummaryStatistics
+from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
@@ -109,6 +109,7 @@ def _make_spare_battery_sim_results(
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
         grid_charge_cost=None,
+        pricing=RunPricing(None, None),
     )
 
 
@@ -577,6 +578,7 @@ def _synthetic_bill_distribution() -> BillDistribution:
         net_cost_gbp=202.2,
         seg_revenue_gbp=73.8,
         window=make_window(days=365),
+        pricing=RunPricing(0.23, 4.1),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,

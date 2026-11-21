@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections.abc import Sequence
 
 import pandas as pd
 import pytest
@@ -30,7 +31,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import HomeConfig, RunPricing, SimulationResults, SummaryStatistics, calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -38,8 +39,19 @@ from tests._finance_builders import (
     make_period,
     make_scenario_and_finance,
     make_scenario_of,
+    make_sim_results,
     make_window,
 )
+
+
+def _fleet_whose_export_revenue_sums_to(
+    export_revenue_gbp: float, homes: Sequence[HomeConfig], *, self_kwh: float, export_kwh: float, import_kwh: float
+) -> FleetResults:
+    """Each of *homes* with make_sim_results of the totals, unpriced, its export_revenue series replaced by one summing to *export_revenue_gbp*."""
+    results = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh)
+    rows = results.export_revenue.index
+    with_revenue = dataclasses.replace(results, export_revenue=pd.Series(export_revenue_gbp / len(rows), index=rows))
+    return make_fleet_results_of([with_revenue for _ in homes], homes=homes)
 
 
 class TestProjectMultiYearRevenue:
@@ -153,7 +165,7 @@ class TestProjectMultiYearRevenue:
         """
         n_homes = 2
         fleet = make_fleet_results(
-            n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
+            n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, pricing=RunPricing(None, 3.0)
         )
         scenario, finance = self._make_revenue_scenario(
             n_homes=n_homes, self_consumption_override=0.90
@@ -192,8 +204,8 @@ class TestProjectMultiYearRevenue:
         curve = project_multi_year(
             scenario,
             finance,
-            simulate=lambda fc, s, e: make_fleet_results(
-                homes=fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, export_revenue_gbp=-50.0
+            simulate=lambda fc, s, e: _fleet_whose_export_revenue_sums_to(
+                -50.0, fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0
             ),
         )
 
@@ -215,12 +227,8 @@ class TestProjectMultiYearRevenue:
             return solve_cost_recovery_rate(
                 scenario,
                 finance,
-                simulate=lambda fc, s, e: make_fleet_results(
-                    homes=fc.homes,
-                    self_kwh=1000.0,
-                    export_kwh=800.0,
-                    import_kwh=300.0,
-                    export_revenue_gbp=seg_income_gbp,
+                simulate=lambda fc, s, e: _fleet_whose_export_revenue_sums_to(
+                    seg_income_gbp, fc.homes, self_kwh=1000.0, export_kwh=800.0, import_kwh=300.0
                 ),
             )
 
@@ -369,7 +377,9 @@ def _make_grid_charging_sim_results(
     grid-charge slice of import_cost.  self_consumption is B-style (it includes the
     grid-charged discharge), so basis-C own-use = demand − import = sc − grid_charge.
     Defaults give per home: total_import_cost_gbp £258.00, of which
-    total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.
+    total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.  Every row imports
+    at the same blended rate, £258.00 / 1,000 kWh = 0.258 £/kWh, which the pricing
+    records as the tariff's time-weighted rate, with no SEG.
 
     Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
     each row over the hour it lasts, returns the kWh totals and simulation_days is 365:
@@ -385,6 +395,7 @@ def _make_grid_charging_sim_results(
 
     zeros = pd.Series(0.0, index=idx)
     grid_charge_pence = grid_charge_kwh * off_peak_pence
+    import_pence = import_to_load_kwh * peak_pence + grid_charge_pence
     return SimulationResults(
         generation=constant_kw(sc_kwh + export_kwh),
         demand=constant_kw(sc_kwh + import_to_load_kwh),
@@ -394,10 +405,11 @@ def _make_grid_charging_sim_results(
         battery_soc=zeros.copy(),
         grid_import=constant_kw(import_to_load_kwh + grid_charge_kwh),
         grid_export=constant_kw(export_kwh),
-        import_cost=constant_gbp(import_to_load_kwh * peak_pence + grid_charge_pence),
+        import_cost=constant_gbp(import_pence),
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
         grid_charge_cost=constant_gbp(grid_charge_pence),
+        pricing=RunPricing(import_pence / (import_to_load_kwh + grid_charge_kwh) / 100.0, None),
     )
 
 
