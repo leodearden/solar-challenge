@@ -718,7 +718,7 @@ class TestFleetFromDistribution:
     def test_empty_battery_block_returns_400_carrying_the_grammars_refusal_naming_its_capacity(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
+        """An empty battery block is a present block, not an absent one: a battery without its capacity distribution, it reaches fleet_distribution.py's grammar and is a 400 whose error is the grammar's refusal, naming battery.capacity_kwh; no fleet is queued."""
         body = {**self._VALID_BODY, "battery": {}}
         with pytest.raises(ConfigurationError) as grammar_refusal:
             parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
@@ -760,7 +760,7 @@ class TestFleetFromDistribution:
         patch: dict,
         missing: tuple[str, ...],
     ) -> None:
-        """A distribution sent without a parameter or its rows reaches config.py's grammar without them, not with an invented default, and is a 400 whose error is the grammar's refusal naming each missing key; no fleet is queued."""
+        """A distribution sent without a parameter or its rows reaches fleet_distribution.py's grammar without them, not with an invented default, and is a 400 whose error is the grammar's refusal naming each missing key; no fleet is queued."""
         body = {**self._VALID_BODY, **patch}
         with pytest.raises(ConfigurationError) as grammar_refusal:
             parse_fleet_distribution_config(form_to_fleet_distribution_config(body))
@@ -898,7 +898,7 @@ class TestFleetFromDistribution:
     def test_shuffled_pool_not_sized_to_n_homes_returns_400_carrying_the_grammars_refusal(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, count: int
     ) -> None:
-        """A shuffled_pool whose count is not the body's 2 homes reaches config.py's grammar and is a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
+        """A shuffled_pool whose count is not the body's 2 homes reaches fleet_distribution.py's grammar and is a 400 whose error is the grammar's refusal, naming pv.capacity_kw; no fleet is queued."""
         body = {
             **self._VALID_BODY,
             "pv": {"capacity_kw": {"type": "shuffled_pool", "entries": [{"value": 4.0, "count": count}]}},
@@ -1096,7 +1096,7 @@ class TestFleetFromDistribution:
     def test_a_mapping_block_setting_the_grammar_refuses_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, named: str
     ) -> None:
-        """A block setting sent as a mapping that config.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
+        """A block setting sent as a mapping that fleet_distribution.py's grammar refuses reaches the grammar unchanged, and is a 400 whose error is the grammar's own refusal, naming the setting; no fleet is queued."""
         body = {**self._VALID_BODY, **patch}
         with pytest.raises(ConfigurationError) as grammar_refusal:
             parse_fleet_distribution_config(
@@ -1133,7 +1133,7 @@ class TestFleetFromDistribution:
         settings: dict,
         value: object,
     ) -> None:
-        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false, 0 or null, reaches config.py's grammar, which has no such key, and is a 400 whose error is the grammar's refusal naming it; no fleet is queued. A fleet without batteries leaves its battery block out or sends it null."""
+        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false, 0 or null, reaches fleet_distribution.py's grammar, which has no such key, and is a 400 whose error is the grammar's refusal naming it; no fleet is queued. A fleet without batteries leaves its battery block out or sends it null."""
         body = {**self._VALID_BODY, block: {**settings, "enabled": value}}
         with pytest.raises(ConfigurationError) as grammar_refusal:
             parse_fleet_distribution_config(

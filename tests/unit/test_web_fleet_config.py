@@ -148,7 +148,7 @@ class TestFleetConfigHelpers:
     def test_sample_distribution_refuses_params_without_what_its_type_is_drawn_from_naming_the_field(
         self, dist_type: str, params: dict, message: str
     ) -> None:
-        """A preview never runs config.py's grammar, so params without a parameter or the rows its type is drawn from, left out or null, are refused naming the field under params, not drawn with an invented default."""
+        """A preview never runs fleet_distribution.py's grammar, so params without a parameter or the rows its type is drawn from, left out or null, are refused naming the field under params, not drawn with an invented default."""
         with pytest.raises(ValueError) as exc_info:
             sample_distribution(dist_type, params, 3)
         assert str(exc_info.value) == message
@@ -785,7 +785,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_leaves_a_distributions_absent_or_null_parameter_out_for_the_grammar_to_name(
         self, patch: dict, block: str, key: str, converted: dict
     ) -> None:
-        """A distribution's parameter or row list that the form leaves out, or sends as null, is left out of its conversion, not given a default, so config.py's grammar names what is missing."""
+        """A distribution's parameter or row list that the form leaves out, or sends as null, is left out of its conversion, not given a default, so fleet_distribution.py's grammar names what is missing."""
         config = form_to_fleet_distribution_config({**valid_distribution_form(), **patch})
         assert config[block][key] == converted
 
@@ -1231,7 +1231,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_passes_null_and_boolean_block_settings_on_as_given(
         self, block: str, key: str, value: object
     ) -> None:
-        """A block setting that is null or a boolean passes on to config.py's grammar as given."""
+        """A block setting that is null or a boolean passes on to fleet_distribution.py's grammar as given."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
         assert config[block][key] is value
@@ -1244,7 +1244,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_passes_a_blocks_enabled_on_as_given_dropping_no_block(
         self, block: str, value: object
     ) -> None:
-        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false or null, is a setting like any other, passed on to config.py's grammar as given beside the block's conversion, and no value of it drops the block."""
+        """The fleet form has no toggle for a block: a pv/battery/load block's enabled, true, false or null, is a setting like any other, passed on to fleet_distribution.py's grammar as given beside the block's conversion, and no value of it drops the block."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], "enabled": value}})
         assert config.get(block) == {
@@ -1294,7 +1294,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_converts_a_block_settings_distribution_as_its_own(
         self, block: str, key: str, spec: dict, converted: dict
     ) -> None:
-        """A block setting sent as a distribution, a mapping with a type, converts to config.py's grammar as the block's own distribution does."""
+        """A block setting sent as a distribution, a mapping with a type, converts to fleet_distribution.py's grammar as the block's own distribution does."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: spec}})
         assert config[block].get(key) == converted
@@ -1314,7 +1314,7 @@ class TestFleetConfigHelpers:
     def test_form_to_fleet_distribution_config_passes_a_block_setting_mapping_without_a_type_on_as_given(
         self, block: str, key: str, value: dict
     ) -> None:
-        """A block setting, the block's distribution included, sent as a mapping without a type passes on to config.py's grammar as given, for the grammar to read or refuse."""
+        """A block setting, the block's distribution included, sent as a mapping without a type passes on to fleet_distribution.py's grammar as given, for the grammar to read or refuse."""
         form = valid_distribution_form()
         config = form_to_fleet_distribution_config({**form, block: {**form[block], key: value}})
         assert config[block].get(key) == value
@@ -1369,7 +1369,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_is_the_inverse_of_the_forms_conversion(
         self, spec: float | dict
     ) -> None:
-        """A distribution the fleet page's editor sends, its Fixed Value's number included, converts to config.py's grammar and reads back as itself."""
+        """A distribution the fleet page's editor sends, its Fixed Value's number included, converts to fleet_distribution.py's grammar and reads back as itself."""
         config = form_to_fleet_distribution_config(
             {**valid_distribution_form(), "pv": {"capacity_kw": spec}}
         )
@@ -1393,7 +1393,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_reads_a_fixed_value_as_the_number_the_form_sends(
         self, spec: object, number: float
     ) -> None:
-        """A fixed value, which config.py's grammar spells as a number or a fixed distribution, reads as the float the editor's Fixed Value sends, as the form's conversion reads it."""
+        """A fixed value, which fleet_distribution.py's grammar spells as a number or a fixed distribution, reads as the float the editor's Fixed Value sends, as the form's conversion reads it."""
         got = distribution_form_spec(spec, "fleet_distribution.pv.capacity_kw")
         assert (type(got), got) == (float, number)
 
@@ -1414,7 +1414,7 @@ class TestFleetConfigHelpers:
     def test_distribution_form_spec_refuses_a_distribution_the_editor_cannot_hold(
         self, spec: object
     ) -> None:
-        """A boolean, which config.py's grammar reads as 1 or 0 but the form's conversion refuses, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
+        """A boolean, which fleet_distribution.py's grammar reads as 1 or 0 but the form's conversion refuses, a type the editor has no form for, or a normal without both of the clamps the editor always sends is refused, naming its path."""
         with pytest.raises(ValueError, match=re.escape("fleet_distribution.battery.capacity_kwh")):
             distribution_form_spec(spec, "fleet_distribution.battery.capacity_kwh")
 
@@ -1537,7 +1537,7 @@ class TestFleetConfigHelpers:
 
 
 class TestDistributionGrammarSpec:
-    """distribution_grammar_spec, the one writer of an editor distribution in config.py's grammar, called with the field each of its keys is sent in."""
+    """distribution_grammar_spec, the one writer of an editor distribution in fleet_distribution.py's grammar, called with the field each of its keys is sent in."""
 
     @pytest.mark.parametrize(
         ("distribution", "spec"),
@@ -1573,7 +1573,7 @@ class TestDistributionGrammarSpec:
     def test_each_editor_distribution_is_written_as_config_grammar_spells_it(
         self, distribution: dict, spec: dict
     ) -> None:
-        """Each of the editor's distributions is written as config.py's grammar spells it: its numbers as floats, a pool's counts as ints, and its rows as parallel lists; a key its type does not read is ignored, as the builder, which sends a normal's parameters beside a uniform's, needs."""
+        """Each of the editor's distributions is written as fleet_distribution.py's grammar spells it: its numbers as floats, a pool's counts as ints, and its rows as parallel lists; a key its type does not read is ignored, as the builder, which sends a normal's parameters beside a uniform's, needs."""
         written = distribution_grammar_spec(distribution, _FIELDS)
 
         assert written == spec
@@ -1618,7 +1618,7 @@ class TestDistributionGrammarSpec:
     def test_a_parameter_or_row_list_left_out_or_null_is_left_out_for_config_grammar_to_name(
         self, distribution: dict, spec: dict
     ) -> None:
-        """A parameter or row list the distribution leaves out, or sends as null, is left out of the spec, not given a default, so config.py's grammar names what is missing."""
+        """A parameter or row list the distribution leaves out, or sends as null, is left out of the spec, not given a default, so fleet_distribution.py's grammar names what is missing."""
         assert distribution_grammar_spec(distribution, _FIELDS) == spec
 
     @pytest.mark.parametrize(
@@ -1671,7 +1671,7 @@ class TestDistributionGrammarSpec:
     def test_a_type_the_editor_does_not_offer_is_refused_naming_its_field(
         self, distribution: dict
     ) -> None:
-        """A type the distribution editor does not offer, config.py's grammar's other types included, or a type that is null, not a string or left out, is refused naming the type's field and the type sent."""
+        """A type the distribution editor does not offer, fleet_distribution.py's grammar's other types included, or a type that is null, not a string or left out, is refused naming the type's field and the type sent."""
         with pytest.raises(ValueError) as exc_info:
             distribution_grammar_spec(distribution, _FIELDS)
         assert str(exc_info.value) == (

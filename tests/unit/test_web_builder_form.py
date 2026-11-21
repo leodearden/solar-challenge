@@ -361,7 +361,7 @@ class TestBuilderFormErrors:
 
 
 class TestBothFormsWriteADistributionAlike:
-    """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same config.py grammar spec."""
+    """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same fleet_distribution.py grammar spec."""
 
     @pytest.mark.parametrize(
         ("fleet_spec", "builder_fields"),
