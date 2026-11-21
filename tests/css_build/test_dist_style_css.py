@@ -66,7 +66,7 @@ _RECOLOURED_ACCENT = "blue"
 # Only so a hung npm or node fails the tests by name. npm ci downloads every package the lock records, while a
 # run, such as a build or a palette read, only runs installed ones, so each has its own bound. npm ci's bound and
 # every run's together fit inside the css-build lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml),
-# whose kill would file css-build::nonzero-exit.
+# whose kill would file css-build::unconfirmable.
 _NPM_CI_TIMEOUT_SECS = 240
 _RUN_TIMEOUT_SECS = 40
 

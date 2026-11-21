@@ -153,7 +153,7 @@ to no workers, so a lane command without `-n 0` still runs it serially.
   it names, as task 1570's triage did. A pace slower than the budget is the cue to raise the
   budget and the step's `timeout` together. A raised `timeout` reaches the running lane only
   when the orchestrator reloads its config. Only a missing browser sends the install to the
-  download host, and an outage there fails it, which the lane files as `e2e::nonzero-exit`: the
+  download host, and an outage there fails it, which the lane files as `e2e::unconfirmable`: the
   job declares no outage probe, since its suite needs no live service. The lane contract probes
   collect only the suite step (`tests/_lane_collection.py::collect_lane_job`), so no verify runs
   the install, and `tests/unit/test_e2e_lane.py` checks that the job keeps it.
