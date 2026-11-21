@@ -245,6 +245,8 @@ class WeatherCache:
                 put writes: a header holding anything but a timezone and a frequency, each a str or null, a
                 timezone str that names none, which put refuses to record, rows that are no CSV of instants, or
                 rows not on the header's frequency
+            OSError: If the entry's file cannot be opened or read for a reason other than its absence, as when the
+                cache directory lies under a regular file or the process may not open files in it
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
@@ -373,6 +375,8 @@ class PvgisTmy:
                 short or changed after put wrote it, or is not in the form put writes; nothing is then fetched. A
                 note on it says what removing the entry, by deleting the file or with WeatherCache.invalidate,
                 leads to: the next get fetches the TMY afresh and puts it
+            OSError: From its cache's get, if the entry's file cannot be opened or read for a reason other than its
+                absence, as when the cache directory lies under a regular file; nothing is then fetched
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)
