@@ -216,6 +216,7 @@ def test_a_drawn_chart_in_a_shown_tab_is_recoloured_as_the_theme_change_is_annou
     page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
 
     announced = page.evaluate("() => window.__titleAsTheThemeChangeIsAnnounced")
+    assert announced is not None, "the theme-changed listener registered after chart-renderer.js's own never ran"
     assert announced["fill"] == announced["containerColour"] != light_fill, (
         f"expected the title's fill, as theme-changed was announced, to be its container's colour then, "
         f"which differs from the light fill {light_fill!r}; read {announced}"
