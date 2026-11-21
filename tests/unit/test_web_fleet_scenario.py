@@ -10,9 +10,9 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
+from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED

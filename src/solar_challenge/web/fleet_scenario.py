@@ -18,16 +18,18 @@ from solar_challenge.config import (
     ComponentDistribution,
     FleetDistributionConfig,
     generate_homes_from_distribution,
-    parse_dispatch_strategy_config,
     parse_fleet_distribution_config,
-    parse_location_block,
-    parse_seg_rate,
-    parse_tariff_config,
 )
 from solar_challenge.dispatch import DispatchStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
+from solar_challenge.scenario_blocks import (
+    parse_dispatch_strategy_config,
+    parse_location_block,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig

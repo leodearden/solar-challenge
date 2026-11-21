@@ -10,9 +10,9 @@ from typing import Any
 
 from flask import request
 
-from solar_challenge.config import parse_location_block
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
+from solar_challenge.scenario_blocks import parse_location_block
 
 
 class NotAJsonObject(ValueError):

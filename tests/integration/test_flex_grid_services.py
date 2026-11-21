@@ -23,7 +23,6 @@ from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
     load_config,
-    parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
 from solar_challenge.fleet import FleetConfig, FleetResults
@@ -31,6 +30,7 @@ from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesE
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_finance_config
 from tests._finance_builders import make_fleet_results_of
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 

@@ -18,7 +18,6 @@ from solar_challenge.config import (
     load_config_json,
     load_config_yaml,
     load_scenarios,
-    parse_location_block,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
@@ -26,6 +25,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 

@@ -16,7 +16,6 @@ from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
     load_scenarios,
-    parse_finance_config,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
@@ -24,6 +23,7 @@ from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_finance_config
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _YEAR_FIELDS = ("loan_term_years", "asset_life_years")

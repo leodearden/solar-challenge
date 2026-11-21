@@ -15,10 +15,10 @@ from flask.testing import FlaskClient
 from solar_challenge.config import (
     load_fleet_config,
     parse_fleet_distribution_config,
-    parse_seg_rate,
 )
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES

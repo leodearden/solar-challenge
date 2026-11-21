@@ -17,9 +17,9 @@ from solar_challenge.config import (
     SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.scenario_blocks import parse_finance_config
 from tests._repository_paths import SCENARIOS_DIR
 
 SCENARIO = SCENARIOS_DIR / "bristol-phase1-flex.yaml"

@@ -15,7 +15,10 @@ from typing import Any, Optional, TypeVar
 
 import yaml
 
-from solar_challenge.config import (
+from solar_challenge.dataclass_instance import DataclassInstance
+from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
+from solar_challenge.scenario_blocks import (
     BATTERY_BLOCK,
     EV_BLOCK,
     HEAT_PUMP_BLOCK,
@@ -24,9 +27,6 @@ from solar_challenge.config import (
     PV_BLOCK,
     ComponentBlock,
 )
-from solar_challenge.dataclass_instance import DataclassInstance
-from solar_challenge.home import HomeConfig
-from solar_challenge.location import Location
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 

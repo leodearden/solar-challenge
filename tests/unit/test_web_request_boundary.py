@@ -10,9 +10,9 @@ pytest.importorskip("flask")
 
 from flask import Flask
 
-from solar_challenge.config import parse_location_block
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
+from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
     read_location,

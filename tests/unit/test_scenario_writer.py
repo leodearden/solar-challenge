@@ -11,17 +11,9 @@ import yaml
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
-    BATTERY_BLOCK,
-    EV_BLOCK,
-    HEAT_PUMP_BLOCK,
-    LOAD_BLOCK,
-    LOCATION_BLOCK,
-    PV_BLOCK,
-    ComponentBlock,
     load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_seg_rate,
 )
 from solar_challenge.dispatch import (
     GridChargeConfig,
@@ -35,6 +27,16 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    LOCATION_BLOCK,
+    PV_BLOCK,
+    ComponentBlock,
+    parse_seg_rate,
+)
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig

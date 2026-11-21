@@ -27,8 +27,6 @@ from solar_challenge.config import (
     ScenarioConfig,
     load_config,
     load_fleet_config,
-    parse_finance_config,
-    parse_seg_rate,
 )
 from solar_challenge.finance import (
     FinanceConfig,
@@ -37,6 +35,10 @@ from solar_challenge.finance import (
     project_economics,
     project_multi_year,
     spreadsheet_revenue_curve,
+)
+from solar_challenge.scenario_blocks import (
+    parse_finance_config,
+    parse_seg_rate,
 )
 from tests._fin_calibration import (
     FIN_GOLDEN,

@@ -21,12 +21,12 @@ from solar_challenge.cli.utils import (
     print_report,
     print_success,
 )
-from solar_challenge.config import parse_home_block, parse_location_block, parse_seg_rate
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_home_block, parse_location_block, parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import covered_days
 
