@@ -14,8 +14,10 @@ and when the window narrows, and, for a chart whose tab is
 hidden at the time, once its tab is shown again. A chart is
 redrawn only at the width its container settles at, never at
 one the container passes through as the sidebar slides,
-however far apart the slide's frames are. A chart that cannot
-be fitted to its container logs one error naming it.
+however far apart the slide's frames are, and whether or not
+the slide is reversed halfway. A chart hidden while a slide
+runs is fitted once its tab is shown again. A chart that
+cannot be fitted to its container logs one error naming it.
 A chart container added to a shown tab after load is drawn by
 the adding script's next microtask, even inside a parent that a
 transform scales to zero width, and a drawn container given
@@ -27,7 +29,7 @@ its chart purged, and a theme toggle after it logs no error.
 
 from collections.abc import Sequence
 
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import JSHandle, Locator, Page, expect
 
 from tests._chart_absences import monthly_reason, seasonal_reason
 from tests.e2e._chart_tabs import open_chart_tab, show_chart_tab
@@ -379,6 +381,18 @@ _A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT = (
     ":has(> #main-content) { transition-duration: 2s !important; transition-timing-function: steps(2) !important; }"
 )
 
+# Holds the slide that expands the sidebar at its start width for 1 s, so that a fit pending when a test clicks runs at
+# that width, and then at its intermediate width for the first half of a 60 s transition, so that whatever a test does
+# while it runs is done mid-slide however loaded the host is: the test ends it by finishing it, as
+# charts_not_as_wide_as_their_containers does. The reverse slide, which collapses the sidebar, takes 2 s, shortened to
+# 1 s when it replaces the first at its intermediate width, so a test can let it end on its own, as
+# _NO_CSS_TRANSITION_RUNS waits for.
+_A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH = (
+    ":has(> #main-content) { transition-delay: 1s !important; transition-duration: 60s !important;"
+    " transition-timing-function: steps(2, jump-start) !important; }"
+    " html.sidebar-collapsed :has(> #main-content) { transition-delay: 0s !important; transition-duration: 2s !important; }"
+)
+
 # Records, for each container of chartIds, the width of its chart's first .main-svg at each plotly_afterplot from now
 # on, and returns the record by container id, which the page goes on filling.
 _RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT = """(chartIds) => Object.fromEntries(chartIds.map(id => {
@@ -390,6 +404,14 @@ _RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT = """(chartIds) => Object.fromEntries(
 
 _NO_CSS_TRANSITION_RUNS = "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
 
+# True once no container among those of widths, by id, has the width widths gives it: for the held slide, once its delay
+# has passed and a frame has laid out the intermediate width, in which the renderer's ResizeObserver reports it too.
+_NO_CONTAINER_HAS_ITS_WIDTH_IN = (
+    "(widths) => Object.entries(widths).every(([id, width]) => document.getElementById(id).clientWidth !== width)"
+)
+
+_NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE = {chart_id: [] for chart_id in _OVERVIEW_CHART_IDS}
+
 
 def _container_widths(page: Page, chart_ids: Sequence[str]) -> dict[str, int]:
     """The clientWidth of each container among chart_ids, the ids of page's chart containers, by container id."""
@@ -400,20 +422,50 @@ def _container_widths(page: Page, chart_ids: Sequence[str]) -> dict[str, int]:
     return widths
 
 
+def _open_collapsed_with_the_slide_stretched(page: Page, live_server: str, run_id: str, stretch: str) -> dict[str, int]:
+    """Open run_id's results page with the sidebar collapsed, wait until Plotly has drawn each Overview chart, and add the stylesheet stretch, one of the constants above, to the page.
+
+    Returns the width of each Overview chart's container, by container id, before any slide.
+    """
+    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    before = _container_widths(page, _OVERVIEW_CHART_IDS)
+    page.add_style_tag(content=stretch)
+    return before
+
+
+def _misfits_and_mid_slide_draws(
+    page: Page, before: dict[str, int], drawn: JSHandle
+) -> tuple[list[dict[str, object]], dict[str, list[float]]]:
+    """Once the slide has ended: the Overview charts that are not as wide as their containers, and, by chart id, the widths each was drawn at that are neither its container's width before the slide, as before gives it, nor the one it settled at.
+
+    charts_not_as_wide_as_their_containers ends the slide if it still runs. drawn is the record
+    _RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT returned, read after the misfits are, so a draw at the settled width that
+    the wait for them let through is in it.
+    """
+    misfits = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+    settled = _container_widths(page, _OVERVIEW_CHART_IDS)
+    mid_slide = {
+        chart_id: [width for width in widths if abs(width - before[chart_id]) > 1 and abs(width - settled[chart_id]) > 1]
+        for chart_id, widths in drawn.json_value().items()
+    }
+    return misfits, mid_slide
+
+
 def test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_redraws_each_shown_chart_only_at_its_settled_width(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
+    page_errors: list[str],
 ) -> None:
     """A renderer starved of CPU draws the sidebar's slide in frames further apart than Plotly.Plots.resize's 100 ms wait, and a chart must be redrawn only at the width its container settles at, never at one the container passes through mid-slide.
 
     That is the lane's misfit, a chart drawn 1001.08 px wide in its 958 px container (flake debt task 1519).
     """
     run_id, _ = seeded_home_run
-    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
-    _open_with_the_overview_charts_drawn(page, live_server, run_id)
-    before = _container_widths(page, _OVERVIEW_CHART_IDS)
-    page.add_style_tag(content=_A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT)
+    before = _open_collapsed_with_the_slide_stretched(
+        page, live_server, run_id, _A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT
+    )
     drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
 
     page.get_by_title("Expand sidebar", exact=True).click()
@@ -421,13 +473,53 @@ def test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_
     # the intermediate width this test is about.
     page.wait_for_function(_NO_CSS_TRANSITION_RUNS)
 
-    misfits = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
-    settled = _container_widths(page, _OVERVIEW_CHART_IDS)
-    mid_slide = {
-        chart_id: [width for width in widths if abs(width - before[chart_id]) > 1 and abs(width - settled[chart_id]) > 1]
-        for chart_id, widths in drawn.json_value().items()
-    }
-    assert (misfits, mid_slide) == ([], {chart_id: [] for chart_id in _OVERVIEW_CHART_IDS})
+    misfits, mid_slide = _misfits_and_mid_slide_draws(page, before, drawn)
+    assert (misfits, mid_slide, page_errors) == ([], _NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE, [])
+
+
+def test_a_sidebar_slide_reversed_halfway_redraws_each_shown_chart_only_at_its_settled_width(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Collapsing the sidebar again while its slide is at its intermediate width cancels the slide's transition and starts the reverse one: the charts, whose fit was waiting for the first, are fitted once the second ends, at the width it settles at, and the page logs no error."""
+    run_id, _ = seeded_home_run
+    before = _open_collapsed_with_the_slide_stretched(page, live_server, run_id, _A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH)
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    page.wait_for_function(_NO_CONTAINER_HAS_ITS_WIDTH_IN, arg=before)
+    page.get_by_title("Collapse sidebar", exact=True).click()
+    # The reverse slide runs to its natural end, so that a fit made at its intermediate width, its first half, has been
+    # drawn by then.
+    page.wait_for_function(_NO_CSS_TRANSITION_RUNS)
+
+    misfits, mid_slide = _misfits_and_mid_slide_draws(page, before, drawn)
+    assert (misfits, mid_slide, page_errors) == ([], _NO_OVERVIEW_CHART_IS_DRAWN_MID_SLIDE, [])
+
+
+def test_after_a_tab_switch_in_the_middle_of_the_sidebars_slide_each_chart_is_as_wide_as_its_container(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+    page_errors: list[str],
+) -> None:
+    """Showing Power Flow while the sidebar's slide is at its intermediate width hides the Overview charts, whose fit was waiting for the slide, and draws Power Flow's chart: no Overview chart is drawn while hidden, once the slide ends Power Flow's chart is as wide as its container, and so is each Overview chart once Overview is shown again, with no error logged."""
+    run_id, _ = seeded_home_run
+    before = _open_collapsed_with_the_slide_stretched(page, live_server, run_id, _A_SLIDE_HELD_AT_ITS_INTERMEDIATE_WIDTH)
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    page.wait_for_function(_NO_CONTAINER_HAS_ITS_WIDTH_IN, arg=before)
+    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
+    drawn_when_hidden = drawn.json_value()
+    power_flow = charts_not_as_wide_as_their_containers(page, [_POWER_FLOW_CHART_ID])
+    drawn_once_the_slide_ended = drawn.json_value()
+    open_chart_tab(page, "Overview")
+    overview = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+
+    assert (overview, power_flow, drawn_once_the_slide_ended, page_errors) == ([], [], drawn_when_hidden, [])
 
 
 def test_after_the_window_narrows_each_shown_chart_is_as_wide_as_its_container(
