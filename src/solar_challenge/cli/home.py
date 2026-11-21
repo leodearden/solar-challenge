@@ -15,20 +15,20 @@ from solar_challenge.cli.utils import (
     create_summary_table,
     handle_errors,
     home_summary_rows,
+    invocation,
     load_config_with_overrides,
     print_info,
     print_report,
     print_success,
 )
 from solar_challenge.config import parse_home_block, parse_location_block, parse_seg_rate
-from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import covered_days
-from solar_challenge.weather import default_weather
 
 app = typer.Typer(help="Single home simulation commands")
 
@@ -66,6 +66,7 @@ def home_config_for_run(
 @app.command()
 @handle_errors
 def run(
+    ctx: typer.Context,
     config: Annotated[
         Optional[Path],
         typer.Argument(
@@ -164,12 +165,13 @@ def run(
     end_date = pd.Timestamp(end, tz=home_config.location.timezone)
 
     days_count = covered_days(start_date.date(), end_date.date())
-    print_info(f"Simulating {days_count} days from {start} to {end}")
+    cli = invocation(ctx)
+    print_info(cli, f"Simulating {days_count} days from {start} to {end}")
 
     # Run simulation with progress
-    with create_progress() as progress:
+    with create_progress(cli) as progress:
         task = progress.add_task("Running simulation...", total=None)
-        results = simulate_home(home_config, start_date, end_date, weather=default_weather())
+        results = cli.runner.simulate_home(home_config, start_date, end_date)
         progress.update(task, completed=True)
 
     if report:
@@ -187,7 +189,7 @@ def run(
     # Export CSV if requested
     if output is not None:
         export_to_csv(results, output)
-        print_success(f"Results saved to {output}")
+        print_success(cli, f"Results saved to {output}")
 
 
 _DEFAULT_LOAD = LoadConfig()
@@ -196,6 +198,7 @@ _DEFAULT_LOAD = LoadConfig()
 @app.command()
 @handle_errors
 def quick(
+    ctx: typer.Context,
     pv_kw: Annotated[
         float,
         typer.Argument(help="PV system capacity in kW"),
@@ -258,11 +261,12 @@ def quick(
     start_date = pd.Timestamp("2024-06-01", tz=loc.timezone)
     end_date = start_date + pd.Timedelta(days=days - 1)
 
-    print_info(f"Quick simulation: {pv_kw} kW PV, {battery_kwh or 0} kWh battery, {days} days")
+    cli = invocation(ctx)
+    print_info(cli, f"Quick simulation: {pv_kw} kW PV, {battery_kwh or 0} kWh battery, {days} days")
 
-    with create_progress() as progress:
+    with create_progress(cli) as progress:
         task = progress.add_task("Running simulation...", total=None)
-        results = simulate_home(home_config, start_date, end_date, weather=default_weather())
+        results = cli.runner.simulate_home(home_config, start_date, end_date)
         progress.update(task, completed=True)
 
     summary = calculate_summary(results)
@@ -272,4 +276,4 @@ def quick(
 
     if output is not None:
         export_to_csv(results, output)
-        print_success(f"Results saved to {output}")
+        print_success(cli, f"Results saved to {output}")

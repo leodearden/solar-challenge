@@ -19,11 +19,10 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
-import solar_challenge.cli.home as _cli_home_module
-import solar_challenge.home as _home_module
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
+    CliInvocation,
     console,
     create_fleet_progress,
     create_progress,
@@ -33,21 +32,21 @@ from solar_challenge.cli.utils import (
     print_error,
     print_info,
     print_report,
+    print_status,
     print_success,
     print_warning,
-    status_console,
 )
 from solar_challenge.config import load_config, parse_finance_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
-from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
+from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.location import parse_location
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
-from solar_challenge.weather import WeatherCache, WeatherDataError
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from solar_challenge.weather import WeatherDataError
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
@@ -477,7 +476,7 @@ class TestErrorHandling:
         monkeypatch.chdir(tmp_path)
         self._write_one_home_scenario(**blocks)
 
-        result = invoke_cli(["finance", "run", "scenario.yaml"], _simulate_raising_a_plain_value_error)
+        result = invoke_cli(["finance", "run", "scenario.yaml"], answering(_simulate_raising_a_plain_value_error))
 
         assert result.exit_code == 1
         assert result.stdout == ""
@@ -556,19 +555,44 @@ class TestErrorHandling:
         assert lines == f"Invalid value: {error_text_with_notes(error)}".splitlines()
 
 
+_STATUS_PRINTERS = [
+    pytest.param(print_success, id="print_success"),
+    pytest.param(print_info, id="print_info"),
+    pytest.param(print_status, id="print_status"),
+    pytest.param(lambda cli, message: print_status(cli, (message, "bold")), id="print_status-styled-part"),
+]
+
+
+def _make_stderr_a_colour_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Rich treat the captured stderr as a standard colour terminal for the rest of the test: TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset."""
+    monkeypatch.setenv("TTY_COMPATIBLE", "1")
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+
+
 class TestPrintHelpers:
     """Tests for the print_* message helpers."""
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_status_message_is_printed_verbatim_on_stderr(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it, styled or not."""
+        print_message(CliInvocation(), _TEXT_RICH_WOULD_PARSE)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
         "print_message",
         [
-            pytest.param(print_success, id="print_success"),
             pytest.param(print_warning, id="print_warning"),
-            pytest.param(print_info, id="print_info"),
             pytest.param(print_error, id="print_error"),
         ],
     )
-    def test_a_message_is_printed_verbatim_on_stderr(
+    def test_a_warning_or_an_error_is_printed_verbatim_on_stderr(
         self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
     ) -> None:
         """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it."""
@@ -579,23 +603,63 @@ class TestPrintHelpers:
         assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
-        ("print_message", "target", "colour"),
+        ("print_message", "colour"),
         [
-            pytest.param(print_success, status_console, "green", id="print_success"),
-            pytest.param(print_warning, error_console, "yellow", id="print_warning"),
-            pytest.param(print_info, status_console, "blue", id="print_info"),
-            pytest.param(print_error, error_console, "red", id="print_error"),
+            pytest.param(print_success, "green", id="print_success"),
+            pytest.param(print_info, "blue", id="print_info"),
         ],
     )
-    def test_a_message_is_printed_in_its_colour_on_its_console(
-        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
+    def test_a_status_message_is_printed_in_its_colour_on_a_colour_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        print_message: Callable[[CliInvocation, str], None],
+        colour: str,
     ) -> None:
-        """Success prints green and info blue on the status console, and warning yellow and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
-        monkeypatch.setattr(target, "record", True)
+        """Success prints green and info blue on stderr. TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset, make Rich treat the captured stderr as a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_message(CliInvocation(), "saved")
+
+        assert capsys.readouterr().err == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize(
+        ("print_message", "colour"),
+        [
+            pytest.param(print_warning, "yellow", id="print_warning"),
+            pytest.param(print_error, "red", id="print_error"),
+        ],
+    )
+    def test_a_warning_or_an_error_is_printed_in_its_colour_on_the_error_console(
+        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], colour: str
+    ) -> None:
+        """Warning prints yellow and error red on the error console, on stderr; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(error_console, "record", True)
 
         print_message("saved")
 
-        assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+        assert error_console.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_quiet_invocations_status_message_is_not_printed(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """A status message for a quiet invocation prints on neither stream."""
+        print_message(CliInvocation(quiet=True), "Simulating 2 homes")
+
+        assert capsys.readouterr() == ("", "")
+
+    def test_print_status_prints_its_parts_side_by_side_on_stderr_each_in_its_own_style(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`web start`'s Ctrl+C hint prints as its three parts give it, the middle one bold and the others plain, on a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_status(CliInvocation(), "  Press ", ("Ctrl+C", "bold"), " to stop the server.")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "  Press " + Style.parse("bold").render("Ctrl+C") + " to stop the server.\n"
 
 
 class TestProgress:
@@ -609,10 +673,10 @@ class TestProgress:
         ],
     )
     def test_progress_is_printed_on_stderr(
-        self, capsys: pytest.CaptureFixture[str], create: Callable[[], Progress]
+        self, capsys: pytest.CaptureFixture[str], create: Callable[[CliInvocation], Progress]
     ) -> None:
         """Progress prints on stderr, so stdout carries only a command's product."""
-        with create() as progress:
+        with create(CliInvocation()) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
 
         captured = capsys.readouterr()
@@ -626,14 +690,16 @@ class TestProgress:
             pytest.param(create_fleet_progress, id="create_fleet_progress"),
         ],
     )
-    def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
-        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
+    def test_a_quiet_invocations_display_leaves_other_stderr_output_alone_on_a_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        create: Callable[[CliInvocation], Progress],
     ) -> None:
-        """Text written on stderr while a display on the quiet status console runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
+        """Text written on stderr while a quiet invocation's display runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
         monkeypatch.setenv("TTY_COMPATIBLE", "1")
-        monkeypatch.setattr(status_console, "quiet", True)
 
-        with create() as progress:
+        with create(CliInvocation(quiet=True)) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
             print("richardsonpy fell back to the Elexon profile", file=sys.stderr)
 
@@ -714,7 +780,6 @@ class TestCreateSummaryTableTitle:
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 
 
-@pytest.mark.usefixtures("bristol_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
 
@@ -742,57 +807,29 @@ home:
         )
         return cfg_path
 
-    def _run_home(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        seg_yaml: str,
-        *extra_args: str,
-    ) -> tuple[Result, dict[str, HomeConfig]]:
-        """Run `home run --report` for _DAY on a config ending in *seg_yaml*.
+    def _run_home(self, tmp_path: Path, seg_yaml: str, *extra_args: str) -> tuple[Result, RecordingSimulate]:
+        """Run `home run --report` for _DAY on a config ending in *seg_yaml*, its simulation answered by a RecordingSimulate.
 
         *extra_args* are appended to the command line after ``--report``.
-        Returns the CLI result and the spy's capture; ``captured["home_config"]``
-        is the HomeConfig passed to simulate_home, absent if it was never called.
+        Returns the CLI result and the recorder, whose homes are the HomeConfigs
+        `home run` asked the invocation's runner to simulate.
         """
-        # Capture the home_config passed to simulate_home by wrapping the real function
-        captured: dict[str, HomeConfig] = {}
-        real_simulate_home = _home_module.simulate_home
-
-        def spy_simulate_home(home_config, *args, **kwargs):  # type: ignore[no-untyped-def]
-            captured["home_config"] = home_config
-            return real_simulate_home(home_config, *args, **kwargs)
-
-        # Patch simulate_home in the CLI module (local binding)
-        monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
-
+        recorder = RecordingSimulate()
         cfg_path = self._write_home_config(tmp_path, seg_yaml)
-        result = runner.invoke(
-            app,
-            [
-                "home", "run", str(cfg_path),
-                "--start", _DAY,
-                "--end", _DAY,
-                "--report",
-                *extra_args,
-            ],
-            catch_exceptions=False,
+        result = invoke_cli(
+            ["home", "run", str(cfg_path), "--start", _DAY, "--end", _DAY, "--report", *extra_args],
+            answering(recorder),
         )
-        return result, captured
+        return result, recorder
 
-    def test_home_run_threads_tariff_and_seg(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
-        result, captured = self._run_home(
-            monkeypatch, tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n"
-        )
+    def test_home_run_threads_tariff_and_seg(self, tmp_path: Path) -> None:
+        """home run passes tariff + seg to the home it simulates and reports SEG Revenue."""
+        result, recorder = self._run_home(tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n")
 
         assert result.exit_code == 0, f"CLI failed: {result.stdout}"
 
+        (home_cfg,) = recorder.homes
         # Tariff must be honoured by the canonical parser
-        home_cfg = captured.get("home_config")
-        assert home_cfg is not None, "spy was not called"
         assert home_cfg.tariff_config is not None, (
             "tariff_config should not be None — canonical parser must pick it up"
         )
@@ -808,37 +845,27 @@ home:
             "generate_summary_report must include a SEG Revenue section"
         )
 
-    def test_home_run_resolves_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_home_run_resolves_seg_preset(self, tmp_path: Path) -> None:
         """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Octopus\n")
+        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Octopus\n")
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
-        seg_tariff = captured["home_config"].seg_tariff
-        assert seg_tariff is not None
-        assert seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
+        (home_cfg,) = recorder.homes
+        assert home_cfg.seg_tariff is not None
+        assert home_cfg.seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
         assert "SEG Revenue" in result.stdout
 
-    def test_home_run_rejects_unknown_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_home_run_rejects_unknown_seg_preset(self, tmp_path: Path) -> None:
         """An unknown SEG preset is refused with exit 1 before anything is simulated."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Nonexistent\n")
+        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Nonexistent\n")
 
         assert result.exit_code == 1
         assert "Nonexistent" in result.output
-        assert "home_config" not in captured
+        assert recorder.homes == []
 
-    def test_home_run_location_option_reaches_home_config(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, weather_cache: WeatherCache
-    ) -> None:
+    def test_home_run_location_option_reaches_home_config(self, tmp_path: Path) -> None:
         """``--location`` places the simulated home where location.parse_location puts it."""
-        edinburgh = parse_location("55.95,-3.19")
-        weather_cache.put(_JUNE_DAYS.hourly_weather(), "tmy", edinburgh)
-
-        result, captured = self._run_home(
-            monkeypatch,
+        result, recorder = self._run_home(
             tmp_path,
             "seg:\n  rate_pence_per_kwh: 15.0\n",
             "--location",
@@ -846,7 +873,8 @@ home:
         )
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
-        assert captured["home_config"].location == edinburgh
+        (home_cfg,) = recorder.homes
+        assert home_cfg.location == parse_location("55.95,-3.19")
 
 
 @pytest.fixture
@@ -1089,8 +1117,8 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result = runner.invoke(
             app,
             [
-                "fleet", "run", "scenario.yaml",
-                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST, "--sequential",
+                "--sequential", "fleet", "run", "scenario.yaml",
+                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST,
             ],
             catch_exceptions=False,
         )
@@ -1134,7 +1162,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
                 "--start", "2024-03-15", "--end", "2024-04-13",
             ],
-            lambda fleet_config, start, end: fleet,
+            answering(lambda fleet_config, start, end: fleet),
         )
 
         assert result.exit_code == 0
@@ -1156,7 +1184,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
-            _simulate_reaching_the_sweep,
+            answering(_simulate_reaching_the_sweep),
         )
 
         assert isinstance(result.exception, _ReachedTheSweep)
@@ -1221,7 +1249,7 @@ def _run_fleet(*argv: str) -> Result:
     """Run the `fleet` command argv for _DAY, simulating its homes one after another."""
     return runner.invoke(
         app,
-        ["fleet", *argv, "--start", _DAY, "--end", _DAY, "--sequential"],
+        ["--sequential", "fleet", *argv, "--start", _DAY, "--end", _DAY],
         catch_exceptions=False,
     )
 
@@ -1343,11 +1371,6 @@ class TestFleetSweepRefusesAFileItCannotSweep:
 class TestQuietOption:
     """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
 
-    @pytest.fixture(autouse=True)
-    def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """CliRunner runs every invocation in this process, on the one status_console, so a --quiet invocation here must not silence a later test."""
-        monkeypatch.setattr(status_console, "quiet", status_console.quiet)
-
     def test_quiet_config_template_writes_its_file_and_prints_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1423,3 +1446,17 @@ class TestQuietOption:
 
         assert quiet.stderr == ""
         assert " ".join(loud.stderr.split()) == "Template written to loud.yaml"
+
+    def test_a_status_message_after_a_quiet_invocation_still_prints(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A --quiet invocation leaves nothing quiet behind it in the process: a loud invocation's status message printed after it reaches stderr."""
+        monkeypatch.chdir(tmp_path)
+        quiet = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "q.yaml"], catch_exceptions=False
+        )
+        assert quiet.exit_code == 0
+
+        print_info(CliInvocation(), "after")
+
+        assert capsys.readouterr() == ("", "after\n")

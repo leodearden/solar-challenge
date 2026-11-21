@@ -13,6 +13,7 @@ from rich.text import Text
 from solar_challenge.cli.utils import (
     console,
     handle_errors,
+    invocation,
     print_error,
     print_success,
     verbatim_table_title,
@@ -67,14 +68,6 @@ def _display_validation_report(report: ValidationReport) -> None:
 
     console.print(table)
 
-    # Summary
-    passed = sum(1 for r in report.results if r.passed)
-    total = len(report.results)
-    if report.all_passed:
-        print_success(f"All {total} checks passed")
-    else:
-        print_error(f"{passed}/{total} checks passed")
-
 
 def _read_results_csv(csv_file: Path) -> pd.DataFrame:
     """The results csv_file holds, indexed by its first column as _on_the_default_clock reads it."""
@@ -99,6 +92,7 @@ def _on_the_default_clock(index: pd.Index) -> pd.Index:
 @app.command()
 @handle_errors
 def results(
+    ctx: typer.Context,
     csv_file: Annotated[
         Path,
         typer.Argument(
@@ -179,8 +173,12 @@ def results(
     report = ValidationReport(results=all_results)
     _display_validation_report(report)
 
+    total = len(report.results)
     if not report.all_passed:
+        passed = sum(1 for r in report.results if r.passed)
+        print_error(f"{passed}/{total} checks passed")
         raise typer.Exit(1)
+    print_success(invocation(ctx), f"All {total} checks passed")
 
 
 @dataclass(frozen=True)

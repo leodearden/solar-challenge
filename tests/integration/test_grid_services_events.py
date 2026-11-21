@@ -55,7 +55,7 @@ from solar_challenge.gridservices import (
 )
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
@@ -235,7 +235,7 @@ def test_finance_run_refuses_the_events_model_without_events_before_simulating(
         simulated.append(fleet_config)
         return _synthetic_fleet_results_in_window(fleet_config.homes)
 
-    result = invoke_cli(["finance", "run", str(path)], _recording_simulate)
+    result = invoke_cli(["finance", "run", str(path)], answering(_recording_simulate))
 
     stderr = " ".join(result.stderr.split())
     assert result.exit_code == 1, result.output

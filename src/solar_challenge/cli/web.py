@@ -5,7 +5,15 @@ from typing import Annotated
 
 import typer
 
-from solar_challenge.cli.utils import handle_errors, print_error, print_info, print_report, status_console
+from solar_challenge.cli.utils import (
+    CliInvocation,
+    handle_errors,
+    invocation,
+    print_error,
+    print_info,
+    print_report,
+    print_status,
+)
 
 app = typer.Typer(help="Web dashboard commands")
 
@@ -13,6 +21,7 @@ app = typer.Typer(help="Web dashboard commands")
 @app.command()
 @handle_errors
 def start(
+    ctx: typer.Context,
     host: Annotated[
         str,
         typer.Option(
@@ -68,11 +77,11 @@ def start(
     if debug and not started_by_reloader_watcher():
         run_reloader_watcher(host, port)
     else:
-        _serve(host, port, debug)
+        _serve(invocation(ctx), host, port, debug)
 
 
-def _serve(host: str, port: int, debug: bool) -> None:
-    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped; exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
+def _serve(cli: CliInvocation, host: str, port: int, debug: bool) -> None:
+    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped, printing cli's status lines; exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
     from solar_challenge.web import create_app
     from solar_challenge.web.jobs import shutdown_all_managers
     from solar_challenge.web.schema import SchemaVersionMismatch, StoreUnreadable
@@ -84,8 +93,8 @@ def _serve(host: str, port: int, debug: bool) -> None:
         print_error(str(refused))
         raise typer.Exit(1) from refused
 
-    print_info(f"Starting web dashboard at http://{host}:{port}")
-    status_console.print("  Press [bold]Ctrl+C[/bold] to stop the server.")
+    print_info(cli, f"Starting web dashboard at http://{host}:{port}")
+    print_status(cli, "  Press ", ("Ctrl+C", "bold"), " to stop the server.")
 
     try:
         flask_app.run(host=host, port=port, debug=debug)

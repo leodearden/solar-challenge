@@ -3,20 +3,24 @@
 
 A command prints its product (a results table, a template or a report) on
 stdout, through console and print_report, and nothing else there. Status
-messages and progress print on stderr through status_console, and warnings
-and errors through error_console, so redirecting stdout captures the product
-alone. Print the product after any progress display stops: while one runs on
-a terminal, Rich routes sys.stdout writes through it to stderr.
+messages and progress print on stderr through the status helpers (print_status,
+print_info, print_success, create_progress and create_fleet_progress), and
+warnings and errors through error_console, so redirecting stdout captures the
+product alone. Print the product after any progress display stops: while one
+runs on a terminal, Rich routes sys.stdout writes through it to stderr.
 
---quiet calls set_status_quiet, which silences status_console: status
-messages go unprinted and progress displays stay off, while products,
-warnings and errors print as ever.
+The status helpers take the command's invocation. While it is quiet (--quiet,
+or an injected quiet invocation) they print nothing and progress displays stay
+off; products, warnings and errors print either way.
 
-`finance run` and `optimize configs` read their fleet simulator from Click's
-context object, ctx.ensure_object(CliFleetSimulator).simulate:
-fleet.default_runner().simulate, unless whoever invokes the CLI passes another
-CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they build
-a fleet.FleetRunner from their --workers and --sequential.
+What one invocation runs with travels as Click's context object, a
+CliInvocation. Every command that simulates (`home run`, `home quick`,
+`fleet run`, `fleet sweep`, `finance run` and `optimize configs`) reads its
+runner from the invocation, invocation(ctx).runner. The root callback builds
+that runner from --workers and --sequential, as root_invocation says, unless
+whoever invokes the CLI passes a CliInvocation as obj; the root's options leave
+that invocation's runner as it is. `web start` passes it on once create_app
+takes one (task 889).
 """
 
 import dataclasses
@@ -45,14 +49,13 @@ from solar_challenge.battery import has_battery
 from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetSimulate, FleetSummary, default_runner
+from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import parse_location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
-status_console = Console(stderr=True)
 error_console = Console(stderr=True)
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -95,10 +98,35 @@ def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
 
 
 @dataclasses.dataclass(frozen=True)
-class CliFleetSimulator:
-    """Fleet simulator a command reads from Click's context object."""
+class CliInvocation:
+    """What one CLI invocation runs with, on Click's context object.
 
-    simulate: FleetSimulate = dataclasses.field(default_factory=lambda: default_runner().simulate)
+    Attributes:
+        runner: Runs every simulation of the commands that simulate
+        quiet: Whether the invocation's status messages and progress go unprinted
+    """
+
+    runner: FleetSimulator = dataclasses.field(default_factory=default_runner)
+    quiet: bool = False
+
+
+def invocation(ctx: typer.Context) -> CliInvocation:
+    """The CliInvocation ctx's command runs with: its context object, else a default CliInvocation()."""
+    return ctx.ensure_object(CliInvocation)
+
+
+def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential: bool) -> CliInvocation:
+    """The invocation the root's options make of obj: with none, default_runner() with parallel=not sequential and max_workers=workers, quiet as quiet says; an injected CliInvocation keeps its runner, and is quiet if it already is or quiet says so.
+
+    Raises:
+        TypeError: obj is neither None nor a CliInvocation, naming CliInvocation and obj's type
+    """
+    if obj is None:
+        runner = dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
+        return CliInvocation(runner=runner, quiet=quiet)
+    if isinstance(obj, CliInvocation):
+        return dataclasses.replace(obj, quiet=obj.quiet or quiet)
+    raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
 
 
 def load_config_with_overrides(
@@ -265,28 +293,30 @@ def _money_rows(
     return tuple((metric, f"£{amount:.2f}") for metric, amount in amounts if amount is not None)
 
 
-def set_status_quiet(quiet: bool) -> None:
-    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products, warnings and errors print either way."""
-    status_console.quiet = quiet
+def _status_console(cli: CliInvocation) -> Console:
+    """A console on stderr that prints nothing while cli is quiet, built for each status call, so no console outlives the invocation it prints for."""
+    return Console(stderr=True, quiet=cli.quiet)
 
 
-def _status_progress(*columns: str | ProgressColumn) -> Progress:
-    """A progress display of columns on status_console, off while that console is quiet, so it never captures what else a command writes to stdout or stderr."""
-    return Progress(*columns, console=status_console, disable=status_console.quiet)
+def _status_progress(cli: CliInvocation, *columns: str | ProgressColumn) -> Progress:
+    """A progress display of columns on stderr, off while cli is quiet, so a quiet display never captures what else a command writes to stdout or stderr."""
+    return Progress(*columns, console=_status_console(cli), disable=cli.quiet)
 
 
-def create_progress() -> Progress:
-    """Create a Rich progress bar for simulations, printed on stderr."""
+def create_progress(cli: CliInvocation) -> Progress:
+    """Create a Rich progress bar for cli's simulations, printed on stderr."""
     return _status_progress(
+        cli,
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
     )
 
 
-def create_fleet_progress() -> Progress:
-    """Progress bar with ETA for fleet simulations, printed on stderr."""
+def create_fleet_progress(cli: CliInvocation) -> Progress:
+    """Progress bar with ETA for cli's fleet simulations, printed on stderr."""
     return _status_progress(
+        cli,
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -298,9 +328,14 @@ def create_fleet_progress() -> Progress:
     )
 
 
-def print_success(message: str) -> None:
-    """Print message in green on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "green"))
+def print_status(cli: CliInvocation, *parts: str | tuple[str, str]) -> None:
+    """Print parts side by side on stderr exactly as they are, unless cli is quiet; a (text, style) part is printed in that style."""
+    _print_verbatim(_status_console(cli), *parts)
+
+
+def print_success(cli: CliInvocation, message: str) -> None:
+    """Print message in green on stderr, exactly as it is, unless cli is quiet."""
+    print_status(cli, (message, "green"))
 
 
 def print_warning(message: str) -> None:
@@ -313,9 +348,9 @@ def print_error(message: str) -> None:
     _print_verbatim(error_console, (message, "red"))
 
 
-def print_info(message: str) -> None:
-    """Print message in blue on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "blue"))
+def print_info(cli: CliInvocation, message: str) -> None:
+    """Print message in blue on stderr, exactly as it is, unless cli is quiet."""
+    print_status(cli, (message, "blue"))
 
 
 def print_report(report: str) -> None:

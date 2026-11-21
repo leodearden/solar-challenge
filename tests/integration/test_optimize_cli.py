@@ -23,7 +23,7 @@ from solar_challenge.optimize import (
     SensitivityPanel,
 )
 from solar_challenge.output import generate_config_ranking_report
-from tests._cli_fleet_simulator import invoke_cli
+from tests._cli_fleet_simulator import answering, invoke_cli
 from tests._factories import (
     make_bill_distribution_from_statistics,
     make_config_result,
@@ -826,7 +826,7 @@ class TestOptimizeCLIE2EFast:
     """Fast injected-simulator end-to-end tests for `optimize configs` wiring (G2/W-H6 signal).
 
     Each test that runs a sweep passes its own fleet simulator as the Click
-    context object (``obj=CliFleetSimulator(...)``), so the whole sweep,
+    context object (``obj=CliInvocation(runner=...)``), so the whole sweep,
     sensitivity panel included, runs offline without PVGIS.
     """
 
@@ -854,7 +854,7 @@ class TestOptimizeCLIE2EFast:
         scenario_file = _write_optimize_scenario(
             tmp_path, n_homes=n_homes, finance_overrides=finance_overrides
         )
-        result = invoke_cli(["optimize", "configs", str(scenario_file), *options], simulate)
+        result = invoke_cli(["optimize", "configs", str(scenario_file), *options], answering(simulate))
         return result, simulated_fleets
 
     def test_optimize_configs_standard_sweep_output(
@@ -887,7 +887,7 @@ class TestOptimizeCLIE2EFast:
         )
         assert simulated_fleets, (
             "Expected 'optimize configs' to run its sweep with the simulator passed as "
-            "obj=CliFleetSimulator(...); it asked that simulator for no fleet simulation.\n"
+            "obj=CliInvocation(runner=...); it asked that simulator for no fleet simulation.\n"
             f"Output:\n{result.output}"
         )
         assert "cost-recovery rank" in result.output.lower(), (
@@ -1105,7 +1105,7 @@ class TestOptimizeCLIE2EFast:
                 *options,
                 "--sensitivity", "grid_services",
             ],
-            simulate,
+            answering(simulate),
         )
 
         assert len(asked) > len(sweep_fleets), "the panel asked for no simulation"
@@ -1173,7 +1173,7 @@ class TestOptimizeCLIE2EFast:
                 *options,
                 "--sensitivity", "grid_services",
             ],
-            simulate,
+            answering(simulate),
         )
 
         assert len(asked) > len(sweep_fleets), "the panel asked for no simulation"
@@ -1205,7 +1205,7 @@ def _invoke_configs_on_the_board(options: list[str]) -> tuple[Result, list[Fleet
 
     result = invoke_cli(
         ["optimize", "configs", str(SCENARIO), "--pv", "4", "--battery", "5", "--inverter", "5", *options],
-        simulate,
+        answering(simulate),
     )
     return result, simulated_fleets
 
@@ -1238,3 +1238,16 @@ def test_an_explicit_grid_services_axis_under_the_events_model_is_refused_before
     assert "--sensitivity" in stderr
     assert "capacity_at_events" in stderr
     assert simulated_fleets == []
+
+
+def test_without_sensitivity_under_the_events_model_a_status_line_names_grid_services_as_left_out() -> None:
+    """The default axes leave out grid_services, whose flat rate the events model does not read, and say so on stderr."""
+    result, _ = _invoke_configs_on_the_board([])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 0, result.output
+    assert (
+        "Sensitivity axis grid_services omitted from the default: it sweeps the flat grid-services rate, "
+        "grid_services_income_per_kw_per_year_gbp, which grid_services_model='capacity_at_events' does not read."
+    ) in stderr
+    assert "Sensitivity axis retained_floor" not in stderr
