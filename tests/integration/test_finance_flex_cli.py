@@ -301,8 +301,8 @@ class TestFinanceFlexCLIBandEntryPoints:
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: GridServicesEventsConfig.band must be one of low, central, high, "
-            "got 'medium'"
+            "Configuration error: finance.grid_services_events: "
+            "GridServicesEventsConfig.band must be one of low, central, high, got 'medium'"
         ) in _whitespace_normalised(result.output), result.output
 
     def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
@@ -350,8 +350,8 @@ class TestFinanceRunEventsDeliveryBaseline:
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: GridServicesEventsConfig.delivery_baseline must be one of "
-            "operational, capacity, got 'metered'"
+            "Configuration error: finance.grid_services_events: "
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
         ) in _whitespace_normalised(result.output), result.output
 
 
