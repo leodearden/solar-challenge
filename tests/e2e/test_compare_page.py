@@ -4,11 +4,11 @@ Verifies page loading, metrics table, delta columns, color coding,
 the comparison charts, and the empty state shown when no IDs are given.
 The charts are the Energy Totals bar chart and the Efficiency Ratios
 radar chart, each in a tab of its own. The bar chart's tab is shown on
-load, and the bar chart ends as wide as its container once the page
-settles; the radar chart's tab is hidden on load, so its chart is drawn
-only once the tab is shown, and then fills its container; both charts
-draw without errors, with titles and legends legible in light and dark
-mode, and the radar chart's tick labels legible on its disc.
+load, and the bar chart is drawn as wide as its container; the radar
+chart's tab is hidden on load, so its chart is drawn only once the tab
+is shown, and then fills its container; both charts draw without
+errors, with titles and legends legible in light and dark mode, and the
+radar chart's tick labels legible on its disc.
 Uses seeded run pair fixtures.
 """
 
@@ -156,12 +156,12 @@ def _contrast_ratio(foreground: Sequence[float], background: Sequence[float]) ->
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def test_the_energy_totals_chart_is_as_wide_as_its_container_once_the_page_settles(
+def test_the_energy_totals_chart_drawn_on_load_is_as_wide_as_its_container(
     page: Page,
     live_server: str,
     seeded_home_runs_pair: list[tuple[str, str]],
 ) -> None:
-    """The bar chart, in Energy Totals, the tab shown on load, is drawn while base.html's main column slides in, and ends as wide as its container."""
+    """The bar chart, in Energy Totals, the tab shown on load, is drawn on load as wide as its container."""
     (id1, _), (id2, _) = seeded_home_runs_pair
     page.goto(live_server + f"/history/compare?ids={id1},{id2}")
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()

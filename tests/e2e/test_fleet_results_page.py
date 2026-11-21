@@ -3,7 +3,7 @@
 Uses the seeded_fleet_run fixture (no live simulation needed) to verify
 the page's title, its action links, its chart tabs, that it renders
 without errors, and that the charts of Aggregate, the tab shown on load,
-end as wide as their containers once the page settles.
+are drawn as wide as their containers.
 """
 
 import pytest
@@ -133,12 +133,12 @@ def test_fleet_results_page_shows_every_tab_without_errors(
 # -- Each chart is drawn as wide as its container ---------------------------
 
 
-def test_each_aggregate_chart_is_as_wide_as_its_container_once_the_page_settles(
+def test_each_aggregate_chart_drawn_on_load_is_as_wide_as_its_container(
     page: Page,
     live_server: str,
     seeded_fleet_run: tuple[str, str],
 ) -> None:
-    """The Aggregate charts are drawn while base.html's main column slides in on load, and each ends as wide as its container."""
+    """The Aggregate charts, drawn on load in the tab shown on load, are each as wide as their containers."""
     run_id, _ = seeded_fleet_run
     page.goto(live_server + f"/results/fleet/{run_id}")
     aggregate_chart_ids = _CHART_IDS_BY_TAB["Aggregate"]
