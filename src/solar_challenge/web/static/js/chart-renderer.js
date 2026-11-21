@@ -8,9 +8,9 @@
  * panels, as the sweep page does, needs no renderer API and keeps no chart it
  * no longer shows.
  * Each drawn chart is fitted to its container whenever the container's size
- * changes while it is shown, as when base.html's main column slides in on
- * load, the sidebar is toggled, the window is resized or the chart's tab is
- * shown again, so the chart ends as wide as its container.
+ * changes while it is shown, as when the sidebar is toggled, the window is
+ * resized or the chart's tab is shown again, so the chart ends as wide as
+ * its container.
  *
  * Each chart takes its chrome colours from the computed style of its
  * container (AC9): color for its texts, and --chart-grid for its grid, zero
