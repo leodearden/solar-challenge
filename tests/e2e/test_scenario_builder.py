@@ -229,7 +229,7 @@ def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]
 def _open_section(page: Page, section: str, *, rest_timeout_ms: float | None = None) -> None:
     """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
 
-    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
+    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss. It waits for rest in real time rather than finishing the CSS transitions; test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displayed says why.
 
     *rest_timeout_ms*, if given, bounds only the wait for rest, in milliseconds: the click and the panel-id reads keep the page's default timeout and the header check keeps expect's own, so a click slowed by a loaded host cannot fail a caller that expects the wait to time out.
     """
