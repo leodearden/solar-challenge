@@ -6,8 +6,10 @@ import json
 import math
 import re
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from solar_challenge.config import (
@@ -291,7 +293,7 @@ class TestSimulatedHomes:
 
 
 class TestScenarioConfigRefusals:
-    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a scenario tariff_config."""
+    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, a scenario tariff_config, and a period whose days are not dates or run backwards."""
 
     @pytest.mark.parametrize(
         ("rate", "requirement"),
@@ -358,6 +360,56 @@ class TestScenarioConfigRefusals:
                 home=_home(),
                 tariff_config=TariffConfig.economy_7(),
             )
+
+    @pytest.mark.parametrize(
+        ("start_date", "end_date"),
+        [
+            pytest.param("2024", "2024-01-07", id="a-year"),
+            pytest.param("2024-02-30", "2024-03-01", id="a-day-its-month-lacks"),
+            pytest.param("20240601", "2024-06-07", id="an-iso-basic-date"),
+            pytest.param(pd.NaT, "2024-06-07", id="not-a-time"),
+        ],
+    )
+    def test_a_start_day_that_is_not_a_date_is_refused_naming_the_scenario_the_field_and_the_value(
+        self, start_date: object, end_date: str
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("'x'", "period.start_date", repr(start_date))):
+            ScenarioConfig(name="x", period=SimulationPeriod(start_date, end_date), home=_home())
+
+    def test_an_end_day_that_is_not_a_date_is_refused_by_its_own_name(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("'x'", "period.end_date", "'2024'")):
+            ScenarioConfig(name="x", period=SimulationPeriod("2024-01-01", "2024"), home=_home())
+
+    def test_a_period_whose_last_day_precedes_its_first_is_refused_naming_both(self) -> None:
+        with pytest.raises(
+            ConfigurationError,
+            match=_naming("'x'", "period.start_date", "2024-08-31", "period.end_date", "2024-06-01"),
+        ):
+            ScenarioConfig(name="x", period=SimulationPeriod("2024-08-31", "2024-06-01"), home=_home())
+
+    def test_a_one_day_period_constructs(self) -> None:
+        period = SimulationPeriod("2024-06-21", "2024-06-21")
+
+        assert ScenarioConfig(name="x", period=period, home=_home()).period == period
+
+    @pytest.mark.parametrize(
+        "period",
+        [
+            pytest.param(SimulationPeriod(date(2024, 6, 1), date(2024, 6, 7)), id="dates-as-unquoted-yaml-gives"),
+            pytest.param(
+                SimulationPeriod(
+                    pd.Timestamp("2024-06-01 06:00", tz="Europe/London"),
+                    pd.Timestamp("2024-06-07 18:00", tz="Europe/London"),
+                ),
+                id="zoned-timestamps-at-a-time-of-day",
+            ),
+            pytest.param(
+                SimulationPeriod(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-07")), id="naive-timestamps"
+            ),
+        ],
+    )
+    def test_a_period_of_dates_or_timestamps_constructs(self, period: SimulationPeriod) -> None:
+        assert ScenarioConfig(name="x", period=period, home=_home()).period == period
 
 
 class TestMapHomes:
