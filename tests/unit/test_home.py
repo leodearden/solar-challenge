@@ -1,4 +1,4 @@
-"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing and the weather it runs on."""
+"""Tests for HomeConfig, SimulationResults, RunPricing, calculate_summary and simulate_home's tariff and SEG pricing, the pricing it records and the weather it runs on."""
 
 import dataclasses
 import math
@@ -14,6 +14,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import (
     HomeConfig,
+    RunPricing,
     SeriesRefused,
     SimulationResults,
     SummaryStatistics,
@@ -934,6 +935,108 @@ class TestSimulateHomeExportValuationWithoutATariff:
             atol=0.0,
         )
         assert not [warning for warning in caught if "seg_tariff" in str(warning.message)]
+
+
+class TestRunPricing:
+    """RunPricing holds each grid flow's rate, a finite number of at least 0, or None when nothing priced that flow."""
+
+    @pytest.mark.parametrize(
+        "rates",
+        [pytest.param((0.0, 15.0), id="a-zero-import-rate-is-a-rate"), pytest.param((None, None), id="unpriced")],
+    )
+    def test_it_holds_its_rates_and_refuses_a_field_assignment(self, rates: tuple[float | None, float | None]) -> None:
+        pricing = RunPricing(*rates)
+
+        assert (pricing.import_tariff_mean_rate_gbp_per_kwh, pricing.seg_rate_pence_per_kwh) == rates
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            pricing.seg_rate_pence_per_kwh = 1.0  # type: ignore[misc]
+
+    @pytest.mark.parametrize("field", ["import_tariff_mean_rate_gbp_per_kwh", "seg_rate_pence_per_kwh"])
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(-0.01, id="negative"), pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
+    )
+    def test_a_rate_that_is_negative_or_not_finite_is_refused_naming_its_field_and_the_value(
+        self, field: str, value: float
+    ) -> None:
+        rates: dict[str, float | None] = {"import_tariff_mean_rate_gbp_per_kwh": None, "seg_rate_pence_per_kwh": None}
+
+        with pytest.raises(ValueError) as refused:
+            RunPricing(**{**rates, field: value})
+
+        assert field in str(refused.value)
+        assert repr(value) in str(refused.value)
+
+
+def _home_priced_at(tariff: TariffConfig | None, seg_tariff: SEGTariff | None) -> HomeConfig:
+    """A PV-only home with a seeded load, on tariff and seg_tariff."""
+    return HomeConfig(
+        PVConfig(capacity_kw=4.0),
+        LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+        tariff_config=tariff,
+        seg_tariff=seg_tariff,
+    )
+
+
+def _simulated_june_21(home: HomeConfig, weather_data: pd.DataFrame) -> SimulationResults:
+    """home's results for 21 June 2024, simulated on weather_data."""
+    day = pd.Timestamp("2024-06-21")
+    return simulate_home(home, day, day, weather=weather_for(home, weather_data))
+
+
+def _zero_tariff_home() -> HomeConfig:
+    """A home whose import a £0 flat tariff prices, and whose export an SEG of 15 p/kWh prices."""
+    return _home_priced_at(TariffConfig.flat_rate(0.0), SEGTariff(name="", rate_pence_per_kwh=15.0))
+
+
+class TestSimulateHomeRecordsHowItPricedTheRun:
+    """simulate_home records the rates it priced the run's grid flows at, and calculate_summary carries them; results simulate_home did not make record none."""
+
+    def test_a_zero_tariff_is_recorded_as_a_rate_of_zero_beside_its_seg_rate(self, june21_weather_data):
+        results = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+
+        assert results.pricing == RunPricing(0.0, 15.0)
+        assert calculate_summary(results).pricing == RunPricing(0.0, 15.0)
+
+    def test_a_home_with_no_tariff_and_no_seg_is_recorded_as_unpriced(self, june21_weather_data):
+        results = _simulated_june_21(_home_priced_at(None, None), june21_weather_data)
+
+        assert results.pricing == RunPricing(None, None)
+        assert calculate_summary(results).pricing == RunPricing(None, None)
+
+    def test_the_import_rate_is_the_tariffs_time_weighted_mean_over_the_run(self, june21_weather_data):
+        """(3 h at 0.30 + 21 h at 0.10) / 24 h is 0.125 £/kWh, not the mean of the tariff's three period rates, 0.50 / 3."""
+        tariff = TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "16:00", 0.10, "Day"),
+                TariffPeriod("16:00", "19:00", 0.30, "Peak"),
+                TariffPeriod("19:00", "00:00", 0.10, "Evening"),
+            ),
+            name="Evening peak",
+        )
+
+        pricing = _simulated_june_21(_home_priced_at(tariff, SEG_PRESETS["Octopus"]), june21_weather_data).pricing
+
+        assert pricing is not None
+        assert pricing.import_tariff_mean_rate_gbp_per_kwh == pytest.approx(0.125)
+        assert tariff.mean_period_rate == pytest.approx(0.50 / 3)
+        assert pricing.seg_rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
+
+    def test_results_read_back_from_their_frame_record_no_pricing(self, june21_weather_data):
+        """A frame holds the run's series, not the rates its run was priced at, so neither the results nor their summary claims any."""
+        results = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+
+        read_back = SimulationResults.from_dataframe(results.to_dataframe(), strategy_name=results.strategy_name)
+
+        assert read_back.pricing is None
+        assert calculate_summary(read_back).pricing is None
+
+    def test_the_pricing_adds_no_column_to_the_frame(self, june21_weather_data):
+        priced = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+        unpriced = dataclasses.replace(priced, pricing=None)
+
+        assert priced.pricing is not None
+        assert list(priced.to_dataframe().columns) == list(unpriced.to_dataframe().columns)
 
 
 _MIDSUMMER = pd.Timestamp("2024-06-21")

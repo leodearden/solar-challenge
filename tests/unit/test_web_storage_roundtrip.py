@@ -9,6 +9,8 @@ Tests cover:
 - A summary's window survives home and fleet roundtrips and is stored as ISO 8601
   text; a summary saved without one loads it as None, and one whose simulation_days
   is not its window's days is refused
+- A summary's pricing survives home and fleet roundtrips, and a summary saved
+  without one loads it as None
 - A stored summary whose battery discharge exceeds its self-consumption is refused
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
@@ -55,7 +57,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.fleet import FleetResults, FleetSummary
-from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
+from solar_challenge.home import HomeConfig, RunPricing, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -492,6 +494,68 @@ class TestSummaryWindowRoundtrip:
             storage.load_run("window-days-001")
 
         assert refused.value.document == "summary.json"
+
+
+class TestSummaryPricingRoundtrip:
+    """A summary keeps how its run was priced when reloaded; a summary saved before the
+    field existed loads it as None."""
+
+    @pytest.mark.parametrize(
+        "pricing",
+        [
+            pytest.param(RunPricing(0.0, 15.0), id="zero-tariff-with-seg"),
+            pytest.param(RunPricing(None, None), id="unpriced"),
+            pytest.param(RunPricing(0.245, None), id="tariff-without-seg"),
+        ],
+    )
+    def test_home_run_reloads_its_summarys_pricing(self, storage: RunStorage, pricing: RunPricing) -> None:
+        storage.save_home_run(
+            run_id="pricing-home-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), pricing=pricing),
+            name="Saved Run",
+        )
+
+        loaded_summary = storage.load_run("pricing-home-001").summary
+
+        assert loaded_summary.pricing == pricing
+
+    def test_fleet_run_reloads_each_home_summarys_pricing(self, storage: RunStorage) -> None:
+        pricings = [RunPricing(0.0, 15.0), RunPricing(0.245, None)]
+        storage.save_fleet_run(
+            run_id="pricing-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results() for _ in pricings],
+                home_configs=[_make_home_config(f"Home {i}") for i, _ in enumerate(pricings)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=len(pricings)),
+            per_home_summaries=[dataclasses.replace(_make_summary(), pricing=pricing) for pricing in pricings],
+            name="Saved Run",
+        )
+
+        loaded_home_summaries = storage.load_run("pricing-fleet-001").home_summaries
+
+        assert [summary.pricing for summary in loaded_home_summaries] == pricings
+
+    def test_summary_saved_without_pricing_loads_none(self, storage: RunStorage) -> None:
+        """Every summary.json written before the pricing field existed lacks its key, and the
+        field's default reads it with no RunDocumentStep."""
+        storage.save_home_run(
+            run_id="no-pricing-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), pricing=RunPricing(0.245, 4.1)),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-pricing-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["pricing"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded_summary = storage.load_run("no-pricing-001").summary
+
+        assert loaded_summary.pricing is None
 
 
 class TestStoredSummaryDischargeBound:
