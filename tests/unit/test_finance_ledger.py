@@ -196,11 +196,12 @@ class TestHomeLedgerBalances:
         assert _named("import_kwh", 1200.0) in str(refusal.value)
 
     def test_l3_allows_a_relative_1e_12_and_no_more(self) -> None:
+        """Half the tolerance is allowed and twice it refused, so any tolerance but one from 5e-13 to under 2e-12 fails."""
         covered_kwh = 2200.0 + 1200.0
 
-        assert _ledger(demand_kwh=covered_kwh * (1 + 1e-13)).demand_kwh == pytest.approx(covered_kwh)
+        assert _ledger(demand_kwh=covered_kwh * (1 + 5e-13)).demand_kwh == pytest.approx(covered_kwh)
         with pytest.raises(ValueError, match="L3"):
-            _ledger(demand_kwh=covered_kwh * (1 + 1e-9))
+            _ledger(demand_kwh=covered_kwh * (1 + 2e-12))
 
     def test_l4_refuses_an_override_whose_own_use_and_export_are_not_its_generation(self) -> None:
         with pytest.raises(ValueError, match="L4") as refusal:
