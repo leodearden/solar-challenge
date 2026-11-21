@@ -16,10 +16,10 @@ cannot be fitted to its container logs one error naming it.
 A chart container added to a shown tab after load is drawn by
 the adding script's next microtask, even inside a parent that a
 transform scales to zero width, and a drawn container given
-another figure is redrawn with it; a container added and given
-another figure in one task is drawn once. A drawn container
-removed from the page has its chart purged, and a theme toggle
-after it logs no error.
+another figure is redrawn with it by the setting script's next
+microtask; a container added and given another figure in one
+task is drawn once. A drawn container removed from the page has
+its chart purged, and a theme toggle after it logs no error.
 """
 
 from playwright.sync_api import Locator, Page, expect
