@@ -27,6 +27,10 @@ from tests._lane_collection import (
     suite_node_ids_matching,
     suite_tests_matching,
 )
+from tests._lane_project_logging_each_collection import (
+    collections_logged,
+    throwaway_lane_project_logging_each_collection,
+)
 from tests._throwaway_lane_project import PROBE_JOB, throwaway_lane_project
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
@@ -54,13 +58,6 @@ _SUITE = "tests/suite"
 
 _SUITE_NODE_ID = f"{_SUITE}/test_in_suite.py::test_case"
 
-_APPENDS_A_LINE_TO_THE_COLLECTIONS_LOG = """\
-from pathlib import Path
-
-with (Path(__file__).parent / "collections.log").open("a", encoding="utf-8") as log:
-    log.write("collected\\n")
-"""
-
 
 def _this_process_environment(command: str) -> Mapping[str, str]:
     """env_for for the probe jobs here, which run this interpreter's pytest and no uv: this process's environment, whatever the command."""
@@ -81,24 +78,6 @@ def _project_with_a_suite(project_root: Path, *, ini: str = "[pytest]\n", confte
     (suite / "test_in_suite.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
     (tests / "test_beside.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
     return project_root
-
-
-def _project_logging_each_collection(root: Path, test_module_source: str) -> Path:
-    """Make *root* a throwaway project whose PROBE_JOB collects its test_kept.py, written from *test_module_source*.
-
-    Its conftest appends a line to its collections.log each time a collection loads it.
-    """
-    root.mkdir()
-    throwaway_lane_project(root, f"{_PYTEST} test_kept.py")
-    (root / "test_kept.py").write_text(test_module_source, encoding="utf-8")
-    (root / "conftest.py").write_text(_APPENDS_A_LINE_TO_THE_COLLECTIONS_LOG, encoding="utf-8")
-    return root
-
-
-def _collections_logged(root: Path) -> int:
-    """Return how many collections *root*'s conftest logged, 0 when it logged none."""
-    log = root / "collections.log"
-    return len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
 
 
 def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path: Path) -> None:
@@ -255,31 +234,37 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
 
 
 def test_a_second_call_given_the_same_collections_directory_reads_the_collection_back_without_collecting_again(
-    tmp_path: Path,
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    project_root = _project_logging_each_collection(tmp_path / "project", "def test_case():\n    pass\n")
-    collections = tmp_path / "collections"
+    project_root = throwaway_lane_project_logging_each_collection(tmp_path_factory.mktemp("project"))
+    collections = tmp_path_factory.mktemp("collections")
 
     first = collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
     second = collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert second == first
     assert second.node_ids() == ("test_kept.py::test_case",), second.describe()
-    assert _collections_logged(project_root) == 1, (
-        f"two calls given one collections directory collected the job {_collections_logged(project_root)} times; "
+    assert collections_logged(project_root) == 1, (
+        f"two calls given one collections directory collected the job {collections_logged(project_root)} times; "
         "the second must read the first's collection back"
     )
 
 
-def test_one_collections_directory_keeps_the_collection_of_each_project_and_job_apart(tmp_path: Path) -> None:
+def test_one_collections_directory_keeps_the_collection_of_each_project_and_job_apart(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     """Asking project a for a job its yaml lacks fails first, and then each project's probe job is asked for.
 
     A key ignoring the job's name would raise that recorded failure for a's probe
     job, and a key ignoring the project would hand b a's collection.
     """
-    project_a = _project_logging_each_collection(tmp_path / "a", "def test_in_a():\n    pass\n")
-    project_b = _project_logging_each_collection(tmp_path / "b", "def test_in_b():\n    pass\n")
-    collections = tmp_path / "collections"
+    project_a = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("a"), "def test_in_a():\n    pass\n"
+    )
+    project_b = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("b"), "def test_in_b():\n    pass\n"
+    )
+    collections = tmp_path_factory.mktemp("collections")
 
     with pytest.raises(AssertionError, match="'absent'"):
         collect_lane_job_once(collections, project_a, "absent", env_for=_this_process_environment)
@@ -288,23 +273,25 @@ def test_one_collections_directory_keeps_the_collection_of_each_project_and_job_
 
     assert in_a.node_ids() == ("test_kept.py::test_in_a",), in_a.describe()
     assert in_b.node_ids() == ("test_kept.py::test_in_b",), in_b.describe()
-    assert (_collections_logged(project_a), _collections_logged(project_b)) == (1, 1)
+    assert (collections_logged(project_a), collections_logged(project_b)) == (1, 1)
 
 
-def test_a_collection_that_failed_is_not_collected_again_and_each_later_call_raises_its_error(tmp_path: Path) -> None:
+def test_a_collection_that_failed_is_not_collected_again_and_each_later_call_raises_its_error(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
     """The job's pytest stops on test_kept.py's error at import, so the first call fails collect_lane_job's assert."""
-    project_root = _project_logging_each_collection(
-        tmp_path / "project", "raise RuntimeError('test_kept.py refuses to be imported')\n"
+    project_root = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("project"), "raise RuntimeError('test_kept.py refuses to be imported')\n"
     )
-    collections = tmp_path / "collections"
+    collections = tmp_path_factory.mktemp("collections")
 
     with pytest.raises(AssertionError, match="failed to collect"):
         collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
     with pytest.raises(RuntimeError, match="failed to collect"):
         collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
 
-    assert _collections_logged(project_root) == 1, (
-        f"the job was collected {_collections_logged(project_root)} times, though its first collection failed; "
+    assert collections_logged(project_root) == 1, (
+        f"the job was collected {collections_logged(project_root)} times, though its first collection failed; "
         "a later call must raise that failure, never collect again"
     )
 

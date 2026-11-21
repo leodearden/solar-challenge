@@ -10,14 +10,17 @@ environment in place of the uv environments shared_uv_probe_environments builds.
 """
 
 import shlex
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
 from tests._collect_only import requires_uv
-from tests._throwaway_lane_project import PROBE_JOB, throwaway_lane_project
+from tests._lane_project_logging_each_collection import (
+    collections_logged,
+    throwaway_lane_project_logging_each_collection,
+)
+from tests._throwaway_lane_project import PROBE_JOB
 
 GIVES_EACH_COMMAND_THIS_PROCESS_ENVIRONMENT = """\
 import os
@@ -35,29 +38,9 @@ def shared_uv_probe_environments():
     return _ThisProcessEnvironment()
 """
 
-APPENDS_A_LINE_TO_THE_COLLECTIONS_LOG = """\
-from pathlib import Path
-
-with (Path(__file__).parent.parent / "collections.log").open("a", encoding="utf-8") as log:
-    log.write("collected\\n")
-"""
-
 REQUIRES_UV = "@requires_uv"
 
 FREEZES_THE_CALLERS_UV_LOCK_MODE = '@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")'
-
-
-def _lane_project_logging_each_collection(lane_project: Path) -> Path:
-    """Make *lane_project* a throwaway project whose one lane job, PROBE_JOB, runs this interpreter's pytest on suite/.
-
-    The suite's conftest appends a line to the project's collections.log each time a collection loads it.
-    """
-    throwaway_lane_project(lane_project, f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider suite")
-    suite = lane_project / "suite"
-    suite.mkdir()
-    (suite / "test_case.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
-    (suite / "conftest.py").write_text(APPENDS_A_LINE_TO_THE_COLLECTIONS_LOG, encoding="utf-8")
-    return lane_project
 
 
 def _module_asking_for_the_probe_job_of(lane_project: Path, *decorators: str) -> str:
@@ -79,7 +62,7 @@ from tests._collect_only import requires_uv
     worker = getattr(request.config, "workerinput", {{}}).get("workerid", "master")
     Path(__file__).with_suffix(".worker").write_text(worker, encoding="utf-8")
     collection = lane_job_collection(Path({str(lane_project)!r}), {PROBE_JOB!r})
-    assert collection.node_ids() == ("suite/test_case.py::test_case",), collection.describe()
+    assert collection.node_ids() == ("test_kept.py::test_case",), collection.describe()
 """
 
 
@@ -95,11 +78,11 @@ def _run_scenario(pytester: pytest.Pytester, asking_modules: Mapping[str, str], 
 def test_a_run_collects_a_lane_job_once_however_many_of_its_workers_and_test_modules_ask_for_it(
     pytester_under_root_conftest: pytest.Pytester, tmp_path_factory: pytest.TempPathFactory, mode: tuple[str, str]
 ) -> None:
-    """Two test modules of one run ask for a throwaway lane job, whose suite's conftest logs each collection; on two workers, each worker runs one.
+    """Two test modules of one run ask for a throwaway lane job, whose conftest logs each collection; on two workers, each worker runs one.
 
     Each asks with both premises every asking test carries, so this runs only where uv is installed.
     """
-    lane_project = _lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
+    lane_project = throwaway_lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
     asking_module = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV, FREEZES_THE_CALLERS_UV_LOCK_MODE)
 
     result = _run_scenario(
@@ -114,9 +97,9 @@ def test_a_run_collects_a_lane_job_once_however_many_of_its_workers_and_test_mod
             f"the two asking tests ran on {workers}, so not both workers asked for the lane job and this test cannot "
             "tell whether they share its collection"
         )
-    collections = (lane_project / "collections.log").read_text(encoding="utf-8").splitlines()
-    assert len(collections) == 1, (
-        f"a run under {shlex.join(mode)} collected the {PROBE_JOB!r} lane job's suite {len(collections)} times for "
+    logged = collections_logged(lane_project)
+    assert logged == 1, (
+        f"a run under {shlex.join(mode)} collected the {PROBE_JOB!r} lane job's suite {logged} times for "
         "the two tests that asked lane_job_collection for it; the workers and test modules of one run must share one "
         "collection, else each worker collects the job itself"
     )
@@ -134,7 +117,7 @@ def test_asking_without_freezing_the_callers_uv_lock_mode_fails_naming_its_fixtu
     runs its tests in, no test reads a collection collected without the lock mode a caller's shell may freeze.
     """
     monkeypatch.delenv("UV_FROZEN", raising=False)
-    lane_project = _lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
+    lane_project = throwaway_lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
     unfrozen = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV)
     frozen = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV, FREEZES_THE_CALLERS_UV_LOCK_MODE)
 
@@ -154,7 +137,7 @@ def test_asking_where_uv_is_not_installed_fails_naming_requires_uv(
 ) -> None:
     """With no uv on PATH, a test that asks without @requires_uv, which would skip it there, fails naming it."""
     monkeypatch.setenv("PATH", str(tmp_path_factory.mktemp("path-without-uv")))
-    lane_project = _lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
+    lane_project = throwaway_lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
     asking_module = _module_asking_for_the_probe_job_of(lane_project, FREEZES_THE_CALLERS_UV_LOCK_MODE)
 
     result = _run_scenario(pytester_under_root_conftest, {"test_only": asking_module})
