@@ -36,7 +36,7 @@ relationship to the system has three components:
 |-----------|------------------|---------------|
 | Self-consumed solar | Householder pays CBS at `own_use_rate` p/kWh | `bill()` `own_use_payment_gbp` |
 | Grid export (SEG) | CBS receives; not passed to householder | `project_multi_year()` `fleet_revenue_gbp` (SEG rate reconciled from `ScenarioConfig.seg_tariff_pence_per_kwh` onto homes) |
-| Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff is configured) | `householder_bill()` `import_cost_gbp` |
+| Grid import (including off-peak energy a battery grid-charges) | Householder pays retailer at the home's tariff rate (`retail_baseline_rate` p/kWh fallback when no tariff priced the run, i.e. `SummaryStatistics.pricing`'s import rate is None) | `householder_bill()` `import_cost_gbp` |
 
 The householder carries no debt, no capital obligation, and no export-MPAN risk.
 The CBS bears all capex, debt service, and battery-cycling costs.
@@ -134,6 +134,15 @@ summaries over different windows, naming the first position that differs and bot
 windows, and names their one window in `BillDistribution.annualised_from`
 (`tests/unit/test_finance_window.py`).
 
+How the run was priced is the summary's own too (`SummaryStatistics.pricing`, the
+`RunPricing` that `simulate_home` records and `calculate_summary` copies).  A home no
+tariff priced, whose `import_tariff_mean_rate_gbp_per_kwh` is None, is billed its
+import at the retail rate with a `UserWarning`, whatever it imported.  A £0 tariff
+priced its run, so its import is billed £0, with no warning.  `householder_bill` and
+`bill_distribution` raise `ValueError` for a summary whose pricing is None, naming
+`calculate_summary`, and `project_multi_year` and the cost-recovery solve do the same
+for a `simulate` whose results record none (`tests/unit/test_finance_pricing.py`).
+
 `own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
 With `self_consumption_override` set it comes from the override instead (*Override
 (spreadsheet-assumption) path*, below).
@@ -198,7 +207,7 @@ for the full worked reconciliation):
 ```
 own_use_kwh         = 2,000 kWh/home/yr   (no grid-charging: basis C == B-style; see §2)
 import_kwh          = 1,400 kWh/home/yr
-import_cost_gbp     = 1,400 × 23 / 100  = £322.00/yr (retail fallback; no tariff config)
+import_cost_gbp     = 1,400 × 23 / 100  = £322.00/yr (retail fallback; no tariff priced the run)
 standing_charge_gbp = 60 × 365 / 100    = £219.00/yr
 own_use_payment_gbp = 12.22 × 2,000 / 100 = £244.40/yr  (at solved rate; basis C = 2,000 here)
 own_use_vat_gbp     = 0.05 × 244.40     = £12.22/yr
@@ -220,12 +229,11 @@ override fraction instead of basis C:
 ```
 own_use_kwh = min(self_consumption_override × generation_kwh, demand_kwh)
 import_kwh  = demand_kwh − own_use_kwh
-              (priced at the home's effective import rate: physics import cost /
-               physics import kWh × 100, or retail when physics import is 0.
-               A home with no tariff configured reports a £0 physics import
-               cost; householder_bill first prices that at retail, with a
-               UserWarning, on both paths, so the home's effective rate is
-               retail too)
+              (priced at the home's own import rate: physics import cost /
+               physics import kWh, or the tariff's time-weighted mean rate,
+               RunPricing.import_tariff_mean_rate_gbp_per_kwh, when the run
+               imported nothing; at retail, with a UserWarning, only when no
+               tariff priced the run)
 ```
 
 Every other identity above is unchanged, applied to this `own_use_kwh`.  A home
@@ -237,8 +245,8 @@ the same split (§4), so the cost-recovery solve's rate base is the own-use thes
 bills charge (§5).
 
 **[FIN] override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 5.5 kWp × 1,050 kWh/kWp,
-3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail and effective import
-rate 23 p/kWh, over a non-leap calendar-year window, `year_days` = 365):
+3,400 kWh demand, override 0.70, own-use 15 p/kWh, retail rate and the home's own
+import rate 23 p/kWh, over a non-leap calendar-year window, `year_days` = 365):
 
 ```
 generation_kwh       = 5.5 × 1,050 = 5,775 kWh/yr
@@ -262,14 +270,14 @@ Uncapped, the 0.5.0 tag bills this home for 4,042.5 kWh: own-use
 15 × 4,042.5 / 100 = £606.375, outlay £866.64, saving £184.41.
 
 **Untariffed override example** (`tests/integration/test_finance_bill.py::TestOverrideExactValues`; 4,000 kWh generation,
-3,400 kWh demand, 1,200 kWh physics import at £0 with no tariff configured,
+3,400 kWh demand, 1,200 kWh physics import that no tariff priced,
 override 0.70, own-use 15 p/kWh, retail 23 p/kWh, over a non-leap calendar-year
 window, `year_days` = 365):
 
 ```
 own_use_kwh          = min(0.70 × 4,000, 3,400) = 2,800 kWh/yr   (cap not binding)
 import_kwh           = 3,400 − 2,800 = 600 kWh/yr
-effective import rate = 23 p/kWh   (retail fallback: physics import cost is £0; warned)
+import rate          = 23 p/kWh   (retail fallback: no tariff priced the run; warned)
 import_cost_gbp      = 600 × 23 / 100 = £138.00/yr
 own_use_payment_gbp  = 15 × 2,800 / 100 = £420.00/yr
 cbs_amount_due_gbp   = 420 + 0.05 × 420 = £441.00/yr   (import is paid to the retailer, so the fallback leaves this unchanged)
@@ -310,24 +318,29 @@ own_use_revenue   = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh / 100
                     (a_h = _annualise_physics(s_h), home h's window totals × k_h;
                      k_h = s_h.window.annualisation_scale = year_days_h / days_h)
 
-seg_revenue       = Σ_homes _seg_export_income_gbp(a_h, finance)
-                    (= Σ k_h × home.total_export_revenue_gbp on the physics path;
-                    both paths read the same a_h as own-use)
+seg_revenue       = Σ_homes export_kwh_h × seg_rate_h / 100
+                    (_seg_export_income_gbp(a_h, finance); seg_rate_h =
+                    s_h.pricing.seg_rate_pence_per_kwh, HomeConfig.seg_tariff's
+                    rate as simulate_home records it, 0 when None; both paths
+                    read the same a_h as own-use)
+
+                    Physics path: export_kwh_h = k_h × the simulated export.
+                    seg_revenue then equals Σ k_h × total_export_revenue_gbp to
+                    float precision, because simulate_home prices each minute's
+                    export at the same flat rate, so physics figures do not move.
 
                     Override path (self_consumption_override set):
-                    export_kwh = generation − min(override × generation, demand)
+                    export_kwh_h = generation − min(override × generation, demand)
                     (a_h's annual generation and demand; §3, override path),
-                    priced at the home's effective export rate = physics
-                    export revenue / physics export kWh × 100
-                    (0 when physics export is 0)
+                    priced at the home's own SEG rate whatever the simulated
+                    export, 0 included
 
                     SEG input reconciliation: project_multi_year simulates
                     scenario.simulated_homes().  When
                     ScenarioConfig.seg_tariff_pence_per_kwh is set, each home
                     whose HomeConfig.seg_tariff is None simulates at
                     SEGTariff(rate_pence_per_kwh=R), so per-home seg_tariff
-                    stays the single source of SEG maths (robust to the
-                    Task-85 export-revenue zeroing).  A scenario whose home
+                    stays the single source of SEG maths.  A scenario whose home
                     carries its own other rate cannot be built: ScenarioConfig
                     construction raises ConfigurationError naming the home and
                     both rates.
@@ -366,7 +379,9 @@ ages it prices
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,
 `min(override × generation, demand)`, and `seg_revenue` prices the export that
-own-use leaves over, `generation − own-use`.  So own-use revenue is exactly what
+own-use leaves over, `generation − own-use`, at the home's own SEG rate, whatever
+it simulated exporting
+(`tests/unit/test_finance_projection_revenue.py::TestSegIncomeAtTheHomesRate`).  So own-use revenue is exactly what
 the §3 override bills charge.  `YearPoint.fleet_export_kwh`, `fleet_import_kwh` and
 the battery throughput behind ageing stay the simulated flows
 (`tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue`).
@@ -434,8 +449,8 @@ ages' battery ageing see only finite values
 
 **No-flex identity** (flat-rate fleet, grid_services = 0):
 
-When `grid_services_income_per_kw_per_year_gbp=0.0` and `export_revenue=0`
-(synthetic SEG-free fleet):
+When `grid_services_income_per_kw_per_year_gbp=0.0` and no SEG rate priced the
+fleet's runs (`RunPricing.seg_rate_pence_per_kwh` None; synthetic SEG-free fleet):
 
 ```
 fleet_revenue_gbp = own_use_rate × fleet_billed_own_use / 100
