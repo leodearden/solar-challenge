@@ -9,28 +9,22 @@ from datetime import datetime
 
 import pytest
 
-from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
     DispatchStrategy,
-    GridChargeConfig,
     PeakShavingStrategy,
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import simulate_timestep
 from solar_challenge.tariff import TariffConfig
-from tests._june_minute_day import MINUTES, inline_day, strategy_day
+from tests._june_minute_day import (
+    MINUTES,
+    inline_day,
+    morning_drain_battery,
+    morning_drain_demand_kw,
+    strategy_day,
+)
 
 _E10 = TariffConfig.economy_10()
-
-
-def _battery(soc_kwh: float) -> Battery:
-    """The fixture's battery at soc_kwh; its grid_charge_target_kwh is 6.0."""
-    return Battery(BatteryConfig(capacity_kwh=10.0, grid_charging=GridChargeConfig(0.6)), initial_soc_kwh=soc_kwh)
-
-
-def _demand_kw(h: float) -> float:
-    """The day's demand: 0.4 kW, plus the 3.5 kW morning drain from 06:00 to 13:00 and 1.5 kW from 17:00 to 20:00."""
-    return 0.4 + (3.5 if 6 <= h < 13 else 0.0) + (1.5 if 17 <= h < 20 else 0.0)
 
 
 _TOU = TOUOptimizedStrategy([(5, 13), (16, 20), (22, 24)])
@@ -52,7 +46,9 @@ class TestACheapMinuteWhosePvChargeReachesTheTarget:
 
     @pytest.mark.parametrize("strategy", _STRATEGIES)
     def test_it_stores_no_grid_energy(self, strategy: DispatchStrategy) -> None:
-        result = simulate_timestep(2.0, 0.5, _battery(5.98), 1.0, datetime(2024, 6, 21, 14, 0), strategy, tariff=_E10)
+        result = simulate_timestep(
+            2.0, 0.5, morning_drain_battery(5.98), 1.0, datetime(2024, 6, 21, 14, 0), strategy, tariff=_E10
+        )
 
         assert result.grid_charge == 0.0
 
@@ -61,8 +57,10 @@ class TestTheMorningDrainDay:
     """The day from 1.0 kWh: the cheap night grid-charges the battery to its target, the expensive morning's drain discharges it, and in the cheap afternoon PV recharges it while the grid tops up what that PV charge leaves short of the target."""
 
     def test_the_strategy_route_grid_charges_what_simulate_timestep_tou_does(self) -> None:
-        inline = [result.grid_charge for result in inline_day(_battery(1.0), _demand_kw, _E10)]
-        routed = [result.grid_charge for result in strategy_day(_battery(1.0), _demand_kw, _TOU, _E10)]
+        inline = [result.grid_charge for result in inline_day(morning_drain_battery(1.0), morning_drain_demand_kw, _E10)]
+        routed = [
+            result.grid_charge for result in strategy_day(morning_drain_battery(1.0), morning_drain_demand_kw, _TOU, _E10)
+        ]
 
         # The grid energy the battery drew; the 0.975 of it the battery stored is the PRD's 5.045223 kWh.
         assert sum(inline) == pytest.approx(5.174588, abs=1e-6)
@@ -71,10 +69,10 @@ class TestTheMorningDrainDay:
 
     @pytest.mark.parametrize("strategy", _STRATEGIES)
     def test_no_step_that_grid_charges_ends_above_the_target(self, strategy: DispatchStrategy) -> None:
-        battery = _battery(1.0)
+        battery = morning_drain_battery(1.0)
         target_kwh = battery.grid_charge_target_kwh
 
-        flows = strategy_day(battery, _demand_kw, strategy, _E10)
+        flows = strategy_day(battery, morning_drain_demand_kw, strategy, _E10)
 
         assert [
             (minute, result.battery_soc)
