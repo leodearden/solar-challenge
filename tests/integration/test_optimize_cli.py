@@ -29,7 +29,8 @@ from tests._factories import (
     make_config_result,
     make_ranked_sweep,
 )
-from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config
+from tests._finance_builders import make_fleet_results, make_home_config
+from tests._fleet_simulate_stand_in import answering_with
 from tests.integration._helpers import SCENARIO
 
 
@@ -844,10 +845,11 @@ class TestOptimizeCLIE2EFast:
         was asked to simulate.
         """
         simulated_fleets: list[FleetConfig] = []
+        answer = answering_with(fleet_results)
 
         def simulate(fleet_config, start, end):
             simulated_fleets.append(fleet_config)
-            return make_fleet_results_of(fleet_results.per_home_results, homes=fleet_config.homes)
+            return answer(fleet_config, start, end)
 
         scenario_file = _write_optimize_scenario(
             tmp_path, n_homes=n_homes, finance_overrides=finance_overrides
@@ -1089,12 +1091,13 @@ class TestOptimizeCLIE2EFast:
         )
         assert sweep_only.exit_code == 0, sweep_only.output
         asked: list[object] = []
+        answer = answering_with(one_home_fleet_results)
 
         def simulate(fleet_config, start, end):
             asked.append(fleet_config)
             if len(asked) > len(sweep_fleets):
                 raise ValueError("a defect raised while the sensitivity panel runs")
-            return make_fleet_results_of(one_home_fleet_results.per_home_results, homes=fleet_config.homes)
+            return answer(fleet_config, start, end)
 
         result = invoke_cli(
             [
@@ -1156,12 +1159,13 @@ class TestOptimizeCLIE2EFast:
         )
         assert sweep_only.exit_code == 0, sweep_only.output
         asked: list[object] = []
+        answer = answering_with(one_home_fleet_results)
 
         def simulate(fleet_config, start, end):
             asked.append(fleet_config)
             if len(asked) > len(sweep_fleets):
                 raise ConfigurationError("a refusal raised while the sensitivity panel runs")
-            return make_fleet_results_of(one_home_fleet_results.per_home_results, homes=fleet_config.homes)
+            return answer(fleet_config, start, end)
 
         result = invoke_cli(
             [

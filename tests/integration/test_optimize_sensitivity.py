@@ -4,9 +4,9 @@
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected
 synthetic simulate stands in for the real fleet simulator: it answers each fleet
-with constant energy, paired with that fleet's homes.
-The synthetic homes, scenarios and simulation results come from
-tests/_finance_builders.py.
+with constant energy, paired with that fleet's homes, through
+tests/_fleet_simulate_stand_in.py.  The synthetic homes, scenarios and
+simulation results come from tests/_finance_builders.py.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import pytest
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.gridservices import GridServicesEventsConfig
 from solar_challenge.home import SimulationResults
 from solar_challenge.optimize import (
@@ -36,6 +36,7 @@ from tests._finance_builders import (
     make_scenario,
     make_sim_results,
 )
+from tests._fleet_simulate_stand_in import answering_with
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +98,7 @@ _CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
 )
 
 
-def _paired_const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
-    """_CONST_FLEET_RESULTS' energy, paired with the config's own homes, as FleetRunner.simulate pairs them.
-
-    Grid-services income is priced from the simulated fleet's homes, so each
-    config's batteries earn it while every config simulates the same energy.
-    """
-    return make_fleet_results_of(_CONST_FLEET_RESULTS.per_home_results, homes=fc.homes)
+_paired_const_simulate: FleetSimulate = answering_with(_CONST_FLEET_RESULTS)
 
 
 def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-def]
