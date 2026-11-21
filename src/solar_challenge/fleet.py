@@ -8,6 +8,7 @@ import os
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
+from datetime import tzinfo
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
@@ -20,6 +21,7 @@ from solar_challenge.home import (
     SummaryStatistics,
     calculate_summary,
     grid_dependency_ratio,
+    run_window,
     self_consumption_ratio,
     simulate_home,
 )
@@ -401,15 +403,15 @@ def reusing(
     A request matches when its start and end are start_date's and end_date's instants on their clocks, and its homes
     equal results' with each battery at its starting soh; the fleet's name is not compared. A home whose load is
     stochastic and unseeded is therefore answered with results' draw, not a fresh one. A matching request raises
-    ValueError, naming both windows, unless each of results' homes covers start_date's date to end_date's in
-    start_date's zone. Every other request goes to simulate, and nothing beyond results is kept: the reasons are in
-    decision 8 of docs/prds/fleet-execution-policy.md.
+    ValueError, naming both windows, unless each of results' homes covers its run window from start_date to end_date
+    (home.run_window, the window simulate_home runs it over). Every other request goes to simulate, and nothing beyond
+    results is kept: the reasons are in decision 8 of docs/prds/fleet-execution-policy.md.
     """
     held_homes = _at_starting_soh(results.home_configs)
     held_window = _instants_and_clocks(start_date, end_date)
 
     def simulate_reusing(fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-        """results paired with fleet's homes for a request reusing matches, once they are found to cover its window; else simulate's answer."""
+        """results paired with fleet's homes for a request reusing matches, once each of results' homes is found to cover its run window; else simulate's answer."""
         if _instants_and_clocks(start, end) == held_window and _at_starting_soh(fleet.homes) == held_homes:
             _require_results_cover(results, start_date, end_date)
             return FleetResults(per_home_results=list(results.per_home_results), home_configs=list(fleet.homes))
@@ -420,26 +422,20 @@ def reusing(
 
 def _instants_and_clocks(
     start: pd.Timestamp, end: pd.Timestamp
-) -> tuple[pd.Timestamp, str | None, pd.Timestamp, str | None]:
-    """start and end, each followed by its zone's name, so two windows are equal only at the same instants on the same clocks."""
-    return start, _zone_name(start), end, _zone_name(end)
-
-
-def _zone_name(moment: pd.Timestamp) -> str | None:
-    """The name of moment's zone, as SimulationWindow.of_index names an index's: None for a naive moment."""
-    return None if moment.tz is None else str(moment.tz)
+) -> tuple[pd.Timestamp, tzinfo | None, pd.Timestamp, tzinfo | None]:
+    """Each moment followed by its tzinfo, so two windows are equal only at the same instants on the same clocks."""
+    return start, start.tz, end, end.tz
 
 
 def _require_results_cover(results: FleetResults, start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
-    """Raise ValueError, naming both windows, unless each of results' homes covers start_date's date to end_date's in start_date's zone."""
-    first_day, last_day, zone = start_date.date(), end_date.date(), _zone_name(start_date)
+    """Raise ValueError, naming both windows, unless each of results' homes covers its run window from start_date to end_date."""
     for position, (home, held) in enumerate(zip(results.home_configs, results.per_home_results, strict=True)):
-        covered = held.window
-        if (covered.first_day, covered.last_day, covered.timezone) != (first_day, last_day, zone):
+        covered, expected = held.window, run_window(home.location, start_date, end_date)
+        if covered != expected:
             raise ValueError(
-                "reusing answers only from results over the window it wraps them with: "
-                f"home {position} ({home.name!r}) covers {covered.first_day} to {covered.last_day} in "
-                f"{covered.timezone}, where start_date and end_date run from {first_day} to {last_day} in {zone}"
+                "reusing answers only from results over the window simulate_home runs each home over from "
+                f"start_date to end_date: home {position} ({home.name!r}) covers {covered!r}, "
+                f"where its run window is {expected!r}"
             )
 
 

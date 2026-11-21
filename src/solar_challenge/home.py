@@ -728,8 +728,8 @@ def _local_date(moment: pd.Timestamp, timezone: str) -> datetime.date:
     return local_date
 
 
-def _run_window(location: Location, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationWindow:
-    """The run's window: the dates of start_date and end_date on location's clock, both counted, at one minute."""
+def run_window(location: Location, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationWindow:
+    """The window simulate_home runs a home at location over: the dates of start_date and end_date on location's clock, a naive moment read as already on it, both counted, at one minute."""
     return SimulationWindow(
         _local_date(start_date, location.timezone),
         _local_date(end_date, location.timezone),
@@ -781,7 +781,7 @@ def simulate_home(
             PrefetchedWeather refuses it. Whatever else weather.get raises,
             e.g. PvgisTmy's WeatherDataError, propagates too.
     """
-    window = _run_window(config.location, start_date, end_date)
+    window = run_window(config.location, start_date, end_date)
     rows = window.rows()
     hourly_weather = _hourly_weather(config, weather)
     minute_generation = interpolate_to_minute_resolution(
