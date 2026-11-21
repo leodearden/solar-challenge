@@ -1303,6 +1303,33 @@ class TestSummaryStatistics:
         with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
             home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
 
+    @pytest.mark.parametrize(
+        ("discharge_kwh", "self_consumption_kwh"),
+        [
+            pytest.param(8.0, 6.0, id="more-than-self-consumed"),
+            pytest.param(math.nextafter(60.0, math.inf), 60.0, id="by-one-ulp"),
+            pytest.param(math.inf, 60.0, id="infinite"),
+            pytest.param(float("nan"), 60.0, id="discharge-not-a-number"),
+            pytest.param(8.0, float("nan"), id="self-consumption-not-a-number"),
+        ],
+    )
+    def test_a_discharge_above_its_self_consumption_is_refused_naming_both_totals(
+        self, discharge_kwh: float, self_consumption_kwh: float
+    ) -> None:
+        """The error states the invariant and the totals that break it."""
+        with pytest.raises(ValueError) as refused:
+            home_summary(total_battery_discharge_kwh=discharge_kwh, total_self_consumption_kwh=self_consumption_kwh)
+
+        message = str(refused.value)
+        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
+        assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
+
+    def test_a_discharge_that_is_all_of_its_self_consumption_is_accepted_with_no_direct_use(self) -> None:
+        summary = home_summary(total_battery_discharge_kwh=60.0, total_self_consumption_kwh=60.0)
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
     def test_refuses_a_field_assignment(self) -> None:
         """A summary is a frozen value, so a simulation_days construction checked against its window cannot be assigned after it."""
         summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)

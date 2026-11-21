@@ -393,6 +393,8 @@ class SummaryStatistics:
     total_grid_import_kwh: float
     total_grid_export_kwh: float
     total_battery_charge_kwh: float
+    # Energy the battery delivered to the home's bus, after its discharge losses: a part of
+    # total_self_consumption_kwh, which counts it.
     total_battery_discharge_kwh: float
     peak_generation_kw: float
     peak_demand_kw: float
@@ -418,7 +420,7 @@ class SummaryStatistics:
     window: Optional[SimulationWindow] = None
 
     def __post_init__(self) -> None:
-        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and, when a window is set, a simulation_days other than its days."""
+        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and, when a window is set, a simulation_days other than its days."""
         grid_charge = self.total_grid_charge_kwh
         if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
             raise ValueError(
@@ -427,6 +429,14 @@ class SummaryStatistics:
                 f"got total_grid_charge_kwh={grid_charge!r}, "
                 f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
                 f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
+            )
+        discharge = self.total_battery_discharge_kwh
+        if not discharge <= self.total_self_consumption_kwh:
+            raise ValueError(
+                "SummaryStatistics' total_battery_discharge_kwh is a part of total_self_consumption_kwh, which "
+                "counts the battery's discharge, so it is at most it: "
+                f"got total_battery_discharge_kwh={discharge!r}, "
+                f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}"
             )
         window = self.window
         if window is not None and self.simulation_days != window.days:
@@ -443,7 +453,7 @@ class SummaryStatistics:
 
     @property
     def total_direct_self_consumption_kwh(self) -> float:
-        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too."""
+        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too, so at least 0."""
         return self.total_self_consumption_kwh - self.total_battery_discharge_kwh
 
     @property

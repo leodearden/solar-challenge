@@ -77,7 +77,7 @@ def _make_spare_battery_sim_results(
     battery_soc above min_soc_kwh and battery_discharge below max_discharge_kw.
 
     With the default battery_soc_kwh=3.0 (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
-    and battery_discharge=0.5 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
+    and battery_discharge=0.2 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
     (winter-weekday-16-18h) selects real in-window steps of the default full-year
     index, and compute_fleet_spare_capacity_kw yields a positive event figure.
     """
@@ -86,7 +86,9 @@ def _make_spare_battery_sim_results(
     # in the flat-rate-0 delta isolation and do not feed the grid-services
     # computation (which only reads battery_soc and battery_discharge).  Each
     # kW row lasts an hour, so *hours* total 2,000 kWh of self-consumption,
-    # 800 kWh of export and 1,400 kWh of import.
+    # 800 kWh of export and 1,400 kWh of import.  The 0.2 kW discharge totals
+    # at most 1,752 kWh over a year of hours, under the 2,000 kWh of
+    # self-consumption that counts it.
     sc_kw = 2000.0 / n_steps
     exp_kw = 800.0 / n_steps
     imp_kw = 1400.0 / n_steps
@@ -99,7 +101,7 @@ def _make_spare_battery_sim_results(
         demand=pd.Series(demand_kw, index=hours),
         self_consumption=pd.Series(sc_kw, index=hours),
         battery_charge=zeros.copy(),
-        battery_discharge=pd.Series(0.5, index=hours),  # below max_discharge_kw=2.5
+        battery_discharge=pd.Series(0.2, index=hours),  # below max_discharge_kw=2.5
         battery_soc=pd.Series(battery_soc_kwh, index=hours),
         grid_import=pd.Series(imp_kw, index=hours),
         grid_export=pd.Series(exp_kw, index=hours),
