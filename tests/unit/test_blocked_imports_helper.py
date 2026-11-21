@@ -10,6 +10,8 @@ import pytest
 
 from tests._blocked_imports import extra_modules, import_with_modules_blocked, run_with_modules_blocked
 
+_BLOCKED_TOGETHER = ("json", "email")
+
 
 @pytest.mark.parametrize(
     ("module", "blocked", "refusal"),
@@ -52,13 +54,15 @@ def test_the_source_runs_with_the_args_as_its_sys_argv_after_the_program_name(pr
     )
 
 
-def test_the_source_cannot_import_a_blocked_module(project_root: Path) -> None:
-    refusal = "ModuleNotFoundError: import of json halted; None in sys.modules"
+@pytest.mark.parametrize("module", _BLOCKED_TOGETHER)
+def test_the_source_cannot_import_any_blocked_module(module: str, project_root: Path) -> None:
+    refusal = f"ModuleNotFoundError: import of {module} halted; None in sys.modules"
 
-    result = run_with_modules_blocked("import json", [], ["json"], project_root, timeout=60)
+    result = run_with_modules_blocked(f"import {module}", [], _BLOCKED_TOGETHER, project_root, timeout=60)
 
     assert result.returncode != 0 and refusal in result.stderr, (
-        f"running `import json` with json blocked exited {result.returncode}:\n{result.stderr}"
+        f"running `import {module}` with {' and '.join(_BLOCKED_TOGETHER)} blocked exited {result.returncode}:\n"
+        f"{result.stderr}"
     )
 
 
