@@ -7,16 +7,21 @@ sunless 2024-01-15. Row 14: a home's dispatch is refused by build_dispatch_strat
 """
 
 import dataclasses
+from collections.abc import Callable
 
 import pandas as pd
 import pytest
-from solar_challenge.dispatch import TOUOptimizedStrategy
+from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategy
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import EnergyFlowResult
-from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._june_minute_day import MINUTES, inline_day, morning_drain_battery, morning_drain_demand_kw, strategy_day
-from tests._synthetic_weather import sunless_weather, weather_for
+from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
 
 _E10 = TariffConfig.economy_10()
 
@@ -90,3 +95,56 @@ class TestTheBristolArbitrageHome:
             given.battery_soc, routed.battery_soc, check_exact=False, rtol=0, atol=_KWH_PER_MINUTE
         )
         assert calculate_summary(routed).total_grid_charge_kwh > 0
+
+
+def _tou_optimized_home(battery: BatteryConfig, tariff: TariffConfig | None) -> HomeConfig:
+    """A home with 4 kW of PV and a deterministic 3400 kWh a year that asks for tou_optimized, on tariff."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
+        battery_config=battery,
+        tariff_config=tariff,
+        dispatch_strategy="tou_optimized",
+    )
+
+
+@pytest.mark.parametrize(
+    "build_tariff",
+    [pytest.param(TariffConfig.economy_10, id="economy_10"), pytest.param(TariffConfig.economy_7, id="economy_7")],
+)
+class TestTheHomesRouteIsTheStrategyRoute:
+    """A 5 kWh battery, naming no strategy, grid-charging to 0.6 on the synthetic 2024-06-21 in a home that asks for tou_optimized."""
+
+    def test_its_run_is_tou_optimized_on_its_tariff_s_clock_given_to_simulate_home(
+        self, build_tariff: Callable[[], TariffConfig]
+    ) -> None:
+        tariff = build_tariff()
+        home = _tou_optimized_home(BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig(0.6)), tariff)
+        day = pd.Timestamp("2024-06-21")
+        weather = weather_for(home, synthetic_june_weather(day))
+
+        own = simulate_home(home, day, day, weather=weather)
+        given = simulate_home(home, day, day, weather=weather, strategy=TOUOptimizedStrategy(tariff=tariff))
+
+        assert own.strategy_name == given.strategy_name
+        pd.testing.assert_frame_equal(own.to_dataframe(), given.to_dataframe(), check_exact=True)
+
+
+class TestRefusalsArriveThroughTheFactory:
+    """A home that asks for tou_optimized, its battery naming no strategy, is refused as build_dispatch_strategy refuses TOUOptimizedStrategyConfig() on the home's tariff."""
+
+    def test_with_no_tariff_it_is_refused_the_tariff_s_clock(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            _tou_optimized_home(BatteryConfig(capacity_kwh=5.0), None)
+
+        for name in ("'tou_optimized'", "tariff's clock", "no tariff"):
+            assert name in str(refused.value), (name, str(refused.value))
+
+    def test_grid_charging_on_a_flat_tariff_is_refused_for_its_lack_of_a_cheap_period(self) -> None:
+        tariff = TariffConfig.flat_rate(0.25)
+
+        with pytest.raises(ConfigurationError) as refused:
+            _tou_optimized_home(BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig(0.9)), tariff)
+
+        for name in ("grid_charging", "'tou_optimized'", tariff.name, "no cheap period"):
+            assert name in str(refused.value), (name, str(refused.value))
