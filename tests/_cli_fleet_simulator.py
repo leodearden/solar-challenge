@@ -34,7 +34,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import CliInvocation
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, FleetSimulator, HomesDone
 from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import ONE_MINUTE, covered_days
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 
 
@@ -98,7 +98,9 @@ class RecordingSimulate:
 
     It answers each home of a fleet with make_sim_results over the asked
     window's calendar days, from its first, paired with that fleet's homes, so
-    it needs no weather.
+    it needs no weather. Its rows are one minute apart, the cadence of the
+    window simulate_home runs a home over, so `finance run`'s reusing wrapper
+    accepts its answers.
     """
 
     fleets: list[FleetConfig] = dataclasses.field(default_factory=list)
@@ -107,7 +109,8 @@ class RecordingSimulate:
         self.fleets.append(fleet)
         days = covered_days(start.date(), end.date())
         return make_fleet_results_of(
-            [make_sim_results(days=days, first_day=start.date()) for _ in fleet.homes], homes=fleet.homes
+            [make_sim_results(days=days, first_day=start.date(), cadence=ONE_MINUTE) for _ in fleet.homes],
+            homes=fleet.homes,
         )
 
     @property
