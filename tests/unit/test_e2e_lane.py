@@ -3,16 +3,22 @@
 
 tests/unit/test_offline_lane_contracts.py holds the contracts every lane job
 keeps, and a test only one job needs stays in that job's module. These read the
-e2e job's steps from dark-factory-orchestrator.yaml: they run no uv and reach no
-network.
+e2e job's steps from dark-factory-orchestrator.yaml, and one also collects the
+job's suite step as the lane runs it, through uv, offline, as the lane contract
+probes do.
 """
 
+import re
 import shlex
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+
+from tests._collect_only import requires_uv
+from tests._lane_collection import collect_lane_job
 from tests._orchestrator_config import OrchestratorCommand, lane_job_steps
-from tests._uv_env import uv_run_options
+from tests._uv_env import SharedUvEnvironments, uv_run_options
 
 _E2E_JOB = "e2e"
 
@@ -21,6 +27,15 @@ _BROWSER_INSTALL = ("playwright", "install")
 _BROWSER = "chromium-headless-shell"
 
 _SKIP_BROWSER_GC = "PLAYWRIGHT_SKIP_BROWSER_GC=1"
+
+# The mean time one e2e test takes when the lane runs the suite serially, at its idle priority, on a loaded host.
+_SECONDS_PER_SERIAL_TEST = 15
+
+_TIMEOUT_OPTIONS_WHOSE_VALUE_IS_THE_NEXT_WORD = frozenset({"-k", "-s", "--kill-after", "--signal"})
+
+_DURATION = re.compile(r"(?P<number>[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?P<unit>[smhd]?)")
+
+_SECONDS_PER_DURATION_UNIT = {"": 1, "s": 1, "m": 60, "h": 60 * 60, "d": 24 * 60 * 60}
 
 
 def _holds_run(words: Sequence[str], run: Sequence[str]) -> bool:
@@ -56,6 +71,38 @@ def _installer_environment(words: Sequence[str]) -> Sequence[str]:
     return words
 
 
+def _timeout_secs(step: OrchestratorCommand) -> float:
+    """Return the DURATION, in seconds, of the coreutils `timeout` *step*'s command starts with.
+
+    The DURATION is a decimal number, then an optional unit: s, the default, m, h or d.
+    """
+    words = shlex.split(step.command)
+    assert words[:1] == ["timeout"], (
+        f"the {step.label} runs {step.command!r}, which does not start with `timeout`, so nothing bounds its run "
+        "and, the lane being single-flight, a hung run stalls every later lane run; docs/orchestrator-config.md §8 "
+        "says why each step is bounded"
+    )
+    duration = _first_operand(words[1:])
+    match = _DURATION.fullmatch(duration or "")
+    assert match, (
+        f"the {step.label} runs {step.command!r}, whose `timeout` DURATION {duration!r} (None if it gives none) is "
+        "not a decimal number with an optional unit s, m, h or d, so its bound cannot be read"
+    )
+    return float(match["number"]) * _SECONDS_PER_DURATION_UNIT[match["unit"]]
+
+
+def _first_operand(arguments: Sequence[str]) -> str | None:
+    """Return the first of coreutils `timeout`'s *arguments* that is neither an option nor an option's value, None if none is.
+
+    An option is a word starting with `-`, and those that take a value apart
+    from it, such as `-k 60`, take the word after it.
+    """
+    index = 0
+    while index < len(arguments) and arguments[index].startswith("-"):
+        index += 2 if arguments[index] in _TIMEOUT_OPTIONS_WHOSE_VALUE_IS_THE_NEXT_WORD else 1
+    return arguments[index] if index < len(arguments) else None
+
+
 def test_the_e2e_job_installs_the_browser_its_suite_launches_before_running_it(project_root: Path) -> None:
     steps = lane_job_steps(project_root, _E2E_JOB)
     expected = ("uv", "run", *uv_run_options(steps.suite.command), *_BROWSER_INSTALL, _BROWSER)
@@ -83,4 +130,25 @@ def test_the_e2e_jobs_browser_install_deletes_no_browser_of_another_install(proj
         f"the browser installs {unguarded} of the lane job {_E2E_JOB!r} do not set {_SKIP_BROWSER_GC} in the "
         "installer's environment, so each deletes other installs' browsers; set it as a shell assignment or through "
         "`env` at the start of the step; docs/orchestrator-config.md §8 says why"
+    )
+
+
+@requires_uv
+@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
+def test_the_e2e_suite_steps_timeout_gives_each_test_it_collects_a_loaded_hosts_serial_budget(
+    project_root: Path, shared_uv_probe_environments: SharedUvEnvironments
+) -> None:
+    collection = collect_lane_job(project_root, _E2E_JOB, env_for=shared_uv_probe_environments.for_command)
+    suite = lane_job_steps(project_root, _E2E_JOB).suite
+    collected = len(collection.node_ids())
+    budget = collected * _SECONDS_PER_SERIAL_TEST
+    bound = _timeout_secs(suite)
+
+    assert bound >= budget, (
+        f"the suite step of the {suite.label}, {suite.command!r}, is bounded at {bound:g} s, less than the "
+        f"{collected} tests it collects at {_SECONDS_PER_SERIAL_TEST} s each, {budget} s. Run serially at the lane's "
+        "idle priority on a loaded host, the suite can then be killed while still green, before pytest reports, "
+        "and the lane files e2e::nonzero-exit, unconfirmable, naming no test. Raise the step's `timeout` in "
+        "dark-factory-orchestrator.yaml; the running lane reads the raise only once the orchestrator reloads its "
+        "config"
     )
