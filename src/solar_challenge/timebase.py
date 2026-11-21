@@ -91,9 +91,9 @@ class SimulationWindow:
 
     def __post_init__(self) -> None:
         """Refuse a first_day or last_day that is not exactly a date, such as a pd.Timestamp or a datetime, and a cadence that is not exactly a timedelta, such as a pd.Timedelta, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
-        _require_exactly(date, "first_day", self.first_day)
-        _require_exactly(date, "last_day", self.last_day)
-        _require_exactly(timedelta, "cadence", self.cadence)
+        _require_window_field_type(date, "first_day", self.first_day)
+        _require_window_field_type(date, "last_day", self.last_day)
+        _require_window_field_type(timedelta, "cadence", self.cadence)
         covered_days(self.first_day, self.last_day)
         if self.cadence <= timedelta(0):
             raise ValueError(
@@ -222,8 +222,8 @@ class SimulationWindow:
         return read_as_dst.where(read_as_dst <= read_as_standard, read_as_standard)
 
 
-def _require_exactly(kind: type, field: str, value: object) -> None:
-    """Refuse value, SimulationWindow's field, unless its type is kind itself, never a subclass of it, naming field and value."""
+def _require_window_field_type(kind: type, field: str, value: object) -> None:
+    """Refuse value, the SimulationWindow field named field, unless its type is exactly kind, never a subclass of it, naming field and value."""
     if type(value) is not kind:
         raise ValueError(
             f"SimulationWindow's {field} is exactly the standard library's {kind.__name__}, "
