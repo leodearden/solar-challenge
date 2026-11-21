@@ -27,7 +27,6 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    SweepSpec,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
@@ -43,6 +42,7 @@ from solar_challenge.fleet import (
     HomesDone,
     calculate_fleet_summary,
 )
+from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.timebase import covered_days
 

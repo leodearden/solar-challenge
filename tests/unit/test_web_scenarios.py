@@ -14,12 +14,12 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
-from solar_challenge.config import (
+from solar_challenge.config import load_fleet_config
+from solar_challenge.fleet_distribution import (
     NormalDistribution,
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
-    load_fleet_config,
     parse_fleet_distribution_config,
 )
 from solar_challenge.location import LOCATION_PRESETS

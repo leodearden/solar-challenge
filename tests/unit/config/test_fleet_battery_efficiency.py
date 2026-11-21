@@ -6,12 +6,12 @@ import math
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import (
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location
 
 

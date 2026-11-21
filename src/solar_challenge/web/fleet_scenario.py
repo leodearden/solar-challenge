@@ -14,14 +14,14 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.config import (
+from solar_challenge.dispatch import DispatchStrategyConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     FleetDistributionConfig,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
-from solar_challenge.dispatch import DispatchStrategyConfig
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import (
