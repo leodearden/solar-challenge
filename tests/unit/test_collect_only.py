@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_collect_only.py's collect(), the collect-only probe the orchestrator contract tests share.
+"""Unit tests for tests/_collect_only.py's collect(), the collect-only probe the orchestrator contract tests share, and for its uv premise, uv_is_installed() and the requires_uv marker built on it.
 
 They pin that the command runs verbatim and only collects, keeps its project's ini addopts in force,
 receives each extra pytest arg whole, and runs in the environment it is given, that environment's
@@ -20,7 +20,13 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import COLLECTION_REPORT_PLUGIN, COLLECTION_REPORT_PLUGIN_DIRECTORY, CollectedTest, collect
+from tests._collect_only import (
+    COLLECTION_REPORT_PLUGIN,
+    COLLECTION_REPORT_PLUGIN_DIRECTORY,
+    CollectedTest,
+    collect,
+    uv_is_installed,
+)
 from tests._command_runner import ShellCommand
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
@@ -41,10 +47,22 @@ _ABSENT_PACKAGE = "a_package_this_probe_never_installs"
 
 _SKIP_AT_IMPORT = f"import pytest\n\npytest.importorskip({_ABSENT_PACKAGE!r})\n\n\n"
 
+_MODULE_REQUIRING_UV = "from tests._collect_only import requires_uv\n\n\n@requires_uv\ndef test_case():\n    pass\n"
+
 
 def _module_of_failing_tests(*names: str) -> str:
     """Return the source of a test module defining one test per name in *names*, each failing if run."""
     return "".join(f"def {name}():\n    raise AssertionError('collect-only ran {name}')\n\n\n" for name in names)
+
+
+def _path_of_one_directory(directory: Path, *, holding_uv: bool) -> str:
+    """Make *directory*, holding an executable file named uv if *holding_uv*, and return a PATH of it alone."""
+    directory.mkdir()
+    if holding_uv:
+        uv = directory / "uv"
+        uv.touch()
+        uv.chmod(0o755)
+    return str(directory)
 
 
 @pytest.fixture
@@ -336,3 +354,36 @@ def test_a_command_that_fails_before_pytest_starts_is_described_by_its_output(tm
     description = collect(ShellCommand(command, tmp_path)).describe()
 
     assert _STARTUP_ERROR_MESSAGE in description, description
+
+
+def test_uv_is_installed_follows_the_path_it_is_called_under(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "without-uv", holding_uv=False))
+    assert not uv_is_installed()
+
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "with-uv", holding_uv=True))
+    assert uv_is_installed()
+
+
+@pytest.mark.parametrize(
+    ("holding_uv", "outcomes", "summary_line"),
+    [
+        pytest.param(True, {"passed": 1}, "PASSED test_requiring_uv.py::test_case", id="uv-on-path"),
+        pytest.param(False, {"skipped": 1}, "SKIPPED *uv is not installed*", id="no-uv-on-path"),
+    ],
+)
+def test_requires_uv_skips_its_test_exactly_where_uv_is_not_installed(
+    pytester_importing_test_helpers: pytest.Pytester,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    holding_uv: bool,
+    outcomes: dict[str, int],
+    summary_line: str,
+) -> None:
+    """requires_uv reads PATH when its module is imported, so each case is a session started under a PATH of its own."""
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "path", holding_uv=holding_uv))
+    pytester_importing_test_helpers.makepyfile(test_requiring_uv=_MODULE_REQUIRING_UV)
+
+    result = pytester_importing_test_helpers.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+
+    result.assert_outcomes(**outcomes)
+    result.stdout.fnmatch_lines([summary_line])
