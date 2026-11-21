@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 from solar_challenge.fleet import FleetConfig, FleetResults
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results, make_fleet_results_of
 
 _PROJECT_HEADING = "## Project Economics"
@@ -199,7 +199,7 @@ def test_without_economics_flags_the_fleet_is_simulated_once(
     """finance run simulates its fleet once, for its bill, when neither --project nor --cost-recovery asks for more."""
     simulator = _RecordingSimulator(fleet_results)
 
-    result = invoke_cli(["finance", "run", str(_write_scenario(tmp_path))], simulator)
+    result = invoke_cli(["finance", "run", str(_write_scenario(tmp_path))], answering(simulator))
 
     assert result.exit_code == 0, result.output
     assert len(simulator.requests) == 1
@@ -214,7 +214,7 @@ def test_the_simulator_receives_the_fleet_paid_the_scenarios_seg_rate_over_the_w
 
     result = invoke_cli(
         ["finance", "run", str(scenario), "--start", "2024-06-01", "--end", "2024-06-07"],
-        simulator,
+        answering(simulator),
     )
 
     assert result.exit_code == 0, result.output

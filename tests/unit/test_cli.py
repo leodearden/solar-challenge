@@ -47,7 +47,7 @@ from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
@@ -477,7 +477,7 @@ class TestErrorHandling:
         monkeypatch.chdir(tmp_path)
         self._write_one_home_scenario(**blocks)
 
-        result = invoke_cli(["finance", "run", "scenario.yaml"], _simulate_raising_a_plain_value_error)
+        result = invoke_cli(["finance", "run", "scenario.yaml"], answering(_simulate_raising_a_plain_value_error))
 
         assert result.exit_code == 1
         assert result.stdout == ""
@@ -1134,7 +1134,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
                 "--start", "2024-03-15", "--end", "2024-04-13",
             ],
-            lambda fleet_config, start, end: fleet,
+            answering(lambda fleet_config, start, end: fleet),
         )
 
         assert result.exit_code == 0
@@ -1156,7 +1156,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
-            _simulate_reaching_the_sweep,
+            answering(_simulate_reaching_the_sweep),
         )
 
         assert isinstance(result.exception, _ReachedTheSweep)
