@@ -1238,3 +1238,16 @@ def test_an_explicit_grid_services_axis_under_the_events_model_is_refused_before
     assert "--sensitivity" in stderr
     assert "capacity_at_events" in stderr
     assert simulated_fleets == []
+
+
+def test_without_sensitivity_under_the_events_model_a_status_line_names_grid_services_as_left_out() -> None:
+    """The default axes leave out grid_services, whose flat rate the events model does not read, and say so on stderr."""
+    result, _ = _invoke_configs_on_the_board([])
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 0, result.output
+    assert (
+        "Sensitivity axis grid_services omitted from the default: it sweeps the flat grid-services rate, "
+        "grid_services_income_per_kw_per_year_gbp, which grid_services_model='capacity_at_events' does not read."
+    ) in stderr
+    assert "Sensitivity axis retained_floor" not in stderr

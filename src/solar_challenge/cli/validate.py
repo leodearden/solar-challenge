@@ -11,7 +11,6 @@ from rich.table import Table
 from rich.text import Text
 
 from solar_challenge.cli.utils import (
-    CliInvocation,
     console,
     handle_errors,
     invocation,
@@ -42,8 +41,8 @@ from solar_challenge.validation import (
 app = typer.Typer(help="Validation commands")
 
 
-def _display_validation_report(cli: CliInvocation, report: ValidationReport) -> None:
-    """Display validation report as a Rich table, then cli's status line when every check passed, or an error counting those that did."""
+def _display_validation_report(report: ValidationReport) -> None:
+    """Display validation report as a Rich table."""
     table = Table(title="Validation Results")
     table.add_column("Check", style="cyan")
     table.add_column("Status", justify="center")
@@ -68,14 +67,6 @@ def _display_validation_report(cli: CliInvocation, report: ValidationReport) -> 
         )
 
     console.print(table)
-
-    # Summary
-    passed = sum(1 for r in report.results if r.passed)
-    total = len(report.results)
-    if report.all_passed:
-        print_success(cli, f"All {total} checks passed")
-    else:
-        print_error(f"{passed}/{total} checks passed")
 
 
 def _read_results_csv(csv_file: Path) -> pd.DataFrame:
@@ -180,10 +171,14 @@ def results(
     all_results.extend(consumption_results)
 
     report = ValidationReport(results=all_results)
-    _display_validation_report(invocation(ctx), report)
+    _display_validation_report(report)
 
+    total = len(report.results)
     if not report.all_passed:
+        passed = sum(1 for r in report.results if r.passed)
+        print_error(f"{passed}/{total} checks passed")
         raise typer.Exit(1)
+    print_success(invocation(ctx), f"All {total} checks passed")
 
 
 @dataclass(frozen=True)

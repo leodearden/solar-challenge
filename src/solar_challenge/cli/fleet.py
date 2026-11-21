@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
 
 from solar_challenge.cli.utils import (
-    CliInvocation,
     console,
     create_fleet_progress,
     create_summary_table,
@@ -318,11 +317,18 @@ def sweep(
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
     if param is None:
-        param_name, sweep_configs = _yaml_sweep(cli, raw_config)
+        source = "YAML"
+        param_name, sweep_spec, sweep_configs = _yaml_sweep(raw_config)
     else:
-        param_name, sweep_configs = _param_sweep(
-            cli, raw_config, param, min_val, max_val, steps, mode
+        source = "CLI"
+        param_name, sweep_spec, sweep_configs = _param_sweep(
+            raw_config, param, min_val, max_val, steps, mode
         )
+    print_info(
+        cli,
+        f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
+        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+    )
 
     start_date, end_date = _period_in_fleet_timezone(sweep_configs[0][1], start, end)
 
@@ -366,24 +372,18 @@ def sweep(
 
 
 def _param_sweep(
-    cli: CliInvocation,
     raw_config: dict[str, Any],
     param: str,
     min_val: Optional[float],
     max_val: Optional[float],
     steps: int,
     mode: str,
-) -> tuple[str, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, param, and each sweep value with the fleet raw_config builds when that value replaces ${param}, after printing cli's status line naming the sweep."""
+) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, param, its spec, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
     sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
-    print_info(
-        cli,
-        f"CLI sweep: {param} from {min_val} to {max_val} "
-        f"({steps} steps, {mode})"
-    )
-    return param, [
+    return param, sweep_spec, [
         (
             value,
             dataclasses.replace(
@@ -396,23 +396,16 @@ def _param_sweep(
 
 
 def _yaml_sweep(
-    cli: CliInvocation,
     raw_config: Mapping[str, Any],
-) -> tuple[str, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, multiplier, and each sweep value with the fleet raw_config's YAML-defined sweep builds for it, after printing cli's status line naming the sweep."""
-    param_name = "multiplier"
+) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, multiplier, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the fleet that sweep builds for it."""
     sweep_spec = detect_fleet_sweep_spec(raw_config)
     if sweep_spec is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
-    print_info(
-        cli,
-        f"YAML sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
-        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
-    )
-    return param_name, parse_sweep_fleet_configs(raw_config)
+    return "multiplier", sweep_spec, parse_sweep_fleet_configs(raw_config)
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
