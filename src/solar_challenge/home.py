@@ -222,7 +222,7 @@ class SimulationResults:
         generation: PV generation in kW
         demand: Load demand in kW
         self_consumption: Demand met on site, by PV used directly and by battery discharge, in kW
-        battery_charge: Power into battery in kW
+        battery_charge: Power the battery drew from the bus to charge, before its charge losses, in kW
         battery_discharge: Power out of battery in kW
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
@@ -232,7 +232,7 @@ class SimulationResults:
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
-        grid_charge: Optional power stored in the battery from the grid in kW, a part of
+        grid_charge: Optional power the battery drew from the grid in kW, a part of
             both battery_charge and grid_import (None when tariff_config is None)
     """
 
@@ -411,8 +411,8 @@ class SummaryStatistics:
     # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
     # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
     total_grid_charge_cost_gbp: float = 0.0
-    # Energy the battery stored from the grid: a part of both total_battery_charge_kwh and
-    # total_grid_import_kwh.
+    # Energy the battery drew from the grid, before its charge losses: a part of both
+    # total_battery_charge_kwh and total_grid_import_kwh.
     total_grid_charge_kwh: float = 0.0
     # The window the totals were computed over, whose days simulation_days is.
     window: Optional[SimulationWindow] = None
@@ -438,7 +438,7 @@ class SummaryStatistics:
 
     @property
     def total_pv_charge_kwh(self) -> float:
-        """Energy the battery stored from PV, in kWh: its total charge less the part it stored from the grid."""
+        """Energy the battery drew from PV, in kWh: its total charge less the part it drew from the grid."""
         return self.total_battery_charge_kwh - self.total_grid_charge_kwh
 
     @property
@@ -448,7 +448,7 @@ class SummaryStatistics:
 
     @property
     def total_grid_to_demand_kwh(self) -> float:
-        """Grid import that met demand, in kWh: the total import less the part the battery stored."""
+        """Grid import that met demand, in kWh: the total import less the part the battery drew."""
         return self.total_grid_import_kwh - self.total_grid_charge_kwh
 
 

@@ -271,7 +271,7 @@ class TestCalculateSummaryGridChargeCost:
 
 
 class TestCalculateSummaryGridCharge:
-    """calculate_summary totals the energy the battery stored from the grid as SummaryStatistics.total_grid_charge_kwh."""
+    """calculate_summary totals the energy the battery drew from the grid as SummaryStatistics.total_grid_charge_kwh."""
 
     def _make_results(self, grid_charge: pd.Series | None = None) -> SimulationResults:
         """Three minutes in which the battery charges only from the grid, so its charge and the grid import each carry grid_charge."""
@@ -293,7 +293,7 @@ class TestCalculateSummaryGridCharge:
         )
 
     def test_total_grid_charge_kwh_is_zero_when_grid_charge_is_none(self) -> None:
-        """A run without a grid_charge series, as every untariffed run is, stored nothing from the grid."""
+        """A run without a grid_charge series, as every untariffed run is, drew nothing from the grid."""
         summary = calculate_summary(self._make_results(grid_charge=None))
 
         assert summary.total_grid_charge_kwh == 0.0
@@ -319,7 +319,7 @@ class TestSummaryStatisticsGridCharge:
     @pytest.mark.parametrize(
         ("grid_charge_kwh", "battery_charge_kwh", "grid_import_kwh"),
         [
-            pytest.param(2.5, 2.0, 9.75, id="more-than-the-battery-stored"),
+            pytest.param(2.5, 2.0, 9.75, id="more-than-the-battery-drew"),
             pytest.param(2.0, 2.0, 1.5, id="more-than-the-grid-supplied"),
             pytest.param(-0.5, 2.0, 9.75, id="negative"),
             pytest.param(float("nan"), 2.0, 9.75, id="not-a-number"),

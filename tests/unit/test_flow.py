@@ -586,7 +586,7 @@ class TestSimulateTimestepTouGridCharge:
         )
         assert result.battery_charge > 0, "Battery should charge from grid during cheap period"
         assert result.grid_export == pytest.approx(0.0)
-        # shortfall=0, discharge=0 → grid_import == grid_charge_stored == battery_charge
+        # shortfall=0, discharge=0 → grid_import == grid_charge_drawn == battery_charge
         assert result.grid_import == pytest.approx(result.battery_charge)
         assert validate_energy_balance(result)
 
@@ -603,7 +603,7 @@ class TestSimulateTimestepTouGridCharge:
             generation_kw=1.0, demand_kw=0.5, battery=bat_ref,
             timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
         )
-        pv_charge_stored = ref.battery_charge  # ≈ 0.4875 kWh (excess * 0.975)
+        pv_charge_drawn = ref.battery_charge  # 0.5 kWh: the battery draws the whole excess
 
         # Main run: grid charging enabled
         config_gc = BatteryConfig(
@@ -616,11 +616,11 @@ class TestSimulateTimestepTouGridCharge:
             timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
         )
         # Grid also topped up → total charge > pv-only
-        assert result.battery_charge > pv_charge_stored, \
+        assert result.battery_charge > pv_charge_drawn, \
             "With grid charging, battery_charge should exceed pv-only charge"
         # Export: only the PV portion reduces export (split formula)
         excess_kwh = (1.0 - 0.5) * (60 / 60)
-        assert result.grid_export == pytest.approx(max(0.0, excess_kwh - pv_charge_stored))
+        assert result.grid_export == pytest.approx(max(0.0, excess_kwh - pv_charge_drawn))
         assert validate_energy_balance(result)
 
     def test_max_charge_kw_not_exceeded(
@@ -641,7 +641,7 @@ class TestSimulateTimestepTouGridCharge:
             timestep_minutes=60,
         )
         duration_hours = 60.0 / 60.0
-        # Total stored energy / dt must not exceed the hardware charge-rate limit
+        # Total drawn energy / dt must not exceed the hardware charge-rate limit
         assert result.battery_charge / duration_hours <= 2.5 + 1e-9
         assert validate_energy_balance(result)
 
@@ -789,9 +789,9 @@ class TestSimulateTimestepGridCharge:
             strategy=stub,
             tariff=economy7_tariff,
         )
-        # grid_charge_stored = battery.charge(1.0, 60) = 1.0 * 0.975 = 0.975 kWh
+        # grid_charge_drawn = battery.charge(1.0, 60) = 1.0 kWh, 0.975 kWh of it stored
         assert result.battery_charge > 0
-        # pv_charge_stored=0 → battery_charge == grid_charge_stored == grid_import
+        # pv_charge_drawn=0 → battery_charge == grid_charge_drawn == grid_import
         assert result.battery_charge == pytest.approx(result.grid_import)
         assert result.grid_export == pytest.approx(0.0)
         assert validate_energy_balance(result)
@@ -829,9 +829,9 @@ class TestSimulateTimestepGridCharge:
             timestamp=off_peak_ts.to_pydatetime(),
             strategy=stub_gc, tariff=economy7_tariff,
         )
-        grid_charge_stored = result_gc.battery_charge  # pv_charge=0
+        grid_charge_drawn = result_gc.battery_charge  # pv_charge=0
         assert result_gc.grid_import == pytest.approx(
-            max(0.0, 0.0 - 0.0) + grid_charge_stored
+            max(0.0, 0.0 - 0.0) + grid_charge_drawn
         )
         assert validate_energy_balance(result_gc)
 
