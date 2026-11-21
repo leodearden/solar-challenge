@@ -48,7 +48,7 @@ Key public symbols:
 
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING, NamedTuple, Optional, TypeAlias, TypeVar
 
 import numpy as np
@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-_Word = TypeVar("_Word", bound=Enum)
+_Word = TypeVar("_Word", bound=StrEnum)
 
 
 def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word:
@@ -90,15 +90,17 @@ def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word
         ConfigurationError: If *value* is anything else; the message names
             *what*, the members' values in order and *value*.
     """
-    try:
-        return vocabulary(value)
-    except ValueError:
-        raise ConfigurationError.must_be(
-            what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
-        ) from None
+    if isinstance(value, str):
+        try:
+            return vocabulary(value)
+        except ValueError:
+            pass
+    raise ConfigurationError.must_be(
+        what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+    )
 
 
-class GridServicesBand(str, Enum):
+class GridServicesBand(StrEnum):
     """The three uncertainty bands every grid-services rate is quoted in, from low to high."""
 
     LOW = "low"
@@ -111,7 +113,7 @@ class GridServicesBand(str, Enum):
         return _member_named(cls, value, what=what)
 
 
-class DeliveryBaseline(str, Enum):
+class DeliveryBaseline(StrEnum):
     """How an event's delivery is measured: operational, the increment above the battery's own discharge, as NESO's DFS measures it; capacity, the battery's whole window discharge, as NGED baselines domestic storage."""
 
     OPERATIONAL = "operational"
