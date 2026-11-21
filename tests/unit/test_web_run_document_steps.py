@@ -16,9 +16,13 @@ has, added to each object of a config of every field shape, is dropped from a da
 and kept in a dict field's, and the config then reads back as the home saved. A run stored before
 the battery's dispatch strategies were variants of one union migrates, then loads.
 
-Last it pins v3, the step that reads each stored home's dispatch as it ran: which home
+Then it pins v3, the step that reads each stored home's dispatch as it ran: which home
 dispatch_strategy it reads as greedy, which grid_charging it drops, what it leaves as it is, and
 that it changes none of its input.
+
+Last it pins v4, the step that drops each battery's grid_charging that its run ignored on a tariff
+with no cheap period, one whose periods all charge the same rate: which grid_charging it drops,
+what it leaves as it is, and that it changes none of its input.
 """
 
 import copy
@@ -67,8 +71,14 @@ from tests._stored_run_fixtures import (
     stored_run_fixture_dir,
 )
 
-_V2 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 2)
-_V3 = next(step for step in RUN_DOCUMENT_STEPS if step.version == 3)
+
+def _step(version: int) -> RunDocumentStep:
+    """The one of RUN_DOCUMENT_STEPS of *version*."""
+    return next(step for step in RUN_DOCUMENT_STEPS if step.version == version)
+
+
+_V2 = _step(2)
+_V3 = _step(3)
 
 _STRATEGIES_AND_THE_GRID_CHARGING_THEY_RAN_BY = [
     pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
@@ -475,21 +485,21 @@ def test_v2_changes_none_of_its_input_documents() -> None:
 
 
 _GRID_CHARGING_TO_80_PERCENT = {"target_soc_fraction": 0.8}
-"""The grid_charging object of every battery of pre_786_dispatch_home and pre_787_dispatch_fleet."""
+"""The grid_charging object of every battery of pre_786_dispatch_home, pre_787_dispatch_fleet and pre_839_flat_grid_charging_fleet."""
 
 _PEAK_SHAVING = {"strategy_type": "peak_shaving", "import_limit_kw": 3.0}
 
 
-def _home_run_before_v3(*edits: tuple[Keys, Any]) -> StoredRunDocuments:
-    """pre_786_dispatch_home's documents as v3 is given them, its config holding each edit's value at the edit's keys."""
-    documents = _documents_before(_V3, "pre_786_dispatch_home")
+def _home_run_before(step: RunDocumentStep, *edits: tuple[Keys, Any]) -> StoredRunDocuments:
+    """pre_786_dispatch_home's documents as *step* is given them, its config holding each edit's value at the edit's keys."""
+    documents = _documents_before(step, "pre_786_dispatch_home")
     for keys, value in edits:
         documents = _with_value(documents, "config.json", keys, value)
     return documents
 
 
-def _elm_row_home(name: str, battery: BatteryConfig, **home: Any) -> HomeConfig:
-    """A home of pre_787_dispatch_fleet, named *name*, with *battery* and the rest of *home*."""
+def _fleet_fixture_home(name: str, battery: BatteryConfig, **home: Any) -> HomeConfig:
+    """A home of pre_787_dispatch_fleet or pre_839_flat_grid_charging_fleet, whose homes share their PV and load, named *name*, with *battery* and the rest of *home*."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
@@ -512,16 +522,16 @@ def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_
         RewrittenValue(name, "config.json", "homes[2].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
     )
     assert result.documents.config.read(FleetRunConfig).homes == (
-        _elm_row_home(
+        _fleet_fixture_home(
             "Elm Row 1",
             BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig()),
             tariff_config=TariffConfig.economy_7(),
         ),
-        _elm_row_home(
+        _fleet_fixture_home(
             "Elm Row 2",
             BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),))),
         ),
-        _elm_row_home("Elm Row 3", BatteryConfig(capacity_kwh=5.0)),
+        _fleet_fixture_home("Elm Row 3", BatteryConfig(capacity_kwh=5.0)),
     )
 
 
@@ -560,9 +570,9 @@ _RAN_DIFFERENTLY = [
 def test_v3_reads_a_home_run_s_dispatch_as_it_ran_reporting_each_value_it_changes(
     edits: list[tuple[Keys, Any]], as_it_ran: list[tuple[Keys, Any]], reported: list[tuple[str, Any, Any]]
 ) -> None:
-    result = _V3.apply("home", _home_run_before_v3(*edits))
+    result = _V3.apply("home", _home_run_before(_V3, *edits))
 
-    assert result.documents == _home_run_before_v3(*edits, *as_it_ran)
+    assert result.documents == _home_run_before(_V3, *edits, *as_it_ran)
     assert result.dropped == ()
     assert result.rewritten == tuple(
         RewrittenValue("pre_786_dispatch_home", "config.json", field, was, now) for field, was, now in reported
@@ -592,7 +602,7 @@ _RAN_AS_STORED = [
 
 @pytest.mark.parametrize("edits", _RAN_AS_STORED)
 def test_v3_leaves_a_home_run_that_ran_as_stored_as_it_is(edits: list[tuple[Keys, Any]]) -> None:
-    documents = _home_run_before_v3(*edits)
+    documents = _home_run_before(_V3, *edits)
 
     result = _V3.apply("home", documents)
 
@@ -604,7 +614,7 @@ def test_v3_leaves_a_home_run_that_ran_as_stored_as_it_is(edits: list[tuple[Keys
 @pytest.mark.parametrize("content", ["not a config", ["not", "a", "config"]], ids=["text", "array"])
 def test_v3_leaves_a_config_that_is_not_an_object_as_it_is(content: Any) -> None:
     documents = dataclasses.replace(
-        _home_run_before_v3(), config=StoredDocument("pre_786_dispatch_home", "config.json", content)
+        _home_run_before(_V3), config=StoredDocument("pre_786_dispatch_home", "config.json", content)
     )
 
     result = _V3.apply("home", documents)
@@ -619,5 +629,163 @@ def test_v3_changes_none_of_its_input_documents() -> None:
     before = copy.deepcopy(documents)
 
     _V3.apply("fleet", documents)
+
+    assert documents == before
+
+
+def test_v4_drops_the_grid_charging_each_home_of_the_pre_839_fleet_ignored_on_its_flat_tariff() -> None:
+    name = "pre_839_flat_grid_charging_fleet"
+    v4 = _step(4)
+
+    result = v4.apply("fleet", _documents_before(v4, name))
+
+    assert result.dropped == ()
+    assert result.rewritten == tuple(
+        RewrittenValue(name, "config.json", f"homes[{index}].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None)
+        for index in range(3)
+    )
+    assert result.documents.config.read(FleetRunConfig).homes == (
+        _fleet_fixture_home(
+            "Flat Row 1",
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),))),
+            tariff_config=TariffConfig.flat_rate(0.25),
+        ),
+        _fleet_fixture_home(
+            "Flat Row 2",
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=PeakShavingStrategyConfig(import_limit_kw=3.0)),
+            tariff_config=TariffConfig.flat_rate(0.25),
+        ),
+        _fleet_fixture_home(
+            "Flat Row 3",
+            BatteryConfig(capacity_kwh=5.0),
+            tariff_config=TariffConfig.flat_rate(0.25),
+            dispatch_strategy="tou_optimized",
+        ),
+    )
+
+
+_FLAT_TARIFF = field_tree(TariffConfig.flat_rate(0.25))
+"""A flat tariff of 0.25 £/kWh as a stored home's tariff_config holds it: one period, all day."""
+
+_RAN_WITHOUT_GRID_CHARGE = [
+    pytest.param([(("tariff_config",), _FLAT_TARIFF)], id="tou-optimized-battery-on-a-flat-tariff"),
+    pytest.param(
+        [(("tariff_config", "periods", 0, "rate_per_kwh"), 0.25)], id="tou-optimized-battery-on-two-periods-of-one-rate"
+    ),
+    pytest.param(
+        [
+            (("dispatch_strategy",), "tou_optimized"),
+            (("battery_config", "dispatch_strategy"), None),
+            (("tariff_config",), _FLAT_TARIFF),
+        ],
+        id="home-tou-optimized-on-a-flat-tariff",
+    ),
+]
+"""Edits to pre_786_dispatch_home's config before v4, each giving its grid-charging battery a tariff with no cheap period.
+
+Its Economy 7 tariff's first period is the off-peak one, so charging the second period's 0.25 there
+leaves both periods charging one rate.
+"""
+
+
+@pytest.mark.parametrize("edits", _RAN_WITHOUT_GRID_CHARGE)
+def test_v4_drops_the_grid_charging_a_home_run_ignored_on_a_tariff_with_no_cheap_period_reporting_it(
+    edits: list[tuple[Keys, Any]],
+) -> None:
+    v4 = _step(4)
+
+    result = v4.apply("home", _home_run_before(v4, *edits))
+
+    assert result.documents == _home_run_before(v4, *edits, (("battery_config", "grid_charging"), None))
+    assert result.dropped == ()
+    assert result.rewritten == (
+        RewrittenValue(
+            "pre_786_dispatch_home", "config.json", "battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None
+        ),
+    )
+    battery = result.documents.config.read(HomeConfig).battery_config
+    assert battery is not None and battery.grid_charging is None
+
+
+_FLAT_PERIOD = _FLAT_TARIFF["periods"][0]
+
+_LEFT_AS_IT_IS_BY_V4 = [
+    pytest.param([], id="tou-optimized-battery-grid-charging-on-economy-7"),
+    pytest.param(
+        [(("battery_config", "dispatch_strategy"), _PEAK_SHAVING)], id="peak-shaving-battery-grid-charging-on-economy-7"
+    ),
+    pytest.param([(("tariff_config",), None)], id="no-tariff"),
+    pytest.param([(("tariff_config",), "Flat rate 0.25")], id="tariff-not-an-object"),
+    pytest.param([(("tariff_config",), {**_FLAT_TARIFF, "periods": _FLAT_PERIOD})], id="periods-not-a-list"),
+    pytest.param([(("tariff_config",), {**_FLAT_TARIFF, "periods": []})], id="no-periods"),
+    pytest.param([(("tariff_config",), {**_FLAT_TARIFF, "periods": ["All day"]})], id="a-period-not-an-object"),
+    pytest.param(
+        [(("tariff_config",), _FLAT_TARIFF), (("tariff_config", "periods", 0, "rate_per_kwh"), "0.25")],
+        id="a-rate-not-a-number",
+    ),
+    pytest.param(
+        [
+            (("tariff_config",), _FLAT_TARIFF),
+            (("tariff_config", "periods", 0), {key: value for key, value in _FLAT_PERIOD.items() if key != "rate_per_kwh"}),
+        ],
+        id="a-period-without-a-rate",
+    ),
+    pytest.param(
+        [(("tariff_config", "periods", 0, "rate_per_kwh"), True), (("tariff_config", "periods", 1, "rate_per_kwh"), True)],
+        id="rates-that-are-booleans",
+    ),
+    pytest.param([(("battery_config",), None), (("tariff_config",), _FLAT_TARIFF)], id="batteryless-home-on-a-flat-tariff"),
+    pytest.param(
+        [(("battery_config", "grid_charging"), None), (("tariff_config",), _FLAT_TARIFF)],
+        id="no-grid-charging-on-a-flat-tariff",
+    ),
+]
+"""Edits to pre_786_dispatch_home's config before v4 that leave no grid_charging set beside a tariff whose periods v4 can read as all charging one number."""
+
+
+@pytest.mark.parametrize("edits", _LEFT_AS_IT_IS_BY_V4)
+def test_v4_leaves_a_home_run_that_is_not_grid_charging_on_one_rate_as_it_is(edits: list[tuple[Keys, Any]]) -> None:
+    v4 = _step(4)
+    documents = _home_run_before(v4, *edits)
+
+    result = v4.apply("home", documents)
+
+    assert result.documents == documents
+    assert result.dropped == ()
+    assert result.rewritten == ()
+
+
+@pytest.mark.parametrize(
+    ("run_type", "name", "content"),
+    [
+        pytest.param("home", "pre_786_dispatch_home", "not a config", id="home-text"),
+        pytest.param("home", "pre_786_dispatch_home", ["not", "a", "config"], id="home-array"),
+        pytest.param("fleet", "pre_839_flat_grid_charging_fleet", ["not", "a", "config"], id="fleet-array"),
+        pytest.param(
+            "fleet", "pre_839_flat_grid_charging_fleet", {"homes": "not a list", "n_homes": 3}, id="fleet-homes-not-a-list"
+        ),
+    ],
+)
+def test_v4_leaves_a_config_that_is_not_an_object_or_whose_homes_are_not_a_list_as_it_is(
+    run_type: RunType, name: str, content: Any
+) -> None:
+    v4 = _step(4)
+    documents = dataclasses.replace(
+        _documents_before(v4, name), config=StoredDocument(name, "config.json", content)
+    )
+
+    result = v4.apply(run_type, documents)
+
+    assert result.documents == documents
+    assert result.dropped == ()
+    assert result.rewritten == ()
+
+
+def test_v4_changes_none_of_its_input_documents() -> None:
+    v4 = _step(4)
+    documents = _documents_before(v4, "pre_839_flat_grid_charging_fleet")
+    before = copy.deepcopy(documents)
+
+    v4.apply("fleet", documents)
 
     assert documents == before

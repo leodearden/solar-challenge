@@ -18,6 +18,14 @@ saved them through that tree's RunStorage.save_fleet_run into a temporary store.
 also wrote a format.json, which was then deleted, so the run reads as one stored before a run
 carried a format version, and every step brings it forward.
 
+pre_839_flat_grid_charging_fleet is a run that the code of main at commit bb2ec17 ("Merge task/908
+into main") saved, before task 839 refused grid_charging on a tariff with no cheap period. It was
+made as pre_787_dispatch_fleet was: a one-off script, which is not committed, simulated each home
+for one day, 2024-06-15, offline with that tree's synthetic_june_weather; it summarised them with
+that tree's calculate_home_summaries and calculate_fleet_summary; it saved them through that
+tree's RunStorage.save_fleet_run into a temporary store; and the format.json that save wrote was
+deleted.
+
 Each fixture holds:
 
 - run/: the run's directory as that save wrote it, without a format.json. A home run's
@@ -41,6 +49,12 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   dispatch_strategy "greedy"; homes[1]'s battery dispatches tou_optimized with peak_hours
   [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
   that names no dispatch strategy and no tariff, so it ran self-consumption.
+- pre_839_flat_grid_charging_fleet: a fleet run of three homes on a flat tariff of 0.25 £/kWh,
+  each with a 5 kWh battery that grid-charges to 0.8, whose dispatch charged nothing from the
+  grid, as a tariff whose periods all charge one rate has no cheap period: homes[0]'s battery
+  dispatches tou_optimized with peak_hours [[16, 19]]; homes[1]'s dispatches peak_shaving with
+  import_limit_kw 3.0; homes[2] has home dispatch_strategy "tou_optimized" and a battery that
+  names no dispatch strategy, so it ran the tariff's rates.
 
 PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
 docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
@@ -82,6 +96,7 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
     "legacy_fleet",
     "pre_786_dispatch_home",
     "pre_787_dispatch_fleet",
+    "pre_839_flat_grid_charging_fleet",
 )
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
 
