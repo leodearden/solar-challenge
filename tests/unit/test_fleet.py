@@ -23,6 +23,7 @@ from solar_challenge.fleet import (
     calculate_fleet_summary,
     calculate_home_summaries,
     default_runner,
+    reusing,
 )
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
@@ -837,6 +838,122 @@ class TestFleetRunnerParallelMatchesSequential:
                 from_sequence.to_dataframe(),
                 check_exact=True,
                 obj=f"{home.name}'s results from {worker_start_method} workers",
+            )
+
+
+def _with_a_5kwh_battery(home: HomeConfig) -> HomeConfig:
+    """*home* fitted with a 5 kWh battery that has no soh override, as an unaged scenario's home is."""
+    return replace(home, battery_config=BatteryConfig(capacity_kwh=5.0))
+
+
+def _battery_at_soh(home: HomeConfig, soh: float) -> HomeConfig:
+    """*home* with its battery's soh override set to *soh*, as finance._aged_homes sets it: 1.0 at age 0."""
+    assert home.battery_config is not None, f"{home.name!r} has no battery whose soh to set"
+    return replace(home, battery_config=replace(home.battery_config, soh=soh))
+
+
+_BATTERY_HOME = _with_a_5kwh_battery(_home("Battery", 4.0))
+_PV_HOME = _home("PV only", 3.0)
+_HELD_HOMES = (_BATTERY_HOME, _PV_HOME)
+_AGE_0_HOMES = (_battery_at_soh(_BATTERY_HOME, 1.0), _PV_HOME)
+_ONE_DAY = pd.Timedelta(days=1)
+_NO_SHIFT = pd.Timedelta(0)
+
+
+def _held_results() -> FleetResults:
+    """A distinct make_sim_results of one day for each of _HELD_HOMES, paired with them."""
+    return make_fleet_results_of([make_sim_results(days=1) for _ in _HELD_HOMES], homes=_HELD_HOMES)
+
+
+@dataclass
+class _CountingSimulate:
+    """A FleetSimulate that records each (fleet, start, end) it is asked for and answers make_fleet_results of the fleet's homes over one day, keeping its last answer."""
+
+    asked: list[tuple[FleetConfig, pd.Timestamp, pd.Timestamp]] = field(default_factory=list)
+    returned: FleetResults | None = None
+
+    def __call__(self, fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        self.asked.append((fleet, start, end))
+        self.returned = make_fleet_results(homes=fleet.homes, days=1)
+        return self.returned
+
+
+class TestReusingAnswersAFleetThatSimulatesAsTheResultsFleet:
+    """reusing answers a fleet whose homes at their starting soh are its results' homes, over its window, from those results paired with the asked homes; any other fleet or window goes to its simulate."""
+
+    def test_the_results_homes_at_their_starting_soh_over_the_same_window_are_answered_from_the_results_paired_with_the_asked_homes(
+        self,
+    ) -> None:
+        sim = _CountingSimulate()
+        start, end = _JUNE_DAYS.window()
+        results = _held_results()
+        asked = FleetConfig(homes=list(_AGE_0_HOMES), name="proj-age-0")
+        assert asked.homes != results.home_configs, "premise: the asked battery's soh is 1.0, the held battery's None"
+
+        answer = reusing(sim, results, start, end)(asked, start, end)
+
+        assert sim.asked == []
+        assert len(answer) == len(results)
+        for answered, held in zip(answer.per_home_results, results.per_home_results, strict=True):
+            assert answered is held
+        assert answer.home_configs == asked.homes
+
+    @pytest.mark.parametrize(
+        ("asked_homes", "start_moved_by", "end_moved_by"),
+        [
+            pytest.param(
+                (_battery_at_soh(_BATTERY_HOME, 0.9), _PV_HOME), _NO_SHIFT, _NO_SHIFT, id="soh-0.9-against-none"
+            ),
+            pytest.param(_AGE_0_HOMES, _NO_SHIFT, _ONE_DAY, id="a-later-end"),
+            pytest.param(_AGE_0_HOMES, -_ONE_DAY, _NO_SHIFT, id="an-earlier-start"),
+            pytest.param(
+                (_AGE_0_HOMES[0], replace(_PV_HOME, pv_config=replace(_PV_HOME.pv_config, system_age_years=1.0))),
+                _NO_SHIFT,
+                _NO_SHIFT,
+                id="an-aged-pv",
+            ),
+        ],
+    )
+    def test_a_fleet_that_may_simulate_otherwise_or_another_window_is_simulated(
+        self, asked_homes: tuple[HomeConfig, ...], start_moved_by: pd.Timedelta, end_moved_by: pd.Timedelta
+    ) -> None:
+        sim = _CountingSimulate()
+        start, end = _JUNE_DAYS.window()
+        asked = FleetConfig(homes=list(asked_homes), name="proj-age-0")
+        asked_start, asked_end = start + start_moved_by, end + end_moved_by
+
+        answer = reusing(sim, _held_results(), start, end)(asked, asked_start, asked_end)
+
+        assert sim.asked == [(asked, asked_start, asked_end)]
+        assert answer is sim.returned
+
+    @pytest.mark.usefixtures("bristol_june_tmy")
+    def test_what_it_answers_is_what_the_runner_simulates_for_the_asked_fleet(self) -> None:
+        start, end = _JUNE_DAYS.window()
+        runner = FleetRunner(weather=default_weather(), home_simulator=simulate_home, parallel=False)
+        fleet = FleetConfig(
+            homes=[_with_a_5kwh_battery(_home("Home 1", 4.0)), _with_a_5kwh_battery(_home("Home 2", 3.0))],
+            name="bill run",
+        )
+        held = runner.simulate(fleet, start, end)
+        asked = FleetConfig(homes=[_battery_at_soh(home, 1.0) for home in fleet.homes], name="proj-age-0")
+
+        answer = reusing(runner.simulate, held, start, end)(asked, start, end)
+
+        assert [
+            answered is from_held
+            for answered, from_held in zip(answer.per_home_results, held.per_home_results, strict=True)
+        ] == [True, True], "premise: the asked fleet is answered from held, not simulated again"
+        assert answer.home_configs == asked.homes
+        simulated = runner.simulate(asked, start, end)
+        for home, answered, from_runner in zip(
+            asked.homes, answer.per_home_results, simulated.per_home_results, strict=True
+        ):
+            pd.testing.assert_frame_equal(
+                answered.to_dataframe(),
+                from_runner.to_dataframe(),
+                check_exact=True,
+                obj=f"{home.name}'s answered results",
             )
 
 
