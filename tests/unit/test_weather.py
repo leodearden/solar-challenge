@@ -216,11 +216,39 @@ class TestWeatherCache:
             shutil.copy2(KEY_VERSION_2_ENTRY_DIR / name, cache.cache_dir / name)
         return names
 
-    def test_cache_directory_created(self, temp_cache_dir):
-        """Cache directory is created if it doesn't exist."""
-        new_cache_dir = temp_cache_dir / "new_cache"
-        WeatherCache(cache_dir=new_cache_dir)
-        assert new_cache_dir.exists()
+    def test_constructing_a_cache_leaves_its_directory_absent_until_the_first_put(
+        self, tmp_path, bristol, sample_weather_data
+    ):
+        """Constructing a cache creates neither its directory nor the directory's parent, and get, invalidate and
+        clear read the absent directory as an empty cache, creating nothing either; the first put creates the
+        directory, its parent included, and stores the entry there."""
+        cache_dir = tmp_path / "absent" / "weather"
+
+        cache = WeatherCache(cache_dir=cache_dir)
+
+        assert not cache_dir.parent.exists()
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        assert not cache_dir.parent.exists()
+
+        cache.put(sample_weather_data, "tmy", bristol)
+
+        assert len(list(cache_dir.iterdir())) == 1
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
+
+    def test_a_refused_put_into_an_absent_directory_leaves_it_absent(self, tmp_path, bristol):
+        """A put refused for its index's timezone creates no directory either. The index is built at UTC and
+        converted to the dateutil zone, as for test_put_refuses_an_index_in_a_timezone_get_could_not_restore."""
+        cache_dir = tmp_path / "absent"
+        cache = WeatherCache(cache_dir=cache_dir)
+        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert("dateutil/Europe/London")
+        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
+
+        with pytest.raises(ValueError, match=re.escape(str(index.tz))):
+            cache.put(frame, "tmy", bristol)
+
+        assert not cache_dir.exists()
 
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):
         """Data can be stored and retrieved from cache."""
@@ -491,14 +519,18 @@ class TestWeatherCacheDirectory:
     """
 
     def test_given_no_directory_it_uses_the_one_the_variable_names(self, monkeypatch, tmp_path):
-        """WeatherCache() uses the directory the variable names, and creates it."""
+        """WeatherCache() uses the directory the variable names, which its first put creates."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         cache = WeatherCache()
 
         assert cache.cache_dir == tmp_path / "named"
-        assert (tmp_path / "named").is_dir()
+        assert not (tmp_path / "named").exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "named").iterdir())) == 1
 
     @pytest.mark.parametrize(
         "clear_variable",
@@ -510,14 +542,18 @@ class TestWeatherCacheDirectory:
     def test_given_no_directory_it_uses_the_default_when_the_variable_is_unset_or_empty(
         self, monkeypatch, tmp_path, clear_variable
     ):
-        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, and creates it."""
+        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, which its first put creates."""
         monkeypatch.chdir(tmp_path)
         clear_variable(monkeypatch)
 
         cache = WeatherCache()
 
         assert cache.cache_dir == DEFAULT_CACHE_DIR
-        assert (tmp_path / DEFAULT_CACHE_DIR).is_dir()
+        assert not (tmp_path / DEFAULT_CACHE_DIR).exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / DEFAULT_CACHE_DIR).iterdir())) == 1
 
     def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
         """WeatherCache(cache_dir=...) uses the directory it is given and never creates the one the variable names."""
@@ -672,6 +708,14 @@ class TestDefaultWeather:
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         assert get_weather_cache() is installed_cache
+
+    def test_default_weather_with_none_installed_creates_no_directory(self, no_cache_installed, tmp_path):
+        """With no cache installed, default_weather() and get_weather_cache() create no directory under the working
+        directory, so a composition root that builds the default provider writes nothing before its first put."""
+        default_weather()
+        get_weather_cache()
+
+        assert not (tmp_path / DEFAULT_CACHE_DIR).exists()
 
     def test_default_weather_reads_the_installed_cache(self, installed_cache, pvgis_requests):
         """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
