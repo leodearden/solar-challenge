@@ -11,11 +11,12 @@ from dataclasses import dataclass
 from datetime import datetime, time
 from functools import cached_property
 
+import numpy as np
 import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
-from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, minutes_of_day
 
 
 def _minute_of_day(clock: time | datetime) -> int:
@@ -238,6 +239,11 @@ class TariffConfig:
             Rate in £/kWh
         """
         return self._rate_by_minute[_minute_of_day(timestamp)]
+
+    def rates_for(self, index: pd.DatetimeIndex) -> np.ndarray:
+        """The rate in £/kWh at each timestamp of index, in order, as float64: get_rate's rate at that timestamp's wall-clock minute, from the same minute table."""
+        rates: np.ndarray = np.asarray(self._rate_by_minute, dtype=np.float64)[minutes_of_day(index)]
+        return rates
 
     def is_cheap_at(self, timestamp: datetime) -> bool:
         """Whether the timestamp's wall-clock minute is one of cheap_minutes_of_day."""
