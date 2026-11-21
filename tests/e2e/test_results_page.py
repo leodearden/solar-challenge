@@ -305,7 +305,7 @@ def test_a_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown(
     expect(page.locator("#chart-power-flow.js-plotly-plot")).to_be_visible()
 
 
-# -- Each chart is drawn as wide as its container --------------------------
+# -- Each chart is as wide as its container --------------------------------
 
 _OVERVIEW_CHART_IDS = ("chart-sankey", "chart-daily-balance")
 

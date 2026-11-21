@@ -3,7 +3,7 @@
 Uses the seeded_fleet_run fixture (no live simulation needed) to verify
 the page's title, its action links, its chart tabs, that it renders
 without errors, and that the charts of Aggregate, the tab shown on load,
-are drawn as wide as their containers.
+are as wide as their containers once drawn.
 """
 
 import pytest
@@ -130,7 +130,7 @@ def test_fleet_results_page_shows_every_tab_without_errors(
     assert page_errors == [], f"Errors on /results/fleet/{run_id}: {page_errors}"
 
 
-# -- Each chart is drawn as wide as its container ---------------------------
+# -- Each chart is as wide as its container ---------------------------------
 
 
 def test_each_aggregate_chart_drawn_on_load_is_as_wide_as_its_container(
