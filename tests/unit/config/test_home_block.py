@@ -391,11 +391,11 @@ class TestOmittedAndNullKeys:
             parse_home_block({"dispatch_strategy": "tou_optimised"}, Location.bristol(), block_path="homes[0]")
 
     def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
-        """Kept gap, task 866's: the null reaches GridChargeConfig, whose refusal names its key but not its block."""
         grid_charging = {"target_soc_fraction": None}
 
-        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == _refusal(
-            lambda: GridChargeConfig(**grid_charging)
+        assert _refusal(lambda: _parsed_home(battery={"grid_charging": grid_charging})) == (
+            ConfigurationError,
+            prefixed_construction_refusal("home.battery.grid_charging", lambda: GridChargeConfig(**grid_charging)),
         )
 
     def test_a_bad_dispatch_strategy_is_reported_before_a_bad_grid_charging_block(self) -> None:

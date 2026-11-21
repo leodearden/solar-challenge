@@ -35,7 +35,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig, TariffPeriod
 
 
 #: The value a fleet gives every home for a SETTING or FLAG key: a SETTING's as written or as its
@@ -327,11 +327,14 @@ def parse_grid_charge_config(
 
     Raises:
         ConfigurationError: If data is present but not a mapping, or carries a key
-            other than ``target_soc_fraction``.
+            other than ``target_soc_fraction``; or as GridChargeConfig refuses its
+            target, prefixed by the block's path.
     """
     if data is None:
         return None
-    return GridChargeConfig(**refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS))
+    return constructed(
+        block_path, GridChargeConfig, **refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS)
+    )
 
 
 def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
@@ -610,7 +613,7 @@ LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
 
 _TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
 
-_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset({"off_peak_rate", "peak_rate"})
+_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset(each.name for each in fields(PresetRates))
 
 
 def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
@@ -618,50 +621,59 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
     rate = data.get("rate_per_kwh")
     if rate is None:
         raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
-    return TariffConfig.flat_rate(
-        rate_per_kwh=float(rate),
-        name=_read_name(data, block_path=block_path)
+    return constructed(
+        block_path, TariffConfig.flat_rate, rate_per_kwh=rate, name=_read_name(data, block_path=block_path)
     )
 
 
-def _preset_tariff_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the keyword overrides a preset tariff block sets, its rates read as floats.
+def _preset_tariff(
+    data: dict[str, Any],
+    block_path: str,
+    factory: Callable[..., TariffConfig],
+    preset_rates: PresetRates,
+) -> TariffConfig:
+    """The tariff *factory* builds for the preset block at *block_path*: its rates as PresetRates reads them over *preset_rates*, its times as written.
 
-    Reads a block that parse_tariff_config has already confined to its type's keys.
+    Reads a block that parse_tariff_config has already confined to its type's keys, so a rate
+    PresetRates refuses is named by the key the block sets.
     """
-    return {
-        key: float(value) if key in _PRESET_TARIFF_RATE_KEYS else value
-        for key, value in data.items()
-        if key != "type"
-    }
+    rates = constructed(
+        block_path,
+        PresetRates,
+        **{**asdict(preset_rates), **{key: data[key] for key in _PRESET_TARIFF_RATE_KEYS if key in data}},
+    )
+    times = {key: value for key, value in data.items() if key != "type" and key not in _PRESET_TARIFF_RATE_KEYS}
+    return constructed(block_path, factory, **asdict(rates), **times)
 
 
 def _build_economy_7_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the Economy 7 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_7(**_preset_tariff_overrides(data))
+    return _preset_tariff(data, block_path, TariffConfig.economy_7, PRESET_RATES["economy_7"])
 
 
 def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the Economy 10 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_10(**_preset_tariff_overrides(data))
+    return _preset_tariff(data, block_path, TariffConfig.economy_10, PRESET_RATES["economy_10"])
 
 
 def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
-    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate."""
+    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate, and as TariffPeriod refuses it, prefixed by its path."""
     period = refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
     for key in ("start_time", "end_time", "rate_per_kwh"):
         if key not in period:
             raise ConfigurationError(f"Tariff period requires '{key}' field")
-    return TariffPeriod(
+    return constructed(
+        block_path,
+        TariffPeriod,
         start_time=period["start_time"],
         end_time=period["end_time"],
-        rate_per_kwh=float(period["rate_per_kwh"]),
-        name=_read_name(period, block_path=block_path)
+        rate_per_kwh=period["rate_per_kwh"],
+        name=_read_name(period, block_path=block_path),
     )
 
 
 def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the custom tariff a block names from its periods, refusing it unless it gives some."""
+    """Build the custom tariff a block names from its periods, refusing it unless it gives some, and as TariffConfig refuses its periods, prefixed by the block's path."""
     if "periods" not in data:
         raise ConfigurationError("custom tariff requires 'periods' field")
 
@@ -669,13 +681,11 @@ def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     if not periods_data:
         raise ConfigurationError("custom tariff must have at least one period")
 
-    return TariffConfig(
-        periods=tuple(
-            _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
-            for index, period in enumerate(periods_data)
-        ),
-        name=_read_name(data, block_path=block_path)
+    periods = tuple(
+        _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
+        for index, period in enumerate(periods_data)
     )
+    return constructed(block_path, TariffConfig, periods=periods, name=_read_name(data, block_path=block_path))
 
 
 _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
@@ -721,7 +731,9 @@ def parse_tariff_config(
     Raises:
         ConfigurationError: If tariff specification is invalid, including a
             block or custom period that is not a mapping or carries a key its
-            type does not read
+            type does not read; a value the tariff, a custom period or an
+            economy preset's rates refuse is refused as they refuse it,
+            prefixed by the path of the block or period
     """
     if data is None:
         return None
@@ -783,9 +795,15 @@ def parse_home_block(
 
     A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
     omitted pv or load block reads as an empty one.
+
+    Raises:
+        ConfigurationError: as each of its blocks' readers refuses that block; or as
+            HomeConfig refuses the home its blocks describe, prefixed by the block's path.
     """
     home = refuse_unrecognised_keys(block_path, data, HOME_BLOCK_KEYS)
-    return HomeConfig(
+    return constructed(
+        block_path,
+        HomeConfig,
         pv_config=_parse_pv_config(home.get("pv", {}), block_path=child_path(block_path, "pv")),
         battery_config=_parse_battery_config(
             home.get("battery"), block_path=child_path(block_path, "battery")
