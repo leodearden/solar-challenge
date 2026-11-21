@@ -16,6 +16,7 @@ from tests.e2e._fetches_handled import (
     record_fetches_started_and_handled,
     wait_until_the_page_has_handled_every_fetch_it_started,
 )
+from tests.e2e._run_history_requests import hold_requests, is_runs_list_request
 
 
 # -- The list a search leaves ----------------------------------------------
@@ -195,8 +196,7 @@ def test_pagination_controls_exist(
 
 
 def _is_unfiltered_runs_request(url: str) -> bool:
-    parts = urlsplit(url)
-    return parts.path == "/api/history/runs" and "q" not in parse_qs(parts.query)
+    return is_runs_list_request(url) and "q" not in parse_qs(urlsplit(url).query)
 
 
 @pytest.mark.usefixtures("seeded_home_runs_pair")
@@ -213,12 +213,7 @@ def test_late_superseded_request_does_not_replace_search_results(
 ) -> None:
     """The initial list request, answered or failed after the search's, leaves the search results showing."""
     run_id, run_name = seeded_home_run
-    held_requests: list[Route] = []
-
-    def hold(route: Route) -> None:
-        held_requests.append(route)
-
-    page.route(_is_unfiltered_runs_request, hold)
+    held_requests = hold_requests(page, _is_unfiltered_runs_request)
     record_fetches_started_and_handled(page)
     page.goto(live_server + "/history/runs")
     page.get_by_label("Search", exact=True).fill(run_name)

@@ -13,22 +13,14 @@ from tests.e2e._fetches_handled import (
     record_fetches_started_and_handled,
     wait_until_the_page_has_handled_every_fetch_it_started,
 )
-
-
-def _is_runs_list_request(url: str) -> bool:
-    return urlsplit(url).path == "/api/history/runs"
+from tests.e2e._run_history_requests import hold_requests, is_runs_list_request
 
 
 def _open_run_history_answering_its_runs_list_only_then(
     page: Page, live_server: str, answer: Callable[[Route], None]
 ) -> None:
     """Open Run History once Alpine has started, holding its runs-list request until then, then answer it with answer."""
-    held_requests: list[Route] = []
-
-    def hold(route: Route) -> None:
-        held_requests.append(route)
-
-    page.route(_is_runs_list_request, hold)
+    held_requests = hold_requests(page, is_runs_list_request)
     open_once_alpine_has_started(page, live_server + "/history/runs")
     (runs_list_request,) = held_requests
     answer(runs_list_request)
