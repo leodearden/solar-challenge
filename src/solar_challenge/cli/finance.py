@@ -34,7 +34,7 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.flex import resolve_flex_band
-from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
 from solar_challenge.gridservices import (
     GridServicesAtEvents,
     GridServicesBand,
@@ -240,8 +240,7 @@ def run(
 
     cli = invocation(ctx)
     print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
-    simulate = cli.runner.simulate
-    fleet_results = simulate(fleet_config, start_date, end_date)
+    fleet_results = cli.runner.simulate(fleet_config, start_date, end_date)
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
@@ -254,6 +253,7 @@ def run(
         else None
     )
 
+    simulate = reusing(cli.runner.simulate, fleet_results, start_date, end_date)
     scenario_config = ScenarioConfig(
         name=raw.get("name", str(scenario)),
         period=SimulationPeriod(start_date=start, end_date=end),
