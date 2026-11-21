@@ -25,6 +25,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import (
+    child_path,
     parse_dispatch_strategy_config,
     parse_location_block,
     parse_seg_rate,
@@ -325,11 +326,6 @@ def _refuse_what_the_loaders_refuse(scenario: Mapping[str, Any]) -> None:
     parse_seg_rate(scenario.get("seg"))
 
 
-def _child_path(path: str, key: str) -> str:
-    """The path of the *key* setting inside the block at *path*; "" is the scenario's top level."""
-    return f"{path}.{key}" if path else key
-
-
 def _not_loaded(
     block: Mapping[str, Any], path: str, held: Mapping[str, tuple[str, ...]]
 ) -> tuple[str, ...]:
@@ -341,7 +337,7 @@ def _not_loaded(
     return tuple(
         not_loaded
         for key in block
-        for not_loaded in held.get(key, (_child_path(path, key),))
+        for not_loaded in held.get(key, (child_path(path, key),))
     )
 
 
@@ -422,10 +418,10 @@ def _read_fleet_size_and_seed(fleet: Mapping[str, Any]) -> Mapping[str, _BlockRe
             fleet_distribution.n_homes or fleet_distribution.seed.
     """
     path = "fleet_distribution"
-    n_homes = read_fleet_size(fleet.get("n_homes"), _child_path(path, "n_homes"))
+    n_homes = read_fleet_size(fleet.get("n_homes"), child_path(path, "n_homes"))
     return {
         "n_homes": ({"n_homes": n_homes}, ()),
-        "seed": _read_seed(fleet.get("seed"), _child_path(path, "seed")),
+        "seed": _read_seed(fleet.get("seed"), child_path(path, "seed")),
     }
 
 
@@ -444,7 +440,7 @@ def _read_fleet_distribution(
         {
             **fleet_size_and_seed,
             "pv": _read_component(fleet, path, "pv", "capacity_kw"),
-            "battery": _read_battery(fleet.get("battery"), _child_path(path, "battery")),
+            "battery": _read_battery(fleet.get("battery"), child_path(path, "battery")),
             "load": _read_component(fleet, path, "load", "annual_consumption_kwh"),
         },
     )
@@ -471,10 +467,10 @@ def _read_component(
         ValueError: From distribution_form_spec, for a distribution the editor cannot hold,
             an absent one included.
     """
-    block_path = _child_path(path, component)
+    block_path = child_path(path, component)
     block = fleet.get(component, {})
     spec = distribution_form_spec(
-        block.get(distribution_key), _child_path(block_path, distribution_key)
+        block.get(distribution_key), child_path(block_path, distribution_key)
     )
     return {component: {distribution_key: spec}}, _not_loaded(block, block_path, {distribution_key: ()})
 
@@ -490,10 +486,10 @@ def _read_battery(battery: Any, path: str) -> _BlockRead:
     """
     if battery is None:
         return {}, ()
-    capacity_path = _child_path(path, "capacity_kwh")
+    capacity_path = child_path(path, "capacity_kwh")
     capacity = distribution_form_spec(_null_capacity_as_zero(battery["capacity_kwh"]), capacity_path)
     dispatch, dispatch_not_loaded = _read_dispatch(
-        battery.get("dispatch_strategy"), _child_path(path, "dispatch_strategy")
+        battery.get("dispatch_strategy"), child_path(path, "dispatch_strategy")
     )
     held = {"capacity_kwh": (), "dispatch_strategy": dispatch_not_loaded}
     return {"battery": {"capacity_kwh": capacity}, **dispatch}, _not_loaded(battery, path, held)
@@ -602,12 +598,12 @@ def _read_typed_block(
     readers = settings.get(block_type)
     if readers is None:
         raise ValueError(
-            f"{_child_path(path, type_key)} must be one the fleet page holds "
+            f"{child_path(path, type_key)} must be one the fleet page holds "
             f"({', '.join(settings)}), got {block_type!r}"
         )
     form = {
         type_key: block_type,
-        **{key: read(block.get(key), _child_path(path, key)) for key, read in readers.items()},
+        **{key: read(block.get(key), child_path(path, key)) for key, read in readers.items()},
     }
     return form, _not_loaded(block, path, dict.fromkeys((type_key, *readers), ()))
 
