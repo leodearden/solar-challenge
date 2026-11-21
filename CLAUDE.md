@@ -38,8 +38,9 @@ pytest --cov=src/solar_challenge
 uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 
 # Browser e2e suite: what the offline lane's e2e job runs after every merge
-# (~3.5 min), once it has installed the browser the locked playwright needs;
-# the per-task verify never runs it
+# (serially: from about ten minutes on an idle host to over an hour on a loaded
+# one, so size a command timeout for that), once it has installed the browser
+# the locked playwright needs; the per-task verify never runs it
 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
 
 # PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
