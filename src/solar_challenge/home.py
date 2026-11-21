@@ -24,6 +24,7 @@ from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_e
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
@@ -197,6 +198,32 @@ def _refuse_unless_a_number_in_every_row(column: str, series: pd.Series) -> None
 
 
 @dataclass(frozen=True)
+class RunPricing:
+    """How simulate_home priced a run's grid flows.
+
+    A rate is None when no tariff, or no SEG tariff, priced its flow. A £0 tariff is 0.0,
+    and priced.
+
+    Attributes:
+        import_tariff_mean_rate_gbp_per_kwh: The import tariff's rate in £/kWh, time-weighted
+            over the run's rows
+        seg_rate_pence_per_kwh: The SEG rate in pence/kWh that the run's export earned
+
+    Raises:
+        ConfigurationError: A ValueError naming the field and the value, for a set rate that is
+            not a finite number of at least 0.
+    """
+
+    import_tariff_mean_rate_gbp_per_kwh: Optional[float]
+    seg_rate_pence_per_kwh: Optional[float]
+
+    def __post_init__(self) -> None:
+        """Read each set rate as a finite number of at least 0, holding the float read, as SEGTariff reads its rate."""
+        read_field(self, "import_tariff_mean_rate_gbp_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
+        read_field(self, "seg_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
+
+
+@dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
 
@@ -233,6 +260,8 @@ class SimulationResults:
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
         grid_charge: Optional power the battery drew from the grid in kW, a part of
             both battery_charge and grid_import (None when tariff_config is None)
+        pricing: How the run's grid flows were priced (None for results simulate_home did
+            not make, e.g. from_dataframe's)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -252,6 +281,7 @@ class SimulationResults:
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
+    pricing: Optional[RunPricing] = None
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from.
@@ -417,6 +447,8 @@ class SummaryStatistics:
     total_grid_charge_kwh: float = 0.0
     # The window the totals were computed over, whose days simulation_days is.
     window: Optional[SimulationWindow] = None
+    # How the run's grid flows were priced, None when that is unknown.
+    pricing: Optional[RunPricing] = None
 
     def __post_init__(self) -> None:
         """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and, when a window is set, a simulation_days other than its days."""
@@ -665,6 +697,19 @@ def _export_revenue(
     return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=rows)
 
 
+def _run_pricing(config: HomeConfig, tariff_rate: pd.Series) -> RunPricing:
+    """How config's tariffs priced the run whose rows' import rates are tariff_rate.
+
+    The rows are the run's evenly spaced minutes, so their mean rate is the tariff's
+    time-weighted mean over the run.
+    """
+    seg_tariff = config.seg_tariff
+    return RunPricing(
+        import_tariff_mean_rate_gbp_per_kwh=None if config.tariff_config is None else float(tariff_rate.mean()),
+        seg_rate_pence_per_kwh=None if seg_tariff is None else seg_tariff.rate_pence_per_kwh,
+    )
+
+
 def _results(
     flows: Sequence[EnergyFlowResult],
     rows: pd.DatetimeIndex,
@@ -674,10 +719,12 @@ def _results(
     export_revenue: pd.Series,
     heat_pump_load: Optional[pd.Series],
     strategy_name: str,
+    pricing: RunPricing,
 ) -> SimulationResults:
     """The run's results on its rows, each lasting step_hours hours.
 
-    Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
+    Each flow's power in kW, the battery's state of charge in kWh, the run's prices, and
+    pricing, how they were priced.
     """
     kw_per_kwh = 1 / step_hours
 
@@ -700,6 +747,7 @@ def _results(
         heat_pump_load=heat_pump_load,
         grid_charge_cost=import_pricing.grid_charge_cost,
         grid_charge=None if import_pricing.grid_charge_cost is None else power_kw(lambda flow: flow.grid_charge),
+        pricing=pricing,
     )
 
 
@@ -753,7 +801,8 @@ def simulate_home(
     Returns:
         SimulationResults with every time series on the run's window's rows:
         one a minute on config.location's clock, from the first day's local
-        midnight up to the midnight after the last day
+        midnight up to the midnight after the last day; their pricing records
+        the rates config's tariffs priced the run's grid flows at
 
     Raises:
         ValueError: If end_date's date is before start_date's, naming both;
@@ -790,6 +839,7 @@ def simulate_home(
         export_revenue=export_revenue,
         heat_pump_load=demand.heat_pump_kw,
         strategy_name=dispatch.strategy_name,
+        pricing=_run_pricing(config, import_pricing.tariff_rate),
     )
 
 
@@ -810,7 +860,7 @@ def calculate_summary(
 
     Returns:
         SummaryStatistics with totals and ratios, carrying the window its results
-        cover, whose calendar days are its simulation_days
+        cover, whose calendar days are its simulation_days, and the results' pricing
 
     Notes:
         **Two-path SEG design** — ``total_export_revenue_gbp`` and
@@ -901,4 +951,5 @@ def calculate_summary(
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
         window=window,
+        pricing=results.pricing,
     )

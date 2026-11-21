@@ -20,6 +20,7 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
+from solar_challenge.home import RunPricing
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
 
@@ -438,13 +439,13 @@ class TestSolveCostRecoveryRateClamps:
     def test_over_feasible_binding_rate_clamped_zero(self) -> None:
         """Over-feasible: surplus(0) > floor → binding='rate_clamped_zero', rate==0, feasible=True.
 
-        Set-up: zero capex (grant >= capex) + large SEG income (via export_revenue_gbp)
+        Set-up: zero capex (grant >= capex) + large SEG income (via a 25 p SEG rate)
         ensures fleet_revenue(r=0) = SEG > fleet_opex + floor×n_homes, so surplus(r=0) > floor
         without needing any own-use payment.
         """
         n_homes = 5
         # fleet_opex = 131 × 5 = 655 GBP/yr; floor×n_homes = 10 × 5 = 50 GBP/yr
-        # Need SEG > 705 GBP/yr → set export_revenue_gbp=200/home → 1000/fleet >> 705
+        # Need SEG > 705 GBP/yr → 800 kWh at 25 p = 200/home → 1000/fleet >> 705
         scenario = _make_scenario(n_homes=n_homes)
         finance = _make_finance(
             pv_cost_per_kwp_gbp=200.0,
@@ -460,7 +461,7 @@ class TestSolveCostRecoveryRateClamps:
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp=200.0,
+            pricing=RunPricing(None, 25.0),
         )
         simulate = lambda fc, s, e: fr  # noqa: E731
 
@@ -572,7 +573,7 @@ class TestSolveCostRecoveryRateDegenerate:
             self_kwh=0.0,
             export_kwh=2800.0,
             import_kwh=4000.0,
-            export_revenue_gbp=200.0,  # SEG: 200 × 5 = 1000 GBP/yr fleet
+            pricing=RunPricing(None, 100.0 * 200.0 / 2800.0),  # SEG: 200 × 5 = 1000 GBP/yr fleet
         )
         scenario = _make_scenario(n_homes=n_homes)
         # pv_cost_per_kwp_gbp must be > 0 (FinanceConfig validation); use minimal value.
@@ -670,7 +671,7 @@ class TestSolveCostRecoveryRateShortWindow:
             self_kwh=2000.0,
             export_kwh=800.0,
             import_kwh=1200.0,
-            export_revenue_gbp=40.0,
+            pricing=RunPricing(None, 5.0),
         )
         share_of_year = window_days / 365
         fleet_short = make_fleet_results(
@@ -678,7 +679,7 @@ class TestSolveCostRecoveryRateShortWindow:
             self_kwh=2000.0 * share_of_year,
             export_kwh=800.0 * share_of_year,
             import_kwh=1200.0 * share_of_year,
-            export_revenue_gbp=40.0 * share_of_year,
+            pricing=RunPricing(None, 5.0),
             days=window_days,
         )
 

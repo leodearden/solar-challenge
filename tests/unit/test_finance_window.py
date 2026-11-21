@@ -33,7 +33,7 @@ from solar_challenge.finance import (
     spreadsheet_revenue_curve,
 )
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SummaryStatistics, calculate_summary
+from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._finance_builders import (
@@ -52,15 +52,11 @@ _OWN_USE_PENCE_PER_KWH = 15.0
 def _summary(*, days: int, first_day: date = date(2021, 1, 1)) -> SummaryStatistics:
     """The summary of make_sim_results' home over *days* local dates from *first_day*.
 
-    Its import is priced at 30 p/kWh, as a tariff would price it, so no bill
-    falls back to the retail rate and warns.
+    Its import is priced by a 30 p/kWh tariff, so no bill falls back to the
+    retail rate and warns.
     """
-    summary = calculate_summary(make_sim_results(days=days, first_day=first_day))
-    import_cost_gbp = summary.total_grid_import_kwh * _IMPORT_RATE_GBP_PER_KWH
-    return dataclasses.replace(
-        summary,
-        total_import_cost_gbp=import_cost_gbp,
-        net_cost_gbp=import_cost_gbp - summary.total_export_revenue_gbp,
+    return calculate_summary(
+        make_sim_results(days=days, first_day=first_day, pricing=RunPricing(_IMPORT_RATE_GBP_PER_KWH, None))
     )
 
 
