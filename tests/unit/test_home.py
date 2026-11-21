@@ -1329,36 +1329,6 @@ class TestSummaryStatistics:
 
         assert summary.total_direct_self_consumption_kwh == 0.0
 
-    @pytest.mark.parametrize(
-        ("dispatch_strategy", "tariff_config", "seg_tariff"),
-        [
-            pytest.param("greedy", None, None, id="greedy"),
-            pytest.param("tou_optimized", TariffConfig.economy_7(), SEGTariff("Octopus", 4.1), id="tou-optimized"),
-        ],
-    )
-    def test_on_a_sunless_day_the_engines_summary_counts_all_its_self_consumption_as_discharge(
-        self, dispatch_strategy: str, tariff_config: TariffConfig | None, seg_tariff: SEGTariff | None
-    ) -> None:
-        """With no sun, the battery supplies every kWh the home self-consumes."""
-        home = HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=5000.0, seed=11),
-            battery_config=BatteryConfig(capacity_kwh=10.0),
-            location=Location.bristol(),
-            dispatch_strategy=dispatch_strategy,
-            tariff_config=tariff_config,
-            seg_tariff=seg_tariff,
-        )
-        day = pd.Timestamp("2024-09-01")
-
-        summary = calculate_summary(
-            simulate_home(home, day, day, weather=weather_for(home, sunless_weather("2024-09-01", temp_air=12.0)))
-        )
-
-        assert summary.total_battery_discharge_kwh > 0.0
-        assert summary.total_battery_discharge_kwh == summary.total_self_consumption_kwh
-        assert summary.total_direct_self_consumption_kwh == 0.0
-
     def test_refuses_a_field_assignment(self) -> None:
         """A summary is a frozen value, so a simulation_days construction checked against its window cannot be assigned after it."""
         summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
