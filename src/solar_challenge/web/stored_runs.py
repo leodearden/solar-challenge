@@ -922,10 +922,10 @@ def _home_without_grid_charging_on_one_rate(home: Any) -> tuple[Any, list[_Field
     That is the home as its run ran. A tariff's periods tile the day, so each covers a minute,
     and at format 3 its cheap_minutes_of_day was empty exactly when its periods shared one rate:
     neither GridChargeContext.is_cheap_period nor simulate_timestep_tou then ever charged from
-    the grid. Format 2 had already dropped grid_charging under self-consumption dispatch or with
-    no tariff, so any left is on a dispatch that grid-charges. The rule reads format 3's JSON,
-    not a TariffConfig, so a later change to the tariff's classifier cannot change the step. A
-    home it cannot read as a grid-charging battery on such a tariff is left as it is.
+    the grid. v3 had already dropped grid_charging under self-consumption dispatch or with no
+    tariff, so any left at format 3 is on a dispatch that grid-charges. The rule reads format
+    3's JSON, not a TariffConfig, so a later change to the tariff's classifier cannot change the
+    step. A home it cannot read as a grid-charging battery on such a tariff is left as it is.
     """
     if not isinstance(home, dict):
         return home, []

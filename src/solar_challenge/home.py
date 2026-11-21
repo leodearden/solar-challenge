@@ -69,7 +69,8 @@ class HomeConfig:
             cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
             battery whose dispatch would ignore a setting: tou_optimized with no tariff to
             dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy), a
-            tariff with no cheap period included.
+            tariff with no cheap period included; or a battery tou_optimized whose peak_hours
+            reach a cheap minute of tariff_config (TOUOptimizedStrategy).
     """
 
     pv_config: PVConfig
