@@ -11,6 +11,8 @@ from solar_challenge.community import CommunityConfig
 from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -19,6 +21,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     constructed,
     parse_community_config,
+    parse_finance_config,
     parse_home_block,
     parse_location_block,
     parse_seg_rate,
@@ -288,9 +291,63 @@ _SEG_AND_COMMUNITY_ROWS = [
 ]
 
 
+def _finance(block: dict[str, Any]) -> Callable[[], object]:
+    """Read *block* as a finance: block at the path parse_finance_config names by default, "finance"."""
+    return lambda: parse_finance_config(block)
+
+
+_STANDING_CHARGE = {"standing_charge_pence_per_day": 60.0}
+
+_PRICED_AT_EVENTS = {**_STANDING_CHARGE, "grid_services_model": "capacity_at_events"}
+
+_EVENT_WINDOW = {"months": [1, 2], "weekdays": [0, 1], "hours": [17, 18], "events_per_year": 5, "event_hours": 2.0}
+
+
+def _event_window_row(key: str, value: object, row_id: str) -> Any:
+    """The row of a finance block priced at events whose one event window sets *key* to *value*, which EventWindow refuses."""
+    window = {**_EVENT_WINDOW, key: value}
+    return pytest.param(
+        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"event_windows": [window]}}),
+        "finance.grid_services_events.event_windows[0]",
+        lambda: EventWindow(**window),
+        id=row_id,
+    )
+
+
+_FINANCE_ROWS = [
+    pytest.param(
+        _finance({**_STANDING_CHARGE, "vat_rate": True}),
+        "finance",
+        lambda: FinanceConfig(**_STANDING_CHARGE, vat_rate=True),
+        id="finance-vat-rate-boolean",
+    ),
+    pytest.param(
+        _finance({**_STANDING_CHARGE, "grid_services_model": 5}),
+        "finance",
+        lambda: FinanceConfig(**_STANDING_CHARGE, grid_services_model=5),
+        id="finance-grid-services-model-a-number",
+    ),
+    pytest.param(
+        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"aggregator_share": True}}),
+        "finance.grid_services_events",
+        lambda: GridServicesEventsConfig(aggregator_share=True),
+        id="events-aggregator-share-boolean",
+    ),
+    pytest.param(
+        _finance({**_PRICED_AT_EVENTS, "grid_services_events": {"band": 5}}),
+        "finance.grid_services_events",
+        lambda: GridServicesEventsConfig(band=5),
+        id="events-band-a-number",
+    ),
+    _event_window_row("event_hours", math.inf, "event-window-hours-infinite"),
+    _event_window_row("months", [1.5], "event-window-month-a-fraction"),
+    _event_window_row("events_per_year", 5.5, "event-window-events-per-year-a-fraction"),
+]
+
+
 @pytest.mark.parametrize(
     ("read", "label", "construct"),
-    [*_COMPONENT_BLOCK_ROWS, *_HOME_ROWS, *_TARIFF_ROWS, *_SEG_AND_COMMUNITY_ROWS],
+    [*_COMPONENT_BLOCK_ROWS, *_HOME_ROWS, *_TARIFF_ROWS, *_SEG_AND_COMMUNITY_ROWS, *_FINANCE_ROWS],
 )
 def test_a_value_its_blocks_type_refuses_is_refused_prefixed_by_the_blocks_path(
     read: Callable[[], object], label: str, construct: Callable[[], object]

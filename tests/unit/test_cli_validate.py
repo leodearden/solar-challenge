@@ -15,6 +15,8 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from solar_challenge.ev import EVConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import EventWindow
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_tariff_config
@@ -470,6 +472,20 @@ home:
                 "home.tariff",
                 lambda: TariffConfig.flat_rate(rate_per_kwh=True),
                 id="home-flat-rate-boolean",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\nfinance: {standing_charge_pence_per_day: 60.0, vat_rate: true}\n",
+                "finance",
+                lambda: FinanceConfig(standing_charge_pence_per_day=60.0, vat_rate=True),
+                id="finance-vat-rate-boolean",
+            ),
+            pytest.param(
+                yaml.safe_dump(_flex_document_with_infinite_event_hours()),
+                "finance.grid_services_events.event_windows[0]",
+                lambda: EventWindow(
+                    **_flex_document_with_infinite_event_hours()["finance"]["grid_services_events"]["event_windows"][0]
+                ),
+                id="flex-fleet-event-hours-infinite",
             ),
         ],
     )
