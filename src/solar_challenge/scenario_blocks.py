@@ -5,7 +5,6 @@ The component tables it reads blocks by also carry each key's fleet row and each
 writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
 """
 
-import math
 from dataclasses import MISSING, asdict, dataclass, fields
 from enum import Enum
 from types import MappingProxyType
@@ -838,7 +837,8 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
     The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
     ``preset`` or a ``rate_pence_per_kwh`` that :func:`_parse_seg_rate_scalar`
     accepts.  ``None`` means no SEG; any other shape raises
-    :exc:`ConfigurationError` naming *block_path*.
+    :exc:`ConfigurationError` naming *block_path*, and a rate SEGTariff refuses is
+    refused as it refuses it, prefixed by *block_path*.
     """
     if data is None:
         return None
@@ -849,27 +849,16 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
             f"'rate_pence_per_kwh', got {data!r}"
         )
     if "rate_pence_per_kwh" in data:
-        return _parse_seg_rate_scalar(
-            data["rate_pence_per_kwh"], key_path=f"{block_path}.rate_pence_per_kwh"
-        )
+        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], path=block_path)
     try:
         return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
     except (ValueError, TypeError) as exc:
         raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
 
 
-def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
-    """Read a SEG export rate in pence/kWh: a finite number that :class:`SEGTariff` accepts."""
-    try:
-        rate = float(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"'{key_path}' must be a number, got {value!r}") from exc
-    if isinstance(value, bool) or not math.isfinite(rate):
-        raise ConfigurationError(f"'{key_path}' must be a finite number, got {value!r}")
-    try:
-        return SEGTariff(name="", rate_pence_per_kwh=rate).rate_pence_per_kwh
-    except ValueError as exc:
-        raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
+def _parse_seg_rate_scalar(value: Any, *, path: str) -> float:
+    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *path*, the rate's place in its file."""
+    return constructed(path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
 
 
 # Rows follow FinanceConfig's field order, which decides the first bad value reported.
@@ -1055,8 +1044,10 @@ def _parse_community_billing_config(
 
     Raises:
         ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, an ambiguous SEG specification, a malformed ``seg``
-            block or an invalid ``seg_rate_pence_per_kwh``.
+            does not read, an ambiguous SEG specification or a malformed ``seg``
+            block; for a ``seg_rate_pence_per_kwh``, null or not, that SEGTariff
+            refuses, as it refuses it, prefixed by the key's path; or as
+            CommunityBillingConfig refuses the block, prefixed by its path.
     """
     if data is None:
         return None
@@ -1069,7 +1060,7 @@ def _parse_community_billing_config(
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            key_path=child_path(block_path, "seg_rate_pence_per_kwh"),
+            path=child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
@@ -1091,7 +1082,7 @@ def _parse_community_billing_config(
     # absent key.
     if tariff is None and seg_rate is None:
         return None
-    return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
+    return constructed(block_path, CommunityBillingConfig, tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
 
 
 _COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
@@ -1113,8 +1104,10 @@ def parse_community_config(
 
     Raises:
         ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, missing/invalid ``sharing_mode``, p2p+battery,
-            community_battery-without-battery, or any nested config error.
+            does not read, or a missing ``sharing_mode``; as a nested block's reader
+            refuses that block; or as CommunityConfig refuses the block, such as an
+            unknown ``sharing_mode``, p2p+battery or community_battery-without-battery,
+            prefixed by its path.
     """
     if data is None:
         return None
@@ -1134,11 +1127,10 @@ def parse_community_config(
         data.get("billing"), block_path=child_path(block_path, "billing")
     )
 
-    try:
-        return CommunityConfig(
-            sharing_mode=sharing_mode,
-            community_battery=community_battery,
-            billing=billing,
-        )
-    except ValueError as exc:
-        raise ConfigurationError(str(exc)) from exc
+    return constructed(
+        block_path,
+        CommunityConfig,
+        sharing_mode=sharing_mode,
+        community_battery=community_battery,
+        billing=billing,
+    )
