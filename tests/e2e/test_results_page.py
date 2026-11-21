@@ -511,6 +511,7 @@ def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
         _GIVE_IT_THE_SANKEYS_FIGURE_AND_READ_ITS_TITLE_BY_THE_NEXT_MICROTASK
     )
 
+    expect(title).to_have_text("Energy Flow")
     assert (title_by_the_next_microtask, page_errors) == ("Energy Flow", [])
 
 
