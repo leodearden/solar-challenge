@@ -43,8 +43,8 @@ uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 # it at least the e2e suite step's `timeout` in dark-factory-orchestrator.yaml,
 # sized per collected test as docs/orchestrator-config.md §8 says. If the tool
 # running it caps one command below that, detach the run under that `timeout`
-# and read its log, or run only the failing node-ids, as the Dark Factory
-# section's e2e bullet says
+# and read its log, or run only the failing node-ids with the reproduce command
+# in the Dark Factory section's e2e bullet
 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider
 
 # PVGIS contract tests: what the offline lane's pvgis job runs after every merge;
