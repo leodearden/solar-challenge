@@ -2,6 +2,8 @@
  * Draws each Plotly chart of a page from the figure its container carries
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
+ * A container already shown is drawn at once, so the tab shown on load has
+ * its charts drawn by the page's load event.
  * A container added to the page after load, or given another figure, is
  * drawn the same way once shown, and a container removed from the page is
  * forgotten, its chart purged, so a page that inserts and replaces chart
@@ -158,7 +160,7 @@
             if (container.isConnected) {
                 _fitWhileShown.observe(container);
                 if (!_sameColours(_chromeColours(container), drawnIn)) {
-                    _recolourOnceShown.observe(container);
+                    _recolourOnceShown.request(container);
                 }
             } else {
                 _forget(container);
@@ -181,31 +183,57 @@
     }
 
     /**
-     * Returns a ResizeObserver that calls action with each observed container
-     * the first time it has a width, at the next frame if it has one already,
-     * so nothing is laid out in a hidden tab.
+     * Whether container is shown: laid out with a width, as no container in a
+     * hidden tab is. Its layout width ignores transforms, as the
+     * ResizeObservers that report a container shown do, so a transform cannot
+     * leave a container waiting for a report that never comes.
+     */
+    function _isShown(container) {
+        return container.offsetWidth > 0;
+    }
+
+    /**
+     * Returns the requests to call action with a container once it is shown:
+     * request(container) calls action with container at once if it is shown,
+     * else the first time it is, so nothing is laid out in a hidden tab, and
+     * cancel(container) withdraws a request still waiting.
      */
     function _onceShown(action) {
-        return new ResizeObserver(function (entries, observer) {
+        var observer = new ResizeObserver(function (entries) {
             entries.forEach(function (entry) {
-                if (entry.contentRect.width > 0) {
-                    observer.unobserve(entry.target);
-                    action(entry.target);
+                if (_isShown(entry.target)) {
+                    actOn(entry.target);
                 }
             });
         });
+        function actOn(container) {
+            observer.unobserve(container);
+            action(container);
+        }
+        return {
+            request: function (container) {
+                if (_isShown(container)) {
+                    actOn(container);
+                } else {
+                    observer.observe(container);
+                }
+            },
+            cancel: function (container) {
+                observer.unobserve(container);
+            },
+        };
     }
 
-    /** Draws each observed container the first time it is shown (AC3). */
+    /** Draws each requested container now if shown, else the first time it is shown (AC3). */
     var _drawOnceShown = _onceShown(_draw);
 
-    /** Recolours each observed container's chart the first time it is shown (AC10). */
+    /** Recolours each requested container's chart now if shown, else the first time it is shown (AC10). */
     var _recolourOnceShown = _onceShown(_recolour);
 
     /** Fits each observed container's chart, which is drawn, whenever the container's size changes while it has a width. */
     var _fitWhileShown = new ResizeObserver(function (entries) {
         entries.forEach(function (entry) {
-            if (entry.contentRect.width > 0) {
+            if (_isShown(entry.target)) {
                 _fit(entry.target);
             }
         });
@@ -224,20 +252,15 @@
         });
     }
 
-    /** Draws container the first time it is shown (AC3). */
-    function _drawWhenShown(container) {
-        _drawOnceShown.observe(container);
-    }
-
     /**
      * Forgets container, which has left the page, so the renderer keeps
      * nothing of it: it is no longer drawn, fitted or recoloured, and its
      * chart, if drawn, is purged.
      */
     function _forget(container) {
-        _drawOnceShown.unobserve(container);
+        _drawOnceShown.cancel(container);
         _fitWhileShown.unobserve(container);
-        _recolourOnceShown.unobserve(container);
+        _recolourOnceShown.cancel(container);
         if (_drawn.delete(container)) {
             _attempt(container, 'purge the chart of', function () {
                 Plotly.purge(container);
@@ -246,32 +269,41 @@
     }
 
     /**
-     * Follows the page's containers after load: each container added is drawn
-     * once shown, each given another figure is redrawn, by _draw's
-     * Plotly.newPlot, once shown, and each removed is forgotten. A container
-     * whose figure was removed is left as it is. Nodes added to or removed
-     * from inside a container are its chart's own drawing, such as a hover
-     * label, so they are skipped.
+     * Follows the page's containers after load, acting once on each container
+     * a batch of mutations names, however many of its records name it: each
+     * removed is forgotten, and then each added or given another figure, if
+     * still on the page, is drawn, by _draw's Plotly.newPlot, once shown. A
+     * container whose figure was removed is left as it is. Nodes added to or
+     * removed from inside a container are its chart's own drawing, such as a
+     * hover label, so they are skipped.
      */
     var _followContainersAfterLoad = new MutationObserver(function (records) {
+        var removed = new Set();
+        var toDraw = new Set();
         records.forEach(function (record) {
             if (record.type === 'attributes') {
                 if (record.target.hasAttribute('data-chart-figure')) {
-                    _drawWhenShown(record.target);
+                    toDraw.add(record.target);
                 }
             } else if (!record.target.closest('[data-chart-figure]')) {
                 record.removedNodes.forEach(function (node) {
-                    _forEachContainerIn(node, _forget);
+                    _forEachContainerIn(node, removed.add.bind(removed));
                 });
                 record.addedNodes.forEach(function (node) {
-                    _forEachContainerIn(node, _drawWhenShown);
+                    _forEachContainerIn(node, toDraw.add.bind(toDraw));
                 });
+            }
+        });
+        removed.forEach(_forget);
+        toDraw.forEach(function (container) {
+            if (container.isConnected) {
+                _drawOnceShown.request(container);
             }
         });
     });
 
     document.addEventListener('DOMContentLoaded', function () {
-        _forEachContainerIn(document.body, _drawWhenShown);
+        _forEachContainerIn(document.body, _drawOnceShown.request);
         _followContainersAfterLoad.observe(document.body, {
             childList: true, subtree: true, attributes: true, attributeFilter: ['data-chart-figure'],
         });
@@ -280,7 +312,7 @@
     /** Recolours each drawn chart once it is shown, in the chrome colours its container names then (AC10). */
     document.addEventListener('theme-changed', function () {
         _drawn.forEach(function (subplots, container) {
-            _recolourOnceShown.observe(container);
+            _recolourOnceShown.request(container);
         });
     });
 }());

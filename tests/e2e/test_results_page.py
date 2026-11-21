@@ -13,10 +13,13 @@ container's width changes: when the sidebar collapses or expands
 and when the window narrows, and, for a chart whose tab is
 hidden at the time, once its tab is shown again. A chart that
 cannot be fitted to its container logs one error naming it.
-A chart container added to the page after load is drawn, and
-a drawn container given another figure is redrawn with it. A
-drawn container removed from the page has its chart purged,
-and a theme toggle after it logs no error.
+A chart container added to a shown tab after load is drawn by
+the adding script's next microtask, even inside a parent that a
+transform scales to zero width, and a drawn container given
+another figure is redrawn with it; a container added and given
+another figure in one task is drawn once. A drawn container
+removed from the page has its chart purged, and a theme toggle
+after it logs no error.
 """
 
 from playwright.sync_api import Locator, Page, expect
@@ -440,19 +443,48 @@ _GIVE_IT_THE_SANKEYS_FIGURE = """(container) => {
 }"""
 
 
-def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn(
+# Adds the container, then awaits one microtask, whose continuation the addition queued behind the
+# MutationObserver's, and returns whether Plotly has drawn the added container by then.
+_ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK = f"""async (drawn) => {{
+    ({_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER})(drawn);
+    await Promise.resolve();
+    return document.getElementById('chart-added-late').classList.contains('js-plotly-plot');
+}}"""
+
+
+def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn_before_the_adding_scripts_next_microtask(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
     page_errors: list[str],
 ) -> None:
+    """A container added to the shown Overview tab is drawn in the microtask that reports its addition, ahead of the adding script's next, and the page logs no error."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
 
-    page.locator("#chart-daily-balance").evaluate(_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER)
+    drawn_by_the_next_microtask = page.locator("#chart-daily-balance").evaluate(
+        _ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK
+    )
 
     expect(page.locator("#chart-added-late.js-plotly-plot")).to_be_visible()
-    assert page_errors == []
+    assert (drawn_by_the_next_microtask, page_errors) == (True, [])
+
+
+_SCALE_ITS_PARENT_TO_ZERO_WIDTH = "(container) => { container.parentElement.style.transform = 'scale(0)'; }"
+
+
+def test_a_chart_container_added_inside_a_parent_scaled_to_zero_width_is_drawn_by_the_adding_scripts_next_microtask(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A transform changes no layout width, so a container added to the shown Overview tab inside a parent that a transform scales to zero width is drawn as promptly as one at full width."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    drawn = page.locator("#chart-daily-balance")
+    drawn.evaluate(_SCALE_ITS_PARENT_TO_ZERO_WIDTH)
+
+    assert drawn.evaluate(_ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK) is True
 
 
 def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
@@ -471,6 +503,40 @@ def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
 
     expect(title).to_have_text("Energy Flow")
     assert page_errors == []
+
+
+# Counts on window.__drawsOf, by container id, each chart Plotly.newPlot draws from now on.
+_COUNT_EACH_CONTAINERS_DRAWS = """() => {
+    const newPlot = Plotly.newPlot;
+    window.__drawsOf = {};
+    Plotly.newPlot = function (container) {
+        window.__drawsOf[container.id] = (window.__drawsOf[container.id] || 0) + 1;
+        return newPlot.apply(this, arguments);
+    };
+}"""
+
+# Adds a container after the drawn container it is called on and gives it the Sankey's figure in the same task,
+# so one batch of mutation records names the added container twice: as added, and as given another figure.
+_ADD_ONE_AND_GIVE_IT_THE_SANKEYS_FIGURE = f"""(drawn) => {{
+    ({_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER})(drawn);
+    ({_GIVE_IT_THE_SANKEYS_FIGURE})(document.getElementById('chart-added-late'));
+}}"""
+
+
+def test_a_chart_container_added_and_given_another_figure_in_one_task_is_drawn_once_with_that_figure(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A container added to the shown Overview tab and given the Sankey's figure in the same task is drawn once, titled as the Sankey's layout is."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    page.evaluate(_COUNT_EACH_CONTAINERS_DRAWS)
+
+    page.locator("#chart-daily-balance").evaluate(_ADD_ONE_AND_GIVE_IT_THE_SANKEYS_FIGURE)
+
+    expect(page.locator("#chart-added-late .gtitle")).to_have_text("Energy Flow")
+    assert page.evaluate("() => window.__drawsOf") == {"chart-added-late": 1}
 
 
 _REMOVE_IT = "container => { container.remove(); return container; }"

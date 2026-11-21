@@ -4,11 +4,13 @@ Verifies page loading, metrics table, delta columns, color coding,
 the comparison charts, and the empty state shown when no IDs are given.
 The charts are the Energy Totals bar chart and the Efficiency Ratios
 radar chart, each in a tab of its own. The bar chart's tab is shown on
-load, and the bar chart is as wide as its container once drawn; the
-radar chart's tab is hidden on load, so its chart is drawn only once
-the tab is shown, and then fills its container; both charts draw
-without errors, with titles and legends legible in light and dark
-mode, and the radar chart's tick labels legible on its disc.
+load, so the bar chart is drawn by the page's load event, and is as
+wide as its container; the radar chart's tab is hidden on load, so its
+chart is drawn only once the tab is shown, and then fills its
+container; both charts draw without errors, with titles and legends
+legible in light and dark mode, and the radar chart's tick labels
+legible on its disc. A drawn chart in a shown tab is recoloured as a
+theme change is announced.
 Uses seeded run pair fixtures.
 """
 
@@ -167,6 +169,58 @@ def test_the_energy_totals_chart_drawn_on_load_is_as_wide_as_its_container(
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
 
     assert charts_not_as_wide_as_their_containers(page, [_BAR_CHART_ID]) == []
+
+
+_RECORD_THE_CHARTS_DRAWN_BY_LOAD = """window.addEventListener('load', () => {
+    window.__chartsDrawnByLoad = [...document.querySelectorAll('[data-chart-figure]')]
+        .filter(container => container.classList.contains('js-plotly-plot'))
+        .map(container => container.id);
+});"""
+
+
+def test_the_energy_totals_chart_in_the_tab_shown_on_load_is_drawn_by_the_pages_load_event(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """By the window's load event, which page.goto waits for, the bar chart in the tab shown on load is drawn, and the radar chart in the hidden tab is not."""
+    page.add_init_script(_RECORD_THE_CHARTS_DRAWN_BY_LOAD)
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+
+    assert page.evaluate("() => window.__chartsDrawnByLoad") == [_BAR_CHART_ID]
+
+
+# Returns the title fill of the chart container it is called on, and records on window, from a theme-changed listener
+# registered after chart-renderer.js's own, the title's fill and the container's colour as the change is announced.
+_RECORD_THE_TITLE_AS_THE_THEME_CHANGE_IS_ANNOUNCED = """(container) => {
+    const titleFill = () => getComputedStyle(container.querySelector('.gtitle')).fill;
+    document.addEventListener('theme-changed', () => {
+        window.__titleAsTheThemeChangeIsAnnounced = {fill: titleFill(), containerColour: getComputedStyle(container).color};
+    });
+    return titleFill();
+}"""
+
+
+def test_a_drawn_chart_in_a_shown_tab_is_recoloured_as_the_theme_change_is_announced(
+    page: Page,
+    live_server: str,
+    seeded_home_runs_pair: list[tuple[str, str]],
+) -> None:
+    """As the theme toggle announces theme-changed, the bar chart's title already takes its container's new colour."""
+    (id1, _), (id2, _) = seeded_home_runs_pair
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
+    light_fill = page.locator(_BAR_CHART).evaluate(_RECORD_THE_TITLE_AS_THE_THEME_CHANGE_IS_ANNOUNCED)
+
+    page.get_by_role("button", name="Toggle dark mode").filter(visible=True).click()
+
+    announced = page.evaluate("() => window.__titleAsTheThemeChangeIsAnnounced")
+    assert announced is not None, "the theme-changed listener registered after chart-renderer.js's own never ran"
+    assert announced["fill"] == announced["containerColour"] != light_fill, (
+        f"expected the title's fill, as theme-changed was announced, to be its container's colour then, "
+        f"which differs from the light fill {light_fill!r}; read {announced}"
+    )
 
 
 def test_compare_radar_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown_and_fills_its_container(
