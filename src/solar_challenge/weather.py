@@ -307,10 +307,11 @@ class WeatherCache:
         """Clear all cached data: every file in the cache directory, those of entries an earlier key version wrote included.
 
         Returns:
-            Number of files removed
+            Number of files removed, 0 if the cache holds none, as when the cache directory is absent or a regular
+            file lies where it, or a parent of it, should be
         """
         count = 0
-        if self.cache_dir.exists():
+        if self.cache_dir.is_dir():
             for file in self.cache_dir.glob("*"):
                 file.unlink()
                 count += 1
