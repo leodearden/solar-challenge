@@ -12,6 +12,11 @@ Usage::
     command = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider test_in_suite.py"
     project_root = throwaway_lane_project(tmp_path, command, cwd="suite")
     collection = collect_lane_job(project_root, PROBE_JOB, env_for=lambda command: os.environ)
+
+With a test_command, the project also has the verify slot::
+
+    project_root = throwaway_lane_project(tmp_path, command, test_command=command)
+    verify = verify_command(project_root, "test_command")
 """
 
 from pathlib import Path
