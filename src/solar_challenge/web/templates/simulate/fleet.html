@@ -20,7 +20,7 @@
 ) }}
 
 <div
-    x-data="fleetSimulator()"
+    x-data='fleetSimulator({{ tariff_preset_rates|tojson }})'
 >
     <!-- Fleet size selector -->
     {% call card(classes='p-6 mb-6') %}

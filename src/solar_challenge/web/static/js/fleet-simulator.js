@@ -3,7 +3,7 @@ document.addEventListener('alpine:init', () => {
     const DEFAULT_PERIOD_DAYS = 30;
     const DEFAULT_SEED = 42;
 
-    Alpine.data('fleetSimulator', () => ({
+    Alpine.data('fleetSimulator', (tariffPresetRates) => ({
         n_homes: 100,
         seed: DEFAULT_SEED,
         submitting: false,
@@ -41,8 +41,12 @@ document.addEventListener('alpine:init', () => {
         tariffEnabled: false,
         tariffType: 'flat_rate',
         tariffRatePerKwh: 0.28,
-        tariffPeakRate: 0.35,
-        tariffOffPeakRate: 0.13,
+        tariffRates: tariffPresetRates,
+        // The economy rate inputs edit the selected type's pair.
+        get tariffPeakRate() { return this.tariffRates[this.tariffType]?.peak_rate; },
+        set tariffPeakRate(rate) { this.tariffRates[this.tariffType].peak_rate = rate; },
+        get tariffOffPeakRate() { return this.tariffRates[this.tariffType]?.off_peak_rate; },
+        set tariffOffPeakRate(rate) { this.tariffRates[this.tariffType].off_peak_rate = rate; },
         dispatchStrategyType: 'self_consumption',
         dispatchPeakStart: 16,
         dispatchPeakEnd: 19,
