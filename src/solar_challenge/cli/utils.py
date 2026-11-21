@@ -13,11 +13,13 @@ messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
 
 What one invocation runs with travels as Click's context object, a
-CliInvocation. `fleet run`, `fleet sweep`, `finance run` and `optimize configs`
-simulate with its runner, invocation(ctx).runner. The root callback builds that
-runner from --workers and --sequential, as root_invocation says, unless whoever
-invokes the CLI passes a CliInvocation as obj; the root's options leave that
-invocation's runner as it is.
+CliInvocation. Every command that simulates (`home run`, `home quick`,
+`fleet run`, `fleet sweep`, `finance run` and `optimize configs`) reads its
+runner from the invocation, invocation(ctx).runner. The root callback builds
+that runner from --workers and --sequential, as root_invocation says, unless
+whoever invokes the CLI passes a CliInvocation as obj; the root's options leave
+that invocation's runner as it is. `web start` passes it on once create_app
+takes one (task 889).
 """
 
 import dataclasses
