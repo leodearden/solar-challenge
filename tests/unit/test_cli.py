@@ -1089,8 +1089,8 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result = runner.invoke(
             app,
             [
-                "fleet", "run", "scenario.yaml",
-                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST, "--sequential",
+                "--sequential", "fleet", "run", "scenario.yaml",
+                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST,
             ],
             catch_exceptions=False,
         )
@@ -1221,7 +1221,7 @@ def _run_fleet(*argv: str) -> Result:
     """Run the `fleet` command argv for _DAY, simulating its homes one after another."""
     return runner.invoke(
         app,
-        ["fleet", *argv, "--start", _DAY, "--end", _DAY, "--sequential"],
+        ["--sequential", "fleet", *argv, "--start", _DAY, "--end", _DAY],
         catch_exceptions=False,
     )
 

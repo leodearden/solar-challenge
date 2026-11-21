@@ -23,13 +23,46 @@ from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 
 _DAY = "2024-06-21"
 
+_DETERMINISTIC_LOAD = {"annual_consumption_kwh": 3400, "use_stochastic": False}
+
+_ONE_HOME_SCENARIO = {
+    "name": "Invocation",
+    "homes": [{"name": "Only Home", "pv": {"capacity_kw": 4.0}, "load": _DETERMINISTIC_LOAD}],
+    "finance": {"standing_charge_pence_per_day": 28.0},
+}
+
+_TWO_HOME_FLEET = {
+    "name": "Pair",
+    "homes": [
+        {"name": "North", "pv": {"capacity_kw": 4.0}, "load": _DETERMINISTIC_LOAD},
+        {"name": "South", "pv": {"capacity_kw": 3.0}, "battery": {"capacity_kwh": 5.0}, "load": _DETERMINISTIC_LOAD},
+    ],
+}
+
+_TWO_HOMES_SWEEPING_THEIR_BATTERY = {
+    "fleet_distribution": {
+        "n_homes": 2,
+        "seed": 42,
+        "pv": {"capacity_kw": 4.0},
+        "battery": {
+            "capacity_kwh": {
+                "type": "proportional_to",
+                "source": "pv.capacity_kw",
+                "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
+            }
+        },
+        "load": _DETERMINISTIC_LOAD,
+    }
+}
+
+_ONE_JUNE_DAY = ("--start", _DAY, "--end", _DAY)
+
 
 def _what_the_runner_runs_with(runner: FleetSimulator) -> tuple[object, ...]:
     """runner's fields, its weather read as the cache directory its PvgisTmy reads: WeatherCache has no value equality, so no two default_runner() values are ==."""
     assert isinstance(runner, FleetRunner)
     assert isinstance(runner.weather, PvgisTmy) and runner.weather.cache is not None
     return (runner.weather.cache.cache_dir, runner.home_simulator, runner.parallel, runner.max_workers)
-
 
 
 class TestRootWorkerPolicy:
@@ -84,6 +117,15 @@ class TestRootWorkerPolicy:
         assert built.runner is injected.runner
         assert built.quiet is True
 
+    def test_fleet_run_takes_no_worker_option_of_its_own(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        Path("fleet.yaml").write_text(yaml.safe_dump(_TWO_HOME_FLEET))
+
+        result = CliRunner().invoke(app, ["fleet", "run", "fleet.yaml", "--workers", "2"])
+
+        assert result.exit_code == 2
+        assert "No such option" in " ".join(result.output.split())
+
     def test_an_obj_that_is_not_an_invocation_is_refused_naming_both_types(self) -> None:
         with pytest.raises(TypeError) as refusal:
             root_invocation({"runner": None}, quiet=False, workers=None, sequential=False)
@@ -91,20 +133,6 @@ class TestRootWorkerPolicy:
         assert "CliInvocation" in str(refusal.value)
         assert "dict" in str(refusal.value)
 
-
-_ONE_HOME_SCENARIO = {
-    "name": "Invocation",
-    "homes": [
-        {
-            "name": "Only Home",
-            "pv": {"capacity_kw": 4.0},
-            "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-        }
-    ],
-    "finance": {"standing_charge_pence_per_day": 28.0},
-}
-
-_ONE_JUNE_DAY = ("--start", _DAY, "--end", _DAY)
 
 HomeAsked = tuple[str, float, float | None]
 """A home the runner was asked for: its name, its PV kW and its battery kWh, None for no battery."""
@@ -146,6 +174,25 @@ _SIMULATING_RUNS = (
             fleets_asked=((("Only Home", 4.0, None),),),
         ),
         id="finance-run-under-the-root-worker-options",
+    ),
+    pytest.param(
+        _SimulatingRun(
+            files={"fleet.yaml": _TWO_HOME_FLEET},
+            argv=("fleet", "run", "fleet.yaml", *_ONE_JUNE_DAY),
+            fleets_asked=((("North", 4.0, None), ("South", 3.0, 5.0)),),
+        ),
+        id="fleet-run",
+    ),
+    pytest.param(
+        _SimulatingRun(
+            files={"fleet.yaml": _TWO_HOMES_SWEEPING_THEIR_BATTERY},
+            argv=("fleet", "sweep", "fleet.yaml", *_ONE_JUNE_DAY),
+            fleets_asked=(
+                (("Home 1", 4.0, 5.0), ("Home 2", 4.0, 5.0)),
+                (("Home 1", 4.0, 10.0), ("Home 2", 4.0, 10.0)),
+            ),
+        ),
+        id="fleet-sweep",
     ),
 )
 

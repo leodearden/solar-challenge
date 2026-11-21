@@ -203,7 +203,7 @@ class TestPrintedSummaryTables:
 
         result = CliRunner().invoke(
             app,
-            ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY, "--sequential"],
+            ["--sequential", "fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY],
             catch_exceptions=False,
         )
 

@@ -81,8 +81,8 @@ def _sweep_document(document: dict[str, object], *options: str, start: str = _DA
     return runner.invoke(
         app,
         [
-            "fleet", "sweep", "fleet.yaml", "--output-dir", "out",
-            "--start", start, "--end", _DAY, "--sequential", *options,
+            "--sequential", "fleet", "sweep", "fleet.yaml", "--output-dir", "out",
+            "--start", start, "--end", _DAY, *options,
         ],
         catch_exceptions=False,
     )
