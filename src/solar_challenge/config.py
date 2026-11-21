@@ -5,10 +5,12 @@ A document's blocks are read by solar_challenge.scenario_blocks, and its fleet_d
 block by solar_challenge.fleet_distribution.
 """
 
+import contextlib
 import json
 import math
 import re
 from dataclasses import dataclass, replace
+from datetime import date, datetime
 from pathlib import Path
 from typing import (
     Any,
@@ -53,6 +55,7 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import covered_days
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,30 @@ class SimulationPeriod:
         if ts.tz is None:
             ts = ts.tz_localize(timezone)
         return ts
+
+
+_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+"""The one string form a period's day takes: 'YYYY-MM-DD'."""
+
+
+def _period_day(value: object, field: str) -> date:
+    """The calendar day *value*, the period's *field*, gives: a datetime's or Timestamp's own date on its own clock, a date as it is, or a 'YYYY-MM-DD' string's day.
+
+    Raises:
+        ConfigurationError: For any other value, such as NaT, '2024' or '20240601', naming period.<field>,
+            the value and the forms a period's day takes.
+    """
+    if isinstance(value, datetime) and value is not pd.NaT:
+        return value.date()
+    if type(value) is date:
+        return value
+    if isinstance(value, str) and _ISO_DAY.fullmatch(value):
+        with contextlib.suppress(ValueError):
+            return date.fromisoformat(value)
+    raise ConfigurationError(
+        f"period.{field} is {value!r}, which is not a day: "
+        "give a date, a 'YYYY-MM-DD' string or a Timestamp"
+    )
 
 
 @dataclass(frozen=True)
@@ -151,6 +178,7 @@ class ScenarioConfig:
                 f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
                 "give each home its tariff as HomeConfig.tariff_config"
             )
+        self._refuse_a_period_that_is_not_a_run_of_days()
 
     @property
     def is_fleet(self) -> bool:
@@ -176,6 +204,27 @@ class ScenarioConfig:
         if self.home is not None:
             return replace(self, home=transform(self.home))
         return replace(self, homes=tuple(transform(home) for home in self.homes))
+
+    def _period_days(self) -> tuple[date, date]:
+        """The period's first and last calendar days, each read by _period_day, whose refusal is prefixed with the scenario's name."""
+        try:
+            return (
+                _period_day(self.period.start_date, "start_date"),
+                _period_day(self.period.end_date, "end_date"),
+            )
+        except ConfigurationError as exc:
+            raise ConfigurationError(f"Scenario '{self.name}': {exc}") from exc
+
+    def _refuse_a_period_that_is_not_a_run_of_days(self) -> None:
+        """Raise ConfigurationError for a period day that is not a day, as _period_days does; then, naming the scenario and both fields and days, for a last day before the first, through covered_days, the one home of that rule."""
+        first_day, last_day = self._period_days()
+        try:
+            covered_days(first_day, last_day)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' has period.start_date {first_day.isoformat()} and "
+                f"period.end_date {last_day.isoformat()}: {exc}"
+            ) from exc
 
     def _stored_homes(self) -> tuple[HomeConfig, ...]:
         """The homes as stored: (home,) in the single-home form, else homes, in order."""
