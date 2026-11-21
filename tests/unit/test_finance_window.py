@@ -3,7 +3,8 @@
 
 householder_bill and bill_distribution bill over their summaries' own day count and
 refuse any other, refuse a summary with no window and summaries over different
-windows, and householder_bill refuses own-use outside 0 to the window's demand.
+windows, and householder_bill refuses an own-use outside 0 to the window's
+demand with the ledger's invariants, naming it as passed.
 `finance run` bills the day count of the summaries its fleet simulator returns.
 
 A bill is the window's year, by one rule with no threshold and no warning: the
@@ -127,24 +128,35 @@ class TestWindowlessSummaryRefused:
 
 
 class TestOwnUseWithinTheWindowsDemand:
-    """householder_bill's own-use is the home's over the summary's window, so it lies from 0 to the window's demand (fk-286fe17c28c9)."""
+    """householder_bill's own-use is the home's over the summary's window, so it lies from 0 to the window's demand (fk-286fe17c28c9).
 
+    householder_bill refuses one outside, on either basis and before it scales
+    it, naming the ledger's invariant it breaks: L1, finite and >= 0, or L2, at
+    most the demand.
+    """
+
+    @pytest.mark.parametrize("days", [365, 30], ids=["whole-year", "30-day"])
     @pytest.mark.parametrize("self_consumption_override", [None, 0.3], ids=["physics", "override"])
     @pytest.mark.parametrize(
-        "own_use_for_demand",
+        ("own_use_for_demand", "invariant"),
         [
-            pytest.param(lambda demand_kwh: -0.1, id="below-zero"),
-            pytest.param(lambda demand_kwh: demand_kwh + 0.1, id="above-the-demand"),
-            pytest.param(lambda demand_kwh: math.nan, id="nan"),
+            pytest.param(lambda demand_kwh: -0.1, "L1", id="below-zero"),
+            pytest.param(lambda demand_kwh: demand_kwh + 0.1, "L2", id="above-the-demand"),
+            pytest.param(lambda demand_kwh: math.nan, "L1", id="nan"),
         ],
     )
-    def test_own_use_outside_the_windows_demand_is_refused(
-        self, own_use_for_demand: Callable[[float], float], self_consumption_override: float | None
+    def test_own_use_outside_the_windows_demand_is_refused_naming_it_as_passed(
+        self,
+        own_use_for_demand: Callable[[float], float],
+        invariant: str,
+        self_consumption_override: float | None,
+        days: int,
     ) -> None:
-        summary = _summary(days=365)
+        """A 30-day window's scale is 365/30, and the refusal still names the caller's figure, not the year's."""
+        summary = _summary(days=days)
         own_use_kwh = own_use_for_demand(summary.total_demand_kwh)
 
-        with pytest.raises(ValueError, match="total_demand_kwh") as refusal:
+        with pytest.raises(ValueError, match=f"HomeLedger {invariant}:") as refusal:
             householder_bill(
                 summary,
                 own_use_kwh,
@@ -152,7 +164,15 @@ class TestOwnUseWithinTheWindowsDemand:
                 summary.simulation_days,
             )
 
-        assert repr(own_use_kwh) in str(refusal.value)
+        assert f"annual_self_consumption_kwh={own_use_kwh!r}" in str(refusal.value)
+
+    def test_own_use_above_a_short_windows_demand_is_refused_naming_the_windows_demand(self) -> None:
+        summary = _summary(days=30)
+
+        with pytest.raises(ValueError, match="HomeLedger L2:") as refusal:
+            householder_bill(summary, summary.total_demand_kwh + 0.1, _finance(), summary.simulation_days)
+
+        assert f"total_demand_kwh={summary.total_demand_kwh!r}" in str(refusal.value)
 
     def test_own_use_equal_to_the_windows_demand_bills(self) -> None:
         summary = _summary(days=365)

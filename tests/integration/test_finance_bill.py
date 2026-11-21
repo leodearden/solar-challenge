@@ -20,7 +20,6 @@ from solar_challenge.finance import (
     BillBreakdown,
     BillDistribution,
     FinanceConfig,
-    _cbs_own_use_kwh,
     bill,
     bill_distribution,
     householder_bill,
@@ -270,8 +269,14 @@ class TestHouseholderBillPhysics:
         assert breakdown.import_cost_gbp > 0.0
 
     def test_physics_no_import_no_fallback(self) -> None:
-        """When import kWh is genuinely zero, no fallback and no warning fire."""
+        """When import kWh is genuinely zero, no fallback and no warning fire.
+
+        With no import, the home's own-use is its whole 3,400 kWh demand, and its
+        generation that own-use plus the 1,800 kWh it exports.
+        """
         summary = _make_summary(
+            total_generation_kwh=5200.0,
+            total_self_consumption_kwh=3400.0,
             total_grid_import_kwh=0.0,
             total_import_cost_gbp=0.0,
             net_cost_gbp=0.0,
@@ -605,8 +610,8 @@ class TestOverrideExactValues:
         """Override path with zero physics export: total_outlay must still be positive.
 
         CR3: The householder has no SEG field; the export-rate fallback logic
-        is irrelevant to the householder bill (it moved to _seg_export_income_gbp
-        for CBS-revenue use).  Assert the bill computes without error and yields
+        is irrelevant to the householder bill (SEG income is the CBS's, on the
+        home's ledger).  Assert the bill computes without error and yields
         a sensible total_outlay.
         """
         # Summary where physics export is zero (no surplus)
@@ -672,9 +677,9 @@ class TestBillDistribution:
         CR3: per_home_net_bill_gbp name retained (back-compat §12-Q4), value
         redefined to per-home total_outlay_gbp.
 
-        Basis C (task-84 §6): bill_distribution uses _cbs_own_use_kwh (demand −
-        import) as annual_self_consumption_kwh.  The expected bill must use the
-        same basis so the assertion reflects the actual contract.
+        Basis C (task-84 §6): bill_distribution bills each home's demand −
+        import as its annual_self_consumption_kwh.  The expected bill must use
+        the same basis so the assertion reflects the actual contract.
         """
         summaries = self._make_fleet()
         finance = _make_finance()
@@ -684,7 +689,7 @@ class TestBillDistribution:
             expected_bill = householder_bill(
                 summary=s,
                 # Basis C: matches what bill_distribution passes internally
-                annual_self_consumption_kwh=_cbs_own_use_kwh(s),
+                annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                 finance=finance,
                 simulation_days=365,
             )

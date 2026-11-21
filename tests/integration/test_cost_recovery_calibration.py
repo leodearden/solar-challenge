@@ -27,7 +27,7 @@ from solar_challenge.finance import (
     MultiYearCurve,
     ProjectEconomics,
     YearPoint,
-    _cbs_own_use_kwh,
+    basis_c_own_use_kwh,
     bill_distribution,
     project_economics,
     project_multi_year,
@@ -798,7 +798,7 @@ def _make_grid_charge_fleet_cr6(
         total_self_consumption_kwh = 2000 kWh/home  (B-style)
         total_demand_kwh           = 2000 + 800 = 2800 kWh/home
         total_grid_import_kwh      = 800 + 200 = 1000 kWh/home
-        _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
+        demand − import            = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
     return make_fleet_results_of(
@@ -816,7 +816,7 @@ def _make_grid_charge_fleet_cr6(
 
 
 # ---------------------------------------------------------------------------
-# Task-84 RED / GREEN: TestCbsOwnUseKwhHelper — unit test for _cbs_own_use_kwh
+# Task-84: basis C (demand − import) on grid-charging fleets, and basis_c_own_use_kwh
 # ---------------------------------------------------------------------------
 
 
@@ -824,8 +824,8 @@ class TestArbitrageBasisCReconciliation:
     """Basis-C reconciliation for grid-charging (arbitrage) fleets (task-84 step-3/4).
 
     Verifies three properties on a fleet where grid_charge_kwh > 0:
-    (c) _cbs_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
-    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh)
+    (c) basis_c_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
+    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == Σ(demand − import)
         AND strictly < sum(total_self_consumption_kwh)
     Plus a flat/no-grid-charge control showing no gap.
 
@@ -855,10 +855,10 @@ class TestArbitrageBasisCReconciliation:
         return scenario, finance, fr, summaries
 
     def test_c_helper_gap_on_grid_charge_homes(self) -> None:
-        """(c) For each home: _cbs_own_use_kwh(s) < total_sc AND == demand - import."""
+        """(c) For each home: basis_c_own_use_kwh(s) < total_sc AND == demand - import."""
         _, _, _, summaries = self._build_grid_charge()
         for s in summaries:
-            basis_c = _cbs_own_use_kwh(s)
+            basis_c = basis_c_own_use_kwh(s)
             # Basis C must be strictly less than B-style total_self_consumption_kwh
             assert basis_c < s.total_self_consumption_kwh, (
                 f"Expected basis-C {basis_c:.1f} < sc {s.total_self_consumption_kwh:.1f}"
@@ -869,7 +869,7 @@ class TestArbitrageBasisCReconciliation:
             )
 
     def test_a_fleet_billed_own_use_is_basis_c(self) -> None:
-        """(a) project_multi_year fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh) < sum(total_sc).
+        """(a) project_multi_year fleet_billed_own_use_kwh == Σ(demand − import) < sum(total_sc).
 
         RED until step-4: before the fix _simulate_age uses total_self_consumption_kwh.
         """
@@ -879,7 +879,7 @@ class TestArbitrageBasisCReconciliation:
         curve = project_multi_year(scenario, finance, simulate=simulate)
         year0 = curve.points[0]
 
-        expected_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        expected_basis_c = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
         b_style_sum = sum(s.total_self_consumption_kwh for s in summaries)
 
         # (a) fleet_billed_own_use_kwh must equal the basis-C sum (not B-style)
@@ -892,12 +892,12 @@ class TestArbitrageBasisCReconciliation:
         assert year0.fleet_billed_own_use_kwh < b_style_sum
 
     def test_flat_control_no_gap(self) -> None:
-        """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
+        """Flat-rate control: basis_c_own_use_kwh == total_sc when grid_charge==0."""
         # Use the existing flat-rate builder
         flat_sr = make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
-        assert _cbs_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
+        assert basis_c_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
 
     def _build_grid_charge_interior(self) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, fr, summaries) for the interior grid-charging fleet.
@@ -971,7 +971,7 @@ class TestArbitrageBasisCReconciliation:
         # bill_distribution selects by median total_outlay; all homes are identical
         # so any summary will do; use summaries[0].
         rep_summary = summaries[0]
-        basis_c_kwh = _cbs_own_use_kwh(rep_summary)
+        basis_c_kwh = rep_summary.total_demand_kwh - rep_summary.total_grid_import_kwh
         b_style_kwh = rep_summary.total_self_consumption_kwh
 
         # After step-6: own_use_payment == rate × basis_c / 100
@@ -1025,7 +1025,7 @@ class TestArbitrageBasisCReconciliation:
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
         r_basis_c = sol.own_use_rate_pence_per_kwh
 
-        fleet_sc_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        fleet_sc_basis_c = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
         fleet_sc_b_style = sum(s.total_self_consumption_kwh for s in summaries)
 
         # Floor binding: r × fleet_sc/100 = recovery_target (constant).
@@ -1040,8 +1040,8 @@ class TestArbitrageBasisCReconciliation:
         )
 
 
-class TestCbsOwnUseKwhHelper:
-    """Unit tests for the module-level helper _cbs_own_use_kwh (basis C).
+class TestBasisCOwnUseKwh:
+    """Unit tests for finance.basis_c_own_use_kwh (basis C).
 
     Basis C: own_use_kwh = max(total_demand_kwh − total_grid_import_kwh, 0.0)
     Tests cover the normal case and the clamp-to-zero case.
@@ -1058,7 +1058,7 @@ class TestCbsOwnUseKwhHelper:
         # total_demand = sc + import = 1800 + 1600 = 3400
         # total_grid_import = 1600
         # basis C = 3400 - 1600 = 1800
-        assert _cbs_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
+        assert basis_c_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
 
     def test_clamp_to_zero(self) -> None:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
@@ -1073,7 +1073,7 @@ class TestCbsOwnUseKwhHelper:
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
         # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
         with pytest.warns(UserWarning, match="Basis-C own-use is negative"):
-            result = _cbs_own_use_kwh(summary)
+            result = basis_c_own_use_kwh(summary)
         assert result == pytest.approx(0.0, abs=1e-9)
 
 

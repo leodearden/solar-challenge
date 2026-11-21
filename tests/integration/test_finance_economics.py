@@ -23,9 +23,9 @@ from solar_challenge.finance import (
     MultiYearCurve,
     ProjectEconomics,
     YearPoint,
-    _annuity_payment,
-    _irr_bisection,
-    _npv,
+    annuity_payment,
+    irr,
+    npv,
     project_economics,
 )
 from solar_challenge.output import generate_finance_report
@@ -319,7 +319,7 @@ class TestProjectEconomicsDebtService:
 
         # capex = 1*1000 + 1000 = 2000; debt = 2000 * 0.5 = 1000
         expected_debt = 2000.0 * 0.5
-        expected_annuity = _annuity_payment(expected_debt, 0.07, 15)
+        expected_annuity = annuity_payment(expected_debt, 0.07, 15)
         # verify helper itself
         hand_annuity = expected_debt * 0.07 / (1.0 - (1.07) ** -15)
         assert expected_annuity == pytest.approx(hand_annuity, rel=1e-9)
@@ -361,19 +361,41 @@ class TestProjectEconomicsDebtService:
         assert econ.annual_debt_service_gbp == pytest.approx(0.0, abs=1e-9)
 
     def test_annuity_helper_direct(self) -> None:
-        """_annuity_payment helper: closed-form check at known values."""
+        """annuity_payment helper: closed-form check at known values."""
         # 1000 @ 10% for 10 years: payment = 1000 * 0.1 / (1 - 1.1^-10)
         principal = 1000.0
         rate = 0.10
         n = 10
         expected = principal * rate / (1.0 - (1.0 + rate) ** -n)
-        result = _annuity_payment(principal, rate, n)
+        result = annuity_payment(principal, rate, n)
         assert result == pytest.approx(expected, rel=1e-9)
 
     def test_annuity_helper_zero_rate(self) -> None:
-        """_annuity_payment: zero rate falls back to principal/n."""
-        result = _annuity_payment(1000.0, 0.0, 8)
+        """annuity_payment: zero rate falls back to principal/n."""
+        result = annuity_payment(1000.0, 0.0, 8)
         assert result == pytest.approx(125.0, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        ("rate", "n_years", "refused"),
+        [
+            (0.0, 0, "n_years=0"),
+            (0.07, 0, "n_years=0"),
+            (0.07, -3, "n_years=-3"),
+            (-1.0, 10, "rate=-1.0"),
+            (-1.5, 10, "rate=-1.5"),
+            (math.nan, 10, "rate=nan"),
+            (math.inf, 10, "rate=inf"),
+        ],
+        ids=["no-term-at-zero-rate", "no-term", "negative-term", "rate-minus-one", "rate-below-minus-one", "nan", "inf"],
+    )
+    def test_annuity_helper_refuses_a_term_under_a_year_or_a_rate_not_above_minus_one(
+        self, rate: float, n_years: int, refused: str
+    ) -> None:
+        """Each would otherwise divide by zero, or price a payment no loan has."""
+        with pytest.raises(ValueError, match="annuity_payment") as refusal:
+            annuity_payment(1000.0, rate, n_years)
+
+        assert refused in str(refusal.value)
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +415,7 @@ class TestProjectEconomicsSurplusDSCR:
                  opex_per_home=200, asset_life=25.
         capex = (4*1000+1000+5*250)+(3*1000+1000+0) = 6250+4000=10250
         financed = 10250; equity = 7687.5; debt = 2562.5
-        annual_debt_service = _annuity_payment(2562.5, 0.07, 15)
+        annual_debt_service = annuity_payment(2562.5, 0.07, 15)
         fleet_opex = 200 * 2 = 400
         revenues = [5000.0] * 25 (flat)
         per_year_surplus[y<15] = 5000 - 400 - debt_service
@@ -421,7 +443,7 @@ class TestProjectEconomicsSurplusDSCR:
         capex = 10250.0
         debt = capex * 0.25
         fleet_opex = 200.0 * 2
-        annual_ds = _annuity_payment(debt, 0.07, 15)
+        annual_ds = annuity_payment(debt, 0.07, 15)
         return scenario, finance, curve, fleet_opex, annual_ds
 
     def test_surplus_length_equals_asset_life(self) -> None:
@@ -487,7 +509,7 @@ class TestProjectEconomicsSurplusDSCR:
 
         capex = 10250.0
         debt = capex * 0.25
-        annual_ds = _annuity_payment(debt, 0.07, 15)
+        annual_ds = annuity_payment(debt, 0.07, 15)
         fleet_opex = 200.0 * 2
         expected_dscr = (5000.0 - fleet_opex) / annual_ds
 
@@ -543,15 +565,27 @@ class TestProjectEconomicsSurplusDSCR:
 class TestProjectEconomicsIRRPayback:
     """Fast tests for equity_irr, payback_years, and determinism (H5)."""
 
-    def test_irr_bisection_simple_cashflow(self) -> None:
-        """_irr_bisection: [-100, 110] → IRR = 0.10."""
-        result = _irr_bisection([-100.0, 110.0])
+    def test_irr_simple_cashflow(self) -> None:
+        """irr: [-100, 110] → IRR = 0.10."""
+        result = irr([-100.0, 110.0])
         assert result == pytest.approx(0.10, rel=1e-6)
 
-    def test_irr_bisection_two_period(self) -> None:
-        """_irr_bisection: [-100, 0, 121] → IRR = 0.10."""
-        result = _irr_bisection([-100.0, 0.0, 121.0])
+    def test_irr_two_period(self) -> None:
+        """irr: [-100, 0, 121] → IRR = 0.10."""
+        result = irr([-100.0, 0.0, 121.0])
         assert result == pytest.approx(0.10, rel=1e-6)
+
+    @pytest.mark.parametrize(
+        "cashflows",
+        [[], [0.0, 50.0], [-100.0, -10.0]],
+        ids=["no-cashflows", "no-equity-invested", "no-sign-change"],
+    )
+    def test_irr_is_nan_when_undefined(self, cashflows: list[float]) -> None:
+        assert math.isnan(irr(cashflows))
+
+    def test_npv_accepts_a_tuple(self) -> None:
+        """npv reads any sequence of cashflows: at 10 %, -100 now and 110 in a year are worth nothing."""
+        assert npv(0.1, (-100.0, 110.0)) == pytest.approx(0.0)
 
     def test_irr_npv_consistency(self) -> None:
         """NPV of cashflows at equity_irr must be approximately zero."""
@@ -575,7 +609,7 @@ class TestProjectEconomicsIRRPayback:
 
         if not math.isnan(econ.equity_irr):
             cashflows = [-econ.equity_gbp] + list(econ.per_year_surplus_gbp)
-            npv_at_irr = _npv(econ.equity_irr, cashflows)
+            npv_at_irr = npv(econ.equity_irr, cashflows)
             # |NPV| < 1e-6 * equity
             assert abs(npv_at_irr) < 1e-6 * max(abs(econ.equity_gbp), 1.0)
 

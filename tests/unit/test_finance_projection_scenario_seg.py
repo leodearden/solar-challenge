@@ -38,7 +38,7 @@ def _seg_aware_fleet_results_factory(
     Every home self-consumes *self_kwh*, exports *export_kwh* and imports
     *import_kwh* over *days* days.  A home with a tariff earns export_kwh × rate/100,
     and a home without one earns nothing, each priced and recorded as simulate_home
-    prices and records it.  _annualise_physics scales the totals to 365 days.
+    prices and records it.  finance.annualise scales the totals to 365 days.
     Callers write ``simulate=_seg_aware_fleet_results_factory()``.
     """
 

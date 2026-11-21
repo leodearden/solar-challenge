@@ -4,7 +4,8 @@
 
 They cover own-use income and SEG export income, each home's export priced at
 the SEG rate its results record, with and without the self-consumption
-override, grid-services income, grid-charge energy paid once on householder
+override, under which the fleet's export and import are the override's split
+of its generation and demand, grid-services income, grid-charge energy paid once on householder
 import, and the refusal of a simulate whose fleet lacks the batteries it was
 asked for or whose results record no pricing, all on an injected synthetic
 simulate.
@@ -162,7 +163,8 @@ class TestProjectMultiYearRevenue:
 
         Own-use is capped at demand, so each home is billed 2,800 kWh of own-use at 15 p,
         and the rest of its 4,000 kWh generation, 1,200 kWh, is exported at its physics
-        export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
+        export rate (£72 / 2,400 kWh = 3 p).  Both are priced, and the year reports
+        the export its SEG income was priced on and no import.
         """
         n_homes = 2
         fleet = make_fleet_results(
@@ -178,6 +180,8 @@ class TestProjectMultiYearRevenue:
         assert year_0.fleet_revenue_gbp == pytest.approx(
             n_homes * (15.0 * 2800.0 / 100.0 + 1200.0 * 3.0 / 100.0)
         )
+        assert year_0.fleet_export_kwh == pytest.approx(n_homes * 1200.0)
+        assert year_0.fleet_import_kwh == pytest.approx(0.0)
 
     def test_fleet_revenue_non_negative(self) -> None:
         """fleet_revenue_gbp is non-negative for all years."""

@@ -8,12 +8,22 @@ injected synthetic simulate.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
+import warnings
 from typing import TYPE_CHECKING, Callable
+
+import pytest
 
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import MAX_NODES, FinanceConfig, project_multi_year
-from tests._finance_builders import make_fleet_results, make_home_config, make_period
+from solar_challenge.home import RunPricing
+from tests._finance_builders import (
+    make_fleet_results,
+    make_home_config,
+    make_period,
+    make_scenario_and_finance,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -150,3 +160,96 @@ class TestProjectMultiYearAdaptive:
                 f"{curve.points[i].fleet_billed_own_use_kwh:.3f} > "
                 f"{curve.points[i-1].fleet_billed_own_use_kwh:.3f}"
             )
+
+
+def _override_capped_at_demand(f: float) -> tuple[float, float, float]:
+    """Self 2200 f, export 1800 f and import 3400 - 2200 f kWh: generation 4000 f against a constant demand of 3400.
+
+    Under a 0.9 override, 0.9 x generation caps own-use at demand, so the ledger
+    import is 0 until about age 4 at 1.5 %/yr.
+    """
+    return 2200.0 * f, 1800.0 * f, 3400.0 - 2200.0 * f
+
+
+def _battery_covers_demand(f: float) -> tuple[float, float, float]:
+    """Self min(3400, 3800 f), export 4400 f less that, import 3400 less that (kWh): demand stays 3400.
+
+    The simulated import is 0 until about age 7 at 1.5 %/yr.
+    """
+    own_use = min(3400.0, 3800.0 * f)
+    return own_use, 4400.0 * f - own_use, 3400.0 - own_use
+
+
+def _declining_simulate(
+    home_year: Callable[[float], tuple[float, float, float]],
+    *,
+    kept_each_year: float = 0.985,
+) -> Callable:
+    """Return a simulate whose homes' self-consumption, export and import kWh are *home_year* of f.
+
+    f = kept_each_year ** age is the share of its new generation the aged PV
+    gives, falling 1.5 %/yr compounding by default, as _aged_homes ages the PV.
+    The flows are priced at a 30 p/kWh import tariff and a 4.1 p/kWh SEG rate.
+    """
+
+    def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        f = kept_each_year ** fleet_config.homes[0].pv_config.system_age_years
+        self_kwh, export_kwh, import_kwh = home_year(f)
+        return make_fleet_results(
+            homes=fleet_config.homes,
+            self_kwh=self_kwh,
+            export_kwh=export_kwh,
+            import_kwh=import_kwh,
+            pricing=RunPricing(0.30, 4.1),
+        )
+
+    return _simulate
+
+
+def _finance_over_25_years(self_consumption_override: float | None) -> tuple[ScenarioConfig, FinanceConfig]:
+    """make_scenario_and_finance's one home over a 25-year asset life (seeds 0, 12, 24), at *self_consumption_override*."""
+    scenario, finance = make_scenario_and_finance(asset_life_years=25)
+    return scenario, dataclasses.replace(finance, self_consumption_override=self_consumption_override)
+
+
+class TestTheDeviationScaleSeesAZeroAtAgeZero:
+    """An export or import that is 0 at age 0 and grows with age is measured against the age-0 fleet generation or demand.
+
+    So its interpolation error stays a finite percentage.
+    """
+
+    @pytest.mark.parametrize(
+        ("home_year", "self_consumption_override"),
+        [
+            pytest.param(_override_capped_at_demand, 0.9, id="override-capped-at-demand"),
+            pytest.param(_battery_covers_demand, None, id="simulated-basis-battery-covers-demand"),
+        ],
+    )
+    def test_a_fleet_that_imports_nothing_at_age_zero_converges_below_max_nodes(
+        self,
+        home_year: Callable[[float], tuple[float, float, float]],
+        self_consumption_override: float | None,
+    ) -> None:
+        """The default 1 % target is met with fewer than MAX_NODES ages, and no MAX_NODES warning."""
+        scenario, finance = _finance_over_25_years(self_consumption_override)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(scenario, finance, simulate=_declining_simulate(home_year))
+        assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
+        assert curve.interp_error_estimate <= 1.0
+
+    def test_an_override_fleet_whose_curves_interpolate_within_target_from_the_seeds_simulates_only_the_seeds(
+        self,
+    ) -> None:
+        """Each reported curve's PCHIP midpoint error from the seeds alone is under 1 % of its scale.
+
+        So no bisection age is simulated, as at base.
+        """
+        scenario, finance = _finance_over_25_years(0.9)
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.997),
+        )
+        assert curve.sampled_ages == (0, 12, 24)
+        assert curve.interp_error_estimate <= 1.0
