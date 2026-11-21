@@ -449,9 +449,11 @@ def validate_energy_balance(
     """Validate energy balance for a timestep result.
 
     Balance equation:
-    generation + import = consumption + export + storage_delta
+    generation + grid_import = demand + grid_export + battery_net_draw
 
-    Where storage_delta = battery_charge - battery_discharge (net storage)
+    Where battery_net_draw = battery_charge - battery_discharge, the battery's net draw from
+    the bus. Both are bus energies, so the balance carries no loss term; the battery's SOC
+    change is the storage identity in EnergyFlowResult's docstring.
 
     Args:
         result: Energy flow result to validate
@@ -466,8 +468,8 @@ def validate_energy_balance(
     # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
     # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
-    storage_delta = result.battery_charge - result.battery_discharge
-    energy_out = result.demand + result.grid_export + storage_delta
+    battery_net_draw_kwh = result.battery_charge - result.battery_discharge
+    energy_out = result.demand + result.grid_export + battery_net_draw_kwh
 
     imbalance = abs(energy_in - energy_out)
 
