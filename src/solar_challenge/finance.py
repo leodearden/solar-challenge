@@ -33,7 +33,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, NamedTuple, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -888,145 +888,6 @@ def _ledger_import_cost_gbp(
 
 
 # ---------------------------------------------------------------------------
-# _billed_energy — one home's own-use, import and export as the CBS bills them
-# ---------------------------------------------------------------------------
-
-
-class _BilledEnergy(NamedTuple):
-    """One home's own-use, import and export as the CBS bills them (kWh)."""
-
-    own_use_kwh: float
-    import_kwh: float
-    export_kwh: float
-    capped_at_demand: bool
-    """True when override × generation exceeded demand, so own-use was cut to demand."""
-
-
-def _override_energy_split(
-    override: float,
-    *,
-    generation_kwh: float,
-    demand_kwh: float,
-) -> _BilledEnergy:
-    """Split a home's generation and demand by the override fraction.
-
-    Own-use is ``min(override × generation, demand)``: a home cannot consume
-    more solar than its demand.  The two balances then hold exactly:
-    ``demand = own_use + import`` and ``generation = own_use + export``.
-    """
-    implied_own_use_kwh = override * generation_kwh
-    own_use_kwh = min(implied_own_use_kwh, demand_kwh)
-    return _BilledEnergy(
-        own_use_kwh=own_use_kwh,
-        import_kwh=demand_kwh - own_use_kwh,
-        export_kwh=generation_kwh - own_use_kwh,
-        capped_at_demand=implied_own_use_kwh > demand_kwh,
-    )
-
-
-def _billed_energy(
-    phys: AnnualPhysics,
-    finance: "FinanceConfig",
-    *,
-    physics_own_use_kwh: float,
-) -> _BilledEnergy:
-    """One home's annual own-use, import and export as the CBS bills them (kWh/yr).
-
-    The one physics/override switch for billed energy: :func:`householder_bill`
-    bills its own-use and import, and :func:`project_multi_year` sums its own-use
-    into the CBS own-use revenue and its export into the CBS SEG revenue
-    (:func:`_seg_export_income_gbp`).  With no ``self_consumption_override``, own-use
-    is *physics_own_use_kwh*: the window's own-use (basis C, :func:`basis_c_own_use_kwh`,
-    from both :func:`bill_distribution` and :func:`project_multi_year`) scaled by
-    the window's annualisation_scale, and import and export are the simulated flows.  With the override set, all three split the
-    annual generation and demand (:func:`_override_energy_split`).  Silent when
-    the cap binds, since the projection calls this per home at every sampled age;
-    :func:`householder_bill` warns instead.
-    """
-    override = finance.self_consumption_override
-    if override is None:
-        return _BilledEnergy(
-            own_use_kwh=physics_own_use_kwh,
-            import_kwh=phys.import_kwh,
-            export_kwh=phys.export_kwh,
-            capped_at_demand=False,
-        )
-    return _override_energy_split(
-        override, generation_kwh=phys.generation_kwh, demand_kwh=phys.demand_kwh
-    )
-
-
-# ---------------------------------------------------------------------------
-# _billed_import_cost_gbp — the billed import at the price its run paid
-# ---------------------------------------------------------------------------
-
-
-def _billed_import_cost_gbp(phys: AnnualPhysics, energy: _BilledEnergy, finance: "FinanceConfig") -> float:
-    """The £ of *energy*'s import over the window's year, at the price the home's run was priced at.
-
-    * No tariff priced the run (``phys.pricing``'s import rate is None): the
-      retail baseline rate, on either basis, with a :class:`UserWarning`
-      attributed to :func:`householder_bill`'s caller, whatever it imported.
-      Homes generated from a fleet_distribution with no tariff are such homes,
-      e.g. scenarios/bristol-phase1.yaml's.
-    * Physics basis (``finance.self_consumption_override`` is None): the
-      simulated import cost, £0 on a £0 tariff.
-    * Override basis: the run's own price per kWh imported, simulated cost ÷
-      simulated import kWh, or the tariff's time-weighted mean rate when the
-      run imported nothing.
-    """
-    tariff_mean_rate_gbp_per_kwh = phys.pricing.import_tariff_mean_rate_gbp_per_kwh
-    if tariff_mean_rate_gbp_per_kwh is None:
-        retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
-        warnings.warn(
-            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
-            f"has a £0 cost (no tariff configured on this home), so its import "
-            f"rate falls back to the retail baseline rate "
-            f"({retail_rate_pence:.1f} p/kWh).",
-            UserWarning,
-            stacklevel=3,
-        )
-        return energy.import_kwh * retail_rate_pence / 100.0
-    if finance.self_consumption_override is None:
-        return phys.import_cost_gbp
-    if phys.import_kwh > 0.0:
-        return energy.import_kwh * (phys.import_cost_gbp / phys.import_kwh)
-    return energy.import_kwh * tariff_mean_rate_gbp_per_kwh
-
-
-# ---------------------------------------------------------------------------
-# _seg_export_income_gbp — CBS SEG revenue helper
-# ---------------------------------------------------------------------------
-
-
-def _seg_export_income_gbp(pricing: RunPricing, export_kwh: float) -> float:
-    """A home's SEG export income (CBS-revenue side): *export_kwh* at the SEG rate its run was priced at.
-
-    The CBS owns the export MPAN, so export revenue flows to the CBS, not the
-    householder; the householder bill carries no export income
-    (docs/cost-recovery-finance-model.md §4).  :func:`project_multi_year`
-    sums it over the fleet's homes into the CBS fleet revenue (model doc §4).
-
-    Args:
-        pricing: How the home's run was priced (:func:`_summary_pricing`).  A
-            run no SEG tariff priced, whose ``seg_rate_pence_per_kwh`` is None,
-            earns nothing.
-        export_kwh: The home's billed export over the window's year
-            (:func:`_billed_energy`): the simulated export, or with
-            ``self_consumption_override`` set, generation − own-use, whatever
-            the run exported, none included.
-
-    Returns:
-        SEG export income in GBP (£) over the window's year, priced by
-        :func:`~solar_challenge.seg.calculate_seg_revenue`.
-    """
-    seg_rate_pence_per_kwh = pricing.seg_rate_pence_per_kwh
-    if seg_rate_pence_per_kwh is None:
-        return 0.0
-    return calculate_seg_revenue(export_kwh, SEGTariff(name="", rate_pence_per_kwh=seg_rate_pence_per_kwh))
-
-
-# ---------------------------------------------------------------------------
 # basis_c_own_use_kwh — a summary's basis-C own-use (docs/cost-recovery-finance-model.md §2)
 # ---------------------------------------------------------------------------
 
@@ -1215,19 +1076,16 @@ def householder_bill(
     truth.
 
     Responsibilities of this wrapper (not in bill()):
-      * Annualise the window's totals by its annualisation_scale,
-        year_days / days (:func:`annualise`).
-      * Resolve own-use and import through :func:`_billed_energy`, the
-        physics/override switch :func:`project_multi_year` also reads.  The
-        override's own-use is capped at demand, with a :class:`UserWarning`
-        when the cap binds.
-      * Price the billed import as the summary's run was priced
-        (:func:`_billed_import_cost_gbp`).  A run no tariff priced is billed
-        at retail on both paths, with a :class:`UserWarning` whatever it
-        imported; a £0 tariff priced its run, so it is billed £0 on the
-        physics path.  The override's import is billed at the run's own price
-        per kWh imported, or at the tariff's time-weighted mean rate when the
-        run imported nothing.
+      * Build the home's ledger, ``home_ledger(annualise(summary), finance,
+        simulated_own_use_kwh=annual_self_consumption_kwh × scale)``: the
+        window's totals × its annualisation_scale, year_days / days, own-use
+        and import on the physics or override basis, and the import priced as
+        the summary's run was priced (docs/cost-recovery-finance-model.md §3,
+        One ledger per home).  :func:`project_multi_year` sums the same
+        ledgers.
+      * Warn, with a :class:`UserWarning`, when the ledger prices the import
+        at retail because no tariff priced the run, whatever it imported, and
+        when the override's own-use is capped at demand.
       * Price the no-solar baseline at the retail rate (demand × retail / 100),
         so bill()'s effective rate, and with it self_consumption_saving, is
         the retail rate.
@@ -1245,8 +1103,8 @@ def householder_bill(
             window (kWh), from 0 to its ``total_demand_kwh``, billed scaled by
             the window's annualisation_scale when
             ``finance.self_consumption_override`` is None.  Ignored when an
-            override is set: own-use then comes from the override, generation
-            and demand.
+            override is set, though still checked: own-use then comes from the
+            override, generation and demand.
         finance: FinanceConfig with tariff + assumption parameters.
         simulation_days: The summary's own day count, its window's days;
             any other is refused (INV-8).
@@ -1256,53 +1114,42 @@ def householder_bill(
 
     Raises:
         ValueError: If the summary has no window; if *simulation_days* is not
-            the summary's own day count (INV-8), naming both; if
-            *annual_self_consumption_kwh* is not from 0 to the summary's
-            ``total_demand_kwh``, naming both, NaN included; or if the summary
-            has no pricing, naming calculate_summary (:func:`_summary_pricing`).
+            the summary's own day count (INV-8), naming both; if the summary
+            has no pricing, naming calculate_summary (:func:`_summary_pricing`);
+            or if the home's ledger refuses its year, naming the invariant and
+            its values: an own-use that is negative or not finite (L1), above
+            the demand (L2), or that with the import does not cover the demand
+            (L3), on either basis (:class:`HomeLedger`).
     """
-    window = _summary_window(summary)
     _require_summary_days(simulation_days, summary)
-    if not 0.0 <= annual_self_consumption_kwh <= summary.total_demand_kwh:
-        raise ValueError(
-            "householder_bill's annual_self_consumption_kwh is the home's own-use over its summary's "
-            "window, so it lies from 0 to the window's total_demand_kwh: "
-            f"got annual_self_consumption_kwh={annual_self_consumption_kwh!r}, "
-            f"total_demand_kwh={summary.total_demand_kwh!r}"
-        )
+    physics = annualise(summary)
+    ledger = home_ledger(physics, finance, simulated_own_use_kwh=annual_self_consumption_kwh * physics.scale)
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
-    override = finance.self_consumption_override
-
-    # ---- Annualisation (docs/cost-recovery-finance-model.md §4, Annual basis) ----
-    phys = annualise(summary)
-    # NOTE: householder_bill takes annual_self_consumption_kwh as a separate parameter
-    # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
-    # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
-    sc_kwh_physics = annual_self_consumption_kwh * phys.scale
-
-    # ---- Self-consumption switch (docs/cost-recovery-finance-model.md §3, Override path) ----
-    # Export income is the CBS's, computed by _seg_export_income_gbp, not by the householder bill.
-    energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
-    import_cost_gbp = _billed_import_cost_gbp(phys, energy, finance)
-    if override is not None and energy.capped_at_demand:
+    if ledger.import_at_retail:
         warnings.warn(
-            f"self_consumption_override={override:g} implies more own-use than "
+            f"This home's simulated grid import ({physics.import_kwh:.1f} kWh/yr) "
+            f"has a £0 cost (no tariff configured on this home), so its import "
+            f"rate falls back to the retail baseline rate "
+            f"({retail_rate_pence:.1f} p/kWh).",
+            UserWarning,
+            stacklevel=2,
+        )
+    if ledger.own_use_capped:
+        warnings.warn(
+            f"self_consumption_override={finance.self_consumption_override:g} implies more own-use than "
             f"this home's demand; own-use is capped at demand and the surplus "
             f"generation is counted as export.",
             UserWarning,
             stacklevel=2,
         )
-
-    # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
-    baseline_import_cost_gbp = phys.demand_kwh * retail_rate_pence / 100.0
     return bill(
-        period_days=window.year_days,
-        generation_kwh=phys.generation_kwh,
-        demand_kwh=phys.demand_kwh,
-        self_consumption_kwh=energy.own_use_kwh,
-        import_kwh=energy.import_kwh,
-        import_cost_gbp=import_cost_gbp,
-        baseline_import_cost_gbp=baseline_import_cost_gbp,
+        period_days=physics.window.year_days,
+        generation_kwh=ledger.generation_kwh,
+        demand_kwh=ledger.demand_kwh,
+        self_consumption_kwh=ledger.own_use_kwh,
+        import_kwh=ledger.import_kwh,
+        import_cost_gbp=ledger.import_cost_gbp,
+        baseline_import_cost_gbp=ledger.demand_kwh * retail_rate_pence / 100.0,
         finance=finance,
     )
 
@@ -1331,7 +1178,7 @@ class YearPoint:
 
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
-    + SEG export income (Σ seg_export_income_gbp per home)
+    + SEG export income (Σ each home's ledger ``seg_income_gbp``, :func:`home_ledger`)
     + grid-services income (``grid_services_model_of(finance).annual_income_gbp``
     of that age's simulated fleet).
     """
@@ -1354,10 +1201,10 @@ class YearPoint:
     """Own-use the CBS bills the fleet at the own-use rate that year (kWh, ≥ 0)."""
 
     fleet_export_kwh: float
-    """Total grid export from the fleet that year (kWh, ≥ 0)."""
+    """Total grid export from the fleet that year, Σ each home's ledger export: the simulated export, or generation − own-use with ``self_consumption_override`` set (kWh, ≥ 0)."""
 
     fleet_import_kwh: float
-    """Total grid import by the fleet that year (kWh, ≥ 0)."""
+    """Total grid import by the fleet that year, Σ each home's ledger import: the simulated import, or demand − own-use with ``self_consumption_override`` set (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
     """CBS revenue (own-use + SEG + grid-services topper) (£); finite, and may have any sign."""
@@ -1618,7 +1465,7 @@ def bill_distribution(
         householder_bill(
             summary=s,
             # Basis C (docs/cost-recovery-finance-model.md §2), the physics own-use
-            # project_multi_year bills too; _billed_energy replaces it with the
+            # project_multi_year bills too; home_ledger replaces it with the
             # override's own-use when one is set.
             annual_self_consumption_kwh=basis_c_own_use_kwh(s),
             finance=finance,
@@ -1680,13 +1527,13 @@ class _NodeData:
     """System age in calendar years at which the fleet was simulated."""
 
     fleet_billed_own_use: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """Fleet billed own-use (Σ :func:`_billed_energy` own-use), each home's window totals × annualisation_scale (kWh/yr)."""
+    """Fleet billed own-use, Σ each home's :func:`home_ledger` own-use (kWh/yr)."""
 
     fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """Fleet grid export, each home's window total × annualisation_scale (kWh/yr)."""
+    """Fleet grid export, Σ each home's ledger export (kWh/yr)."""
 
     fleet_imp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """Fleet grid import, each home's window total × annualisation_scale (kWh/yr)."""
+    """Fleet grid import, Σ each home's ledger import (kWh/yr)."""
 
     per_home_discharge: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home battery discharge, its window total × annualisation_scale (kWh/yr)."""
@@ -1877,10 +1724,12 @@ def project_multi_year(
 
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
-        own-use, export, import and battery-discharge kWh and its SEG income
-        are its window totals × the window's annualisation_scale
-        (year_days / days, :func:`annualise`), so energy fields and
-        ``fleet_revenue_gbp`` stay on one basis.  A short window is still one
+        own-use, export, import and SEG income are its ledger
+        (:func:`home_ledger`), the one :func:`householder_bill` bills, and its
+        battery discharge is its simulated flow, all from its window totals ×
+        the window's annualisation_scale (year_days / days,
+        :func:`annualise`), so energy fields and ``fleet_revenue_gbp`` stay on
+        one basis.  A short window is still one
         season's sample, so board figures want ``scenario.period`` to cover
         about one full year.
 
@@ -1895,11 +1744,15 @@ def project_multi_year(
             aside.  The message names the age's fleet, ``proj-age-<age>``, and
             the first home whose batteries differ with both batteries, or both
             numbers of homes.
-        ValueError: If a simulated age, seed or bisection trial, gives an
-            aggregate that is NaN or infinite: the fleet's own-use, export,
-            import or revenue, its mean PV or battery state of health, or a
-            home's battery discharge or cumulative battery throughput.  The
-            message names the age and each such aggregate with its value.
+        ValueError: If a home's ledger at a simulated age, seed or bisection
+            trial, breaks L1-L4, such as an own-use, export or import that is
+            NaN or infinite, naming the invariant and its values
+            (:class:`HomeLedger`).
+        ValueError: If a simulated age gives another aggregate that is NaN or
+            infinite: the fleet's revenue, its mean PV or battery state of
+            health, or a home's battery discharge or cumulative battery
+            throughput.  The message names the age and each such aggregate
+            with its value.
         ValueError: If ``simulate`` returns a home's results that record no
             pricing, which only results simulate_home did not make lack, naming
             calculate_summary (:func:`_summary_pricing`); or whose billed export
@@ -1948,32 +1801,25 @@ def project_multi_year(
 
         per_home_summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
 
-        # Each home is annualised once, by its own window, and every figure
-        # below reads that annual record.  Own-use and the export that earns SEG
-        # income are billed through _billed_energy, the switch householder_bill
-        # reads; the export, import and discharge aggregates stay the simulated
-        # flows (docs/cost-recovery-finance-model.md §4).
-        annualised_homes = [(s, annualise(s)) for s in per_home_summaries]
-        billed_homes = [
-            (phys, _billed_energy(phys, finance, physics_own_use_kwh=basis_c_own_use_kwh(s) * phys.scale))
-            for s, phys in annualised_homes
-        ]
-        fleet_billed_own_use = sum(billed.own_use_kwh for _, billed in billed_homes)
-        fleet_exp = sum(phys.export_kwh for phys, _ in billed_homes)
-        fleet_imp = sum(phys.import_kwh for phys, _ in billed_homes)
-        per_home_discharge = tuple(phys.battery_discharge_kwh for phys, _ in billed_homes)
+        # Each home's year is one ledger, the one householder_bill bills
+        # (docs/cost-recovery-finance-model.md §4); battery discharge, which
+        # ageing integrates, stays the simulated flow.
+        physics_of_homes = [annualise(s) for s in per_home_summaries]
+        ledgers = [home_ledger(physics, finance) for physics in physics_of_homes]
+        fleet_billed_own_use = sum(ledger.own_use_kwh for ledger in ledgers)
+        fleet_exp = sum(ledger.export_kwh for ledger in ledgers)
+        fleet_imp = sum(ledger.import_kwh for ledger in ledgers)
+        per_home_discharge = tuple(physics.battery_discharge_kwh for physics in physics_of_homes)
 
         # CBS fleet revenue (model doc §4), every term over the window's year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
-        #   seg_revenue     = Σ _seg_export_income_gbp(phys.pricing, billed.export_kwh), on the same records
+        #   seg_revenue     = Σ ledger seg_income_gbp, each home's ledger export at its run's SEG rate
         #   grid_services   = grid_services_model.annual_income_gbp(fleet_results), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
-        # SEG revenue prices each home's billed export, which honours
-        # self_consumption_override, at the SEG rate its run was priced at.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
-        seg_revenue = sum(_seg_export_income_gbp(phys.pricing, billed.export_kwh) for phys, billed in billed_homes)
+        seg_revenue = sum(ledger.seg_income_gbp for ledger in ledgers)
         with warnings.catch_warnings(record=True) as raised_by_grid_services:
             grid_services = grid_services_model.annual_income_gbp(fleet_results)
         for raised in raised_by_grid_services:
