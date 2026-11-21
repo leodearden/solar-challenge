@@ -239,6 +239,32 @@ class TestWeatherCache:
         assert len(list(cache_dir.iterdir())) == 1
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
 
+    @pytest.mark.parametrize(
+        ("directory_parts", "put_error"),
+        [
+            pytest.param(("file", "weather"), NotADirectoryError, id="its directory under a regular file"),
+            pytest.param(("file",), FileExistsError, id="its directory a regular file"),
+        ],
+    )
+    def test_a_regular_file_in_its_directorys_place_reads_as_an_empty_cache_and_put_raises_oserror(
+        self, tmp_path, bristol, sample_weather_data, directory_parts, put_error
+    ):
+        """A regular file where the cache directory, or a parent of it, should be leaves no entry file anywhere, so
+        get, invalidate and clear read the cache as empty, as for an absent directory, and put raises the OSError
+        its mkdir raises; the regular file is left as it was."""
+        regular_file = tmp_path / "file"
+        regular_file.write_text("kept")
+        cache = WeatherCache(cache_dir=tmp_path.joinpath(*directory_parts))
+
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        with pytest.raises(put_error):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert regular_file.read_text() == "kept"
+        assert list(tmp_path.iterdir()) == [regular_file]
+
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):
         """Data can be stored and retrieved from cache."""
         cache.put(sample_weather_data, "tmy", bristol)
@@ -658,6 +684,22 @@ class TestPvgisTmy:
         pvgis_requests.hourly.assert_called_once()
         pd.testing.assert_frame_equal(seeded_cache.get("tmy", Location.bristol()), fetched, check_exact=True)
 
+    def test_an_entry_path_its_cache_cannot_open_raises_the_oserror_and_fetches_nothing(
+        self, seeded_cache, pvgis_requests
+    ):
+        """get passes on the OSError its cache's get raises for an entry path it cannot open for a reason other than
+        the path's absence, naming the path, and requests nothing from PVGIS. A directory at the path is the cause
+        used, since opening one raises even as root, where a cache directory with no permissions would not."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+
+        with pytest.raises(IsADirectoryError, match=re.escape(str(entry))):
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
     def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
         self, tmp_path, weather_cache, pvgis_requests
     ):
@@ -708,6 +750,26 @@ class TestPvgisTmy:
         assert pvgis_requests.tmy.call_count == 2
         assert pvgis_requests.hourly.call_count == 2
         pd.testing.assert_frame_equal(first, second, check_exact=True)
+
+    def test_a_cache_directory_under_a_regular_file_is_a_miss_so_get_fetches_and_warns_that_its_put_failed(
+        self, tmp_path, pvgis_requests
+    ):
+        """A regular file where the cache directory's parent should be leaves its get no entry to find, so get
+        fetches the scaled TMY and returns it, instead of raising, with a UserWarning that names the directory and
+        the reason its put failed, as for any put its cache cannot make."""
+        regular_file = tmp_path / "file"
+        regular_file.write_text("kept")
+        cache = WeatherCache(cache_dir=regular_file / "weather")
+
+        with pytest.warns(UserWarning, match=re.escape(str(cache.cache_dir))) as raised:
+            fetched = PvgisTmy(cache).get(Location.bristol())
+
+        assert fetched["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        [warning] = [w for w in raised if str(cache.cache_dir) in str(w.message)]
+        assert os.strerror(errno.ENOTDIR) in str(warning.message)
+        assert regular_file.read_text() == "kept"
 
     def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
         """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the weather_cache
