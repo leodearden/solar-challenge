@@ -3,7 +3,7 @@
 
 Proves:
 (a) Threading sanity: load_fleet_config(flex scenario) yields battery homes with
-    Economy-7 tariff (0.09/0.25, 00:30-07:30) + grid_charging + dispatch tou_optimized.
+    Economy-7 tariff at the Economy 7 preset's rates and window + grid_charging + dispatch tou_optimized.
 (b) G6 signal: zero-PV winter-day A/B (grid_charging ON vs OFF) → import_cost_gbp(ON) <
     import_cost_gbp(OFF) AND annualised delta ∈ [£100, £330].
 (c) Finance report: generate_finance_report gains optional flex_band block; default None
@@ -24,6 +24,7 @@ from solar_challenge.finance import FinanceConfig, bill_distribution, householde
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
+from solar_challenge.tariff import PRESET_RATES
 from tests._finance_builders import make_window
 from tests._synthetic_weather import sunless_weather, weather_for
 from tests.integration._helpers import SCENARIO
@@ -53,16 +54,20 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
             f"Home {home.name!r} must inherit Economy-7 tariff from scenario 'tariff:' key"
         )
         # Off-peak rate at 03:00 (inside 00:30–07:30 window)
+        expected_off_peak = PRESET_RATES["economy_7"].off_peak_rate
         off_peak_ts = pd.Timestamp("2024-01-15 03:00:00", tz="Europe/London")
         off_peak_rate = home.tariff_config.get_rate(off_peak_ts)
-        assert abs(off_peak_rate - 0.09) < 1e-9, (
-            f"Expected off-peak rate 0.09 £/kWh at 03:00, got {off_peak_rate}"
+        assert abs(off_peak_rate - expected_off_peak) < 1e-9, (
+            f"Expected the Economy 7 preset's off-peak rate {expected_off_peak} £/kWh at 03:00, "
+            f"got {off_peak_rate}"
         )
         # Peak rate at 18:00 (outside off-peak window)
+        expected_peak = PRESET_RATES["economy_7"].peak_rate
         peak_ts = pd.Timestamp("2024-01-15 18:00:00", tz="Europe/London")
         peak_rate = home.tariff_config.get_rate(peak_ts)
-        assert abs(peak_rate - 0.25) < 1e-9, (
-            f"Expected peak rate 0.25 £/kWh at 18:00, got {peak_rate}"
+        assert abs(peak_rate - expected_peak) < 1e-9, (
+            f"Expected the Economy 7 preset's peak rate {expected_peak} £/kWh at 18:00, "
+            f"got {peak_rate}"
         )
 
         # ---- Grid charging must be set with target_soc_fraction 0.9 -----------

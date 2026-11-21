@@ -20,7 +20,7 @@ from solar_challenge.config import (
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
@@ -500,7 +500,11 @@ class TestFleetPresetEndpoint:
                 "bristol-phase1-flex",
                 {
                     "battery": {"capacity_kwh": 5.0},
-                    "tariff": {"type": "economy_7", "peak_rate": 0.25, "off_peak_rate": 0.09},
+                    "tariff": {
+                        "type": "economy_7",
+                        "peak_rate": PRESET_RATES["economy_7"].peak_rate,
+                        "off_peak_rate": PRESET_RATES["economy_7"].off_peak_rate,
+                    },
                 },
                 (
                     "fleet_distribution.battery.max_charge_kw",
