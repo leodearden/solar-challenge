@@ -52,6 +52,7 @@ from solar_challenge.scenario_blocks import (
     FleetField,
     SettingValue,
     child_path,
+    constructed,
     dispatch_strategy_argument,
     float_or_none,
     read_dispatch_strategy_key,
@@ -679,24 +680,19 @@ def _build_weighted_discrete_spec(
         raise ConfigurationError(
             f"weighted_discrete distribution for '{block_path}' requires 'values' and 'weights'"
         )
-    return WeightedDiscreteDistribution(
-        values=tuple(data["values"]),
-        weights=tuple(float(w) for w in data["weights"]),
+    return constructed(
+        block_path, WeightedDiscreteDistribution, values=data["values"], weights=data["weights"]
     )
 
 
 def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
-    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std."""
+    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std; a min or max it leaves out is NormalDistribution's default."""
     if "mean" not in data or "std" not in data:
         raise ConfigurationError(
             f"normal distribution for '{block_path}' requires 'mean' and 'std'"
         )
-    return NormalDistribution(
-        mean=float(data["mean"]),
-        std=float(data["std"]),
-        min=float_or_none(data.get("min")),
-        max=float_or_none(data.get("max")),
-    )
+    bounds = {key: data[key] for key in ("min", "max") if key in data}
+    return constructed(block_path, NormalDistribution, mean=data["mean"], std=data["std"], **bounds)
 
 
 def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
@@ -705,7 +701,7 @@ def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistrib
         raise ConfigurationError(
             f"uniform distribution for '{block_path}' requires 'min' and 'max'"
         )
-    return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
+    return constructed(block_path, UniformDistribution, min=data["min"], max=data["max"])
 
 
 def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
@@ -725,42 +721,34 @@ def _build_shuffled_pool_spec(
         raise ConfigurationError(
             f"shuffled_pool distribution for '{block_path}' requires 'values' and 'counts'"
         )
-    return ShuffledPoolDistribution(
-        values=tuple(data["values"]),
-        counts=tuple(int(c) for c in data["counts"]),
-    )
+    return constructed(block_path, ShuffledPoolDistribution, values=data["values"], counts=data["counts"])
 
 
 def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
-    """Parse the multiplier of the spec at *block_path*: a number, or a sweep given as a mapping."""
+    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path."""
     if not isinstance(data, dict):
-        return float(data)
+        return data
     if data.get("type") != "sweep":
         raise ConfigurationError(
             f"proportional_to multiplier dict for '{block_path}' must have type='sweep'"
         )
-    refuse_unrecognised_keys(child_path(block_path, "multiplier"), data, _SWEEP_SPEC_KEYS)
-    return SweepSpec(
-        min=float(data["min"]),
-        max=float(data["max"]),
-        steps=int(data["steps"]),
-        mode=data.get("mode", "geometric"),
-    )
+    multiplier_path = child_path(block_path, "multiplier")
+    refuse_unrecognised_keys(multiplier_path, data, _SWEEP_SPEC_KEYS)
+    return constructed(multiplier_path, SweepSpec, **{key: value for key, value in data.items() if key != "type"})
 
 
 def _build_proportional_to_spec(
     data: dict[str, Any], block_path: str
 ) -> ProportionalDistribution:
-    """Build the proportional_to distribution a spec names, refusing it unless it gives a source."""
+    """Build the proportional_to distribution a spec names, refusing it unless it gives a source; a multiplier or offset it leaves out is ProportionalDistribution's default."""
     if "source" not in data:
         raise ConfigurationError(
             f"proportional_to distribution for '{block_path}' requires 'source'"
         )
-    return ProportionalDistribution(
-        source=data["source"],
-        multiplier=_parse_proportional_to_multiplier(data.get("multiplier", 1.0), block_path),
-        offset=float(data.get("offset", 0.0)),
-    )
+    given: dict[str, object] = {key: data[key] for key in ("offset",) if key in data}
+    if "multiplier" in data:
+        given["multiplier"] = _parse_proportional_to_multiplier(data["multiplier"], block_path)
+    return constructed(block_path, ProportionalDistribution, source=data["source"], **given)
 
 
 _DISTRIBUTION_SPEC_TYPES: Mapping[str, BlockType[DistributionSpec]] = MappingProxyType({
@@ -919,8 +907,10 @@ def parse_fleet_distribution_config(
     _refuse_proportional_sources_not_drawn_earlier(
         _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
     )
-    return FleetDistributionConfig(
-        n_homes=int(data["n_homes"]),
+    return constructed(
+        block_path,
+        FleetDistributionConfig,
+        n_homes=data["n_homes"],
         pv=pv,
         load=load,
         battery=battery,
