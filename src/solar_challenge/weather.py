@@ -193,13 +193,13 @@ class WeatherCache:
         """Initialize the cache.
 
         Args:
-            cache_dir: Directory for cache files. Given none, the directory CACHE_DIR_VARIABLE names when it is
-                set and non-empty, else DEFAULT_CACHE_DIR, under the working directory
+            cache_dir: Directory for cache files, created by the first put, not here, so that constructing a cache
+                touches no file. Given none, the directory CACHE_DIR_VARIABLE names when it is set and non-empty,
+                else DEFAULT_CACHE_DIR, under the working directory
         """
         if cache_dir is None:
             cache_dir = Path(os.environ.get(CACHE_DIR_VARIABLE) or DEFAULT_CACHE_DIR)
         self.cache_dir = cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _make_key(self, prefix: str, location: Location,
                   start_date: Optional[pd.Timestamp] = None,
@@ -236,7 +236,7 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            The cached DataFrame, or None if not found
+            The cached DataFrame, or None if not found, as when the cache directory is absent
 
         Raises:
             ValueError: Naming the entry's file and how to remove it, if its first line does not seal the rest, as
@@ -260,7 +260,7 @@ class WeatherCache:
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> None:
-        """Store data in cache, replacing any entry under the same key whole.
+        """Store data in cache, creating the cache directory, parents included, if absent, and replacing any entry under the same key whole.
 
         A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
         never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
@@ -285,6 +285,7 @@ class WeatherCache:
             _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
 
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         with _staged_beside(cache_file) as staged:
             with open(staged, "w", encoding="utf-8", newline="") as file:
                 _write_entry(file, {"timezone": tz_str, "freq": freq_str}, data)
