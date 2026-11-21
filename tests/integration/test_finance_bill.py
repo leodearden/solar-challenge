@@ -578,8 +578,8 @@ class TestOverrideExactValues:
 
         assert breakdown.import_cost_gbp == pytest.approx(0.0, abs=1e-9)
 
-    def test_override_zero_import_kwh_fallback(self) -> None:
-        """When total_grid_import_kwh==0, effective import rate falls back to retail_baseline_rate."""
+    def test_override_zero_import_kwh_bills_at_the_tariffs_mean_rate(self) -> None:
+        """When total_grid_import_kwh==0, the override's import is priced at the tariff's 30 p mean rate, not the 23 p retail rate."""
         # Summary where physics import is zero (all demand met by solar/battery)
         summary_no_import = _make_summary(
             total_grid_import_kwh=0.0,
@@ -587,6 +587,7 @@ class TestOverrideExactValues:
             total_grid_export_kwh=1800.0,
             total_export_revenue_gbp=73.8,
             net_cost_gbp=-73.8,  # exporter only
+            pricing=RunPricing(0.30, 4.1),
         )
         finance = _make_finance(self_consumption_override=0.50)  # will need some import
 
@@ -596,9 +597,8 @@ class TestOverrideExactValues:
             finance=finance,
             simulation_days=365,
         )
-        # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh
-        # fallback import rate = retail_baseline_rate = 23.0 p/kWh
-        expected_import_cost = 1400.0 * 23.0 / 100.0
+        # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh at the tariff's 30 p mean rate
+        expected_import_cost = 1400.0 * 30.0 / 100.0
         assert breakdown.import_cost_gbp == pytest.approx(expected_import_cost, rel=1e-5)
 
     def test_override_zero_export_kwh_fallback(self) -> None:
