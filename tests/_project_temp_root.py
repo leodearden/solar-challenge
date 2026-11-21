@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A pytest plugin that roots this project's pytest sessions in a temp root of the project's own, not in the pytest-of-<user> root that every pytest run of the user shares.
+"""Where this project's pytest sessions keep their temp dirs: a pytest plugin that roots them in a temp root of the project's own, not in the pytest-of-<user> root that every pytest run of the user shares, and the dir for those made before any fixture can be asked.
 
 A session's exit deletes the numbered dirs beyond pytest's retention count and every garbage-* dir under its
 temp root, whichever run left them. In the shared /tmp/pytest-of-<user> those were other projects' xdist
 trees, so a session of this project spent its exit deleting them.
 
-Usage: listed in tests/conftest.py's pytest_plugins.
+Usage: listed in tests/conftest.py's pytest_plugins; a hook that runs before any fixture makes its temp dirs in
+pre_fixture_temp_dir(config).
 """
 
 import os
@@ -36,6 +37,36 @@ def pytest_configure(config: pytest.Config) -> None:
     patch = pytest.MonkeyPatch()
     config.add_cleanup(patch.undo)
     patch.setenv(TEMP_ROOT_VARIABLE, str(root))
+
+
+def worker_run_basetemp(config: pytest.Config) -> Path | None:
+    """Return the run's basetemp if *config* is an xdist worker's whose controller gave it a basetemp, else None.
+
+    That is the parent of the worker's basetemp, the controller's, which the controller made before it started the
+    worker and pytest's retention reaps. The worker's own is emptied at its first getbasetemp(), which can come after
+    a hook made a dir in it.
+    """
+    if not hasattr(config, "workerinput"):
+        return None
+    given = config.getoption("basetemp")
+    return None if given is None else Path(given).parent
+
+
+def pre_fixture_temp_dir(config: pytest.Config) -> Path:
+    """Return the dir in which code that runs before any fixture can be asked makes its temp dirs in *config*'s session: on an xdist worker the run's basetemp, else the session's temp root, which TEMP_ROOT_VARIABLE names.
+
+    Raise RuntimeError if TEMP_ROOT_VARIABLE names none, since this plugin names one for the session's lifetime.
+    """
+    run_basetemp = worker_run_basetemp(config)
+    if run_basetemp is not None:
+        return run_basetemp
+    root = os.environ.get(TEMP_ROOT_VARIABLE)
+    if not root:
+        raise RuntimeError(
+            f"{TEMP_ROOT_VARIABLE} names no temp root, though tests/_project_temp_root.py names one at "
+            "pytest_configure for the session's lifetime: something unset it, or the session does not load the plugin"
+        )
+    return Path(root)
 
 
 def _make_private_root(root: Path) -> None:

@@ -25,6 +25,8 @@ from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache
 
+# Hooks and fixtures import tests._project_temp_root when they run, never this module's top, directly or through another
+# helper: imported before pytest_plugins registers it, pytest cannot rewrite the plugin and warns so in every session.
 pytest_plugins = ["pytester", "tests._project_temp_root"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
@@ -209,16 +211,16 @@ _OFFLINE_WINDOW_KEY = pytest.StashKey[_OfflineWindow]()
 
 
 @contextmanager
-def _open_offline_window() -> Iterator[_OfflineWindow]:
+def _open_offline_window(temp_dir: Path) -> Iterator[_OfflineWindow]:
     """Open a test's window, which closes after the test is reported, where an error would abort the session.
 
-    CACHE_DIR_VARIABLE names the window's weather cache until it closes, so default_weather() reads that cache.
+    CACHE_DIR_VARIABLE names the window's weather cache, a temp dir in *temp_dir*, until it closes, so default_weather() reads that cache.
     The first window imports solar_challenge.weather, before it refuses the network, so sessions that run no test never load it.
     """
     from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 
     with (
-        tempfile.TemporaryDirectory(prefix="weather-cache-", ignore_cleanup_errors=True) as cache_dir,
+        tempfile.TemporaryDirectory(prefix="weather-cache-", dir=temp_dir, ignore_cleanup_errors=True) as cache_dir,
         refusing_network() as refused,
         pytest.MonkeyPatch.context() as patch,
     ):
@@ -251,9 +253,11 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     starts runs `-n auto` in its own process, while a slow test's sessions, such as
     the lanes' verify runs, keep a worker per core.
     """
+    from tests._project_temp_root import pre_fixture_temp_dir
+
     if item.get_closest_marker("slow"):
         return (yield)
-    with _open_offline_window() as window, _pytest_sessions_it_starts_run_serially():
+    with _open_offline_window(pre_fixture_temp_dir(item.config)) as window, _pytest_sessions_it_starts_run_serially():
         item.stash[_OFFLINE_WINDOW_KEY] = window
         try:
             return (yield)
