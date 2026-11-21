@@ -5,6 +5,12 @@ They collect an offline-lane job's suite step as the lane runs it, a default
 collection of tests/, a suite by its explicit path under a mark expression, and
 every test under tests/, the lane-only suites included, under a mark expression.
 
+A test reads the collection of one of the repository's offline-lane jobs from
+tests/conftest.py's fixture lane_job_collection, called as
+lane_job_collection(project_root, name), rather than calling collect_lane_job
+itself; the fixture's docstring gives the premises each caller carries. The
+first example below is collect_lane_job's own usage.
+
 Usage::
 
     from tests._lane_collection import (
