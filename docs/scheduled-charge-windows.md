@@ -115,8 +115,10 @@ results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 | D | `ScheduledChargeStrategy` over `SelfConsumptionStrategy()` |
 
 B and D share one window, daily from 00:30 for 7 hours to 0.9, holding, on
-`Europe/London`. It mirrors Economy 7's clock: off-peak from 00:30 to 07:30 at £0.09/kWh,
-peak from 07:30 to 00:30 at £0.25/kWh, on the same wall clock.
+`Europe/London`. It mirrors Economy 7's clock: off-peak from 00:30 to 07:30, peak from
+07:30 to 00:30, on the same wall clock. The bills in §4 were measured while
+`scenarios/bristol-arbitrage.yaml` restated Economy 7 at 0.09/0.25 £/kWh; since task 841
+it is charged `tariff.PRESET_RATES`' rates, so a re-run prints other bills.
 
 **B's base peak hours.** `TOUOptimizedStrategy`'s peak hours are whole hours, so they
 cannot express 00:30 or 07:30. Outside the window B's base must dispatch as at the dear

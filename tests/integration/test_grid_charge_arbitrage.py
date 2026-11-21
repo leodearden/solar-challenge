@@ -71,9 +71,8 @@ def test_grid_charge_lowers_net_cost() -> None:
     """grid_charge ON reduces net_cost_gbp vs OFF on a deterministic winter day.
 
     Uses zero-PV injected weather so net_cost == import_cost in both runs.
-    The ON run grid-charges overnight (off-peak 0.09 £/kWh) and discharges
-    at the 18:00 evening peak (0.25 £/kWh), strictly lowering import cost.
-    The Economy 7 spread gate guarantees a comfortable ~£0.31 margin.
+    The ON run grid-charges overnight at Economy 7's off-peak rate and
+    discharges at its 18:00 evening peak, strictly lowering import cost.
     """
     scenario = load_scenarios(SCENARIO)[0]
     home_on = scenario.home
