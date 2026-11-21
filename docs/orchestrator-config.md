@@ -131,7 +131,12 @@ workers.
   nothing, and `PLAYWRIGHT_SKIP_BROWSER_GC=1` stops it deleting other installs' browsers in
   turn. `LaneCommand` has no timeout field and the lane is single-flight, so without the
   `timeout` prefix on each step a hung download or browser run would stall every later lane
-  run. Each prefix is sized as a generous multiple of its step's run, not at the run. Only a
+  run. Each prefix is sized as a generous multiple of its step's run, not at the run. The suite
+  step runs its tests serially, at the lane's idle priority, so its run grows with the host's
+  load as well as with the suite. Its `timeout` gives each test it collects the per-test budget
+  `tests/unit/test_e2e_lane.py` states, and that test fails the per-task verify once the suite
+  outgrows the bound, rather than the lane killing a green run before pytest reports. A raised
+  `timeout` reaches the running lane only when the orchestrator reloads its config. Only a
   missing browser sends the install to the download host, and an outage there fails it, which
   the lane files as `e2e::nonzero-exit`: the job declares no outage probe, since its suite needs
   no live service. The lane contract probes collect only the suite step
