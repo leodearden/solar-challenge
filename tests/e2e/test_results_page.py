@@ -442,6 +442,14 @@ _GIVE_IT_THE_SANKEYS_FIGURE = """(container) => {
     container.dataset.chartFigure = document.getElementById('chart-sankey').dataset.chartFigure;
 }"""
 
+# Gives the container the Sankey's figure, then awaits one microtask, whose continuation the attribute change queued
+# behind the MutationObserver's, and returns the title Plotly has drawn in the container by then, null if it has none.
+_GIVE_IT_THE_SANKEYS_FIGURE_AND_READ_ITS_TITLE_BY_THE_NEXT_MICROTASK = f"""async (container) => {{
+    ({_GIVE_IT_THE_SANKEYS_FIGURE})(container);
+    await Promise.resolve();
+    return container.querySelector('.gtitle')?.textContent ?? null;
+}}"""
+
 
 # Adds the container, then awaits one microtask, whose continuation the addition queued behind the
 # MutationObserver's, and returns whether Plotly has drawn the added container by then.
@@ -493,16 +501,17 @@ def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
     seeded_home_run: tuple[str, str],
     page_errors: list[str],
 ) -> None:
-    """The daily balance's container, given the Sankey's figure, is drawn titled as the Sankey's layout is."""
+    """The daily balance's container, given the Sankey's figure, is redrawn titled as the Sankey's layout is, by the setting script's next microtask, and the page logs no error."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
     title = page.locator("#chart-daily-balance .gtitle")
     expect(title).to_have_text("Daily Energy Balance")
 
-    page.locator("#chart-daily-balance").evaluate(_GIVE_IT_THE_SANKEYS_FIGURE)
+    title_by_the_next_microtask = page.locator("#chart-daily-balance").evaluate(
+        _GIVE_IT_THE_SANKEYS_FIGURE_AND_READ_ITS_TITLE_BY_THE_NEXT_MICROTASK
+    )
 
-    expect(title).to_have_text("Energy Flow")
-    assert page_errors == []
+    assert (title_by_the_next_microtask, page_errors) == ("Energy Flow", [])
 
 
 # Counts on window.__drawsOf, by container id, each chart Plotly.newPlot draws from now on.
