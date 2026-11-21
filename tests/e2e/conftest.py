@@ -35,11 +35,8 @@ collects. So the suite runs serially unless its command passes an explicit
 `-n N`.
 
 It imports playwright's and pytest-playwright's types for annotations only,
-so nothing from the e2e extra when it loads: tests/unit/test_e2e_job_wait.py
-and tests/unit/test_e2e_network_change_reruns.py run copies of this module
-in the verify environment, which lacks that extra.
-tests/unit/test_e2e_conftest_needs_no_e2e_extra.py pins that, even where the
-extra is installed.
+so nothing from the e2e extra when it loads;
+tests/unit/test_e2e_conftest_needs_no_e2e_extra.py says why, and pins it.
 """
 
 from __future__ import annotations

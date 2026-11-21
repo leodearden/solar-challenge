@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The e2e conftest imports nothing from the e2e extra when it loads.
 
-tests/unit/test_e2e_job_wait.py, tests/unit/test_e2e_network_change_reruns.py and
-tests/unit/test_e2e_live_server_weather.py load copies of it in the verify environment, which lacks that extra.
+In the verify environment, which lacks that extra, unit tests run pytester sessions under copies of it: each copies
+the file that tests/conftest.py's e2e_conftest fixture returns.
 """
 
 from pathlib import Path
