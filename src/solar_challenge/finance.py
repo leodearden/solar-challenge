@@ -55,6 +55,7 @@ from solar_challenge.number_fields import (
     as_whole_number,
     read_field,
 )
+from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
@@ -693,7 +694,8 @@ def _billed_energy(
 
     The one physics/override switch for billed energy: :func:`householder_bill`
     bills its own-use and import, and :func:`project_multi_year` sums its own-use
-    into the CBS own-use revenue.  With no ``self_consumption_override``, own-use
+    into the CBS own-use revenue and its export into the CBS SEG revenue
+    (:func:`_seg_export_income_gbp`).  With no ``self_consumption_override``, own-use
     is *physics_own_use_kwh*: the window's own-use (basis C, :func:`_cbs_own_use_kwh`,
     from both :func:`bill_distribution` and :func:`project_multi_year`) scaled by
     the window's annualisation_scale, and import and export are the simulated flows.  With the override set, all three split the
@@ -723,7 +725,8 @@ def _billed_import_cost_gbp(phys: _AnnualisedPhysics, energy: _BilledEnergy, fin
     """The £ of *energy*'s import over the window's year, at the price the home's run was priced at.
 
     * No tariff priced the run (``phys.pricing``'s import rate is None): the
-      retail baseline rate, on either basis; :func:`householder_bill` warns.
+      retail baseline rate, on either basis, with a :class:`UserWarning`
+      attributed to :func:`householder_bill`'s caller, whatever it imported.
       Homes generated from a fleet_distribution with no tariff are such homes,
       e.g. scenarios/bristol-phase1.yaml's.
     * Physics basis (``finance.self_consumption_override`` is None): the
@@ -734,7 +737,16 @@ def _billed_import_cost_gbp(phys: _AnnualisedPhysics, energy: _BilledEnergy, fin
     """
     tariff_mean_rate_gbp_per_kwh = phys.pricing.import_tariff_mean_rate_gbp_per_kwh
     if tariff_mean_rate_gbp_per_kwh is None:
-        return energy.import_kwh * finance.retail_baseline_rate_pence_per_kwh / 100.0
+        retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
+        warnings.warn(
+            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
+            f"has a £0 cost (no tariff configured on this home), so its import "
+            f"rate falls back to the retail baseline rate "
+            f"({retail_rate_pence:.1f} p/kWh).",
+            UserWarning,
+            stacklevel=3,
+        )
+        return energy.import_kwh * retail_rate_pence / 100.0
     if finance.self_consumption_override is None:
         return phys.import_cost_gbp
     if phys.import_kwh > 0.0:
@@ -747,50 +759,31 @@ def _billed_import_cost_gbp(phys: _AnnualisedPhysics, energy: _BilledEnergy, fin
 # ---------------------------------------------------------------------------
 
 
-def _seg_export_income_gbp(
-    phys: _AnnualisedPhysics,
-    finance: "FinanceConfig",
-) -> float:
-    """Compute the SEG export income for a single home (CBS-revenue side).
+def _seg_export_income_gbp(pricing: RunPricing, export_kwh: float) -> float:
+    """A home's SEG export income (CBS-revenue side): *export_kwh* at the SEG rate its run was priced at.
 
     The CBS owns the export MPAN, so export revenue flows to the CBS, not the
     householder; the householder bill carries no export income
-    (docs/cost-recovery-finance-model.md §4).  It is used by :func:`project_multi_year._simulate_age`
-    to compute ``seg_revenue = Σ _seg_export_income_gbp(phys, ...)`` as part of
-    the CBS fleet revenue formula (model doc §4), from the same annualised physics
-    the home's own-use reads.
-
-    The home's export earns the SEG rate its run was priced at,
-    ``phys.pricing.seg_rate_pence_per_kwh``, and nothing when no SEG tariff
-    priced it.  The export is:
-
-    * **Physics path** (``finance.self_consumption_override`` is None): the
-      simulated export.
-    * **Override path**: generation − min(override × generation, demand)
-      (:func:`_override_energy_split`), whatever the simulated export, none
-      included.  Silent when the cap binds, since this runs per home at every
-      sampled age; :func:`householder_bill` warns instead.
+    (docs/cost-recovery-finance-model.md §4).  :func:`project_multi_year`
+    sums it over the fleet's homes into the CBS fleet revenue (model doc §4).
 
     Args:
-        phys: The home's simulation totals, annualised to the window's year:
-            its totals × annualisation_scale (year_days / days)
-            (:func:`_annualise_physics`), and its run's pricing.
-        finance: FinanceConfig with tariff + assumption parameters.
+        pricing: How the home's run was priced (:func:`_summary_pricing`).  A
+            run no SEG tariff priced, whose ``seg_rate_pence_per_kwh`` is None,
+            earns nothing.
+        export_kwh: The home's billed export over the window's year
+            (:func:`_billed_energy`): the simulated export, or with
+            ``self_consumption_override`` set, generation − own-use, whatever
+            the run exported, none included.
 
     Returns:
-        SEG export income in GBP (£) over the window's year.
+        SEG export income in GBP (£) over the window's year, priced by
+        :func:`~solar_challenge.seg.calculate_seg_revenue`.
     """
-    seg_rate_pence_per_kwh = phys.pricing.seg_rate_pence_per_kwh
+    seg_rate_pence_per_kwh = pricing.seg_rate_pence_per_kwh
     if seg_rate_pence_per_kwh is None:
         return 0.0
-    override = finance.self_consumption_override
-    if override is None:
-        export_kwh = phys.export_kwh
-    else:
-        export_kwh = _override_energy_split(
-            override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
-        ).export_kwh
-    return export_kwh * seg_rate_pence_per_kwh / 100.0
+    return calculate_seg_revenue(export_kwh, SEGTariff(name="", rate_pence_per_kwh=seg_rate_pence_per_kwh))
 
 
 # ---------------------------------------------------------------------------
@@ -1046,19 +1039,11 @@ def householder_bill(
     # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
     # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
     sc_kwh_physics = annual_self_consumption_kwh * phys.scale
-    # Export income is the CBS's, computed by _seg_export_income_gbp, not by the householder bill.
-    if phys.pricing.import_tariff_mean_rate_gbp_per_kwh is None:
-        warnings.warn(
-            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
-            f"has a £0 cost (no tariff configured on this home), so its import "
-            f"rate falls back to the retail baseline rate "
-            f"({retail_rate_pence:.1f} p/kWh).",
-            UserWarning,
-            stacklevel=2,
-        )
 
     # ---- Self-consumption switch (docs/cost-recovery-finance-model.md §3, Override path) ----
+    # Export income is the CBS's, computed by _seg_export_income_gbp, not by the householder bill.
     energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
+    import_cost_gbp = _billed_import_cost_gbp(phys, energy, finance)
     if override is not None and energy.capped_at_demand:
         warnings.warn(
             f"self_consumption_override={override:g} implies more own-use than "
@@ -1076,7 +1061,7 @@ def householder_bill(
         demand_kwh=phys.demand_kwh,
         self_consumption_kwh=energy.own_use_kwh,
         import_kwh=energy.import_kwh,
-        import_cost_gbp=_billed_import_cost_gbp(phys, energy, finance),
+        import_cost_gbp=import_cost_gbp,
         baseline_import_cost_gbp=baseline_import_cost_gbp,
         finance=finance,
     )
@@ -1107,8 +1092,8 @@ class YearPoint:
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
     + SEG export income (Σ seg_export_income_gbp per home)
-    + grid-services income (that age's ``pricing.annual_income_gbp`` of its
-    simulated fleet, ``pricing = grid_services_model_of(finance)``).
+    + grid-services income (``grid_services_model_of(finance).annual_income_gbp``
+    of that age's simulated fleet).
     """
 
     year: int
@@ -1633,9 +1618,10 @@ def project_multi_year(
     to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
     Each sampled age's grid-services income is priced from that age's own
     simulated fleet by ``grid_services_model_of(finance)``, and is annual by
-    construction.  Each distinct warning that pricing raises, such as one
-    naming an event window the simulated period never enters, is shown once
-    per call, however many ages raise it, and is attributed to the caller.
+    construction.  Each distinct warning that grid-services pricing raises,
+    such as one naming an event window the simulated period never enters, is
+    shown once per call, however many ages raise it, and is attributed to the
+    caller.
 
     Args:
         scenario: ScenarioConfig with homes, period, and location.
@@ -1676,7 +1662,10 @@ def project_multi_year(
             message names the age and each such aggregate with its value.
         ValueError: If ``simulate`` returns a home's results that record no
             pricing, which only results simulate_home did not make lack, naming
-            calculate_summary (:func:`_summary_pricing`).
+            calculate_summary (:func:`_summary_pricing`); or whose billed export
+            at a recorded SEG rate is negative, which
+            :func:`~solar_challenge.seg.calculate_seg_revenue` refuses, naming
+            the export.
     """
     homes = scenario.simulated_homes()
 
@@ -1691,12 +1680,12 @@ def project_multi_year(
     start_ts = scenario.period.get_start_timestamp(tz)
     end_ts = scenario.period.get_end_timestamp(tz)
 
-    pricing = grid_services_model_of(finance)
-    # Each age's pricing can raise a warning in the same words as every other age's,
-    # e.g. naming an event window the simulated period never enters.  Each distinct
-    # one is kept here and shown once after the march
+    grid_services_model = grid_services_model_of(finance)
+    # Each age's grid-services income can raise a warning in the same words as every
+    # other age's, e.g. naming an event window the simulated period never enters.
+    # Each distinct one is kept here and shown once after the march
     # (docs/prds/grid-services-pricing-model.md §5.4).
-    pricing_warnings: dict[tuple[type[Warning], str], warnings.WarningMessage] = {}
+    grid_services_warnings: dict[tuple[type[Warning], str], warnings.WarningMessage] = {}
 
     asset_life = finance.asset_life_years
 
@@ -1720,36 +1709,35 @@ def project_multi_year(
         per_home_summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
 
         # Each home is annualised once, by its own window, and every figure
-        # below reads that annual record.  Own-use is billed through _billed_energy,
-        # the switch householder_bill reads; export, import and discharge stay the
-        # simulated flows (docs/cost-recovery-finance-model.md §4).
+        # below reads that annual record.  Own-use and the export that earns SEG
+        # income are billed through _billed_energy, the switch householder_bill
+        # reads; the export, import and discharge aggregates stay the simulated
+        # flows (docs/cost-recovery-finance-model.md §4).
         annualised_homes = [(s, _annualise_physics(s)) for s in per_home_summaries]
-        fleet_billed_own_use = sum(
-            _billed_energy(
-                phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale
-            ).own_use_kwh
+        billed_homes = [
+            (phys, _billed_energy(phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale))
             for s, phys in annualised_homes
-        )
-        fleet_exp = sum(phys.export_kwh for _, phys in annualised_homes)
-        fleet_imp = sum(phys.import_kwh for _, phys in annualised_homes)
-        per_home_discharge = tuple(phys.battery_discharge_kwh for _, phys in annualised_homes)
+        ]
+        fleet_billed_own_use = sum(billed.own_use_kwh for _, billed in billed_homes)
+        fleet_exp = sum(phys.export_kwh for phys, _ in billed_homes)
+        fleet_imp = sum(phys.import_kwh for phys, _ in billed_homes)
+        per_home_discharge = tuple(phys.battery_discharge_kwh for phys, _ in billed_homes)
 
         # CBS fleet revenue (model doc §4), every term over the window's year:
         #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
-        #   seg_revenue     = Σ _seg_export_income_gbp(phys, finance), on the same annual records
-        #   grid_services   = pricing.annual_income_gbp(fleet_results), already annual
+        #   seg_revenue     = Σ _seg_export_income_gbp(phys.pricing, billed.export_kwh), on the same records
+        #   grid_services   = grid_services_model.annual_income_gbp(fleet_results), already annual
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
-        # SEG revenue comes from _seg_export_income_gbp, which prices each home's
-        # export at the SEG rate its run was priced at and honours
-        # self_consumption_override.
+        # SEG revenue prices each home's billed export, which honours
+        # self_consumption_override, at the SEG rate its run was priced at.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
-        seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
-        with warnings.catch_warnings(record=True) as raised_by_pricing:
-            grid_services = pricing.annual_income_gbp(fleet_results)
-        for raised in raised_by_pricing:
-            pricing_warnings.setdefault((raised.category, str(raised.message)), raised)
+        seg_revenue = sum(_seg_export_income_gbp(phys.pricing, billed.export_kwh) for phys, billed in billed_homes)
+        with warnings.catch_warnings(record=True) as raised_by_grid_services:
+            grid_services = grid_services_model.annual_income_gbp(fleet_results)
+        for raised in raised_by_grid_services:
+            grid_services_warnings.setdefault((raised.category, str(raised.message)), raised)
         fleet_revenue = own_use_revenue + seg_revenue + grid_services
 
         # PV SOH: mean of calculate_degradation_factor over all homes
@@ -1874,8 +1862,8 @@ def project_multi_year(
             stacklevel=2,
         )
 
-    # ---- Pricing warnings: each distinct one once per projection ------------
-    for raised in pricing_warnings.values():
+    # ---- Grid-services warnings: each distinct one once per projection ------
+    for raised in grid_services_warnings.values():
         warnings.warn(raised.message, raised.category, stacklevel=2)
 
     # ---- Interpolate per-year curves with the converged node set ------------

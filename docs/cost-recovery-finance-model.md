@@ -140,8 +140,9 @@ tariff priced, whose `import_tariff_mean_rate_gbp_per_kwh` is None, is billed it
 import at the retail rate with a `UserWarning`, whatever it imported.  A £0 tariff
 priced its run, so its import is billed £0, with no warning.  `householder_bill` and
 `bill_distribution` raise `ValueError` for a summary whose pricing is None, naming
-`calculate_summary`, and `project_multi_year` and the cost-recovery solve do the same
-for a `simulate` whose results record none (`tests/unit/test_finance_pricing.py`).
+`calculate_summary` (`tests/unit/test_finance_pricing.py`), and `project_multi_year`
+and the cost-recovery solve do the same for a `simulate` whose results record none
+(`tests/unit/test_finance_projection_revenue.py::TestSegIncomeAtTheHomesRate::test_results_that_record_no_pricing_are_refused_naming_calculate_summary`).
 
 `own_use_kwh` below is basis C (see §2): `own_use_kwh = total_demand_kwh − total_grid_import_kwh`.
 With `self_consumption_override` set it comes from the override instead (*Override
@@ -309,20 +310,23 @@ Where each term is:
 
 ```
 own_use_revenue   = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh / 100
-                    (fleet_billed_own_use_kwh = Σ_homes _billed_energy(a_h, finance,
-                                                  physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)).own_use_kwh
+                    (fleet_billed_own_use_kwh = Σ_homes b_h.own_use_kwh
                                               = Σ_homes k_h × (demand − import)
                                                 with no override (basis C)
                                               = Σ_homes min(override × k_h × generation, k_h × demand)
                                                 with self_consumption_override set)
-                    (a_h = _annualise_physics(s_h), home h's window totals × k_h;
+                    (b_h = _billed_energy(a_h, finance,
+                                          physics_own_use_kwh=k_h × _cbs_own_use_kwh(s_h)),
+                     home h's billed own-use, import and export;
+                     a_h = _annualise_physics(s_h), home h's window totals × k_h;
                      k_h = s_h.window.annualisation_scale = year_days_h / days_h)
 
 seg_revenue       = Σ_homes export_kwh_h × seg_rate_h / 100
-                    (_seg_export_income_gbp(a_h, finance); seg_rate_h =
+                    (_seg_export_income_gbp(a_h.pricing, b_h.export_kwh),
+                    priced by seg.calculate_seg_revenue; export_kwh_h =
+                    b_h.export_kwh, from the same b_h as own-use; seg_rate_h =
                     s_h.pricing.seg_rate_pence_per_kwh, HomeConfig.seg_tariff's
-                    rate as simulate_home records it, 0 when None; both paths
-                    read the same a_h as own-use)
+                    rate as simulate_home records it, 0 when None)
 
                     Physics path: export_kwh_h = k_h × the simulated export.
                     seg_revenue then equals Σ k_h × total_export_revenue_gbp to
@@ -345,9 +349,9 @@ seg_revenue       = Σ_homes export_kwh_h × seg_rate_h / 100
                     construction raises ConfigurationError naming the home and
                     both rates.
 
-grid_services_income(t) = pricing.annual_income_gbp(F_t)
-    pricing = grid_services_model_of(finance), resolved once, before any simulation
-    F_t     = the fleet simulated at age t
+grid_services_income(t) = M.annual_income_gbp(F_t)
+    M   = grid_services_model_of(finance), resolved once, before any simulation
+    F_t = the fleet simulated at age t
   NoGridServices()    → 0
   FlatGridServices(r) → r × Σ_{battery homes of F_t} max_discharge_kw
   grid_services_model = "capacity_at_events", the GridServicesEventsConfig:

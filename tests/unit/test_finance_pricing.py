@@ -64,13 +64,14 @@ class TestPhysicsImport:
 
         assert breakdown.import_cost_gbp == 0.0
 
-    def test_a_run_no_tariff_priced_bills_its_import_at_retail_and_warns(self) -> None:
+    def test_a_run_no_tariff_priced_bills_its_import_at_retail_and_warns_householder_bills_caller(self) -> None:
         summary = _summary(self_kwh=2200.0, export_kwh=1800.0, import_kwh=1200.0, pricing=RunPricing(None, None))
 
-        with pytest.warns(UserWarning, match="no tariff configured"):
+        with pytest.warns(UserWarning, match="no tariff configured") as raised:
             breakdown = _bill(summary)
 
         assert breakdown.import_cost_gbp == pytest.approx(1200.0 * _RETAIL_PENCE_PER_KWH / 100.0)
+        assert [warning.filename for warning in raised] == [__file__]
 
 
 class TestOverrideImport:

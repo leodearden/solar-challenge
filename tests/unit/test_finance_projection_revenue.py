@@ -259,6 +259,19 @@ class TestSegIncomeAtTheHomesRate:
 
         assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([15.0] * 5)
 
+    def test_a_negative_export_at_a_seg_rate_is_refused_naming_it(self) -> None:
+        """seg.calculate_seg_revenue prices the SEG income, as it prices simulate_home's, and refuses an export below 0 kWh."""
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+
+        with pytest.raises(ValueError, match="Export energy must be non-negative, got -"):
+            project_multi_year(
+                scenario,
+                finance,
+                simulate=lambda fc, s, e: make_fleet_results(
+                    homes=fc.homes, self_kwh=500.0, export_kwh=-100.0, import_kwh=300.0, pricing=RunPricing(None, 5.0)
+                ),
+            )
+
     @pytest.mark.parametrize(
         "run_it",
         [
