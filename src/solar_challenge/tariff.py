@@ -6,10 +6,11 @@ flat-rate tariffs, and preset UK tariff configurations.
 """
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time
 from functools import cached_property
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -176,6 +177,31 @@ def _tiling_refusal(
 
 
 @dataclass(frozen=True)
+class PresetRates:
+    """An economy preset's default rates.
+
+    Attributes:
+        off_peak_rate: Off-peak rate in £/kWh, at least 0 and finite
+        peak_rate: Peak rate in £/kWh, at least 0 and finite
+    """
+
+    off_peak_rate: float
+    peak_rate: float
+
+    def __post_init__(self) -> None:
+        """Read both rates through number_fields, holding the floats read, as TariffPeriod reads its rate."""
+        read_field(self, "off_peak_rate", as_finite_float, NON_NEGATIVE)
+        read_field(self, "peak_rate", as_finite_float, NON_NEGATIVE)
+
+
+#: Each economy preset's default rates, what a preset tariff built without rates is charged, keyed by the scenario grammar's tariff type.
+PRESET_RATES: Mapping[str, PresetRates] = MappingProxyType({
+    "economy_7": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+    "economy_10": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+})
+
+
+@dataclass(frozen=True)
 class TariffConfig:
     """Configuration for an electricity tariff.
 
@@ -275,8 +301,8 @@ class TariffConfig:
     @classmethod
     def economy_7(
         cls,
-        off_peak_rate: float = 0.09,
-        peak_rate: float = 0.25,
+        off_peak_rate: float = PRESET_RATES["economy_7"].off_peak_rate,
+        peak_rate: float = PRESET_RATES["economy_7"].peak_rate,
         off_peak_start: str = "00:30",
         off_peak_end: str = "07:30",
     ) -> "TariffConfig":
@@ -286,8 +312,8 @@ class TariffConfig:
         typically 00:30-07:30 (times vary by region).
 
         Args:
-            off_peak_rate: Off-peak rate in £/kWh (default: 0.09)
-            peak_rate: Peak rate in £/kWh (default: 0.25)
+            off_peak_rate: Off-peak rate in £/kWh (default: PRESET_RATES["economy_7"].off_peak_rate)
+            peak_rate: Peak rate in £/kWh (default: PRESET_RATES["economy_7"].peak_rate)
             off_peak_start: Off-peak period start time HH:MM (default: "00:30")
             off_peak_end: Off-peak period end time HH:MM (default: "07:30")
 
@@ -315,8 +341,8 @@ class TariffConfig:
     @classmethod
     def economy_10(
         cls,
-        off_peak_rate: float = 0.08,
-        peak_rate: float = 0.27,
+        off_peak_rate: float = PRESET_RATES["economy_10"].off_peak_rate,
+        peak_rate: float = PRESET_RATES["economy_10"].peak_rate,
         night_start: str = "00:00",
         night_end: str = "05:00",
         afternoon_start: str = "13:00",
@@ -330,8 +356,8 @@ class TariffConfig:
         night, afternoon, and evening periods.
 
         Args:
-            off_peak_rate: Off-peak rate in £/kWh (default: 0.08)
-            peak_rate: Peak rate in £/kWh (default: 0.27)
+            off_peak_rate: Off-peak rate in £/kWh (default: PRESET_RATES["economy_10"].off_peak_rate)
+            peak_rate: Peak rate in £/kWh (default: PRESET_RATES["economy_10"].peak_rate)
             night_start: Night off-peak start (default: "00:00")
             night_end: Night off-peak end (default: "05:00")
             afternoon_start: Afternoon off-peak start (default: "13:00")
