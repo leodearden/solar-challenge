@@ -248,8 +248,8 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const transitions = () => documentTransitions()
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    const finishTransitions = () => documentTransitions().forEach(transition => transition.finish());
-    const settled = () => { finishTransitions(); return drawn(); };
+    const finishDocumentTransitions = () => documentTransitions().forEach(transition => transition.finish());
+    const settled = () => { finishDocumentTransitions(); return drawn(); };
     window.sidebarProbe = {drawn, transitions, settled, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
