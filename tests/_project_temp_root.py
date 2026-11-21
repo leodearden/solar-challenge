@@ -3,7 +3,7 @@
 
 A session's exit deletes the numbered dirs beyond pytest's retention count and every garbage-* dir under its
 temp root, whichever run left them. In the shared /tmp/pytest-of-<user> those were other projects' xdist
-trees, and task 1550 (esc-1512-1) measured a session's exit spending 15+ minutes deleting them.
+trees, so a session of this project spent its exit deleting them.
 
 Usage: listed in tests/conftest.py's pytest_plugins.
 """
