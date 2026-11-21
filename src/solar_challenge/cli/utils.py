@@ -62,7 +62,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def handle_errors(func: F) -> F:
-    """Decorator to handle common errors and display user-friendly messages."""
+    """Decorator that prints a ConfigurationError, a FileNotFoundError, any other OSError (as from a weather cache entry that cannot be read), a ValueError or a WeatherDataError on stderr under its own label and exits 1; Ctrl-C exits 130."""
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -73,6 +73,9 @@ def handle_errors(func: F) -> F:
             raise typer.Exit(1) from e
         except FileNotFoundError as e:
             _print_error_verbatim("File not found", e)
+            raise typer.Exit(1) from e
+        except OSError as e:
+            _print_error_verbatim("System error", e)
             raise typer.Exit(1) from e
         except ValueError as e:
             _print_error_verbatim("Invalid value", e)
