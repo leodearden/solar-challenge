@@ -12,5 +12,8 @@ _FINISH_THE_CSS_TRANSITIONS = """() => document.getAnimations()
 
 
 def finish_the_css_transitions(page: Page) -> None:
-    """Finish every CSS transition running in page, including one the caller's last change has just started, since getAnimations() flushes pending style first, and leave its CSS animations, which may be infinite, running."""
+    """Finish every CSS transition running in page, including one the caller's last change has just started, since getAnimations() flushes pending style first, and leave its CSS animations, which may be infinite, running.
+
+    A transition that a script starts in a later animation frame may not be running yet, and then it is not finished: Alpine's x-transition and x-collapse start theirs in the second animation frame after the change that shows or hides their element.
+    """
     page.evaluate(_FINISH_THE_CSS_TRANSITIONS)
