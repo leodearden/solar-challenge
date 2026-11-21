@@ -23,6 +23,7 @@ from solar_challenge.number_fields import (
     as_finite_float,
     as_finite_floats,
     as_finite_real,
+    as_list_elements,
     as_whole_number,
     as_whole_numbers,
     read_field,
@@ -561,6 +562,19 @@ class TestAsWholeNumberWithAnInterval:
         assert str(exc_info.value) == f"n_homes must be a finite number, got {value!r}"
 
 
+#: One value of each kind that is not a list, which every list reader refuses.
+_NOT_LISTS = [
+    pytest.param("1,2", id="string"),
+    pytest.param(b"12", id="bytes"),
+    pytest.param({"a": 1}, id="mapping"),
+    pytest.param({1, 2}, id="set"),
+    pytest.param(frozenset({1, 2}), id="frozenset"),
+    pytest.param(5, id="int"),
+    pytest.param(2.5, id="float"),
+    pytest.param(None, id="null"),
+]
+
+
 class TestListReaders:
     """as_finite_floats and as_whole_numbers read a list as a tuple, each element i as as_finite_float or as_whole_number reads it under the name {field}[{i}]."""
 
@@ -606,19 +620,7 @@ class TestListReaders:
             as_whole_numbers([1, 13], "months", Interval(1, 12))
         assert str(exc_info.value) == "months[1] must be between 1 and 12, got 13"
 
-    @pytest.mark.parametrize(
-        "value",
-        [
-            pytest.param("1,2", id="string"),
-            pytest.param(b"12", id="bytes"),
-            pytest.param({"a": 1}, id="mapping"),
-            pytest.param({1, 2}, id="set"),
-            pytest.param(frozenset({1, 2}), id="frozenset"),
-            pytest.param(5, id="int"),
-            pytest.param(2.5, id="float"),
-            pytest.param(None, id="null"),
-        ],
-    )
+    @pytest.mark.parametrize("value", _NOT_LISTS)
     @pytest.mark.parametrize(
         ("read", "field", "kind"),
         [
@@ -633,6 +635,40 @@ class TestListReaders:
         with pytest.raises(ConfigurationError) as exc_info:
             read(value, field)
         assert str(exc_info.value) == f"{field} must be a list of {kind}, got {value!r}"
+
+
+class TestAsListElements:
+    """as_list_elements reads a list setting's shape alone: it returns the tuple of the list's elements as given, reading none of them, and refuses a value that is not a list."""
+
+    def test_the_elements_are_returned_as_given(self) -> None:
+        elements = as_list_elements(["a", 1, None, "2.5"], "values")
+        assert elements == ("a", 1, None, "2.5")
+        assert [type(element) for element in elements] == [str, int, type(None), str]
+
+    @pytest.mark.parametrize(
+        "make_values",
+        [
+            pytest.param(lambda: (1, 2, 3), id="tuple"),
+            pytest.param(lambda: (number for number in (1, 2, 3)), id="generator"),
+            pytest.param(lambda: range(1, 4), id="range"),
+        ],
+    )
+    def test_any_iterable_is_read(self, make_values: Callable[[], Iterable[int]]) -> None:
+        assert as_list_elements(make_values(), "values") == (1, 2, 3)
+
+    def test_an_empty_list_reads_as_an_empty_tuple(self) -> None:
+        assert as_list_elements([], "values") == ()
+
+    @pytest.mark.parametrize("value", _NOT_LISTS)
+    def test_a_value_that_is_not_a_list_is_refused_naming_the_field_and_the_value(self, value: object) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_list_elements(value, "values")
+        assert str(exc_info.value) == f"values must be a list, got {value!r}"
+
+    def test_the_refusal_names_what_the_field_must_be(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            as_list_elements(5, "rates", "a list of finite numbers")
+        assert str(exc_info.value) == "rates must be a list of finite numbers, got 5"
 
 
 @dataclasses.dataclass(frozen=True)
