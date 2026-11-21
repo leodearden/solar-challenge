@@ -246,7 +246,7 @@ def _price_grid_flows(
     (import_cost_gbp, export_revenue_gbp)
         Both values in GBP.
     """
-    # Import cost: per-timestep TOU-aware pricing via the canonical loop.
+    # Import cost: each row priced at its own TOU rate by calculate_bill.
     import_cost_gbp: float = calculate_bill(window.row_energy_kwh(import_kw), tariff)
 
     # Export revenue: flat SEG rate → sum kWh first, then price once (exact).

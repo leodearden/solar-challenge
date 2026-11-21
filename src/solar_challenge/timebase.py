@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; and a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; and a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's."""
 
 import calendar
 import itertools
@@ -43,6 +43,12 @@ def covered_days(first_day: date, last_day: date) -> int:
     return last_day.toordinal() - first_day.toordinal() + 1
 
 
+def minutes_of_day(index: pd.DatetimeIndex) -> np.ndarray:
+    """Each timestamp's minute on its own wall clock, 0 to 1439: its hour times MINUTES_PER_HOUR plus its minute, its seconds dropped."""
+    minutes: np.ndarray = (index.hour * MINUTES_PER_HOUR + index.minute).to_numpy()
+    return minutes
+
+
 @dataclass(frozen=True, eq=False)
 class LocalDay:
     """One calendar date of a window on the window's clock: the window's rows that start on that date, from the date's first instant, at the window's cadence.
@@ -55,8 +61,7 @@ class LocalDay:
 
     def minute_of_day(self) -> np.ndarray:
         """Each row's minute on the local wall clock, 0 to 1439: a day the clocks go back repeats the minutes of the hour they repeat, and a day they go forward lacks those of the hour they skip."""
-        minutes: np.ndarray = (self.rows.hour * MINUTES_PER_HOUR + self.rows.minute).to_numpy()
-        return minutes
+        return minutes_of_day(self.rows)
 
     def instant(self, minute_of_day: int) -> pd.Timestamp:
         """The first row of this date whose local clock reads minute_of_day or later.
