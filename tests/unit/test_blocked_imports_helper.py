@@ -54,6 +54,18 @@ def test_the_source_runs_with_the_args_as_its_sys_argv_after_the_program_name(pr
     )
 
 
+def test_the_source_runs_as_the_main_module(project_root: Path) -> None:
+    """`python -c` runs its program in the __main__ module's namespace, where pickle looks up the classes it defines."""
+    result = run_with_modules_blocked(
+        "import __main__; print(vars(__main__) is globals())", [], [], project_root, timeout=60
+    )
+
+    assert result.returncode == 0 and result.stdout == "True\n", (
+        f"checking that the source's globals are the __main__ module's exited {result.returncode} "
+        f"and printed {result.stdout!r}:\n{result.stderr}"
+    )
+
+
 @pytest.mark.parametrize("module", _BLOCKED_TOGETHER)
 def test_the_source_cannot_import_any_blocked_module(module: str, project_root: Path) -> None:
     refusal = f"ModuleNotFoundError: import of {module} halted; None in sys.modules"

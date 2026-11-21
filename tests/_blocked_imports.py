@@ -35,7 +35,9 @@ separator = rest.index("--")
 for name in rest[:separator]:
     sys.modules[name] = None
 sys.argv[1:] = rest[separator + 1 :]
-exec(source, {"__name__": "__main__"})
+main = type(sys)("__main__")
+sys.modules["__main__"] = main
+exec(source, vars(main))
 """
 
 _IMPORT_MODULE = """\
