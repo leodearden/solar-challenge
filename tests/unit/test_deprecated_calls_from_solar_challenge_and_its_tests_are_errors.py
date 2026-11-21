@@ -1,19 +1,35 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A deprecated call made from solar_challenge fails the test that meets it; one made from a dependency stays a warning.
+"""A deprecated call made from solar_challenge or from the test suite's own modules fails the test that meets it; one made from a dependency stays a warning.
 
 pyproject.toml's filterwarnings turns every DeprecationWarning attributed to a
-solar_challenge module into an error, in each run that reads its pytest ini.
-Libraries such as pandas attribute a deprecation to the frame that made the
-deprecated call, so a call solar_challenge makes fails the first run whose
-release deprecates it, not a run on the release that removes it. The
-newest-releases lane runs on the newest releases pyproject's ranges admit, so
-it fails at, and names, each such call before uv.lock reaches that release.
-weather.py's read_csv float_precision, which pandas 3.1 deprecated, was one.
+solar_challenge module, or to one of the test suite's own modules, into an
+error, in each run that reads its pytest ini. Libraries such as pandas
+attribute a deprecation to the frame that made the deprecated call, so a call
+solar_challenge makes fails the first run whose release deprecates it, not a
+run on the release that removes it. The newest-releases lane runs on the
+newest releases pyproject's ranges admit, so it fails at, and names, each such
+call before uv.lock reaches that release. weather.py's read_csv
+float_precision, which pandas 3.1 deprecated, was one.
+
+The suite's helpers, conftests and test modules are named tests.<...>, since
+tests/ is a package (tests/__init__.py), and they make the same pandas calls
+solar_challenge does: tests._synthetic_weather builds the weather frames. So a
+deprecated call there fails the newest-releases lane at the release that
+deprecates it too, not at the one that removes it. A test that means to make a
+deprecated call wraps it in pytest.deprecated_call(), which records the
+warning instead of raising it.
 
 A dependency's own deprecated calls, such as pvlib's tools.py on pandas 3.1,
-are not this project's to fix. The filter's module field is a regular
-expression matched at the start of the attributed module's name, and it names
-solar_challenge alone, so those calls stay warnings.
+are not this project's to fix, so they stay warnings. The filter's module field
+is a regular expression the warnings module matches at the start of the
+attributed module's name, with two alternatives. The first, solar_challenge,
+matches every name that begins with it: the package's modules, and the
+collection-report plugin, which tests/_collect_only.py loads by its own
+top-level name, solar_challenge_collection_report. The second, tests, must be
+followed by a dot or by the name's end, so it matches the suite's package and
+its modules but not a dependency whose name merely begins with "tests", such
+as testscenarios. The field is a TOML literal string, in single quotes, since a
+basic string rejects the backslash before that dot.
 
 The filter names the builtin DeprecationWarning, which pandas' Pandas4Warning
 subclasses, not a pandas class. A filter naming a class its module lacks stops
