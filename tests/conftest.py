@@ -188,6 +188,15 @@ def pytester_laid_out_as_the_e2e_suite(
     return pytester_under_root_conftest
 
 
+@pytest.fixture
+def sessions_temp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Return the temp dir under the test's tmp_path that TMPDIR names for the sessions the test runs, so they write nowhere outside tmp_path."""
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temp_dir))
+    return temp_dir
+
+
 @dataclass(frozen=True)
 class _OfflineWindow:
     """What a test not marked slow runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""

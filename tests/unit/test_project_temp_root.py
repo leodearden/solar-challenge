@@ -29,15 +29,6 @@ def _basetemp_of_a_session(pytester: pytest.Pytester) -> Path:
     return Path((pytester.path / "basetemp.txt").read_text())
 
 
-@pytest.fixture
-def sessions_temp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Return the temp dir under the test's tmp_path that TMPDIR names for the sessions the test runs, so they write nowhere outside tmp_path."""
-    temp_dir = tmp_path / "tmp"
-    temp_dir.mkdir()
-    monkeypatch.setenv("TMPDIR", str(temp_dir))
-    return temp_dir
-
-
 def test_a_session_started_with_no_temp_root_named_keeps_its_temp_dirs_under_the_projects_own_root(
     pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, sessions_temp_dir: Path
 ) -> None:
