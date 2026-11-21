@@ -46,7 +46,8 @@ uv run --locked --extra dev pytest -n 0 tests/interpreter_matrix
 # start the run outside the tool's supervision, under coreutils `timeout` set to
 # the e2e suite step's `timeout`, writing its output to a log file that ends
 # with `exit <status>` (a run the `timeout` stops prints no pytest summary, and
-# its log ends `exit 124`), and read the log once that last line is there,
+# its log ends `exit 124`, or `exit 137` if the run outlives the `-k` grace),
+# and read the log once that last line is there,
 # e.g. `setsid nohup sh -c 'timeout -k 60 <secs> "$@"; printf "\nexit $?\n"' sh <the command below> > <log> 2>&1 &`;
 # or run only the failing node-ids with the reproduce command in the Dark
 # Factory section's e2e bullet
