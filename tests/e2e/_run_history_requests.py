@@ -4,10 +4,14 @@
 is_runs_list_request picks those requests out; hold_requests holds each request a page makes that such a predicate matches.
 """
 
+from __future__ import annotations
+
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from playwright.sync_api import Page, Route
+if TYPE_CHECKING:
+    from playwright.sync_api import Page, Route
 
 
 def is_runs_list_request(url: str) -> bool:
