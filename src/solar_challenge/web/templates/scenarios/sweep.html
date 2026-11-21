@@ -180,8 +180,8 @@
         {% endcall %}
     </div>
 
-    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished -->
-    <section aria-label="Sweep charts" x-show="sweepCharts" x-cloak x-html="sweepCharts" class="space-y-6"></section>
+    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished, shown as they are added (tests/e2e/test_parameter_sweep.py::test_the_sweep_charts_region_is_shown_with_its_chart_containers_laid_out_as_its_panels_are_added says why it is not x-show) -->
+    <section aria-label="Sweep charts" hidden :hidden="!sweepCharts" x-html="sweepCharts" class="space-y-6"></section>
 </div>
 
 {% endblock %}
