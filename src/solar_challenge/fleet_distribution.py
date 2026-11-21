@@ -6,7 +6,6 @@ It reads each component's keys by that component's table in solar_challenge.scen
 
 import math
 import random
-from collections.abc import Iterable, Set
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import (
@@ -36,6 +35,7 @@ from solar_challenge.number_fields import (
     as_finite_float,
     as_finite_floats,
     as_finite_real,
+    as_list_elements,
     as_whole_number,
     as_whole_numbers,
     read_field,
@@ -69,18 +69,6 @@ from solar_challenge.tariff import TariffConfig
 SpecValue = Union[float, str, None]
 
 
-def _outcome_values(values: object) -> tuple[SpecValue, ...]:
-    """Return *values*, the outcomes a weighted_discrete or shuffled_pool lists, as a tuple of them as given; the home's type reads each, so none is read as a number here.
-
-    Raises:
-        ConfigurationError: If *values* is text, bytes, a mapping, a set, whose order is
-            arbitrary, or not iterable, naming values and *values*.
-    """
-    if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
-        raise ConfigurationError.must_be("values", "a list", got=values)
-    return tuple(values)
-
-
 @dataclass(frozen=True)
 class WeightedDiscreteDistribution:
     """Weighted discrete distribution for sampling from a list of values.
@@ -88,7 +76,8 @@ class WeightedDiscreteDistribution:
     Weights are auto-normalized (e.g., [2,4,3,1] == [20,40,30,10]).
 
     Attributes:
-        values: The values to sample from, held as given (can include None)
+        values: The values to sample from, held as given, none read as a number; the home's
+            type reads each (can include None)
         weights: Corresponding weights, read as finite floats of at least 0 (sum > 0)
     """
 
@@ -96,7 +85,7 @@ class WeightedDiscreteDistribution:
     weights: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "values", _outcome_values(self.values))
+        object.__setattr__(self, "values", as_list_elements(self.values, "values"))
         read_field(self, "weights", as_finite_floats, NON_NEGATIVE)
         if len(self.values) != len(self.weights):
             raise ConfigurationError(
@@ -180,7 +169,8 @@ class ShuffledPoolDistribution:
     then shuffling (like bristol-phase1).
 
     Attributes:
-        values: The values, held as given (can include None)
+        values: The values, held as given, none read as a number; the home's type reads each
+            (can include None)
         counts: Number of each value in the pool, read as whole numbers of at least 0.  In a
             fleet distribution they total n_homes, one value per home, and
             FleetDistributionConfig refuses any other total; a parameter only some homes draw
@@ -191,7 +181,7 @@ class ShuffledPoolDistribution:
     counts: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "values", _outcome_values(self.values))
+        object.__setattr__(self, "values", as_list_elements(self.values, "values"))
         read_field(self, "counts", as_whole_numbers, NON_NEGATIVE)
         if len(self.values) != len(self.counts):
             raise ConfigurationError(
