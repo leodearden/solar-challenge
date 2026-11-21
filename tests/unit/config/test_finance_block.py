@@ -24,6 +24,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
+from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _YEAR_FIELDS = ("loan_term_years", "asset_life_years")
@@ -38,6 +39,11 @@ _NUMERIC_FIELDS = tuple(
     if f.name in {*_FLOAT_FIELDS, *_YEAR_FIELDS}
 )
 _TOO_LARGE_FOR_A_FLOAT = 10**400
+
+
+def _finance_refusal(block: dict[str, object]) -> str:
+    """The refusal parse_finance_config gives *block*: FinanceConfig's own, prefixed by the block's path, "finance"."""
+    return prefixed_construction_refusal("finance", lambda: FinanceConfig(**block))
 
 
 class TestFinanceConfig:
@@ -556,12 +562,11 @@ class TestFinanceConfigParsing:
         assert result.asset_life_years == 25
         assert isinstance(result.asset_life_years, int)
 
-    def test_non_numeric_value_raises_configuration_error(self) -> None:
-        """A non-numeric string for a numeric field raises ConfigurationError (not a plain ValueError)."""
-        with pytest.raises(ConfigurationError, match="non-numeric"):
-            parse_finance_config(
-                {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
-            )
+    def test_a_word_for_a_numeric_field_is_refused_as_finance_config_refuses_it(self) -> None:
+        """A word for a numeric field is refused as FinanceConfig refuses it, prefixed by the block's path."""
+        block: dict[str, object] = {"standing_charge_pence_per_day": 60.0, "vat_rate": "not-a-number"}
+
+        assert construction_refusal(lambda: parse_finance_config(block)) == _finance_refusal(block)
 
     def test_negative_own_use_rate_propagates_configuration_error(self) -> None:
         """negative own_use_rate_pence_per_kwh in dict raises ConfigurationError."""
@@ -595,9 +600,10 @@ class TestFinanceConfigParsing:
         [k for k in (*_FLOAT_FIELDS, *_YEAR_FIELDS) if k != "self_consumption_override"],
     )
     def test_null_numeric_value_raises_configuration_error(self, key: str) -> None:
-        """A null for a numeric key is refused as non-numeric, not read as the field's default."""
-        with pytest.raises(ConfigurationError, match="non-numeric"):
-            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: None})
+        """A null for a numeric key is refused as FinanceConfig refuses it, not read as the field's default."""
+        block: dict[str, object] = {"standing_charge_pence_per_day": 60.0, key: None}
+
+        assert construction_refusal(lambda: parse_finance_config(block)) == _finance_refusal(block)
 
     @pytest.mark.parametrize("key", _FLOAT_FIELDS)
     def test_fractional_value_reaches_float_field(self, key: str) -> None:
@@ -637,11 +643,10 @@ class TestFinanceConfigParsing:
     @pytest.mark.parametrize("key", _NUMERIC_FIELDS)
     @pytest.mark.parametrize("value", [True, False])
     def test_a_boolean_numeric_value_is_refused(self, key: str, value: bool) -> None:
-        """A boolean for a numeric key is refused, not read as 1.0 or 0.0."""
-        with pytest.raises(
-            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
-        ):
-            parse_finance_config({"standing_charge_pence_per_day": 60.0, key: value})
+        """A boolean for a numeric key is refused as FinanceConfig refuses it, not read as 1.0 or 0.0."""
+        block: dict[str, object] = {"standing_charge_pence_per_day": 60.0, key: value}
+
+        assert construction_refusal(lambda: parse_finance_config(block)) == _finance_refusal(block)
 
     @pytest.mark.parametrize("field", _YEAR_FIELDS)
     def test_a_fractional_year_count_is_refused_not_truncated(self, field: str) -> None:
@@ -655,11 +660,10 @@ class TestFinanceConfigParsing:
     def test_a_number_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:
-        """An integer too large for a float, as YAML can hold, is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
-            parse_finance_config(
-                {"standing_charge_pence_per_day": 60.0, key: _TOO_LARGE_FOR_A_FLOAT}
-            )
+        """An integer too large for a float, as YAML can hold, is refused as FinanceConfig refuses it, prefixed by the block's path, not as a raw OverflowError."""
+        block: dict[str, object] = {"standing_charge_pence_per_day": 60.0, key: _TOO_LARGE_FOR_A_FLOAT}
+
+        assert construction_refusal(lambda: parse_finance_config(block)) == _finance_refusal(block)
 
 
 class TestScenarioFinance:
@@ -860,6 +864,20 @@ class TestFinanceConfigParsingGridServices:
     def _parse_events_block(self, block: object) -> Optional[FinanceConfig]:
         return parse_finance_config(
             {**self._BASE, "grid_services_model": "capacity_at_events", "grid_services_events": block}
+        )
+
+    def _events_refusal(self, key: str, value: object) -> str:
+        """The refusal of _EVENTS_BLOCK with *key* set to *value*: GridServicesEventsConfig's own, prefixed by the block's path."""
+        return prefixed_construction_refusal(
+            "finance.grid_services_events",
+            lambda: GridServicesEventsConfig(**{**self._EVENTS_FIELDS, key: value}),
+        )
+
+    def _window_refusal(self, window_values: dict[str, object]) -> str:
+        """The refusal of _WINDOW with *window_values* set, as the events block's one window: EventWindow's own, prefixed by the window's path."""
+        return prefixed_construction_refusal(
+            "finance.grid_services_events.event_windows[0]",
+            lambda: EventWindow(**{**self._WINDOW, **window_values}),
         )
 
     def test_capacity_at_events_with_nested_events_block(self) -> None:
@@ -1063,26 +1081,17 @@ class TestFinanceConfigParsingGridServices:
                 }
             )
 
-    @pytest.mark.parametrize(
-        ("key", "refusal"),
-        [
-            pytest.param("band", "band must be one of", id="band"),
-            pytest.param(
-                "event_windows", "event_windows must be a list of window dicts", id="event_windows"
-            ),
-            pytest.param("aggregator_share", "non-numeric", id="aggregator_share"),
-            pytest.param("utilisation_factor", "non-numeric", id="utilisation_factor"),
-            pytest.param(
-                "delivery_baseline",
-                "delivery_baseline must be one of operational, capacity",
-                id="delivery_baseline",
-            ),
-        ],
-    )
-    def test_null_events_value_is_refused(self, key: str, refusal: str) -> None:
-        """A null for an events key whose declared default is not None is refused for that key, not read as that default."""
-        with pytest.raises(ConfigurationError, match=refusal):
-            self._parse_events_block({**self._EVENTS_BLOCK, key: None})
+    @pytest.mark.parametrize("key", ["band", "aggregator_share", "utilisation_factor", "delivery_baseline"])
+    def test_null_events_value_is_refused(self, key: str) -> None:
+        """A null for an events key whose declared default is not None is refused as GridServicesEventsConfig refuses it, not read as that default."""
+        assert construction_refusal(
+            lambda: self._parse_events_block({**self._EVENTS_BLOCK, key: None})
+        ) == self._events_refusal(key, None)
+
+    def test_null_event_windows_is_refused_as_not_a_list(self) -> None:
+        """A null event_windows is refused as not a list of windows, not read as the default schedule."""
+        with pytest.raises(ConfigurationError, match="event_windows must be a list of window dicts"):
+            self._parse_events_block({**self._EVENTS_BLOCK, "event_windows": None})
 
     def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
         """An unknown delivery_baseline is refused by the events configuration's own check, not as a non-numeric value."""
@@ -1158,12 +1167,6 @@ class TestFinanceConfigParsingGridServices:
                 " requires 'hours' field",
                 id="missing-key",
             ),
-            pytest.param(
-                [{**_WINDOW, "event_hours": "abc"}],
-                "scenario.finance.grid_services_events.event_windows[0]"
-                " contains a non-numeric value",
-                id="non-numeric",
-            ),
         ],
     )
     def test_malformed_event_windows_are_refused_naming_their_path_in_the_file(
@@ -1179,6 +1182,23 @@ class TestFinanceConfigParsingGridServices:
                 },
                 block_path="scenario.finance",
             )
+
+    def test_a_window_its_type_refuses_is_refused_prefixed_by_its_path_in_the_file(self) -> None:
+        """A window EventWindow refuses is refused as it refuses it, prefixed by the window's path, taken from the finance block's own path."""
+        window = {**self._WINDOW, "event_hours": "abc"}
+
+        assert construction_refusal(
+            lambda: parse_finance_config(
+                {
+                    **self._BASE,
+                    "grid_services_model": "capacity_at_events",
+                    "grid_services_events": {"event_windows": [window]},
+                },
+                block_path="scenario.finance",
+            )
+        ) == prefixed_construction_refusal(
+            "scenario.finance.grid_services_events.event_windows[0]", lambda: EventWindow(**window)
+        )
 
     @pytest.mark.parametrize("omitted", list(_EVENTS_BLOCK))
     def test_omitted_events_key_takes_its_declared_default(self, omitted: str) -> None:
@@ -1205,55 +1225,43 @@ class TestFinanceConfigParsingGridServices:
     @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
     @pytest.mark.parametrize("value", [True, False])
     def test_a_boolean_events_value_is_refused(self, key: str, value: bool) -> None:
-        """A boolean for a numeric events key is refused, not read as 1.0 or 0.0."""
-        with pytest.raises(
-            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
-        ):
-            self._parse_events_block({**self._EVENTS_BLOCK, key: value})
+        """A boolean for a numeric events key is refused as GridServicesEventsConfig refuses it, not read as 1.0 or 0.0."""
+        assert construction_refusal(
+            lambda: self._parse_events_block({**self._EVENTS_BLOCK, key: value})
+        ) == self._events_refusal(key, value)
 
     @pytest.mark.parametrize("value", [True, False])
     def test_a_boolean_event_hours_is_refused(self, value: bool) -> None:
-        """A boolean event_hours is refused, not read as 1.0 or 0.0."""
-        with pytest.raises(
-            ConfigurationError, match=re.escape(f"{value!r} is a boolean, not a number")
-        ):
-            self._parse_events_block(
+        """A boolean event_hours is refused as EventWindow refuses it, not read as 1.0 or 0.0."""
+        assert construction_refusal(
+            lambda: self._parse_events_block(
                 {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, "event_hours": value}]}
             )
+        ) == self._window_refusal({"event_hours": value})
 
     @pytest.mark.parametrize("key", _EVENTS_NUMERIC_KEYS)
     def test_an_events_value_too_large_for_a_float_is_refused_as_a_configuration_error(
         self, key: str
     ) -> None:
-        """An events value too large for a float is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match="int too large to convert to float"):
-            self._parse_events_block({**self._EVENTS_BLOCK, key: _TOO_LARGE_FOR_A_FLOAT})
+        """An events value too large for a float is refused as GridServicesEventsConfig refuses it, prefixed by the block's path, not as a raw OverflowError."""
+        assert construction_refusal(
+            lambda: self._parse_events_block({**self._EVENTS_BLOCK, key: _TOO_LARGE_FOR_A_FLOAT})
+        ) == self._events_refusal(key, _TOO_LARGE_FOR_A_FLOAT)
 
     @pytest.mark.parametrize(
-        ("window_values", "overflow"),
+        "window_values",
         [
-            pytest.param(
-                {"event_hours": _TOO_LARGE_FOR_A_FLOAT},
-                "int too large to convert to float",
-                id="event_hours-too-large-for-a-float",
-            ),
-            pytest.param(
-                {"events_per_year": math.inf},
-                "cannot convert float infinity to integer",
-                id="infinite-events_per_year",
-            ),
-            pytest.param(
-                {"hours": [math.inf]},
-                "cannot convert float infinity to integer",
-                id="infinite-hour",
-            ),
+            pytest.param({"event_hours": _TOO_LARGE_FOR_A_FLOAT}, id="event_hours-too-large-for-a-float"),
+            pytest.param({"events_per_year": math.inf}, id="infinite-events_per_year"),
+            pytest.param({"hours": [math.inf]}, id="infinite-hour"),
         ],
     )
     def test_an_event_window_number_too_large_for_its_type_is_refused_as_a_configuration_error(
-        self, window_values: dict[str, object], overflow: str
+        self, window_values: dict[str, object]
     ) -> None:
-        """An event-window number too large for its type is refused as a ConfigurationError carrying the overflow, not as a raw OverflowError."""
-        with pytest.raises(ConfigurationError, match=overflow):
-            self._parse_events_block(
+        """An event-window number too large for its type is refused as EventWindow refuses it, prefixed by the window's path, not as a raw OverflowError."""
+        assert construction_refusal(
+            lambda: self._parse_events_block(
                 {**self._EVENTS_BLOCK, "event_windows": [{**self._WINDOW, **window_values}]}
             )
+        ) == self._window_refusal(window_values)

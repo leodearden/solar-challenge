@@ -273,18 +273,6 @@ def float_or_none(value: Any) -> Optional[float]:
     return None if value is None else float(value)
 
 
-def _number(value: Any) -> float:
-    """Coerce *value* to a float as float() does, refusing a boolean, which float() would read as 1.0 or 0.0."""
-    if isinstance(value, bool):
-        raise TypeError(f"{value!r} is a boolean, not a number")
-    return float(value)
-
-
-def _number_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* as :func:`_number` does, keeping a null as None."""
-    return None if value is None else _number(value)
-
-
 def parse_location_block(
     data: Optional[dict[str, Any]], *, block_path: str = "location"
 ) -> Location:
@@ -861,80 +849,28 @@ def _parse_seg_rate_scalar(value: Any, *, path: str) -> float:
     return constructed(path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
 
 
-# Rows follow FinanceConfig's field order, which decides the first bad value reported.
-_FINANCE_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "standing_charge_pence_per_day": _number,
-    "vat_rate": _number,
-    "retail_baseline_rate_pence_per_kwh": _number,
-    "self_consumption_override": _number_or_none,
-    "pv_cost_per_kwp_gbp": _number,
-    "roof_fit_cost_gbp": _number,
-    "battery_cost_per_kwh_gbp": _number,
-    "inverter_cost_per_kw_gbp": _number,
-    "grant_gbp": _number,
-    "equity_fraction": _number,
-    "loan_term_years": _number,
-    "loan_rate": _number,
-    "opex_per_home_per_year_gbp": _number,
-    "asset_life_years": _number,
-    "own_use_rate_pence_per_kwh": _number,
-    "retained_cash_floor_per_home_per_year_gbp": _number,
-    "grid_services_income_per_kw_per_year_gbp": _number,
-    "grid_services_model": str,
-})
+_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset(each.name for each in fields(FinanceConfig) if each.init)
 
-_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
-})
+_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset(
+    each.name for each in fields(GridServicesEventsConfig) if each.init
+)
 
-# Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
-_GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "band": str,
-    "aggregator_share": _number,
-    "utilisation_factor": _number,
-    "availability_gbp_per_kw_per_event": _number_or_none,
-    "utilisation_gbp_per_mwh": _number_or_none,
-    "delivery_baseline": str,
-})
-
-_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
-})
-
-
-def _int_tuple(values: Any) -> tuple[int, ...]:
-    """Coerce each of *values* to an int as int() does, keeping their order."""
-    return tuple(int(value) for value in values)
-
-
-# Rows follow EventWindow's field order, which decides the first bad value reported.
-_EVENT_WINDOW_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "months": _int_tuple,
-    "weekdays": _int_tuple,
-    "hours": _int_tuple,
-    "events_per_year": int,
-    "event_hours": _number,
-})
+_EVENT_WINDOW_KEYS: tuple[str, ...] = tuple(each.name for each in fields(EventWindow) if each.init)
+"""The keys an event window recognises, every one of which it requires, in EventWindow's field order."""
 
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
-    """Parse the event_windows list at *block_path* into EventWindows."""
+    """Parse the event_windows list at *block_path* into EventWindows, each refused as EventWindow refuses it, prefixed by its path."""
     if not isinstance(data, list):
         raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
     for i, ew_dict in enumerate(data):
         window_path = f"{block_path}[{i}]"
-        refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_COERCIONS)
-        for req_key in _EVENT_WINDOW_COERCIONS:
-            if req_key not in ew_dict:
+        window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
+        for req_key in _EVENT_WINDOW_KEYS:
+            if req_key not in window:
                 raise ConfigurationError(f"{window_path} requires '{req_key}' field")
-        try:
-            fields = {key: coerce(ew_dict[key]) for key, coerce in _EVENT_WINDOW_COERCIONS.items()}
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise ConfigurationError(
-                f"{window_path} contains a non-numeric value: {exc}"
-            ) from exc
-        parsed_windows.append(EventWindow(**fields))
+        parsed_windows.append(constructed(window_path, EventWindow, **window))
     return tuple(parsed_windows)
 
 
@@ -944,27 +880,23 @@ def _parse_grid_services_events_config(
     """Parse a finance block's grid_services_events block; absent or null is no events config.
 
     A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
-    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS.
+    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS. Its event windows are read
+    first, then a value GridServicesEventsConfig refuses is refused as it refuses it, prefixed
+    by the block's path.
     """
     if data is None:
         return None
     gs_data = refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
-    fields: dict[str, Any] = {}
-    if "event_windows" in gs_data:
-        fields["event_windows"] = _parse_event_windows(
-            gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
-        )
-    try:
-        fields.update(
-            (key, coerce(gs_data[key]))
-            for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
-            if key in gs_data
-        )
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(
-            f"grid_services_events block contains a non-numeric value: {exc}"
-        ) from exc
-    return GridServicesEventsConfig(**fields)
+    event_windows = (
+        {
+            "event_windows": _parse_event_windows(
+                gs_data["event_windows"], block_path=child_path(block_path, "event_windows")
+            )
+        }
+        if "event_windows" in gs_data
+        else {}
+    )
+    return constructed(block_path, GridServicesEventsConfig, **{**gs_data, **event_windows})
 
 
 def parse_finance_config(
@@ -982,11 +914,11 @@ def parse_finance_config(
         FinanceConfig object or None if data is None
 
     Raises:
-        ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__), if a numeric value
-            is a boolean or a value float() cannot read, or if the block, its
-            grid_services_events block or an event window is not a mapping or
-            carries a key it does not read
+        ConfigurationError: If the block, its grid_services_events block or an
+            event window is not a mapping or carries a key it does not read, or
+            leaves out a key it requires; or for a value FinanceConfig,
+            GridServicesEventsConfig or an EventWindow refuses, as it refuses
+            it, prefixed by its block's path
     """
     if data is None:
         return None
@@ -1000,15 +932,7 @@ def parse_finance_config(
         data.get("grid_services_events"),
         block_path=child_path(block_path, "grid_services_events"),
     )
-    try:
-        scalars = {
-            key: coerce(data[key])
-            for key, coerce in _FINANCE_SCALAR_COERCIONS.items()
-            if key in data
-        }
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"finance block contains a non-numeric value: {exc}") from exc
-    return FinanceConfig(**scalars, grid_services_events=grid_services_events)
+    return constructed(block_path, FinanceConfig, **{**data, "grid_services_events": grid_services_events})
 
 
 # ---------------------------------------------------------------------------
