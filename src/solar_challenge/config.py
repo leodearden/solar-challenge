@@ -211,9 +211,7 @@ class ScenarioConfig:
         first_day, last_day = self._period_days()
         return SimulationWindow(first_day, last_day, ONE_MINUTE, self._timezone())
 
-    def with_window(
-        self, *, first_day: Optional[date] = None, last_day: Optional[date] = None
-    ) -> "ScenarioConfig":
+    def with_window(self, *, first_day: Optional[date] = None, last_day: Optional[date] = None) -> "ScenarioConfig":
         """A copy whose period keeps each day not given, checked as construction checks."""
         changes: dict[str, str] = {}
         if first_day is not None:
