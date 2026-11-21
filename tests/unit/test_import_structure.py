@@ -275,6 +275,15 @@ def _grammar_modules_above(module: str) -> tuple[str, ...]:
     return ()
 
 
+def _runner_imports(site: _ImportSite) -> list[tuple[str, str]]:
+    """Return each simulate_* name *site* imports, with the module it imports it from: each such name of its names, from its imported module, and its imported module's last segment if it is one, from that module's parent, since _imported_modules_and_names names each alias of a from-import of the package as a module of it and no module of the package is named simulate_*."""
+    runners = [(name, site.imported) for name in site.names if name.startswith(_RUNNER_PREFIX)]
+    parent, _, last = site.imported.rpartition(".")
+    if last.startswith(_RUNNER_PREFIX):
+        runners.append((last, parent))
+    return runners
+
+
 def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarViolation]:
     """Return, in path then line order, each of *sites* at which a module of a grammar stratum imports a module of a higher one, or a module beneath it, and each simulate_* name a grammar module imports from a module of the package."""
     violations: list[_GrammarViolation] = []
@@ -296,10 +305,9 @@ def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarV
                     site.line,
                     _GrammarRule.NO_RUNNER,
                     name,
-                    f"{site.importer} imports {name} from {site.imported}",
+                    f"{site.importer} imports {name} from {module}",
                 )
-                for name in site.names
-                if name.startswith(_RUNNER_PREFIX)
+                for name, module in _runner_imports(site)
             )
     return sorted(violations, key=lambda violation: (violation.path, violation.line))
 
