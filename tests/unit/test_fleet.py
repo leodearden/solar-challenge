@@ -2,9 +2,10 @@
 
 import multiprocessing
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -858,11 +859,12 @@ _HELD_HOMES = (_BATTERY_HOME, _PV_HOME)
 _AGE_0_HOMES = (_battery_at_soh(_BATTERY_HOME, 1.0), _PV_HOME)
 _ONE_DAY = pd.Timedelta(days=1)
 _NO_SHIFT = pd.Timedelta(0)
+_JUNE_DAY = _JUNE_DAYS.first_day.date()
 
 
-def _held_results() -> FleetResults:
-    """A distinct make_sim_results of one day for each of _HELD_HOMES, paired with them."""
-    return make_fleet_results_of([make_sim_results(days=1) for _ in _HELD_HOMES], homes=_HELD_HOMES)
+def _held_results(homes: Sequence[HomeConfig] = _HELD_HOMES, *, first_day: date = _JUNE_DAY) -> FleetResults:
+    """A distinct make_sim_results of the one day *first_day*, by default _JUNE_DAYS' day, for each of *homes*, paired with them."""
+    return make_fleet_results_of([make_sim_results(days=1, first_day=first_day) for _ in homes], homes=homes)
 
 
 @dataclass
@@ -879,7 +881,7 @@ class _CountingSimulate:
 
 
 class TestReusingAnswersAFleetThatSimulatesAsTheResultsFleet:
-    """reusing answers a fleet whose homes at their starting soh are its results' homes, over its window, from those results paired with the asked homes; any other fleet or window goes to its simulate."""
+    """reusing answers a fleet whose homes at their starting soh are its results' homes, at its window's instants on their clocks, from those results paired with the asked homes, refusing results that do not cover that window; any other fleet or window goes to its simulate."""
 
     def test_the_results_homes_at_their_starting_soh_over_the_same_window_are_answered_from_the_results_paired_with_the_asked_homes(
         self,
@@ -926,6 +928,58 @@ class TestReusingAnswersAFleetThatSimulatesAsTheResultsFleet:
 
         assert sim.asked == [(asked, asked_start, asked_end)]
         assert answer is sim.returned
+
+    def test_the_same_instants_on_another_clock_are_simulated(self) -> None:
+        sim = _CountingSimulate()
+        start, end = _JUNE_DAYS.window()
+        asked = FleetConfig(homes=list(_AGE_0_HOMES), name="proj-age-0")
+        asked_start, asked_end = start.tz_convert("UTC"), end.tz_convert("UTC")
+        assert (asked_start, asked_end) == (start, end), "premise: the instants of the window reusing wraps with"
+
+        answer = reusing(sim, _held_results(), start, end)(asked, asked_start, asked_end)
+
+        assert sim.asked == [(asked, asked_start, asked_end)]
+        assert answer is sim.returned
+
+    def test_a_home_whose_load_is_stochastic_and_unseeded_is_answered_with_the_results_draw(self) -> None:
+        sim = _CountingSimulate()
+        start, end = _JUNE_DAYS.window()
+        unseeded = replace(_BATTERY_HOME, load_config=replace(_LOAD, use_stochastic=True))
+        assert unseeded.load_config.seed is None, "premise: each simulation of the home's load takes a fresh draw"
+        results = _held_results((unseeded,))
+
+        answer = reusing(sim, results, start, end)(
+            FleetConfig(homes=[_battery_at_soh(unseeded, 1.0)], name="proj-age-0"), start, end
+        )
+
+        assert sim.asked == []
+        assert answer.per_home_results[0] is results.per_home_results[0]
+
+    @pytest.mark.parametrize(
+        ("held_first_day", "wrapped_zone", "both_windows"),
+        [
+            pytest.param(
+                (_JUNE_DAYS.first_day - _ONE_DAY).date(),
+                "Europe/London",
+                ("2024-06-20", "2024-06-21"),
+                id="the-day-before",
+            ),
+            pytest.param(_JUNE_DAY, "UTC", ("Europe/London", "UTC"), id="the-same-day-in-another-zone"),
+        ],
+    )
+    def test_results_that_do_not_cover_the_window_it_wraps_them_with_are_refused_naming_both_windows(
+        self, held_first_day: date, wrapped_zone: str, both_windows: tuple[str, str]
+    ) -> None:
+        sim = _CountingSimulate()
+        start = end = pd.Timestamp(_JUNE_DAY.isoformat(), tz=wrapped_zone)
+        simulate_reusing = reusing(sim, _held_results(first_day=held_first_day), start, end)
+
+        with pytest.raises(ValueError) as refused:
+            simulate_reusing(FleetConfig(homes=list(_AGE_0_HOMES), name="proj-age-0"), start, end)
+
+        for window in both_windows:
+            assert window in str(refused.value)
+        assert sim.asked == []
 
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_what_it_answers_is_what_the_runner_simulates_for_the_asked_fleet(self) -> None:
