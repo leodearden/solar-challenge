@@ -28,8 +28,9 @@ def name_the_project_temp_root(config: pytest.Config) -> None:
     """Name the project's temp root in TEMP_ROOT_VARIABLE while *config* is in use, having made the root, in which pytest makes pytest-of-<user> without parents.
 
     A root the environment already names stands, so the sessions a test starts use their parent's root, and those pytester runs the one pytester names.
+    One that is not a directory is refused here, before the session collects (_named_temp_root).
     """
-    if os.environ.get(TEMP_ROOT_VARIABLE):
+    if _named_temp_root() is not None:
         return
     root = project_temp_root(Path(tempfile.gettempdir()))
     _make_private_root(root)
@@ -55,18 +56,32 @@ def pre_fixture_temp_dir(config: pytest.Config) -> Path:
     """Return the dir in which code that runs before any fixture can be asked makes its temp dirs in *config*'s session: on an xdist worker the run's basetemp, else the session's temp root, which TEMP_ROOT_VARIABLE names.
 
     Raise RuntimeError if TEMP_ROOT_VARIABLE names none, since name_the_project_temp_root names one for the session's
-    lifetime.
+    lifetime, and OSError (_named_temp_root) if what it names is not a directory.
     """
     run_basetemp = worker_run_basetemp(config)
     if run_basetemp is not None:
         return run_basetemp
-    root = os.environ.get(TEMP_ROOT_VARIABLE)
-    if not root:
+    root = _named_temp_root()
+    if root is None:
         raise RuntimeError(
             f"{TEMP_ROOT_VARIABLE} names no temp root, though name_the_project_temp_root names one for the session's "
             "lifetime: something unset it, or no pytest_configure of the session called it"
         )
-    return Path(root)
+    return root
+
+
+def _named_temp_root() -> Path | None:
+    """Return the temp root TEMP_ROOT_VARIABLE names, or None if it names none; raise OSError naming the variable and the root when that is not a directory, since pytest makes pytest-of-<user> in it without parents."""
+    named = os.environ.get(TEMP_ROOT_VARIABLE)
+    if not named:
+        return None
+    root = Path(named)
+    if not root.is_dir():
+        raise OSError(
+            f"{TEMP_ROOT_VARIABLE} names the temp root {root}, which is not a directory, so no temp dir can be made "
+            f"in it: make that directory, or name another root in {TEMP_ROOT_VARIABLE}"
+        )
+    return root
 
 
 def _make_private_root(root: Path) -> None:
