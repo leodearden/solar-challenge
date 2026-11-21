@@ -5,6 +5,7 @@ import pickle
 from collections.abc import Iterable
 from datetime import datetime, time
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -15,6 +16,7 @@ from solar_challenge.tariff import (
     calculate_bill,
     describe_minutes_of_day,
 )
+from solar_challenge.timebase import MINUTES_PER_DAY
 from tests._names_as_a_word import names_as_a_word
 from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
@@ -428,6 +430,61 @@ class TestTariffConfigGetRate:
         """No constructed tariff has a minute without a rate: a 09:00-17:00 period alone is refused."""
         with pytest.raises(ConfigurationError, match="17:00-09:00"):
             TariffConfig(periods=(TariffPeriod("09:00", "17:00", 0.25),))
+
+
+class TestTariffConfigRatesFor:
+    """rates_for reads each timestamp's rate as get_rate reads one, at its wall-clock minute."""
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy-7"),
+            pytest.param(TariffConfig.economy_10(), id="economy-10"),
+            pytest.param(TariffConfig.flat_rate(0.20), id="flat"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "index",
+        [
+            pytest.param(
+                pd.date_range(
+                    "2024-03-31", "2024-04-01", freq="min", tz="Europe/London", inclusive="left"
+                ),
+                id="europe-london-clocks-go-forward",
+            ),
+            pytest.param(
+                pd.date_range(
+                    "2024-10-27", "2024-10-28", freq="min", tz="Europe/London", inclusive="left"
+                ),
+                id="europe-london-clocks-go-back",
+            ),
+            pytest.param(
+                pd.date_range("2024-01-15", periods=2 * MINUTES_PER_DAY, freq="min"),
+                id="naive-two-days",
+            ),
+            pytest.param(
+                pd.date_range("2024-06-20 23:00", periods=240, freq="30s", tz="UTC"),
+                id="utc-30-second-steps",
+            ),
+        ],
+    )
+    def test_rates_for_is_get_rate_at_each_timestamp_of_the_index(
+        self, tariff: TariffConfig, index: pd.DatetimeIndex
+    ) -> None:
+        assert tariff.rates_for(index).tolist() == [tariff.get_rate(timestamp) for timestamp in index]
+
+    @pytest.mark.parametrize(
+        "index",
+        [
+            pytest.param(pd.DatetimeIndex([]), id="naive"),
+            pytest.param(pd.DatetimeIndex([], tz="Europe/London"), id="europe-london"),
+        ],
+    )
+    def test_an_empty_index_has_no_rates_as_float64(self, index: pd.DatetimeIndex) -> None:
+        rates = TariffConfig.economy_7().rates_for(index)
+
+        assert rates.shape == (0,)
+        assert rates.dtype == np.float64
 
 
 class TestTariffConfigFlatRate:
