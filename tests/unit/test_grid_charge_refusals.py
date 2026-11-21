@@ -111,7 +111,7 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
             lambda: None,
             None,
             "tou_optimized",
-            ["dispatch_strategy 'tou_optimized'", "tariff"],
+            ["'tou_optimized'", "no tariff"],
             id="home-tou_optimized-without-a-tariff",
         ),
         pytest.param(
