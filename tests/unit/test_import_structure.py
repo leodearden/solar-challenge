@@ -276,12 +276,25 @@ def _grammar_modules_above(module: str) -> tuple[str, ...]:
 
 
 def _runner_imports(site: _ImportSite) -> list[tuple[str, str]]:
-    """Return each simulate_* name *site* imports, with the module it imports it from: each such name of its names, from its imported module, and its imported module's last segment if it is one, from that module's parent, since _imported_modules_and_names names each alias of a from-import of the package as a module of it and no module of the package is named simulate_*."""
+    """Return each simulate_* name *site* imports, with the module it imports it from: each such name of its names, from its imported module, and its imported module's last segment if it is one, from that module's parent, since _imported_modules_and_names names each alias of a from-import of the package as a module of it and no module of the package is named simulate_* (test_no_module_of_the_package_is_named_as_a_runner)."""
     runners = [(name, site.imported) for name in site.names if name.startswith(_RUNNER_PREFIX)]
     parent, _, last = site.imported.rpartition(".")
     if last.startswith(_RUNNER_PREFIX):
         runners.append((last, parent))
     return runners
+
+
+def _modules_named_as_runners(src_dir: Path) -> list[str]:
+    """Return, sorted and once each, every module or package of the package under *src_dir*, a namespace package included, whose own name starts simulate_."""
+    named: set[str] = set()
+    for source in (src_dir / _PACKAGE).rglob("*.py"):
+        segments = _module_name(source, src_dir).split(".")
+        named.update(
+            ".".join(segments[: depth + 1])
+            for depth, segment in enumerate(segments)
+            if segment.startswith(_RUNNER_PREFIX)
+        )
+    return sorted(named)
 
 
 def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarViolation]:
@@ -328,23 +341,37 @@ def _bound_names(target: ast.expr) -> Iterator[str]:
         yield from _bound_names(target.value)
 
 
+def _assigned_targets(statement: ast.stmt) -> list[ast.expr]:
+    """Return the targets *statement* assigns a value to: an assignment's, an annotated assignment's if it has a value, a for's, and each with item's as target."""
+    if isinstance(statement, ast.Assign):
+        return statement.targets
+    if isinstance(statement, ast.AnnAssign) and statement.value is not None:
+        return [statement.target]
+    if isinstance(statement, ast.For):
+        return [statement.target]
+    if isinstance(statement, ast.With):
+        return [item.optional_vars for item in statement.items if item.optional_vars is not None]
+    return []
+
+
+def _block_statements(statement: ast.stmt) -> Iterator[ast.stmt]:
+    """Yield the statements of the blocks *statement* runs in its own scope, those of an if, for, while, with, try, try* or match: its bodies, else and finally blocks, handlers and cases; none for a simple statement, and never pass a def or a class, whose body is a scope of its own."""
+    for child in ast.iter_child_nodes(statement):
+        if isinstance(child, ast.stmt):
+            yield child
+        elif isinstance(child, (ast.ExceptHandler, ast.match_case)):
+            yield from child.body
+
+
 def _top_level_names(statements: Iterable[ast.stmt]) -> Iterator[str]:
-    """Yield each name *statements* bind by def, async def, class, assignment or annotated assignment, those of an if's or a try's bodies included, never by an import."""
+    """Yield each name *statements* bind in their own scope, never by an import: each def's, async def's and class's name, those of each target a statement assigns a value to, and those the blocks of a compound statement bind."""
     for statement in statements:
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             yield statement.name
-        elif isinstance(statement, ast.Assign):
-            for target in statement.targets:
+        else:
+            for target in _assigned_targets(statement):
                 yield from _bound_names(target)
-        elif isinstance(statement, ast.AnnAssign):
-            yield from _bound_names(statement.target)
-        elif isinstance(statement, ast.If):
-            yield from _top_level_names([*statement.body, *statement.orelse])
-        elif isinstance(statement, ast.Try):
-            handled = [line for handler in statement.handlers for line in handler.body]
-            yield from _top_level_names(
-                [*statement.body, *handled, *statement.orelse, *statement.finalbody]
-            )
+            yield from _top_level_names(_block_statements(statement))
 
 
 def _defined_names(source: str) -> frozenset[str]:
@@ -665,6 +692,20 @@ def test_the_scan_reads_the_imports_of_every_grammar_module(
         "test_the_scenario_grammar_imports_in_one_direction_and_imports_no_runner checks "
         "nothing of it. If a module was renamed or moved, update _GRAMMAR_STRATA with it, and "
         "docs/prds/scenario-grammar-partition.md §4.1"
+    )
+
+
+def test_no_module_of_the_package_is_named_as_a_runner() -> None:
+    """No module or package of src/solar_challenge is named simulate_*, so the no-runner rule may read an imported module's simulate_* last segment as a runner its parent exports, as _runner_imports does."""
+    named = _modules_named_as_runners(_SRC_DIR)
+
+    assert not named, (
+        f"these modules of src/solar_challenge are named as a simulate_* runner: {', '.join(named)}. "
+        "The scan names each alias of a from-import of the package as a module of it, so "
+        "_runner_imports reads a simulate_* last segment of an imported module's name as a runner "
+        "the package exports: a grammar module's import of such a module, or of a name from it, "
+        "would be reported as an import of a runner that does not exist. Rename the module, or "
+        "teach _runner_imports to tell such a module from a runner"
     )
 
 
@@ -1345,6 +1386,28 @@ def test_a_runner_imported_through_the_package_is_reported_as_imported_from_the_
     ]
 
 
+def test_a_module_or_package_named_as_a_runner_is_found(tmp_path: Path) -> None:
+    """The premise scan finds a seeded module, package and namespace package named simulate_*, each once, and neither a module named otherwise nor one that defines a runner: the real-tree test passes for a scan that finds nothing."""
+    src_dir = _write_package(
+        tmp_path / "src",
+        {
+            "__init__.py": "",
+            "simulate_tools.py": "",
+            "simulate_batch/__init__.py": "",
+            "simulate_batch/runs.py": "",
+            "simulate_ns/runs.py": "",
+            "cli/simulate.py": "",
+            "home.py": "def simulate_home(config):\n    return config\n",
+        },
+    )
+
+    assert _modules_named_as_runners(src_dir) == [
+        "solar_challenge.simulate_batch",
+        "solar_challenge.simulate_ns",
+        "solar_challenge.simulate_tools",
+    ]
+
+
 #: A package of the three grammar modules, scenario_blocks defining parse_home_block and config
 #: importing it, with an empty tests package: the root the one-spelling tests seed.
 _ONE_SPELLING_ROOT: Mapping[str, str] = {
@@ -1467,6 +1530,39 @@ def test_a_grammar_name_no_module_defines_is_reported_saying_so(tmp_path: Path) 
             id="names-defined-in-a-top-level-if-or-try",
         ),
         pytest.param(
+            {
+                "src/solar_challenge/config.py": (
+                    "for KIND in ('pv',):\n"
+                    "    PER_KIND = KIND\n"
+                    "with open(__file__) as SOURCE:\n"
+                    "    TEXT = SOURCE.read()\n"
+                    "while True:\n"
+                    "    RETRIES = 3\n"
+                    "    break\n"
+                    "match KIND:\n"
+                    "    case 'pv':\n"
+                    "        MATCHED = True\n"
+                    "try:\n"
+                    "    import yaml\n"
+                    "except* ImportError:\n"
+                    "    LOADER = None\n"
+                ),
+                "tests/unit/test_load.py": (
+                    "from solar_challenge.config import KIND, LOADER, MATCHED, PER_KIND, RETRIES, SOURCE, TEXT\n"
+                ),
+            },
+            [],
+            id="names-bound-in-a-top-level-for-with-while-match-or-try-star",
+        ),
+        pytest.param(
+            {
+                "src/solar_challenge/config.py": "LOADER: object\n",
+                "tests/unit/test_load.py": "from solar_challenge.config import LOADER\n",
+            },
+            [("tests/unit/test_load.py", 1, _GrammarRule.ONE_SPELLING)],
+            id="an-annotation-without-a-value-binds-nothing",
+        ),
+        pytest.param(
             {"tests/unit/test_config_module.py": "from solar_challenge import config\n"},
             [],
             id="a-module-not-a-name",
@@ -1484,7 +1580,7 @@ def test_a_grammar_name_no_module_defines_is_reported_saying_so(tmp_path: Path) 
 def test_the_one_spelling_scan_reads_src_and_tests_at_any_scope(
     tmp_path: Path, files: dict[str, str], expected: list[tuple[str, int, _GrammarRule]]
 ) -> None:
-    """The scan reads the from-imports of src and tests at any scope, a relative one resolved, and reports an underscore name imported from a grammar module, even one it defines, and a public name imported from a grammar module that does not define it, at top level or in a top-level if or try. It reports no import of a module and none from a module outside the grammar."""
+    """The scan reads the from-imports of src and tests at any scope, a relative one resolved, and reports an underscore name imported from a grammar module, even one it defines, and a public name imported from a grammar module that does not bind it at top level or in a block of a top-level if, for, while, with, try, try* or match, an annotation without a value binding nothing. It reports no import of a module and none from a module outside the grammar."""
     root = _write_files(tmp_path, {**_ONE_SPELLING_ROOT, **files})
 
     found = _one_spelling_violations_under(root)
