@@ -62,7 +62,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def handle_errors(func: F) -> F:
-    """Decorator that prints a ConfigurationError, a FileNotFoundError, any other OSError (as from a weather cache entry that cannot be read), a ValueError or a WeatherDataError on stderr under its own label and exits 1; Ctrl-C exits 130."""
+    """Decorator that reports an error the user can act on as its label and text on stderr and exits 1, rather than as a traceback; Ctrl-C exits 130."""
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
