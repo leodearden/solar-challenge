@@ -26,15 +26,20 @@ solar_challenge at any scope: it reads any dataclass through its annotations, so
 and modules of the web subpackage import it, web/stored_runs.py among them (§3.1), so an
 import of a web module would close a cycle or reach up past its importers.
 
-scenario_blocks.py, the scenario grammar's block readers, imports neither fleet_distribution
-nor config at any scope (docs/prds/scenario-grammar-partition.md §4.2 C1): both read their
-blocks through it, so such an import closes a cycle.
+The scenario grammar imports in one direction, errors, number_fields <- scenario_blocks <-
+fleet_distribution <- config, at any scope (C1): each grammar module reads its blocks through
+the modules below it, so an import against the direction closes a cycle. No grammar module
+imports a simulate_* name from the package (C2): the grammar reads homes, never simulates them.
+Every name src/solar_challenge or tests imports from a grammar module is a public name that
+module defines, never a re-export or an underscore name (C3). mypy --strict already holds src to
+this, but nothing type-checks tests. No grammar module defines a class named as a dataclass of
+dispatch (decision 5). docs/prds/scenario-grammar-partition.md §3 and §4.2 state the contract.
 
 These rules read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
-tests/unit/test_public_api_surface.py. One test reads what an import loads instead, from a
-fresh interpreter's sys.modules: importing scenario_blocks loads neither fleet_distribution nor
-config, so no module that scenario_blocks imports reaches them either.
+tests/unit/test_public_api_surface.py. Two tests read what an import loads instead, from a
+fresh interpreter's sys.modules: importing scenario_blocks loads neither module above it, and
+importing fleet_distribution does not load config.
 """
 
 import ast
@@ -68,6 +73,7 @@ _GRAMMAR_MODULES: tuple[str, ...] = tuple(
     module for stratum in _GRAMMAR_STRATA[1:] for module in stratum
 )
 _RUNNER_PREFIX = "simulate_"
+_DISPATCH = f"{_PACKAGE}.dispatch"
 _SRC_DIR = REPOSITORY_ROOT / "src"
 
 
@@ -151,6 +157,7 @@ class _GrammarRule(Enum):
     NO_RUNNER = "C2: no grammar module imports a simulate_* runner"
     ONE_SPELLING = "C3: a grammar name is imported from the module that defines it"
     NO_PRIVATE_NAME = "C3: no module imports an underscore name from a grammar module"
+    NO_DISPATCH_TYPE = "decision 5: no grammar module defines a dataclass that dispatch defines"
 
 
 @dataclass(frozen=True)
@@ -366,6 +373,58 @@ def _one_spelling_violations(sites: Iterable[_ImportSite], src_dir: Path) -> lis
             else:
                 rule, detail = _GrammarRule.ONE_SPELLING, f"{imports}, and no module of the package defines it"
             violations.append(_GrammarViolation(site.path, site.line, rule, name, detail))
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))
+
+
+def _is_dataclass_decorator(decorator: ast.expr) -> bool:
+    """Return whether *decorator* is dataclass or dataclasses.dataclass, called or not."""
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(target, ast.Name):
+        return target.id == "dataclass"
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr == "dataclass"
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "dataclasses"
+    )
+
+
+def _module_source(src_dir: Path, module: str) -> Path:
+    """Return the file under *src_dir* that holds *module*, a module of the package that is no package itself."""
+    return src_dir.joinpath(*module.split(".")).with_suffix(".py")
+
+
+def _top_level_classes(source: Path) -> list[ast.ClassDef]:
+    """Return the classes the module in *source* defines at top level, in source order."""
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    return [node for node in tree.body if isinstance(node, ast.ClassDef)]
+
+
+def _dispatch_dataclass_names(src_dir: Path) -> frozenset[str]:
+    """Return the names of the top-level classes dispatch.py, under *src_dir*, decorates as dataclasses."""
+    return frozenset(
+        cls.name
+        for cls in _top_level_classes(_module_source(src_dir, _DISPATCH))
+        if any(_is_dataclass_decorator(decorator) for decorator in cls.decorator_list)
+    )
+
+
+def _dispatch_types_defined_in_the_grammar(src_dir: Path) -> list[_GrammarViolation]:
+    """Return, in path then line order, each top-level class of a grammar module under *src_dir* named as a dataclass dispatch.py defines, at its class line."""
+    dispatch_dataclasses = _dispatch_dataclass_names(src_dir)
+    violations = [
+        _GrammarViolation(
+            source.relative_to(src_dir.parent),
+            cls.lineno,
+            _GrammarRule.NO_DISPATCH_TYPE,
+            cls.name,
+            f"{module} defines {cls.name}, a dataclass {_DISPATCH} defines",
+        )
+        for module in _GRAMMAR_MODULES
+        for source in [_module_source(src_dir, module)]
+        for cls in _top_level_classes(source)
+        if cls.name in dispatch_dataclasses
+    ]
     return sorted(violations, key=lambda violation: (violation.path, violation.line))
 
 
@@ -641,6 +700,28 @@ def test_the_one_spelling_scan_reads_grammar_imports_in_src_and_tests(
         "test_every_grammar_import_names_a_public_name_its_module_defines checks nothing of it. "
         "If the scan no longer finds src/solar_challenge or tests, point _src_and_test_import_sites "
         "at them; if a grammar module was renamed, update _GRAMMAR_STRATA"
+    )
+
+
+def test_no_grammar_module_defines_a_dispatch_dataclass() -> None:
+    """No grammar module defines, at top level, a class named as a dataclass dispatch.py defines."""
+    found = _dispatch_types_defined_in_the_grammar(_SRC_DIR)
+
+    violations = "\n".join(str(violation) for violation in found)
+    assert not found, (
+        f"these grammar modules define a class that solar_challenge.dispatch defines:\n{violations}\n"
+        "The grammar reads dispatch's types and homes none of them: import the type from "
+        "solar_challenge.dispatch (docs/prds/scenario-grammar-partition.md §3 decision 5)"
+    )
+
+
+def test_the_dispatch_scan_reads_dispatch_dataclasses() -> None:
+    """The scan finds a dataclass in the real dispatch.py, so the decision-5 rule cannot pass by reading none."""
+    assert _dispatch_dataclass_names(_SRC_DIR), (
+        f"the scan found no dataclass in {_DISPATCH}, so "
+        "test_no_grammar_module_defines_a_dispatch_dataclass checks nothing. If dispatch's types "
+        "moved, point _DISPATCH at the module that defines them, or teach _is_dataclass_decorator "
+        "the decorator they use now"
     )
 
 
