@@ -116,13 +116,10 @@ css-build's `npm ci`), the interpreter-matrix cases would run at once, each a ve
 core, and each e2e worker would start its own live server and Chromium. No e2e test needs
 another's session state, so the suite passes when split over workers, by test or by file. But
 on a loaded host the workers' pages starve one another past their `Page.goto` and `expect`
-waits, and a small count does not avoid it. Measured for task 1540 at the lane's idle
-priority, four workers cut a pass to under half of its serial time and failed 2 of 1215 tests
-at a load of about 90 to 150 on 32 cores. At 250 to 290 they failed 35 of 630 tests, as high a
-rate as the 32-worker passes, most of them while the four sessions started. A serial run
-flakes at that load too, and the lane files each failure its serial confirm clears as flake
-debt, so the e2e job stays serial until a worker count is shown to flake no more than a
-serial run does. The e2e suite also enforces serial runs itself, as
+waits, and a small count does not avoid it (task 1540 measured four workers). A serial run
+flakes on a loaded host too, and the lane files each failure its serial confirm clears as flake
+debt, so the e2e job stays serial until a worker count is shown to flake no more than a serial
+run does. The e2e suite also enforces serial runs itself, as
 `tests/unit/test_e2e_suite_runs_serially.py` checks: `tests/e2e/conftest.py` resolves `-n auto`
 to no workers, so a lane command without `-n 0` still runs it serially.
 
