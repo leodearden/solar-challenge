@@ -2,6 +2,8 @@
  * Draws each Plotly chart of a page from the figure its container carries
  * (data-chart-figure, written by components/macros.html's chart_panel), once
  * the container is shown, so a hidden tab's chart waits for its tab (AC3).
+ * A container already shown is drawn at once, so the tab shown on load has
+ * its charts drawn by the page's load event.
  * A container added to the page after load, or given another figure, is
  * drawn the same way once shown, and a container removed from the page is
  * forgotten, its chart purged, so a page that inserts and replaces chart
@@ -158,7 +160,7 @@
             if (container.isConnected) {
                 _fitWhileShown.observe(container);
                 if (!_sameColours(_chromeColours(container), drawnIn)) {
-                    _recolourOnceShown.observe(container);
+                    _recolourOnceShown.request(container);
                 }
             } else {
                 _forget(container);
@@ -180,32 +182,53 @@
         });
     }
 
+    /** Whether container is shown: laid out with a width, as no container in a hidden tab is. */
+    function _isShown(container) {
+        return container.getBoundingClientRect().width > 0;
+    }
+
     /**
-     * Returns a ResizeObserver that calls action with each observed container
-     * the first time it has a width, at the next frame if it has one already,
-     * so nothing is laid out in a hidden tab.
+     * Returns the requests to call action with a container once it is shown:
+     * request(container) calls action with container at once if it is shown,
+     * else the first time it is, so nothing is laid out in a hidden tab, and
+     * cancel(container) withdraws a request still waiting.
      */
     function _onceShown(action) {
-        return new ResizeObserver(function (entries, observer) {
+        var observer = new ResizeObserver(function (entries) {
             entries.forEach(function (entry) {
-                if (entry.contentRect.width > 0) {
-                    observer.unobserve(entry.target);
-                    action(entry.target);
+                if (_isShown(entry.target)) {
+                    actOn(entry.target);
                 }
             });
         });
+        function actOn(container) {
+            observer.unobserve(container);
+            action(container);
+        }
+        return {
+            request: function (container) {
+                if (_isShown(container)) {
+                    actOn(container);
+                } else {
+                    observer.observe(container);
+                }
+            },
+            cancel: function (container) {
+                observer.unobserve(container);
+            },
+        };
     }
 
-    /** Draws each observed container the first time it is shown (AC3). */
+    /** Draws each requested container now if shown, else the first time it is shown (AC3). */
     var _drawOnceShown = _onceShown(_draw);
 
-    /** Recolours each observed container's chart the first time it is shown (AC10). */
+    /** Recolours each requested container's chart now if shown, else the first time it is shown (AC10). */
     var _recolourOnceShown = _onceShown(_recolour);
 
     /** Fits each observed container's chart, which is drawn, whenever the container's size changes while it has a width. */
     var _fitWhileShown = new ResizeObserver(function (entries) {
         entries.forEach(function (entry) {
-            if (entry.contentRect.width > 0) {
+            if (_isShown(entry.target)) {
                 _fit(entry.target);
             }
         });
@@ -224,9 +247,9 @@
         });
     }
 
-    /** Draws container the first time it is shown (AC3). */
+    /** Draws container now if shown, else the first time it is shown (AC3). */
     function _drawWhenShown(container) {
-        _drawOnceShown.observe(container);
+        _drawOnceShown.request(container);
     }
 
     /**
@@ -235,9 +258,9 @@
      * chart, if drawn, is purged.
      */
     function _forget(container) {
-        _drawOnceShown.unobserve(container);
+        _drawOnceShown.cancel(container);
         _fitWhileShown.unobserve(container);
-        _recolourOnceShown.unobserve(container);
+        _recolourOnceShown.cancel(container);
         if (_drawn.delete(container)) {
             _attempt(container, 'purge the chart of', function () {
                 Plotly.purge(container);
@@ -280,7 +303,7 @@
     /** Recolours each drawn chart once it is shown, in the chrome colours its container names then (AC10). */
     document.addEventListener('theme-changed', function () {
         _drawn.forEach(function (subplots, container) {
-            _recolourOnceShown.observe(container);
+            _recolourOnceShown.request(container);
         });
     });
 }());
