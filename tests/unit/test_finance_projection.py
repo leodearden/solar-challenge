@@ -205,7 +205,7 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         """
         scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=asset_life_years)
         finite = make_sim_results()
-        infinite_discharge = dataclasses.replace(finite, battery_discharge=finite.battery_discharge + math.inf)
+        infinite_discharge = dataclasses.replace(finite, battery_discharge=finite.battery_discharge - math.inf)
 
         with pytest.raises(ValueError) as exc_info:
             project_multi_year(
@@ -215,5 +215,5 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
             )
 
         assert str(exc_info.value) == (
-            "every aggregate of the fleet simulated at age 0 must be finite: got per_home_discharge[1]=inf"
+            "every aggregate of the fleet simulated at age 0 must be finite: got per_home_discharge[1]=-inf"
         )

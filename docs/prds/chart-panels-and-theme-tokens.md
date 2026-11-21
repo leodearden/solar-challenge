@@ -118,7 +118,7 @@ Heuristics served: 11 (SPOT: colours, chart descriptions, flow identities, cards
    - `total_direct_self_consumption_kwh = total_self_consumption_kwh − total_battery_discharge_kwh`;
    - `total_grid_to_demand_kwh = total_grid_import_kwh − total_grid_charge_kwh`.
 
-   The first and third are ≥ 0 by `__post_init__`'s existing check. The second is exact while discharge never exceeds the step's shortfall, which S3's `DispatchDecision` bound makes a construction invariant. The properties are additive frozen-surface members (D29, in-leaf). `SimulationResults`' docstring "self_consumption: Direct PV consumption" is corrected in the same leaf.
+   The first and third are ≥ 0 by `__post_init__`'s existing check. The second is ≥ 0 because `__post_init__` also refuses a `total_battery_discharge_kwh` above `total_self_consumption_kwh` (task 1358). The engine satisfies that bound exactly: S3's discharge ≤ shortfall bound and `Battery.discharge`'s cap at the request (task 1362) keep each step's discharge within its self-consumption. A stored summary that breaks it is refused as `StoredRunUnreadable`. The properties are additive frozen-surface members (D29, in-leaf). `SimulationResults`' docstring "self_consumption: Direct PV consumption" is corrected in the same leaf.
 10. **The financial note reads the run's configuration.** `HomeConfig.tariff_config` and `seg_tariff` are stored with every home run, so the note is a lookup. The rules:
     - no tariff and no SEG: "No tariff configured — cost and revenue tracking unavailable";
     - SEG only: "No import tariff configured — cost tracking unavailable";
