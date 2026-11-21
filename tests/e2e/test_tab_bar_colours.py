@@ -7,11 +7,11 @@ colours from the tab that had them to the clicked tab alone.
 import pytest
 from playwright.sync_api import Page, expect
 
+from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._tab_bar_pages import PAGES_WITH_TAB_BARS, TabBarPage
 
-# An init script. window.tabProbe.colours() reads each tab's bottom border and text colour by tab name, .fading() the
-# CSS transitions running on the tabs, and .finishFading() finishes those transitions, which moves each tab to the
-# colours it settles in without waiting for frames; each page has one tablist.
+# An init script. window.tabProbe.colours() reads each tab's bottom border and text colour by tab name, and .fading()
+# the CSS transitions running on the tabs; each page has one tablist.
 # It records two readings in window.tabProbe.load:
 # - colours_before_alpine, at readystatechange 'interactive', which fires before any deferred script, so before Alpine.
 #   The read makes the browser compute the tabs' style, so any colour Alpine then changes starts a transition;
@@ -27,8 +27,7 @@ _RECORD_HOW_THE_TABS_LOAD = """(() => {
         .filter(animation => animation instanceof CSSTransition && tabs().includes(animation.effect.target));
     const fading = () => tabTransitions()
         .map(transition => ({tab: name(transition.effect.target), property: transition.transitionProperty}));
-    const finishFading = () => tabTransitions().forEach(transition => transition.finish());
-    window.tabProbe = {colours, fading, finishFading, load: {}};
+    window.tabProbe = {colours, fading, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.tabProbe.load.colours_before_alpine = colours();
     });
@@ -54,8 +53,9 @@ def _open_with_the_tabs_recorded(page: Page, url: str, opening_tab: str) -> None
 
 
 def _finish_the_fading_and_read_the_tab_colours(page: Page) -> dict[str, dict[str, str]]:
-    """Finish every CSS transition on a tab, then return each tab's bottom border colour and text colour, keyed by the tab's name. Finishing moves a fade under way to its end colours, so the read needs none of the frames a loaded host can withhold."""
-    return page.evaluate("() => { window.tabProbe.finishFading(); return window.tabProbe.colours(); }")
+    """Finish every CSS transition in the page, the tabs' fades among them, then return each tab's bottom border colour and text colour, keyed by the tab's name. Finishing moves a fade under way to its end colours, so the read needs none of the frames a loaded host can withhold."""
+    finish_the_css_transitions(page)
+    return page.evaluate("() => window.tabProbe.colours()")
 
 
 @pytest.mark.parametrize("tab_bar_page", PAGES_WITH_TAB_BARS)
