@@ -1262,9 +1262,10 @@ class MultiYearCurve:
     ``points`` covers years 0 .. asset_life_years - 1 (one :class:`YearPoint`
     per year).  ``sampled_ages`` records the ages at which the driver actually
     ran simulations; the remaining years are filled by PCHIP interpolation.
-    ``interp_error_estimate`` is the maximum interpolation deviation, as a
-    percentage of the magnitude of that metric's age-0 value, when the
-    adaptive loop converged (or was capped at ``MAX_NODES``).
+    ``interp_error_estimate`` is the maximum interpolation deviation when the
+    adaptive loop converged (or was capped at ``MAX_NODES``): own-use and
+    revenue as a percentage of their age-0 magnitude, export and import as a
+    percentage of the age-0 fleet generation and demand.
     """
 
     points: tuple[YearPoint, ...]
@@ -1276,7 +1277,9 @@ class MultiYearCurve:
     interp_error_estimate: float
     """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
     (fleet_billed_own_use_kwh, fleet_export_kwh, fleet_import_kwh,
-    fleet_revenue_gbp), convergence invariant of the adaptive loop."""
+    fleet_revenue_gbp), convergence invariant of the adaptive loop: own-use
+    and revenue as a percentage of their age-0 magnitude, export and import as
+    a percentage of the age-0 fleet generation and demand."""
 
     annualised_from: SimulationWindow | None
     """The window the projection's yearly figures were annualised from, the fleet's one window.
@@ -1546,6 +1549,12 @@ class _NodeData:
 
     fleet_imp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid import, Σ each home's ledger import (kWh/yr)."""
+
+    fleet_generation: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    """Fleet generation, Σ each home's ledger generation (kWh/yr): the scale export's interpolation error is measured against."""
+
+    fleet_demand: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    """Fleet demand, Σ each home's ledger demand (kWh/yr): the scale import's interpolation error is measured against."""
 
     per_home_discharge: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
     """Per-home battery discharge, its window total × annualisation_scale (kWh/yr)."""
@@ -1854,6 +1863,8 @@ def project_multi_year(
             fleet_billed_own_use=fleet_billed_own_use,
             fleet_exp=fleet_exp,
             fleet_imp=fleet_imp,
+            fleet_generation=sum(ledger.generation_kwh for ledger in ledgers),
+            fleet_demand=sum(ledger.demand_kwh for ledger in ledgers),
             per_home_discharge=per_home_discharge,
             mean_pv_soh=mean_pv_soh,
             mean_battery_soh=mean_battery_soh,
@@ -1869,14 +1880,12 @@ def project_multi_year(
     sampled_data: dict[int, _NodeData] = dict(seeds)
 
     # ---- Adaptive bisection --------------------------------------
-    # Deviation is the max across all driven energy + revenue metrics, normalised
-    # to percentages by the magnitude of each metric's age-0 value.  This ensures
-    # interp_error_estimate bounds ALL interpolated curves (own-use, export, import,
-    # revenue), not just own-use, whatever the revenue's sign.
-    annual_scale_own_use: float = max(abs(sampled_data[0].fleet_billed_own_use), 1e-9)
-    annual_scale_exp: float = max(abs(sampled_data[0].fleet_exp), 1e-9)
-    annual_scale_imp: float = max(abs(sampled_data[0].fleet_imp), 1e-9)
-    annual_scale_rev: float = max(abs(sampled_data[0].fleet_revenue), 1e-9)
+    # Each metric's midpoint deviation is a percentage of one fixed age-0 scale; export and import are measured against the
+    # generation and demand they are parts of, so a flow that is 0 at age 0 still has a scale (docs/cost-recovery-finance-model.md §4).
+    deviation_scale_own_use: float = max(abs(sampled_data[0].fleet_billed_own_use), 1e-9)
+    deviation_scale_exp: float = max(abs(sampled_data[0].fleet_generation), 1e-9)
+    deviation_scale_imp: float = max(abs(sampled_data[0].fleet_demand), 1e-9)
+    deviation_scale_rev: float = max(abs(sampled_data[0].fleet_revenue), 1e-9)
     max_deviation: float = 0.0
     capped: bool = False
 
@@ -1919,10 +1928,10 @@ def project_multi_year(
 
             # Max PCHIP deviation across all driven metrics (percentage)
             dev = max(
-                abs(own_use_interp_now[mid] - trial_node.fleet_billed_own_use) / annual_scale_own_use * 100.0,
-                abs(exp_interp_now[mid] - trial_node.fleet_exp) / annual_scale_exp * 100.0,
-                abs(imp_interp_now[mid] - trial_node.fleet_imp) / annual_scale_imp * 100.0,
-                abs(rev_interp_now[mid] - trial_node.fleet_revenue) / annual_scale_rev * 100.0,
+                abs(own_use_interp_now[mid] - trial_node.fleet_billed_own_use) / deviation_scale_own_use * 100.0,
+                abs(exp_interp_now[mid] - trial_node.fleet_exp) / deviation_scale_exp * 100.0,
+                abs(imp_interp_now[mid] - trial_node.fleet_imp) / deviation_scale_imp * 100.0,
+                abs(rev_interp_now[mid] - trial_node.fleet_revenue) / deviation_scale_rev * 100.0,
             )
             current_max_dev = max(current_max_dev, dev)
 
