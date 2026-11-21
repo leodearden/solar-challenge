@@ -6,22 +6,20 @@ collection of tests/, a suite by its explicit path under a mark expression, and
 every test under tests/, the lane-only suites included, under a mark expression.
 
 A test reads the collection of one of the repository's offline-lane jobs from
-tests/conftest.py's fixture lane_job_collection, called as
-lane_job_collection(project_root, name), rather than calling collect_lane_job
-itself; the fixture's docstring gives the premises each caller carries. The
-first example below is collect_lane_job's own usage.
+tests/conftest.py's fixture lane_job_collection, as the first example below
+does, rather than calling collect_lane_job itself; the fixture's docstring gives
+the premises each caller carries.
 
 Usage::
 
     from tests._lane_collection import (
-        collect_lane_job,
         default_collection_node_ids_under,
         every_test_matching,
         suite_node_ids_matching,
         suite_tests_matching,
     )
 
-    collection = collect_lane_job(project_root, "e2e", env_for=shared_uv_probe_environments.for_command)
+    collection = lane_job_collection(project_root, "e2e")
     assert collection.node_ids(), f"{collection.command!r} collected no tests\n{collection.describe()}"
     assert not collection.node_ids_outside("tests/e2e"), f"{collection.command!r} collected tests outside tests/e2e"
 
