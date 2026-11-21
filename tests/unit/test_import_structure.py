@@ -40,6 +40,7 @@ config, so no module that scenario_blocks imports reaches them either.
 import ast
 from collections.abc import Collection, Iterable, Iterator
 from dataclasses import astuple, dataclass
+from enum import Enum
 from pathlib import Path
 
 import pytest
@@ -55,7 +56,18 @@ _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
 _SCENARIO_BLOCKS = f"{_PACKAGE}.scenario_blocks"
 _FLEET_DISTRIBUTION = f"{_PACKAGE}.fleet_distribution"
 _CONFIG = f"{_PACKAGE}.config"
-_GRAMMAR_ABOVE_SCENARIO_BLOCKS = (_FLEET_DISTRIBUTION, _CONFIG)
+#: The scenario grammar's strata, lowest first: no module of one imports a module of a higher one.
+_GRAMMAR_STRATA: tuple[tuple[str, ...], ...] = (
+    (f"{_PACKAGE}.errors", f"{_PACKAGE}.number_fields"),
+    (_SCENARIO_BLOCKS,),
+    (_FLEET_DISTRIBUTION,),
+    (_CONFIG,),
+)
+#: The grammar modules: those of every stratum above the lowest, whose leaves the grammar imports.
+_GRAMMAR_MODULES: tuple[str, ...] = tuple(
+    module for stratum in _GRAMMAR_STRATA[1:] for module in stratum
+)
+_RUNNER_PREFIX = "simulate_"
 _SRC_DIR = REPOSITORY_ROOT / "src"
 
 
@@ -116,16 +128,41 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
 
 @dataclass(frozen=True)
 class _ImportSite:
-    """One module an import statement of the package imports: the importing and imported modules, the statement's file and line, and whether it sits inside a function."""
+    """One module an import statement of the package imports: the importing and imported modules, the statement's file and line, whether it sits inside a function, and the names a from-import binds from the module, as written there, never their aliases."""
 
     importer: str
     imported: str
     path: Path
     line: int
     in_function: bool
+    names: tuple[str, ...]
 
     def __str__(self) -> str:
         return f"{self.path.as_posix()}:{self.line} imports {self.imported}"
+
+
+class _GrammarRule(Enum):
+    """A rule of the scenario grammar's contract (docs/prds/scenario-grammar-partition.md §4.2), its value the invariant's text."""
+
+    IMPORT_DIRECTION = (
+        "C1: the scenario grammar imports in one direction, errors, number_fields <- "
+        "scenario_blocks <- fleet_distribution <- config, at any scope"
+    )
+    NO_RUNNER = "C2: no grammar module imports a simulate_* runner"
+
+
+@dataclass(frozen=True)
+class _GrammarViolation:
+    """A statement of the package that breaks a rule of the grammar: its file and line, the rule, the module or name it breaks the rule with, and what it does, in prose."""
+
+    path: Path
+    line: int
+    rule: _GrammarRule
+    subject: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.path.as_posix()}:{self.line}: {self.detail} ({self.rule.value})"
 
 
 def _module_name(source: Path, src_dir: Path) -> str:
@@ -145,16 +182,16 @@ def _from_module(node: ast.ImportFrom, importer: str, is_package: bool) -> str:
     return f"{base}.{node.module}" if node.module else base
 
 
-def _imported_modules(
+def _imported_modules_and_names(
     node: ast.Import | ast.ImportFrom, importer: str, is_package: bool
-) -> list[str]:
-    """Return the dotted names of the modules *node* imports; a from-import with no module or of the top-level package names each alias as a module of it, however it is spelled."""
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Return the dotted name of each module *node* imports, with the names it binds from that module; a from-import with no module or of the top-level package names each alias as a module of it, however it is spelled, binding no name from it."""
     if isinstance(node, ast.Import):
-        return [alias.name for alias in node.names]
+        return [(alias.name, ()) for alias in node.names]
     from_module = _from_module(node, importer, is_package)
     if node.module is None or from_module == _PACKAGE:
-        return [f"{from_module}.{alias.name}" for alias in node.names]
-    return [from_module]
+        return [(f"{from_module}.{alias.name}", ()) for alias in node.names]
+    return [(from_module, tuple(alias.name for alias in node.names))]
 
 
 def _import_statements(
@@ -177,8 +214,9 @@ def _import_sites(src_dir: Path) -> list[_ImportSite]:
         path = source.relative_to(src_dir.parent)
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         for node, in_function in _import_statements(tree):
-            for imported in _imported_modules(node, importer, source.name == "__init__.py"):
-                sites.append(_ImportSite(importer, imported, path, node.lineno, in_function))
+            imports = _imported_modules_and_names(node, importer, source.name == "__init__.py")
+            for imported, names in imports:
+                sites.append(_ImportSite(importer, imported, path, node.lineno, in_function, names))
     return sites
 
 
@@ -217,14 +255,41 @@ def _imports_by(importer: str, package: str, sites: Iterable[_ImportSite]) -> li
     ]
 
 
-def _imports_of_the_grammar_above_scenario_blocks(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
-    """Return the *sites* at which scenario_blocks imports fleet_distribution or config, or a module beneath either, at any scope."""
-    return [
-        site
-        for site in sites
-        if site.importer == _SCENARIO_BLOCKS
-        and any(_in_package(site.imported, grammar) for grammar in _GRAMMAR_ABOVE_SCENARIO_BLOCKS)
-    ]
+def _grammar_modules_above(module: str) -> tuple[str, ...]:
+    """Return the modules of every grammar stratum above *module*'s, lowest first; () for a module of the top stratum or of none."""
+    for level, stratum in enumerate(_GRAMMAR_STRATA):
+        if module in stratum:
+            return tuple(above for higher in _GRAMMAR_STRATA[level + 1 :] for above in higher)
+    return ()
+
+
+def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarViolation]:
+    """Return, in path then line order, each of *sites* at which a module of a grammar stratum imports a module of a higher one, or a module beneath it, and each simulate_* name a grammar module imports from a module of the package."""
+    violations: list[_GrammarViolation] = []
+    for site in sites:
+        if any(_in_package(site.imported, above) for above in _grammar_modules_above(site.importer)):
+            violations.append(
+                _GrammarViolation(
+                    site.path,
+                    site.line,
+                    _GrammarRule.IMPORT_DIRECTION,
+                    site.imported,
+                    f"{site.importer} imports {site.imported}",
+                )
+            )
+        if site.importer in _GRAMMAR_MODULES and _in_package(site.imported, _PACKAGE):
+            violations.extend(
+                _GrammarViolation(
+                    site.path,
+                    site.line,
+                    _GrammarRule.NO_RUNNER,
+                    name,
+                    f"{site.importer} imports {name} from {site.imported}",
+                )
+                for name in site.names
+                if name.startswith(_RUNNER_PREFIX)
+            )
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))
 
 
 def _unlisted(
@@ -401,19 +466,18 @@ def test_the_scan_reads_the_imports_of_web_field_tree(
 
 
 @pytest.mark.parametrize(
-    ("module", "grammar_above"),
+    "module",
     [
-        pytest.param(_SCENARIO_BLOCKS, (_FLEET_DISTRIBUTION, _CONFIG), id="scenario_blocks"),
-        pytest.param(_FLEET_DISTRIBUTION, (_CONFIG,), id="fleet_distribution"),
+        pytest.param(module, id=module.rpartition(".")[2])
+        for module in _GRAMMAR_MODULES
+        if _grammar_modules_above(module)
     ],
 )
-def test_importing_a_grammar_module_loads_no_grammar_module_above_it(
-    module: str, grammar_above: tuple[str, ...]
-) -> None:
+def test_importing_a_grammar_module_loads_no_grammar_module_above_it(module: str) -> None:
     """A fresh interpreter that imports a grammar module has loaded no grammar module above it, so no module it imports reaches up into the grammar that reads through it."""
     loaded = package_modules_loaded_by_importing(module)
 
-    grammar_loaded = sorted(set(grammar_above) & loaded)
+    grammar_loaded = sorted(set(_grammar_modules_above(module)) & loaded)
     assert not grammar_loaded, (
         f"importing {module} in a fresh interpreter loads {', '.join(grammar_loaded)}. "
         "The scenario grammar imports in one direction, errors, number_fields <- scenario_blocks "
@@ -422,34 +486,35 @@ def test_importing_a_grammar_module_loads_no_grammar_module_above_it(
     )
 
 
-def test_scenario_blocks_imports_neither_fleet_distribution_nor_config(
+def test_the_scenario_grammar_imports_in_one_direction_and_imports_no_runner(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
-    """scenario_blocks.py imports neither fleet_distribution nor config, at any scope."""
-    found = _imports_of_the_grammar_above_scenario_blocks(real_tree_imports)
+    """No module of a grammar stratum imports a module of a higher one, at any scope, and no grammar module imports a simulate_* name from a module of the package."""
+    found = _grammar_layering_violations(real_tree_imports)
 
-    sites = "\n".join(str(site) for site in found)
+    violations = "\n".join(str(violation) for violation in found)
     assert not found, (
-        "these import statements of scenario_blocks.py import the scenario grammar above it:"
-        f"\n{sites}\n"
-        "config and fleet_distribution read their blocks through scenario_blocks, so an import "
-        "of either from scenario_blocks, at any scope, closes a cycle "
-        "(docs/prds/scenario-grammar-partition.md §4.2 C1). Move what scenario_blocks needs "
-        "from the grammar above it down into scenario_blocks"
+        f"these import statements of src/solar_challenge break the scenario grammar's layering:\n"
+        f"{violations}\n"
+        "Each grammar module reads its blocks through the modules below it, so an import against "
+        "the direction closes a cycle: move what a lower module needs down into it. A grammar "
+        "module reads homes, never simulates them: call the runner from the code that reads the "
+        "document (docs/prds/scenario-grammar-partition.md §4.2 C1 and C2)"
     )
 
 
-def test_the_scan_reads_the_imports_of_scenario_blocks(
+def test_the_scan_reads_the_imports_of_every_grammar_module(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
-    """The scan reads the import statements of scenario_blocks.py, so its layering rule cannot pass by reading none once the module is renamed or moved."""
+    """The scan reads the import statements of every grammar module, so the layering rules cannot pass by reading none once a module is renamed or moved."""
     importers = {site.importer for site in real_tree_imports}
 
-    assert _SCENARIO_BLOCKS in importers, (
-        f"the scan of src/solar_challenge read no import statement of {_SCENARIO_BLOCKS}, so "
-        "test_scenario_blocks_imports_neither_fleet_distribution_nor_config checks nothing. If "
-        "the module was renamed or moved, point _SCENARIO_BLOCKS at the module that holds the "
-        "block readers, and update docs/prds/scenario-grammar-partition.md §4.1 with it"
+    unread = [module for module in _GRAMMAR_MODULES if module not in importers]
+    assert not unread, (
+        f"the scan of src/solar_challenge read no import statement of {', '.join(unread)}, so "
+        "test_the_scenario_grammar_imports_in_one_direction_and_imports_no_runner checks "
+        "nothing of it. If a module was renamed or moved, update _GRAMMAR_STRATA with it, and "
+        "docs/prds/scenario-grammar-partition.md §4.1"
     )
 
 
@@ -1015,7 +1080,7 @@ def test_an_upward_grammar_import_and_a_runner_import_are_reported_with_their_fi
     ],
 )
 def test_the_scan_finds_grammar_imports_against_the_direction_or_of_a_runner_at_any_scope(
-    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int, "_GrammarRule"]]
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int, _GrammarRule]]
 ) -> None:
     """The scan finds, at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package, an import against the grammar's direction, from a leaf or a grammar module of a module of a stratum above its own, and a grammar module's import of a simulate_* name from a module of the package, named by the name it imports, not its alias. It finds none of a module below the importer's stratum or merely named config_tools, none of a name that is no runner, and none of a runner that a module outside the grammar imports or that a module outside the package defines."""
     src_dir = _write_package(tmp_path / "src", {module: source})
