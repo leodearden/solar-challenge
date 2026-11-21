@@ -30,13 +30,14 @@ from solar_challenge.finance import (
     solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
     make_period,
     make_scenario_and_finance,
+    make_scenario_of,
     make_window,
 )
 
@@ -243,9 +244,17 @@ class TestSimulateMustReturnTheFleetsBatteries:
 
     _BATTERY = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
 
-    def _scenario_and_flat_finance(self) -> tuple[ScenarioConfig, FinanceConfig]:
-        """Two homes, each with _BATTERY, and a finance paying £12 per kW of battery discharge power per year."""
-        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5, battery_config=self._BATTERY)
+    @staticmethod
+    def _homes_with(*batteries: BatteryConfig) -> list[HomeConfig]:
+        """A default home fitted with each of *batteries*, in order."""
+        return [make_home_config(battery_config=battery) for battery in batteries]
+
+    def _scenario_and_flat_finance(
+        self, batteries: tuple[BatteryConfig, ...] = (_BATTERY, _BATTERY)
+    ) -> tuple[ScenarioConfig, FinanceConfig]:
+        """The homes fitted with *batteries*, two with _BATTERY by default, and a finance paying £12 per kW of battery discharge power per year."""
+        _, finance = make_scenario_and_finance(asset_life_years=5)
+        scenario = make_scenario_of(self._homes_with(*batteries))
         return scenario, dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
 
     @staticmethod
@@ -279,6 +288,31 @@ class TestSimulateMustReturnTheFleetsBatteries:
         message = str(excinfo.value)
         assert repr(dataclasses.replace(other, soh=None)) in message
         assert repr(dataclasses.replace(self._BATTERY, soh=None)) in message
+
+    def test_the_refusal_names_the_first_home_whose_batteries_differ_and_both_of_its_batteries(self) -> None:
+        """Asked for a 5 and a 7.5 kWh battery and answered with a 5 and a 10 kWh one, it names home 1, 7.5 and 10 kWh."""
+        asked_second, answered_second = BatteryConfig(capacity_kwh=7.5), BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, asked_second))
+        answer = make_fleet_results(homes=self._homes_with(self._BATTERY, answered_second))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        message = str(excinfo.value)
+        assert "home 1" in message
+        assert repr(dataclasses.replace(asked_second, soh=None)) in message
+        assert repr(dataclasses.replace(answered_second, soh=None)) in message
+
+    def test_the_asked_batteries_answered_in_another_order_are_refused_at_the_first_home(self) -> None:
+        """Asked for a 5 and a 10 kWh battery and answered with the two swapped, it names home 0."""
+        larger = BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, larger))
+        answer = make_fleet_results(homes=self._homes_with(larger, self._BATTERY))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        assert "home 0" in str(excinfo.value)
 
     def test_an_answer_of_another_number_of_homes_is_refused_naming_both_counts(self) -> None:
         scenario, finance = self._scenario_and_flat_finance()
