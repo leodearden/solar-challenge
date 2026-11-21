@@ -44,10 +44,11 @@ def test_importing_a_module_with_nothing_blocked_succeeds(project_root: Path) ->
 def test_extra_modules_are_the_installed_top_level_modules_of_the_distributions_the_extra_requires(
     tmp_path: Path,
 ) -> None:
+    """PyYAML is a core dependency, so every environment has it; the probe spells it as its metadata does, not canonically, and its modules, yaml and _yaml, are not named like it."""
     (tmp_path / "pyproject.toml").write_text(
         "[project.optional-dependencies]\n"
-        'probe = ["packaging>=20", "not-an-installed-distribution>=1"]\n',
+        'probe = ["PyYAML>=6", "packaging>=20", "not-an-installed-distribution>=1"]\n',
         encoding="utf-8",
     )
 
-    assert extra_modules(tmp_path, "probe") == ["packaging"]
+    assert extra_modules(tmp_path, "probe") == ["_yaml", "packaging", "yaml"]
