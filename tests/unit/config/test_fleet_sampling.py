@@ -402,16 +402,36 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
             pytest.param("ev", "arrival_hour", {"charger_type": "7kW"}, id="ev.arrival_hour"),
         ],
     )
-    @pytest.mark.parametrize("offset", [math.inf, -math.inf, math.nan], ids=["inf", "-inf", "nan"])
+    @pytest.mark.parametrize("multiplier", [1e308, -1e308], ids=["inf", "-inf"])
     def test_a_count_that_is_not_finite_is_refused_naming_its_path(
-        self, component: str, key: str, block: dict[str, Any], offset: float
+        self, component: str, key: str, block: dict[str, Any], multiplier: float
     ) -> None:
-        """No whole number is nearest an infinity or a NaN, so the count is refused naming its path and its value."""
+        """A multiplier of ±1e308 times the 4.0 kW source overflows to an infinity, to which no whole number is nearest, so the count is refused naming its path and its value."""
         fleet = parse_fleet_distribution_config(
-            {"n_homes": 1, "pv": {"capacity_kw": 4.0}, component: {**block, key: _proportional_to_pv(offset=offset)}}
+            {"n_homes": 1, "pv": {"capacity_kw": 4.0}, component: {**block, key: _proportional_to_pv(multiplier=multiplier)}}
         )
 
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == f"{component}.{key} must be a finite number, got {4.0 + offset!r}"
+        assert str(refusal.value) == f"{component}.{key} must be a finite number, got {4.0 * multiplier!r}"
+
+    def test_a_count_that_is_nan_is_refused_naming_its_path(self) -> None:
+        """No finite source, multiplier and offset make a NaN, but 0 times a listed infinite consumption does, and no whole number is nearest it, so occupants proportional_to it are refused naming their path and NaN."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "load": {
+                    "annual_consumption_kwh": {"type": "weighted_discrete", "values": [math.inf], "weights": [1.0]},
+                    "household_occupants": {
+                        "type": "proportional_to", "source": "load.annual_consumption_kwh", "multiplier": 0.0,
+                    },
+                },
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == "load.household_occupants must be a finite number, got nan"
