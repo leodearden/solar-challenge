@@ -23,7 +23,7 @@ from solar_challenge.optimize import (
     SensitivityPanel,
 )
 from solar_challenge.output import generate_config_ranking_report
-from tests._cli_fleet_simulator import answering, invoke_cli
+from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
 from tests._factories import (
     make_bill_distribution_from_statistics,
     make_config_result,
@@ -1190,6 +1190,10 @@ class TestOptimizeCLIE2EFast:
 # ---------------------------------------------------------------------------
 
 
+# `optimize configs` over one config of the committed board scenario, which prices grid services at events.
+_ONE_BOARD_CONFIG: tuple[str, ...] = ("optimize", "configs", str(SCENARIO), "--pv", "4", "--battery", "5", "--inverter", "5")
+
+
 def _invoke_configs_on_the_board(options: list[str]) -> tuple[Result, list[FleetConfig]]:
     """Run `optimize configs` over one config of the committed board scenario, which prices grid services at events, with *options*.
 
@@ -1203,10 +1207,7 @@ def _invoke_configs_on_the_board(options: list[str]) -> tuple[Result, list[Fleet
         simulated_fleets.append(fleet_config)
         return make_fleet_results(homes=fleet_config.homes)
 
-    result = invoke_cli(
-        ["optimize", "configs", str(SCENARIO), "--pv", "4", "--battery", "5", "--inverter", "5", *options],
-        answering(simulate),
-    )
+    result = invoke_cli([*_ONE_BOARD_CONFIG, *options], answering(simulate))
     return result, simulated_fleets
 
 
@@ -1241,11 +1242,11 @@ def test_an_explicit_grid_services_axis_under_the_events_model_is_refused_before
 
 
 def test_without_sensitivity_under_the_events_model_a_status_line_names_grid_services_as_left_out() -> None:
-    """The default axes leave out grid_services, whose flat rate the events model does not read, and say so on stderr."""
-    result, _ = _invoke_configs_on_the_board([])
+    """The default axes leave out grid_services, whose flat rate the events model does not read, and say so on stderr before the sweep's first simulation."""
+    result = invoke_cli([*_ONE_BOARD_CONFIG], answering(simulate_reaching_the_sweep))
 
     stderr = " ".join(result.stderr.split())
-    assert result.exit_code == 0, result.output
+    assert isinstance(result.exception, ReachedTheSweep), result.output
     assert (
         "Sensitivity axis grid_services omitted from the default: it sweeps the flat grid-services rate, "
         "grid_services_income_per_kw_per_year_gbp, which grid_services_model='capacity_at_events' does not read."

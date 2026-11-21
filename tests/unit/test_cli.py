@@ -46,7 +46,14 @@ from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherDataError
-from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import (
+    ReachedTheSweep,
+    RecordingSimulate,
+    answering,
+    invoke_cli,
+    invoke_finance_run,
+    simulate_reaching_the_sweep,
+)
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
@@ -1073,15 +1080,6 @@ def test_home_run_counts_the_calendar_days_of_a_run_crossing_the_october_clock_c
 _SPRING_FORWARD_FIRST, _SPRING_FORWARD_LAST = "2024-03-31", "2024-04-01"
 
 
-class _ReachedTheSweep(Exception):
-    """Raised by _simulate_reaching_the_sweep, the sign that a command got as far as its first fleet simulation."""
-
-
-def _simulate_reaching_the_sweep(fleet_config: object, start: object, end: object) -> NoReturn:
-    """A fleet simulator that stops the command at its first fleet simulation, raising _ReachedTheSweep."""
-    raise _ReachedTheSweep
-
-
 def _finance_run_over(first_day: date, days: int) -> tuple[Result, list[SummaryStatistics], FinanceConfig]:
     """Run `finance run` over *days* days from *first_day* on _write_scenario's scenario, named Bristol, every fleet simulation answered by one home's minute results over those days; with those results' summaries and the scenario's finance."""
     _write_scenario("Bristol")
@@ -1184,10 +1182,10 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
-            answering(_simulate_reaching_the_sweep),
+            answering(simulate_reaching_the_sweep),
         )
 
-        assert isinstance(result.exception, _ReachedTheSweep)
+        assert isinstance(result.exception, ReachedTheSweep)
         assert "550 config(s) × 1 home(s) × 182 day(s) ≈ 100,100 home-days" in " ".join(result.stderr.split())
 
 
