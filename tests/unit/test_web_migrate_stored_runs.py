@@ -59,7 +59,9 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
@@ -752,6 +754,47 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
     assert user_version_of(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def _discharging_in_economy_10_s_cheap_minutes(config: dict[str, Any]) -> None:
+    """Edit a home run's stored *config* to a battery dispatching tou_optimized over 16:00-21:00, with no grid_charging, on Economy 10, whose 20:00-21:00 is cheap."""
+    config["battery_config"]["dispatch_strategy"] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]}
+    config["battery_config"]["grid_charging"] = None
+    config["tariff_config"] = field_tree(TariffConfig.economy_10())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_a_run_whose_tou_peak_hours_reach_a_cheap_minute_unmigrated_naming_the_window_and_migrates_the_rest(
+    store_at_version_3: Path, format_3_run_ids: dict[str, str]
+) -> None:
+    """Task 839's recorded decision: a run whose battery discharged in cheap minutes of its tariff no longer loads.
+
+    No configuration now accepted dispatches as it ran, so no step brings it forward. The run
+    stands for one the home page stored with its former default window, 16:00-21:00, on Economy 10.
+    """
+    left = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_3), store_at_version_3.parent, run_id="peak-in-cheap-minutes"
+    )
+    run_dir = _run_dir(store_at_version_3, left)
+    write_run_documents(run_dir, (), 3)
+    _edit_stored_document(run_dir / "config.json", _discharging_in_economy_10_s_cheap_minutes)
+    _edit_runs_document(store_at_version_3, left, "config_json", _discharging_in_economy_10_s_cheap_minutes)
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_3, store_at_version_3.parent)
+
+    assert user_version_of(store_at_version_3) == SCHEMA_VERSION
+    assert len(report.unmigrated_runs) == 2
+    assert {(each.run_id, each.document) for each in report.unmigrated_runs} == {
+        (left, "config.json"),
+        (left, "runs.config_json"),
+    }
+    for each in report.unmigrated_runs:
+        assert "peak_hours[0]" in each.reason and "20:00-21:00" in each.reason, each.reason
+    assert _files_of(run_dir) == files_before
+    assert json.loads((run_dir / "format.json").read_text()) == {"format_version": 3}
+    storage = _storage_of(store_at_version_3)
+    assert [storage.load_run(run_id).run_id for run_id in format_3_run_ids.values()] == list(format_3_run_ids.values())
 
 
 def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
