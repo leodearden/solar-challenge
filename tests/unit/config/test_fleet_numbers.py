@@ -17,9 +17,13 @@ from solar_challenge.fleet_distribution import (
     SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
+from solar_challenge.load import LoadConfig
+from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float, as_whole_number
+from solar_challenge.pv import PVConfig
 from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 
 _WEIGHTED_DISCRETE = WeightedDiscreteDistribution(values=(30.0, 40.0), weights=(1.0, 2.0))
@@ -294,3 +298,73 @@ class TestAFleetBlockRefusesANumberItsTypeRefusesNamingItsPath:
             parse_fleet_distribution_config({"n_homes": 2.7, "pv": _PV})
 
         assert str(refusal.value) == "fleet_distribution: n_homes must be a whole number, got 2.7"
+
+
+#: Values a fleet block gives every home that are not numbers: a bool, not finite, text, even text float() reads, or a list.
+_NO_NUMBERS_EVERY_HOME_IS_GIVEN = [
+    pytest.param(True, id="True"),
+    pytest.param(False, id="False"),
+    pytest.param(math.nan, id="nan"),
+    pytest.param(math.inf, id="inf"),
+    pytest.param(-math.inf, id="-inf"),
+    pytest.param("4", id="numeric-text"),
+    pytest.param("5kWh", id="text"),
+    pytest.param([5.0], id="list"),
+]
+
+
+class TestAValueEveryHomeIsGivenIsReadAtParse:
+    """A number a fleet block gives every home, as a scalar or a fixed spec's value, is read when the block is parsed, naming the parameter's path, whichever way the block writes it."""
+
+    @pytest.mark.parametrize("bad", _NO_NUMBERS_EVERY_HOME_IS_GIVEN)
+    def test_a_scalar_that_is_no_number_is_refused_naming_its_path(self, bad: object) -> None:
+        """C4 is the True case, which gave every home 1.0 kW."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config({"n_homes": 1, "pv": {"capacity_kw": bad}})
+
+        assert str(refusal.value) == f"fleet_distribution.pv.capacity_kw must be a finite number, got {bad!r}"
+
+    @pytest.mark.parametrize("bad", _NO_NUMBERS_EVERY_HOME_IS_GIVEN)
+    def test_a_fixed_value_that_is_no_number_is_refused_naming_its_parameters_path(self, bad: object) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config({"n_homes": 1, "pv": {**_PV, "tilt": {"type": "fixed", "value": bad}}})
+
+        assert str(refusal.value) == f"fleet_distribution.pv.tilt must be a finite number, got {bad!r}"
+
+
+class TestACodeBuiltBareNumberIsReadByTheHomesType:
+    """A ComponentDistribution built in code may give every home a bare value; the sampler hands it on as given, and the home's type reads it, naming the component and the home."""
+
+    @pytest.mark.parametrize(
+        ("components", "label", "build"),
+        [
+            pytest.param(
+                {"pv": ComponentDistribution({"capacity_kw": True})},
+                "fleet_distribution.pv, home 1",
+                lambda: PVConfig(capacity_kw=True),
+                id="pv.capacity_kw",
+            ),
+            pytest.param(
+                {"pv": ComponentDistribution({"capacity_kw": 4.0, "tilt": True})},
+                "fleet_distribution.pv, home 1",
+                lambda: PVConfig(capacity_kw=4.0, tilt=True),
+                id="pv.tilt",
+            ),
+            pytest.param(
+                {"pv": ComponentDistribution(_PV), "load": ComponentDistribution({"annual_consumption_kwh": True})},
+                "fleet_distribution.load, home 1",
+                lambda: LoadConfig(annual_consumption_kwh=True),
+                id="load.annual_consumption_kwh",
+            ),
+        ],
+    )
+    def test_a_bool_is_refused_by_the_homes_type_not_read_as_one(
+        self, components: dict[str, ComponentDistribution], label: str, build: Callable[[], object]
+    ) -> None:
+        """A True was read as 1.0 before any type saw it: a 1.0 kW home."""
+        fleet = FleetDistributionConfig(n_homes=1, seed=1, **components)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == prefixed_construction_refusal(label, build)

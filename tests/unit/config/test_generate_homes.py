@@ -426,12 +426,21 @@ class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
 
     @pytest.mark.parametrize("hour", [math.inf, -math.inf, math.nan], ids=repr)
     @pytest.mark.parametrize(
-        "spec_holding",
+        ("spec_holding", "refusal_of"),
         [
-            pytest.param(lambda hour: hour, id="scalar"),
-            pytest.param(lambda hour: {"type": "fixed", "value": hour}, id="fixed"),
+            pytest.param(
+                lambda hour: hour,
+                lambda field, hour: f"fleet_distribution.ev.{field} must be a finite number, got {hour!r}",
+                id="scalar",
+            ),
+            pytest.param(
+                lambda hour: {"type": "fixed", "value": hour},
+                lambda field, hour: f"fleet_distribution.ev.{field} must be a finite number, got {hour!r}",
+                id="fixed",
+            ),
             pytest.param(
                 lambda hour: {"type": "weighted_discrete", "values": [hour], "weights": [1]},
+                lambda field, hour: f"ev.{field} must be a finite number, got {hour!r}",
                 id="weighted_discrete",
             ),
             pytest.param(
@@ -440,20 +449,25 @@ class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
                     "values": [hour],
                     "counts": [_EVERY_SETTING_DRAWN["n_homes"]],
                 },
+                lambda field, hour: f"ev.{field} must be a finite number, got {hour!r}",
                 id="shuffled_pool",
             ),
         ],
     )
     @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
     def test_an_hour_that_is_not_finite_is_refused_naming_its_setting_and_the_hour(
-        self, field: str, spec_holding: Callable[[float], object], hour: float
+        self,
+        field: str,
+        spec_holding: Callable[[float], object],
+        refusal_of: Callable[[str, float], str],
+        hour: float,
     ) -> None:
-        """An infinite or NaN hour given as a number, a fixed value, or a weighted_discrete or shuffled_pool outcome is refused naming its setting and the hour, never escaping as an OverflowError."""
+        """An infinite or NaN hour given as a number, a fixed value, or a weighted_discrete or shuffled_pool outcome is refused naming its setting and the hour, never escaping as an OverflowError; a number or fixed value every home is given is refused as the block is parsed, naming its path."""
         block = {**_EVERY_SETTING_DRAWN, "ev": {**_EVERY_SETTING_DRAWN["ev"], field: spec_holding(hour)}}
 
         with pytest.raises(ConfigurationError) as exc_info:
             generate_homes_from_distribution(parse_fleet_distribution_config(block), Location.bristol())
-        assert str(exc_info.value) == f"ev.{field} must be a finite number, got {hour!r}"
+        assert str(exc_info.value) == refusal_of(field, hour)
 
 
 class TestHeatPumpDistribution:

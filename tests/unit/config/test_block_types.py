@@ -223,13 +223,11 @@ class TestDistributionSpecTypes:
     """Tests for the distribution-spec types a distribution parameter can name."""
 
     @pytest.mark.parametrize("spec", _NON_MAPPING_DISTRIBUTION_SPECS)
-    def test_spec_that_is_no_number_null_or_mapping_is_refused(self, spec: object) -> None:
-        """A spec that is not a number, null or a mapping is refused, naming its path."""
+    def test_a_spec_that_is_no_mapping_is_read_as_a_number(self, spec: object) -> None:
+        """A spec that is neither null nor a mapping is read as a number, so one that is not a number is refused, naming its path and the spec."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(spec)
-        assert str(refusal.value) == (
-            f"Invalid distribution spec for '{_SPEC_PATH}': expected number, null, or dict"
-        )
+        assert str(refusal.value) == f"{_SPEC_PATH} must be a finite number, got {spec!r}"
 
     @pytest.mark.parametrize("spec", _DISTRIBUTION_SPECS_NAMING_NO_TYPE)
     def test_mapping_naming_no_type_is_refused(self, spec: dict[str, Any]) -> None:
