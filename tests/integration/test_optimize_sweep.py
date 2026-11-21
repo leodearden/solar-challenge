@@ -15,7 +15,7 @@ from collections.abc import Callable
 import pandas as pd
 import pytest
 
-from solar_challenge.config import ScenarioConfig
+from solar_challenge.config import ScenarioConfig, SimulationPeriod
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -384,6 +384,31 @@ class TestRunSweepSingleConfig:
         expected_outlay = dist.representative.total_outlay_gbp
 
         assert cr.baseline_outlay_gbp == pytest.approx(expected_outlay)
+
+    def test_the_age0_baseline_fleet_is_simulated_over_the_scenario_bounds(self) -> None:
+        """A period of zoned Timestamps at 06:00 and 18:00 reaches every fleet run_sweep simulates, the
+        age-0 baseline outlay fleet included, as the swept scenario's simulation_bounds(), its local midnights."""
+        finance = _interior_finance()
+        scenario = dataclasses.replace(
+            _make_scenario(finance=finance),
+            period=SimulationPeriod(
+                pd.Timestamp("2024-01-01 06:00", tz="Europe/London"),
+                pd.Timestamp("2024-12-31 18:00", tz="Europe/London"),
+            ),
+        )
+        configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
+        asked: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []
+        answer = answering_with(_make_fleet_results())
+
+        def recording_simulate(fc: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append((fc.name, start, end))
+            return answer(fc, start, end)
+
+        run_sweep(configs, simulate=recording_simulate)
+
+        swept_scenario = configs[0][1]
+        assert "age-0-baseline" in [name for name, _, _ in asked]
+        assert [(start, end) for _, start, end in asked] == [swept_scenario.simulation_bounds()] * len(asked)
 
     def test_cheapest_feasible_matches_config_point(self) -> None:
         """With one config, cheapest_feasible == that config's ConfigPoint."""
