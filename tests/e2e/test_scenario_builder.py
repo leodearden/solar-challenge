@@ -17,6 +17,10 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._fetches_handled import (
+    record_fetches_started_and_handled,
+    wait_until_the_page_has_handled_every_fetch_it_started,
+)
 from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 
@@ -47,8 +51,12 @@ def test_builder_no_js_errors(
     loaded via ``defer`` in ``{% block head %}``.  Alpine.js may evaluate
     the ``x-data`` before the component function is registered, which
     throws an uncaught ReferenceError.
+
+    It reads page_errors once the page has handled its presets and first-preview answers.
     """
+    record_fetches_started_and_handled(page)
     open_once_alpine_has_started(page, live_server + "/scenarios/builder")
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
 
     assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
