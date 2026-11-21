@@ -13,13 +13,14 @@ from pandas.api.types import is_float_dtype, is_integer_dtype
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
     DispatchStrategy,
+    DispatchStrategyConfig,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
     build_dispatch_strategy,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
@@ -67,10 +68,11 @@ class HomeConfig:
         ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES; or
             ev_config's smart_charging_mode is 'off_peak' and there is no tariff_config whose
             cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
-            battery whose dispatch would ignore a setting: tou_optimized with no tariff to
-            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy), a
-            tariff with no cheap period included; or a battery tou_optimized whose peak_hours
-            reach a cheap minute of tariff_config (TOUOptimizedStrategy).
+            battery whose dispatch, the one _dispatch_strategy_config selects,
+            build_dispatch_strategy refuses: tou_optimized, the home's or its battery's, on the
+            tariff's clock with no tariff; grid_charging the strategy would ignore, a tariff
+            with no cheap period included; or a battery tou_optimized whose peak_hours reach a
+            cheap minute of tariff_config.
     """
 
     pv_config: PVConfig
@@ -93,45 +95,30 @@ class HomeConfig:
         refuse_unknown_home_dispatch_strategy(self.dispatch_strategy, field="dispatch_strategy")
         if self.ev_config is not None:
             require_tariff_for_smart_charging(self.ev_config, self.tariff_config)
-        if self.battery_config is None:
-            return
-        if _runs_tariff_tou(self):
-            if self.tariff_config is None:
-                raise ConfigurationError(
-                    "dispatch_strategy 'tou_optimized' dispatches the battery by the tariff's rates, "
-                    "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
-                )
-            build_dispatch_strategy(
-                TOUOptimizedStrategyConfig(), grid_charging=self.battery_config.grid_charging, tariff=self.tariff_config
-            )
-            return
-        _configured_strategy(self)
+        if self.battery_config is not None:
+            _battery_strategy(self, self.battery_config)
 
 
-def _runs_tariff_tou(config: HomeConfig) -> bool:
-    """Whether the home asks for the tariff-rate TOU path: tou_optimized, and its battery, if any, names no strategy of its own.
-
-    The home runs that path only when it has a tariff. It dispatches as a battery
-    TOUOptimizedStrategyConfig() does (tests/unit/test_tou_tariff_clock.py, Row 6), so its
-    grid_charging is refused as that variant's is.
-    """
-    return config.dispatch_strategy == "tou_optimized" and (
-        config.battery_config is None or config.battery_config.dispatch_strategy is None
-    )
+def _dispatch_strategy_config(config: HomeConfig) -> DispatchStrategyConfig:
+    """The dispatch the home selects: its battery's own strategy when it names one; else tou_optimized on the tariff's clock when the home asks for it; else self-consumption."""
+    battery = config.battery_config
+    if battery is not None and battery.dispatch_strategy is not None:
+        return battery.dispatch_strategy
+    if config.dispatch_strategy == "tou_optimized":
+        return TOUOptimizedStrategyConfig()
+    return SelfConsumptionStrategyConfig()
 
 
-def _configured_strategy(config: HomeConfig) -> DispatchStrategy:
-    """The strategy the home's battery names, self-consumption when it names none or there is no battery, built for its grid_charging at the home's tariff.
+def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStrategy:
+    """A new instance of the strategy _dispatch_strategy_config selects for config, built for battery's grid_charging at the home's tariff.
 
     Raises:
-        ConfigurationError: build_dispatch_strategy refuses the battery's grid_charging, which
-            the strategy would ignore.
+        ConfigurationError: build_dispatch_strategy's refusals: tou_optimized on the tariff's
+            clock with no tariff; peak_hours that reach a cheap minute of the tariff; or
+            grid_charging the strategy would ignore.
     """
-    battery = config.battery_config
     return build_dispatch_strategy(
-        (None if battery is None else battery.dispatch_strategy) or SelfConsumptionStrategyConfig(),
-        grid_charging=None if battery is None else battery.grid_charging,
-        tariff=config.tariff_config,
+        _dispatch_strategy_config(config), grid_charging=battery.grid_charging, tariff=config.tariff_config
     )
 
 
@@ -563,26 +550,13 @@ class _DispatchPath:
     timestep: _Timestep
 
 
-def _tariff_tou_timestep(tariff: TariffConfig, step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, dispatched at the tariff's rates by simulate_timestep_tou."""
+def _strategy_timestep(
+    strategy: Optional[DispatchStrategy], tariff: Optional[TariffConfig], step_minutes: float
+) -> _Timestep:
+    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates.
 
-    def timestep(
-        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
-    ) -> EnergyFlowResult:
-        return simulate_timestep_tou(
-            generation_kw=generation_kw,
-            demand_kw=demand_kw,
-            battery=battery,
-            timestamp=timestamp,
-            tariff=tariff,
-            timestep_minutes=step_minutes,
-        )
-
-    return timestep
-
-
-def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig], step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+    No strategy is a run with no battery, whose rows simulate_timestep only settles with the grid.
+    """
 
     def timestep(
         battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
@@ -603,19 +577,15 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
 def _dispatch_path(
     config: HomeConfig, step_minutes: float, strategy: Optional[DispatchStrategy] = None
 ) -> _DispatchPath:
-    """How the home dispatches each row, step_minutes long.
-
-    A given strategy dispatches it, at the home's tariff. Without one, the home takes the
-    tariff-rate TOU path when it asks for tou_optimized, has a tariff and its battery names no
-    strategy of its own; otherwise its battery's strategy, self-consumption by default.
-    """
-    tariff = config.tariff_config
+    """How the home dispatches each row, step_minutes long, at its tariff: by strategy when given, else by its battery's _battery_strategy; a home with no battery runs none and is named after the dispatch it selects."""
     if strategy is not None:
-        return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
-    if _runs_tariff_tou(config) and tariff is not None:
-        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
-    strategy = _configured_strategy(config)
-    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
+        name = strategy.name
+    elif config.battery_config is not None:
+        strategy = _battery_strategy(config, config.battery_config)
+        name = strategy.name
+    else:
+        name = _dispatch_strategy_config(config).strategy_type
+    return _DispatchPath(name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
 
 
 def _row_flows(
@@ -762,7 +732,8 @@ def simulate_home(
             so with a heat pump configured the weather must be one year of
             hourly rows, 8760 to 8784 (365 to 366 days).
         strategy: The dispatch strategy to run the battery under in place of
-            the one config selects; None runs config's. It is driven through
+            the one config selects; None runs the one config selects
+            (_dispatch_strategy_config). It is driven through
             flow.simulate_timestep with config's tariff, so it is offered a
             GridChargeContext exactly when a configured strategy is: with a
             tariff and battery_config.grid_charging. The results'

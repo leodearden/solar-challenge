@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the dispatch paths simulate_home runs a home under: which one runs, as named by its results' strategy_name, and what each one's results carry, the home's demand and a battery discharge that is part of their self-consumption.
 
-A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
-and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
-self-consumption by default. A strategy given to simulate_home runs in place of either.
+A home's battery is dispatched by its own strategy when it names one, else by tou_optimized on the
+tariff's clock when the home asks for it, else by self-consumption. A home with no battery runs no
+strategy, and its results name the one it configures. A strategy given to simulate_home runs in place
+of the configured one.
 """
 
 import dataclasses
@@ -90,12 +91,12 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
     ],
 )
 def test_results_name_the_dispatch_selected_for_the_home(home, strategy_name):
-    """Each home's results name the dispatch selected for it: the tariff-rate TOU path, or its battery's strategy."""
+    """Each home's results name the dispatch selected for it: its battery's strategy, tou_optimized on the tariff's clock, or self-consumption."""
     assert _simulate_june_21(home).strategy_name == strategy_name
 
 
 def test_a_strategy_given_to_simulate_home_dispatches_the_run_in_place_of_the_configured_one():
-    """_TOU_HOME alone runs the tariff-rate TOU path; given SelfConsumptionStrategy, its run is the greedy home's, row for row."""
+    """_TOU_HOME alone runs tou_optimized on its tariff's clock; given SelfConsumptionStrategy, its run is the greedy home's, row for row."""
     day = pd.Timestamp("2024-06-21")
 
     given = simulate_home(
@@ -131,14 +132,14 @@ def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_
 @pytest.mark.parametrize(
     ("home", "strategy_name"),
     [
-        pytest.param(_TOU_HOME, "tou_optimized", id="tariff-tou-path"),
-        pytest.param(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"), "self_consumption", id="strategy-path"),
+        pytest.param(_TOU_HOME, "tou_optimized", id="home-tou_optimized"),
+        pytest.param(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"), "self_consumption", id="greedy"),
     ],
 )
 def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_kw_in_hours(home, strategy_name):
     """Each row's demand comes back at the kW its load profile asked for only while each engine call is handed the row's step in minutes and the results turn each row's kWh back into kW over the same step in hours.
 
-    So it fails if either engine call is handed step_hours where step_minutes belongs, or if the
+    So it fails if the engine call is handed step_hours where step_minutes belongs, or if the
     conversion multiplies by step_hours.
     """
     day = datetime.date(2024, 6, 21)
@@ -165,7 +166,7 @@ _SUNLESS_SEPTEMBER_HOME = HomeConfig(
 @pytest.mark.parametrize(
     ("home", "strategy_name"),
     [
-        pytest.param(_SUNLESS_SEPTEMBER_HOME, "self_consumption", id="strategy-path"),
+        pytest.param(_SUNLESS_SEPTEMBER_HOME, "self_consumption", id="greedy"),
         pytest.param(
             dataclasses.replace(
                 _SUNLESS_SEPTEMBER_HOME,
@@ -174,7 +175,7 @@ _SUNLESS_SEPTEMBER_HOME = HomeConfig(
                 dispatch_strategy="tou_optimized",
             ),
             "tou_optimized",
-            id="tariff-tou-path",
+            id="home-tou_optimized",
         ),
     ],
 )
