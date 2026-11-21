@@ -9,13 +9,12 @@ tests/conftest.py's lane_job_collection, which the lane contract probes share.
 """
 
 import shlex
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
 from tests._collect_only import Collection, requires_uv
-from tests._computed_once import ComputedOnce
 from tests._coreutils_timeout import timeout_secs
 from tests._orchestrator_config import OrchestratorCommand, lane_job_steps
 from tests._uv_env import uv_run_options
@@ -98,7 +97,7 @@ def test_the_e2e_jobs_browser_install_deletes_no_browser_of_another_install(proj
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_the_e2e_suite_steps_timeout_gives_each_test_it_collects_a_loaded_hosts_serial_budget(
-    project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     collection = lane_job_collection(project_root, _E2E_JOB)
     suite = lane_job_steps(project_root, _E2E_JOB).suite

@@ -14,6 +14,7 @@ SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 import os
 import shlex
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from pathlib import Path, PurePosixPath
@@ -22,7 +23,6 @@ import pytest
 
 from tests._collect_only import Collection, requires_uv
 from tests._command_runner import describe_outcome, run_command
-from tests._computed_once import ComputedOnce
 from tests._lane_collection import (
     default_collection_node_ids_under,
     every_test_matching,
@@ -256,7 +256,7 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=lambda job: job.name)
 def test_the_job_collects_its_suite_and_nothing_else(
-    job: LaneJob, project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the job collects at least one test, every one in its suite.
 
@@ -284,7 +284,7 @@ def test_the_job_collects_its_suite_and_nothing_else(
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_no_node_id_the_job_collects_holds_whitespace(
-    job: LaneJob, project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the job collects no node id holding whitespace, so the lane can name each failing test."""
     collection = lane_job_collection(project_root, job.name)
@@ -303,7 +303,7 @@ def test_no_node_id_the_job_collects_holds_whitespace(
 def test_every_slow_test_runs_in_a_lane_job_or_is_listed_as_one_no_lane_job_runs(
     project_root: Path,
     shared_uv_probe_environments: SharedUvEnvironments,
-    lane_job_collection: ComputedOnce[Collection],
+    lane_job_collection: Callable[[Path, str], Collection],
 ) -> None:
     """Every slow test runs in some LANE_JOBS job, as the lane runs it, unless SLOW_TESTS_NO_LANE_JOB_RUNS lists it.
 

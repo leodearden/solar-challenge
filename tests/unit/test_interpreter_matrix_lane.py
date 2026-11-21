@@ -9,13 +9,12 @@ tests/unit/test_offline_lane_contracts.py.
 """
 
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
 
 from tests._collect_only import CollectedTest, Collection, requires_uv
-from tests._computed_once import ComputedOnce
 from tests._interpreters import off_pin_minor_versions, python_version_pin
 from tests._lane_collection import suite_tests_matching
 
@@ -36,7 +35,7 @@ def _interpreters_of(tests: Iterable[CollectedTest]) -> Counter[str | None]:
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_interpreter_matrix_job_collects_one_case_per_off_pin_admitted_minor(
-    project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the interpreter-matrix job collects one case per off-pin admitted minor, all in its suite.
 

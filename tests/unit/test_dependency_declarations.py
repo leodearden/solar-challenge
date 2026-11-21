@@ -26,6 +26,7 @@ pyproject.toml is also the only dependency declaration: no requirements*.txt at
 the project root may restate it, since a hand-maintained copy drifts from it.
 """
 
+from collections.abc import Callable
 from importlib.metadata import metadata
 from pathlib import Path, PurePosixPath
 
@@ -33,7 +34,6 @@ import pytest
 from packaging.utils import canonicalize_name
 
 from tests._collect_only import Collection, requires_uv
-from tests._computed_once import ComputedOnce
 from tests._declared_dependencies import (
     E2E,
     PACKAGE_SCOPES,
@@ -72,7 +72,7 @@ def test_sources_import_only_declared_dependencies(project_root: Path, scope: So
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 def test_the_e2e_lane_job_judges_each_scope_that_needs_the_e2e_extra(
-    project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the e2e job collects a case of tests/e2e/test_declared_dependencies.py for every
     scope whose extras include e2e.
