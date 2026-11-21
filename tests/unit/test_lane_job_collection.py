@@ -125,7 +125,7 @@ def test_asking_without_freezing_the_callers_uv_lock_mode_fails_naming_its_fixtu
     result = _run_scenario(pytester_under_root_conftest, {"test_a": unfrozen, "test_b": frozen, "test_c": unfrozen})
 
     result.assert_outcomes(passed=1, failed=2)
-    result.stdout.fnmatch_lines(["FAILED scenario/test_a.py::*", "FAILED scenario/test_c.py::*"])
+    result.stdout.fnmatch_lines(["scenario/test_a.py F*", "scenario/test_b.py .*", "scenario/test_c.py F*"])
     result.stdout.fnmatch_lines(
         ["E   AssertionError: *callers_uv_lock_mode_is_frozen*", "E   AssertionError: *callers_uv_lock_mode_is_frozen*"]
     )
