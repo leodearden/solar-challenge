@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import os
-import shutil
 import sys
 import tempfile
 import weakref
@@ -16,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pathlib import Path
 
-from tests._collect_only import Collection
+from tests._collect_only import Collection, uv_is_installed
 from tests._computed_once import ComputedOnce
 from tests._heap_freeze import freeze_the_heap_once
 from tests._lane_collection import collect_lane_job
@@ -106,7 +105,7 @@ def shared_uv_probe_environments(tmp_path_factory: pytest.TempPathFactory) -> Sh
 
 def _assert_asked_with_uv_installed_and_its_lock_mode_frozen(job: str) -> None:
     """Assert that the test asking lane_job_collection for *job* runs as @requires_uv and callers_uv_lock_mode_is_frozen make it run: uv on PATH, UV_FROZEN=1."""
-    assert shutil.which("uv") is not None, (
+    assert uv_is_installed(), (
         f"a test asked lane_job_collection for the {job!r} lane job where uv is not on PATH. Any test that asks may be "
         "the one that collects the job, which runs it through uv, so each carries @requires_uv, which skips it where "
         "uv is not installed"
