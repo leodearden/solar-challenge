@@ -585,60 +585,60 @@ def _summary_pricing(summary: "SummaryStatistics") -> "RunPricing":
 
 
 # ---------------------------------------------------------------------------
-# _annualise_physics — the one annualisation rule
+# annualise — the one annualisation rule
 # ---------------------------------------------------------------------------
 
 
-class _AnnualisedPhysics(NamedTuple):
-    """Simulation physics quantities scaled to the year of the summary's window, and how its run was priced.
+@dataclass(frozen=True)
+class AnnualPhysics:
+    """A summary's simulated totals scaled to the year of its window, beside the window and how its run was priced.
 
-    Returned by :func:`_annualise_physics`.  All energy values are in kWh;
-    monetary values are in GBP (£).
-
-    ``sc_kwh`` is taken from ``summary.total_self_consumption_kwh``.
-    :func:`householder_bill` overrides it with its *annual_self_consumption_kwh*
-    parameter, which may differ when the caller supplies an externally-computed
-    self-consumption figure.
+    Built by :func:`annualise`.  Energy is in kWh a year and the import cost in
+    GBP (£) a year.
     """
 
-    scale: float
-    """The window's annualisation_scale, year_days / days: what each window total is multiplied by."""
-    gen_kwh: float
+    window: SimulationWindow
+    """The window the summary's totals cover."""
+    generation_kwh: float
+    """The home's PV generation."""
     demand_kwh: float
-    sc_kwh: float
+    """The home's demand."""
     import_kwh: float
+    """The simulated grid import."""
     import_cost_gbp: float
+    """What the simulated grid import cost, as its run priced it."""
     export_kwh: float
+    """The simulated grid export."""
     battery_discharge_kwh: float
+    """The simulated battery discharge."""
     pricing: RunPricing
-    """The rates the summary's run was priced at (:func:`_summary_pricing`), which its import and export are billed at."""
+    """The rates the summary's run was priced at, which its import and export are billed at."""
+
+    @property
+    def scale(self) -> float:
+        """The window's annualisation_scale, year_days / days: what each window total was multiplied by."""
+        return self.window.annualisation_scale
 
 
-def _annualise_physics(summary: "SummaryStatistics") -> _AnnualisedPhysics:
-    """Scale a summary's energy and import cost totals to the year of its window, beside how its run was priced.
+def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
+    """Scale *summary*'s energy and import-cost totals to the year of its window, beside the window and how its run was priced.
 
     The one annualisation rule, and the one place finance reads a summary's
     pricing: :func:`householder_bill` and :func:`project_multi_year` both
-    annualise through here.  Every quantity is multiplied by the window's
+    annualise through here.  Every total is multiplied by the window's
     annualisation_scale, year_days / days, whatever the window's length.
 
-    Args:
-        summary: Per-home simulation output (read-only).
-
-    Returns:
-        An :class:`_AnnualisedPhysics` namedtuple with ``scale``, the
-        annualised energy/cost quantities and the run's pricing.
-
     Raises:
-        ValueError: If the summary has no window (:func:`_summary_window`), or
-            no pricing (:func:`_summary_pricing`).
+        ValueError: If the summary has no window (:func:`_summary_window`) or
+            no pricing (:func:`_summary_pricing`), naming the missing field and
+            calculate_summary, which sets both.
     """
-    scale = _summary_window(summary).annualisation_scale
-    return _AnnualisedPhysics(
-        scale=scale,
-        gen_kwh=summary.total_generation_kwh * scale,
+    window = _summary_window(summary)
+    scale = window.annualisation_scale
+    return AnnualPhysics(
+        window=window,
+        generation_kwh=summary.total_generation_kwh * scale,
         demand_kwh=summary.total_demand_kwh * scale,
-        sc_kwh=summary.total_self_consumption_kwh * scale,
         import_kwh=summary.total_grid_import_kwh * scale,
         import_cost_gbp=summary.total_import_cost_gbp * scale,
         export_kwh=summary.total_grid_export_kwh * scale,
@@ -685,7 +685,7 @@ def _override_energy_split(
 
 
 def _billed_energy(
-    phys: _AnnualisedPhysics,
+    phys: AnnualPhysics,
     finance: "FinanceConfig",
     *,
     physics_own_use_kwh: float,
@@ -712,7 +712,7 @@ def _billed_energy(
             capped_at_demand=False,
         )
     return _override_energy_split(
-        override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
+        override, generation_kwh=phys.generation_kwh, demand_kwh=phys.demand_kwh
     )
 
 
@@ -721,7 +721,7 @@ def _billed_energy(
 # ---------------------------------------------------------------------------
 
 
-def _billed_import_cost_gbp(phys: _AnnualisedPhysics, energy: _BilledEnergy, finance: "FinanceConfig") -> float:
+def _billed_import_cost_gbp(phys: AnnualPhysics, energy: _BilledEnergy, finance: "FinanceConfig") -> float:
     """The £ of *energy*'s import over the window's year, at the price the home's run was priced at.
 
     * No tariff priced the run (``phys.pricing``'s import rate is None): the
@@ -976,7 +976,7 @@ def householder_bill(
 
     Responsibilities of this wrapper (not in bill()):
       * Annualise the window's totals by its annualisation_scale,
-        year_days / days (:func:`_annualise_physics`).
+        year_days / days (:func:`annualise`).
       * Resolve own-use and import through :func:`_billed_energy`, the
         physics/override switch :func:`project_multi_year` also reads.  The
         override's own-use is capped at demand, with a :class:`UserWarning`
@@ -1034,7 +1034,7 @@ def householder_bill(
     override = finance.self_consumption_override
 
     # ---- Annualisation (docs/cost-recovery-finance-model.md §4, Annual basis) ----
-    phys = _annualise_physics(summary)
+    phys = annualise(summary)
     # NOTE: householder_bill takes annual_self_consumption_kwh as a separate parameter
     # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
     # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
@@ -1057,7 +1057,7 @@ def householder_bill(
     baseline_import_cost_gbp = phys.demand_kwh * retail_rate_pence / 100.0
     return bill(
         period_days=window.year_days,
-        generation_kwh=phys.gen_kwh,
+        generation_kwh=phys.generation_kwh,
         demand_kwh=phys.demand_kwh,
         self_consumption_kwh=energy.own_use_kwh,
         import_kwh=energy.import_kwh,
@@ -1639,7 +1639,7 @@ def project_multi_year(
         Every returned :class:`YearPoint` is the window's year: each home's
         own-use, export, import and battery-discharge kWh and its SEG income
         are its window totals × the window's annualisation_scale
-        (year_days / days, :func:`_annualise_physics`), so energy fields and
+        (year_days / days, :func:`annualise`), so energy fields and
         ``fleet_revenue_gbp`` stay on one basis.  A short window is still one
         season's sample, so board figures want ``scenario.period`` to cover
         about one full year.
@@ -1713,7 +1713,7 @@ def project_multi_year(
         # income are billed through _billed_energy, the switch householder_bill
         # reads; the export, import and discharge aggregates stay the simulated
         # flows (docs/cost-recovery-finance-model.md §4).
-        annualised_homes = [(s, _annualise_physics(s)) for s in per_home_summaries]
+        annualised_homes = [(s, annualise(s)) for s in per_home_summaries]
         billed_homes = [
             (phys, _billed_energy(phys, finance, physics_own_use_kwh=_cbs_own_use_kwh(s) * phys.scale))
             for s, phys in annualised_homes
