@@ -11,8 +11,11 @@ Each chart drawn on load is as wide as its container, and each
 drawn chart ends as wide as its container whenever the
 container's width changes: when the sidebar collapses or expands
 and when the window narrows, and, for a chart whose tab is
-hidden at the time, once its tab is shown again. A chart that
-cannot be fitted to its container logs one error naming it.
+hidden at the time, once its tab is shown again. A chart is
+redrawn only at the width its container settles at, never at
+one the container passes through as the sidebar slides,
+however far apart the slide's frames are. A chart that cannot
+be fitted to its container logs one error naming it.
 A chart container added to a shown tab after load is drawn by
 the adding script's next microtask, even inside a parent that a
 transform scales to zero width, and a drawn container given
@@ -21,6 +24,8 @@ microtask; a container added and given another figure in one
 task is drawn once. A drawn container removed from the page has
 its chart purged, and a theme toggle after it logs no error.
 """
+
+from collections.abc import Sequence
 
 from playwright.sync_api import Locator, Page, expect
 
@@ -365,6 +370,64 @@ def test_after_the_sidebar_expands_each_shown_chart_is_as_wide_as_its_container(
     page.get_by_title("Expand sidebar", exact=True).click()
 
     assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
+
+
+# Stretches base.html's main-column slide, the transition of the wrapper whose child is #main-content, into one
+# intermediate width, held for 1 s. The slide's frames are then further apart than Plotly.Plots.resize's 100 ms wait,
+# as they are on a renderer starved of CPU.
+_A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT = (
+    ":has(> #main-content) { transition-duration: 2s !important; transition-timing-function: steps(2) !important; }"
+)
+
+# Records, for each container of chartIds, the width of its chart's first .main-svg at each plotly_afterplot from now
+# on, and returns the record by container id, which the page goes on filling.
+_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT = """(chartIds) => Object.fromEntries(chartIds.map(id => {
+    const chart = document.getElementById(id);
+    const widths = [];
+    chart.on('plotly_afterplot', () => widths.push(Number(chart.querySelector('.main-svg').getAttribute('width'))));
+    return [id, widths];
+}))"""
+
+_NO_CSS_TRANSITION_RUNS = "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
+
+
+def _container_widths(page: Page, chart_ids: Sequence[str]) -> dict[str, int]:
+    """The clientWidth of each container among chart_ids, the ids of page's chart containers, by container id."""
+    widths: dict[str, int] = page.evaluate(
+        "chartIds => Object.fromEntries(chartIds.map(id => [id, document.getElementById(id).clientWidth]))",
+        list(chart_ids),
+    )
+    return widths
+
+
+def test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_redraws_each_shown_chart_only_at_its_settled_width(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A renderer starved of CPU draws the sidebar's slide in frames further apart than Plotly.Plots.resize's 100 ms wait, and a chart must be redrawn only at the width its container settles at, never at one the container passes through mid-slide.
+
+    That is the lane's misfit, a chart drawn 1001.08 px wide in its 958 px container (flake debt task 1519).
+    """
+    run_id, _ = seeded_home_run
+    page.add_init_script("localStorage.setItem('sidebarOpen', 'false')")
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+    before = _container_widths(page, _OVERVIEW_CHART_IDS)
+    page.add_style_tag(content=_A_SLIDE_IN_STEPS_FURTHER_APART_THAN_PLOTLYS_RESIZE_WAIT)
+    drawn = page.evaluate_handle(_RECORD_THE_WIDTHS_EACH_CHART_IS_DRAWN_AT, list(_OVERVIEW_CHART_IDS))
+
+    page.get_by_title("Expand sidebar", exact=True).click()
+    # The slide runs to its natural end first: finishing it, as charts_not_as_wide_as_their_containers does, would skip
+    # the intermediate width this test is about.
+    page.wait_for_function(_NO_CSS_TRANSITION_RUNS)
+
+    misfits = charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS)
+    settled = _container_widths(page, _OVERVIEW_CHART_IDS)
+    mid_slide = {
+        chart_id: [width for width in widths if abs(width - before[chart_id]) > 1 and abs(width - settled[chart_id]) > 1]
+        for chart_id, widths in drawn.json_value().items()
+    }
+    assert (misfits, mid_slide) == ([], {chart_id: [] for chart_id in _OVERVIEW_CHART_IDS})
 
 
 def test_after_the_window_narrows_each_shown_chart_is_as_wide_as_its_container(
