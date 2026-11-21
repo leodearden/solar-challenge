@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Unit tests for tests/_web_app.py, which builds the web tests' Flask app, names the database file it gives that app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and releases the store lock it holds, and for the app, client and storage fixtures tests/unit/conftest.py builds with it, the app fixture releasing its app's store lock at teardown."""
 
-import subprocess
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -15,6 +13,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
+from tests._blocked_imports import extra_modules, import_with_modules_blocked
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._web_app import build_test_app, database_of, database_path_in, point_store_config_at_a_missing_directory, release_store_lock, run_storage_of
 from tests._web_runs import store_home_run
@@ -22,13 +21,7 @@ from tests._web_runs import store_home_run
 
 def test_importing_the_helper_needs_no_web_extra(project_root: Path) -> None:
     """tests/unit/conftest.py imports the helper when it loads, and a run without the web extra must skip the tests that need it, not abort."""
-    result = subprocess.run(
-        [sys.executable, "-c", "import sys; sys.modules['flask'] = None; import tests._web_app"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    result = import_with_modules_blocked("tests._web_app", extra_modules(project_root, "web"), project_root)
 
     assert result.returncode == 0, result.stderr
 
