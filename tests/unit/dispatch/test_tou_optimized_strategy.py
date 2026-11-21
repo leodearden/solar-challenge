@@ -659,12 +659,13 @@ class TestTOUOptimizedStrategyGridCharging:
         assert decision.grid_charge_kw == 0.0
 
     def test_is_cheap_period_true_overrides_peak_hours(self, standard_tou_strategy):
-        """Seam test: ctx.is_cheap_period=True is the authority on grid-charging,
-        even when the timestamp falls inside the strategy's configured peak_hours.
+        """ctx.is_cheap_period=True decides grid-charging, even when the timestamp falls inside
+        the peak_hours of a strategy built without a tariff.
 
         The strategy's peak_hours govern charge_kw/discharge_kw decisions; they do
         NOT suppress grid charging when the caller-supplied ctx says is_cheap_period=True.
-        This locks the dual-source-of-truth seam to an explicit contract: ctx wins.
+        Built with the step's tariff, the strategy and the context agree, so no minute is
+        both peak and cheap (tests/unit/test_tou_tariff_clock.py, Row 10).
         """
         ctx = self._FAVOURABLE_CTX  # is_cheap_period=True, spread passes
         # Peak hour (18:00 in peak_hours=[(17,20)]), balanced load → no shortfall

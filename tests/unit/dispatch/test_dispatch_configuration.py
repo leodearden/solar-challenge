@@ -223,7 +223,6 @@ class TestOneValidatorPerRule:
     @pytest.mark.parametrize(
         "value",
         [
-            pytest.param(None, id="null"),
             pytest.param("16-19", id="text"),
             pytest.param(16, id="an-hour"),
             pytest.param({16: 19}, id="a-mapping"),

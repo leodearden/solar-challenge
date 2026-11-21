@@ -87,7 +87,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "GridChargeContext": "dataclass[eq, frozen] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float) -> None",
     "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
-    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]]) -> None",
+    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]] | None = None, *, tariff: TariffConfig | None = None) -> None",
     "PeakShavingStrategy": "(import_limit_kw: float) -> None",
     "DispatchTariffPeriod": "PEAK='peak', OFF_PEAK='off_peak'",
     # --- battery (battery.py) ---
