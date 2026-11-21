@@ -29,7 +29,7 @@ from tests._factories import (
     make_config_result,
     make_ranked_sweep,
 )
-from tests._finance_builders import make_fleet_results, make_home_config
+from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_home_config
 from tests.integration._helpers import SCENARIO
 
 
@@ -838,7 +838,7 @@ class TestOptimizeCLIE2EFast:
         n_homes: int = 5,
         finance_overrides: Optional[dict[str, object]] = None,
     ) -> tuple[Result, list[FleetConfig]]:
-        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides*, with *options*, answering every fleet simulation with *fleet_results*.
+        """Run `optimize configs` on a fresh *n_homes*-home scenario, its finance block updated with *finance_overrides*, with *options*, answering every fleet simulation with *fleet_results*' per-home results, paired with that fleet's homes.
 
         Returns the CliRunner result and the fleet configs the injected simulator
         was asked to simulate.
@@ -847,7 +847,7 @@ class TestOptimizeCLIE2EFast:
 
         def simulate(fleet_config, start, end):
             simulated_fleets.append(fleet_config)
-            return fleet_results
+            return make_fleet_results_of(fleet_results.per_home_results, homes=fleet_config.homes)
 
         scenario_file = _write_optimize_scenario(
             tmp_path, n_homes=n_homes, finance_overrides=finance_overrides
@@ -1094,7 +1094,7 @@ class TestOptimizeCLIE2EFast:
             asked.append(fleet_config)
             if len(asked) > len(sweep_fleets):
                 raise ValueError("a defect raised while the sensitivity panel runs")
-            return one_home_fleet_results
+            return make_fleet_results_of(one_home_fleet_results.per_home_results, homes=fleet_config.homes)
 
         result = invoke_cli(
             [
@@ -1161,7 +1161,7 @@ class TestOptimizeCLIE2EFast:
             asked.append(fleet_config)
             if len(asked) > len(sweep_fleets):
                 raise ConfigurationError("a refusal raised while the sensitivity panel runs")
-            return one_home_fleet_results
+            return make_fleet_results_of(one_home_fleet_results.per_home_results, homes=fleet_config.homes)
 
         result = invoke_cli(
             [
