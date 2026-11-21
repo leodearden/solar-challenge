@@ -837,6 +837,40 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
     assert [(site.imported, site.line) for site in found] == expected
 
 
+def test_an_upward_grammar_import_and_a_runner_import_are_reported_with_their_file_line_and_rule(
+    tmp_path: Path,
+) -> None:
+    """One scan reports a seeded function-local import of config in scenario_blocks.py and a seeded import of simulate_home in fleet_distribution.py, each by its file, line and the rule it breaks: the real-tree test passes for a scan that finds nothing."""
+    src_dir = _write_package(
+        tmp_path / "src",
+        {
+            "scenario_blocks.py": (
+                "def read(path):\n"
+                "    from solar_challenge.config import load_config\n"
+                "    return load_config(path)\n"
+            ),
+            "fleet_distribution.py": (
+                "from solar_challenge.scenario_blocks import child_path\n"
+                "from solar_challenge.home import simulate_home\n"
+            ),
+        },
+    )
+
+    found = _grammar_layering_violations(_import_sites(src_dir))
+
+    assert [(violation.path.as_posix(), violation.line, violation.rule) for violation in found] == [
+        ("src/solar_challenge/fleet_distribution.py", 2, _GrammarRule.NO_RUNNER),
+        ("src/solar_challenge/scenario_blocks.py", 2, _GrammarRule.IMPORT_DIRECTION),
+    ]
+    runner, upward = (str(violation) for violation in found)
+    assert "src/solar_challenge/fleet_distribution.py:2" in runner
+    assert "simulate_home" in runner
+    assert _GrammarRule.NO_RUNNER.value in runner
+    assert "src/solar_challenge/scenario_blocks.py:2" in upward
+    assert "solar_challenge.config" in upward
+    assert _GrammarRule.IMPORT_DIRECTION.value in upward
+
+
 @pytest.mark.parametrize(
     ("module", "source", "expected"),
     [
@@ -844,19 +878,25 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
             "scenario_blocks.py",
             "from solar_challenge.config import load_config\n"
             "import solar_challenge.fleet_distribution\n",
-            [("solar_challenge.config", 1), ("solar_challenge.fleet_distribution", 2)],
+            [
+                ("solar_challenge.config", 1, _GrammarRule.IMPORT_DIRECTION),
+                ("solar_challenge.fleet_distribution", 2, _GrammarRule.IMPORT_DIRECTION),
+            ],
             id="module-top-absolute",
         ),
         pytest.param(
             "scenario_blocks.py",
             "from .config import load_config\nfrom . import fleet_distribution\n",
-            [("solar_challenge.config", 1), ("solar_challenge.fleet_distribution", 2)],
+            [
+                ("solar_challenge.config", 1, _GrammarRule.IMPORT_DIRECTION),
+                ("solar_challenge.fleet_distribution", 2, _GrammarRule.IMPORT_DIRECTION),
+            ],
             id="relative",
         ),
         pytest.param(
             "scenario_blocks.py",
             "from solar_challenge import config\n",
-            [("solar_challenge.config", 1)],
+            [("solar_challenge.config", 1, _GrammarRule.IMPORT_DIRECTION)],
             id="the-package-form",
         ),
         pytest.param(
@@ -865,7 +905,7 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
             "\n"
             "if TYPE_CHECKING:\n"
             "    from solar_challenge.fleet_distribution import SweepSpec\n",
-            [("solar_challenge.fleet_distribution", 4)],
+            [("solar_challenge.fleet_distribution", 4, _GrammarRule.IMPORT_DIRECTION)],
             id="type-checking",
         ),
         pytest.param(
@@ -878,7 +918,10 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
             "    from .fleet_distribution import parse_fleet_distribution_config\n"
             "except ImportError:\n"
             "    parse_fleet_distribution_config = None\n",
-            [("solar_challenge.config", 2), ("solar_challenge.fleet_distribution", 6)],
+            [
+                ("solar_challenge.config", 2, _GrammarRule.IMPORT_DIRECTION),
+                ("solar_challenge.fleet_distribution", 6, _GrammarRule.IMPORT_DIRECTION),
+            ],
             id="in-a-function-and-an-import-error-guard",
         ),
         pytest.param(
@@ -895,14 +938,88 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
             [],
             id="another-module",
         ),
+        pytest.param(
+            "fleet_distribution.py",
+            "from solar_challenge.config import load_config\n"
+            "from . import config\n"
+            "\n"
+            "\n"
+            "def read(path):\n"
+            "    from .config import load_fleet_config\n",
+            [
+                ("solar_challenge.config", 1, _GrammarRule.IMPORT_DIRECTION),
+                ("solar_challenge.config", 2, _GrammarRule.IMPORT_DIRECTION),
+                ("solar_challenge.config", 6, _GrammarRule.IMPORT_DIRECTION),
+            ],
+            id="fleet-distribution-imports-config",
+        ),
+        pytest.param(
+            "errors.py",
+            "from solar_challenge.scenario_blocks import block_label\n",
+            [("solar_challenge.scenario_blocks", 1, _GrammarRule.IMPORT_DIRECTION)],
+            id="a-leaf-imports-scenario-blocks",
+        ),
+        pytest.param(
+            "number_fields.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from solar_challenge.fleet_distribution import SweepSpec\n",
+            [("solar_challenge.fleet_distribution", 4, _GrammarRule.IMPORT_DIRECTION)],
+            id="a-leaf-imports-fleet-distribution-under-type-checking",
+        ),
+        pytest.param(
+            "fleet_distribution.py",
+            "from solar_challenge.errors import ConfigurationError\n"
+            "from solar_challenge.scenario_blocks import child_path\n",
+            [],
+            id="fleet-distribution-imports-below-it",
+        ),
+        pytest.param(
+            "config.py",
+            "from solar_challenge.fleet_distribution import SweepSpec\n"
+            "from .scenario_blocks import parse_home_block\n",
+            [],
+            id="config-imports-below-it",
+        ),
+        pytest.param(
+            "config.py",
+            "def run(config):\n    from solar_challenge.fleet import simulate_fleet as run\n",
+            [("simulate_fleet", 2, _GrammarRule.NO_RUNNER)],
+            id="a-runner-in-a-function-named-by-its-name-not-its-alias",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from .home import simulate_home\n",
+            [("simulate_home", 1, _GrammarRule.NO_RUNNER)],
+            id="a-runner-imported-relatively",
+        ),
+        pytest.param(
+            "fleet_distribution.py",
+            "from solar_challenge.fleet import fleet_home_seed\n",
+            [],
+            id="not-a-runner",
+        ),
+        pytest.param(
+            "cli/home.py",
+            "from solar_challenge.home import simulate_home\n",
+            [],
+            id="a-runner-outside-the-grammar",
+        ),
+        pytest.param(
+            "fleet_distribution.py",
+            "from simulate_tools import simulate_x\n",
+            [],
+            id="a-runner-outside-the-package",
+        ),
     ],
 )
-def test_the_scan_finds_scenario_blocks_imports_of_the_grammar_above_it_at_any_scope(
-    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int]]
+def test_the_scan_finds_grammar_imports_against_the_direction_or_of_a_runner_at_any_scope(
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int, "_GrammarRule"]]
 ) -> None:
-    """The scan finds an import of fleet_distribution or config in scenario_blocks.py at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package. It finds none of another package module, none of a module merely named config_tools, and none that another module makes."""
+    """The scan finds, at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package, an import against the grammar's direction, from a leaf or a grammar module of a module of a stratum above its own, and a grammar module's import of a simulate_* name from a module of the package, named by the name it imports, not its alias. It finds none of a module below the importer's stratum or merely named config_tools, none of a name that is no runner, and none of a runner that a module outside the grammar imports or that a module outside the package defines."""
     src_dir = _write_package(tmp_path / "src", {module: source})
 
-    found = _imports_of_the_grammar_above_scenario_blocks(_import_sites(src_dir))
+    found = _grammar_layering_violations(_import_sites(src_dir))
 
-    assert [(site.imported, site.line) for site in found] == expected
+    assert [(violation.subject, violation.line, violation.rule) for violation in found] == expected
