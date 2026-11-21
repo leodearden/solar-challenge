@@ -14,14 +14,14 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.config import (
+from solar_challenge.dispatch import DispatchStrategyConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     FleetDistributionConfig,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
-from solar_challenge.dispatch import DispatchStrategyConfig
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_blocks import (
@@ -92,12 +92,12 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     """The fleet the fleet *form* describes, as POST /api/simulate/fleet-from-distribution runs it, with its scenario document.
 
     The form's distributions, with its dispatch strategy in the battery block, are the
-    fleet_distribution: block in config.py's grammar that the document writes, where
-    load_fleet_config gives that strategy to every battery; a form without a battery gives
-    it to none.  The homes are generated once, from the form's distributions as config.py's
-    grammar reads them, each battery given the form's dispatch strategy as
-    parse_dispatch_strategy_config reads it, at the form's location with its tariff, and
-    each home is then given its SEG.  The document writes the form's name only when it can
+    fleet_distribution: block in fleet_distribution.py's grammar that the document writes,
+    where load_fleet_config gives that strategy to every battery; a form without a battery
+    gives it to none.  The homes are generated once, from the form's distributions as
+    fleet_distribution.py's grammar reads them, each battery given the form's dispatch
+    strategy as parse_dispatch_strategy_config reads it, at the form's location with its
+    tariff, and each home is then given its SEG.  The document writes the form's name only when it can
     name a run, and the tariff: and seg: blocks as given, null when the form sends none.
 
     The form's six blocks, the pv, battery and load distributions and the tariff,

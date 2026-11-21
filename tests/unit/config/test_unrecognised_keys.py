@@ -15,29 +15,31 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    ComponentDistribution,
-    FleetDistributionConfig,
-    NormalDistribution,
     OutputConfig,
-    ProportionalDistribution,
-    ShuffledPoolDistribution,
     SimulationPeriod,
-    SweepSpec,
-    UniformDistribution,
-    WeightedDiscreteDistribution,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_fleet_distribution_config,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    FleetDistributionConfig,
+    NormalDistribution,
+    ProportionalDistribution,
+    ShuffledPoolDistribution,
+    SweepSpec,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    parse_fleet_distribution_config,
+)
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig

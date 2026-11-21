@@ -12,7 +12,10 @@ from typing import Optional, Union
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import (
+from solar_challenge.config import load_fleet_config
+from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     DistributionSpec,
     FleetDistributionConfig,
@@ -21,11 +24,8 @@ from solar_challenge.config import (
     UniformDistribution,
     WeightedDiscreteDistribution,
     generate_homes_from_distribution,
-    load_fleet_config,
     parse_fleet_distribution_config,
 )
-from solar_challenge.dispatch import GridChargeConfig
-from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location

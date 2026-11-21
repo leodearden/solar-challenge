@@ -287,7 +287,7 @@ class TestScenarioFromFleetForm:
     """The fleet scenario document scenario_from_fleet_form builds from a fleet form, and its refusals."""
 
     def test_a_fleet_form_is_the_scenario_document_it_describes(self) -> None:
-        """Its distributions are written in config.py's grammar with the dispatch under the battery; its dates, location, tariff and SEG are their blocks.
+        """Its distributions are written in fleet_distribution.py's grammar with the dispatch under the battery; its dates, location, tariff and SEG are their blocks.
 
         The blocks come in the order the scenario builder writes them.
         """

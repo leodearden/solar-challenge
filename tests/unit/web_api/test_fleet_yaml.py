@@ -12,12 +12,10 @@ import yaml
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import (
-    load_fleet_config,
-    parse_fleet_distribution_config,
-)
+from solar_challenge.config import load_fleet_config
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
@@ -110,7 +108,7 @@ class TestExportFleetYAML:
     def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in config.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
+        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in fleet_distribution.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
 
         The form sets no seg, which load_fleet_config does not read yet (task 185).
         """

@@ -164,7 +164,7 @@ conventions:
   - rule: >
       Fleet simulations must be reproducible from a single seed: per-home seed = fleet_seed + index,
       computed only by fleet.fleet_home_seed, which FleetConfig.create_uniform,
-      FleetConfig.create_heterogeneous and config.generate_homes_from_distribution call,
+      FleetConfig.create_heterogeneous and fleet_distribution.generate_homes_from_distribution call,
       and stochastic draws run only inside load.py's RNG hand-off, which seeds both generators
       (numpy and the stdlib `random` module) from the call's seed (fresh entropy when unset) and
       restores them.
@@ -213,6 +213,27 @@ conventions:
       ways: an import the list lacks fails it, naming its file:line and the imported module, and
       so does an entry that no import matches any more. So the change that removes a deferred
       import deletes its entry in the same commit.
+
+  - rule: >
+      The scenario grammar is three modules with one import direction, at any scope: errors,
+      number_fields <- scenario_blocks (one block of a scenario file into a domain value, naming
+      its path) <- fleet_distribution (the fleet_distribution: grammar and the homes it generates,
+      sweep points included) <- config (whole scenario, fleet and community documents). No grammar
+      module imports a simulate_* runner or defines a dataclass that solar_challenge.dispatch
+      defines. Every name src or tests imports from a grammar module is a public name that module
+      defines: no re-export, no shim, and no underscore name imported across the line
+      (tests/unit/test_import_structure.py).
+    why: >
+      An import against the direction closes a cycle, and a library consumer reads one block, or
+      the fleet grammar, without loading the whole grammar: a fresh interpreter that imports
+      scenario_blocks loads neither module above it, and one that imports fleet_distribution does
+      not load config
+      (tests/unit/test_import_structure.py::test_importing_a_grammar_module_loads_no_grammar_module_above_it).
+      config binds the names it uses for itself, but mypy --strict has implicit re-export off, so a
+      second spelling such as solar_challenge.config.parse_home_block fails a consumer's own type
+      check; tests are not type-checked, so the guard reads tests as well as src. A name a lower
+      module needs moves down into it, and no exemption is listed for any crossing
+      (docs/prds/scenario-grammar-partition.md §3, §4.2).
 
   - rule: >
       The project's own code is AGPL-3.0-or-later (pyproject is authoritative). pyproject's license
