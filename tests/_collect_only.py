@@ -13,7 +13,7 @@ command's exit code and output.
 
 Usage::
 
-    from tests._collect_only import collect, requires_uv, run_collect_only
+    from tests._collect_only import collect, requires_uv, run_collect_only, uv_is_installed
     from tests._command_runner import ShellCommand, describe_outcome
     from tests._orchestrator_config import lane_job_steps, verify_command
 
@@ -43,8 +43,14 @@ import pytest
 
 from tests._command_runner import Command, describe_outcome, run_command
 
+
+def uv_is_installed() -> bool:
+    """Whether uv is on the PATH this process has now."""
+    return shutil.which("uv") is not None
+
+
 requires_uv = pytest.mark.skipif(
-    shutil.which("uv") is None, reason="uv is not installed; the orchestrator command under test runs through it"
+    not uv_is_installed(), reason="uv is not installed; the orchestrator command under test runs through it"
 )
 
 COLLECTION_REPORT_PLUGIN = "solar_challenge_collection_report"
