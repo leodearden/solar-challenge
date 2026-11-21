@@ -2,6 +2,8 @@
 """Unit tests for tests/_blocked_imports.py, which imports a module in a fresh interpreter whose sys.modules blocks given modules.
 
 Each import names a standard-library module, which every interpreter has installed, so a refusal comes from the block alone.
+The extra_modules test's probe extra requires python-dateutil, which pandas (a core dependency) installs and whose
+module is dateutil, so the test sees a distribution name translated to its module's name.
 """
 
 from pathlib import Path
@@ -46,8 +48,8 @@ def test_extra_modules_are_the_installed_top_level_modules_of_the_distributions_
 ) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[project.optional-dependencies]\n"
-        'probe = ["packaging>=20", "not-an-installed-distribution>=1"]\n',
+        'probe = ["python-dateutil>=2", "packaging>=20", "not-an-installed-distribution>=1"]\n',
         encoding="utf-8",
     )
 
-    assert extra_modules(tmp_path, "probe") == ["packaging"]
+    assert extra_modules(tmp_path, "probe") == ["dateutil", "packaging"]
