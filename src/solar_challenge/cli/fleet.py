@@ -20,6 +20,7 @@ from solar_challenge.cli.utils import (
     create_summary_table,
     fleet_summary_rows,
     handle_errors,
+    invocation,
     print_info,
     print_success,
     print_warning,
@@ -39,10 +40,8 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
-    FleetRunner,
     HomesDone,
     calculate_fleet_summary,
-    default_runner,
 )
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.timebase import covered_days
@@ -122,6 +121,7 @@ def _period_in_fleet_timezone(
 @app.command()
 @handle_errors
 def run(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -151,20 +151,6 @@ def run(
             help="Output CSV file path for aggregate results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
     community_report: Annotated[
         Optional[Path],
         typer.Option(
@@ -179,7 +165,7 @@ def run(
     The config file should define a list of homes with their PV, battery,
     and load configurations.
     """
-    runner = _runner(workers, sequential)
+    runner = invocation(ctx).runner
     fleet_config = load_fleet_config(config)
     community_config = load_community_config(config)
     n_homes = len(fleet_config.homes)
@@ -220,6 +206,7 @@ def run(
 @app.command()
 @handle_errors
 def sweep(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -284,20 +271,6 @@ def sweep(
             help="Output directory for sweep results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers per simulation",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
 ) -> None:
     """Run parameter sweep over fleet configuration.
 
@@ -337,7 +310,7 @@ def sweep(
         solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
     """
-    runner = _runner(workers, sequential)
+    runner = invocation(ctx).runner
     raw_config = load_config(config)
 
     if "fleet_distribution" not in raw_config:
@@ -435,11 +408,6 @@ def _yaml_sweep(
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
     return param_name, parse_sweep_fleet_configs(raw_config)
-
-
-def _runner(workers: Optional[int], sequential: bool) -> FleetRunner:
-    """The default runner, simulating homes in turn when sequential, else in parallel on workers workers, None meaning as many as the homes need, up to the CPUs."""
-    return dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:

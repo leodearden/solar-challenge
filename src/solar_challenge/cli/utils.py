@@ -13,12 +13,11 @@ messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
 
 What one invocation runs with travels as Click's context object, a
-CliInvocation. `finance run` and `optimize configs` simulate with its runner,
-invocation(ctx).runner. The root callback builds that runner from --workers and
---sequential, as root_invocation says, unless whoever invokes the CLI passes a
-CliInvocation as obj; the root's options leave that invocation's runner as it
-is. `fleet run` and `fleet sweep` still build their own fleet.FleetRunner from
-their --workers and --sequential.
+CliInvocation. `fleet run`, `fleet sweep`, `finance run` and `optimize configs`
+simulate with its runner, invocation(ctx).runner. The root callback builds that
+runner from --workers and --sequential, as root_invocation says, unless whoever
+invokes the CLI passes a CliInvocation as obj; the root's options leave that
+invocation's runner as it is.
 """
 
 import dataclasses
