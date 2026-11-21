@@ -13,7 +13,8 @@ container's width changes: when the sidebar collapses or expands
 and when the window narrows, and, for a chart whose tab is
 hidden at the time, once its tab is shown again. A chart that
 cannot be fitted to its container logs one error naming it.
-A chart container added to the page after load is drawn, and
+A chart container added to the page after load is drawn, one
+added to a shown tab by the adding script's next microtask, and
 a drawn container given another figure is redrawn with it. A
 drawn container removed from the page has its chart purged,
 and a theme toggle after it logs no error.
@@ -453,6 +454,31 @@ def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn(
 
     expect(page.locator("#chart-added-late.js-plotly-plot")).to_be_visible()
     assert page_errors == []
+
+
+# Adds the container, then awaits one microtask, whose continuation the addition queued behind the
+# MutationObserver's, and returns whether Plotly has drawn the added container by then.
+_ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK = f"""async (drawn) => {{
+    ({_ADD_A_CONTAINER_OF_THE_SAME_FIGURE_AFTER})(drawn);
+    await Promise.resolve();
+    return document.getElementById('chart-added-late').classList.contains('js-plotly-plot');
+}}"""
+
+
+def test_a_chart_container_added_to_a_shown_tab_after_load_is_drawn_before_the_adding_scripts_next_microtask(
+    page: Page,
+    live_server: str,
+    seeded_home_run: tuple[str, str],
+) -> None:
+    """A container added to the shown Overview tab is drawn in the microtask that reports its addition, ahead of the adding script's next."""
+    run_id, _ = seeded_home_run
+    _open_with_the_overview_charts_drawn(page, live_server, run_id)
+
+    drawn_by_the_next_microtask = page.locator("#chart-daily-balance").evaluate(
+        _ADD_ONE_AND_SAY_WHETHER_IT_IS_DRAWN_BY_THE_NEXT_MICROTASK
+    )
+
+    assert drawn_by_the_next_microtask is True
 
 
 def test_a_drawn_chart_container_given_another_figure_is_redrawn_with_it(
