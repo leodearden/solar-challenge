@@ -17,7 +17,7 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.tariff import PRESET_RATES, TariffConfig, TariffPeriod
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
@@ -251,8 +251,8 @@ class TestEconomy7TariffIntegration:
         # Tariff rates should still vary
         unique_rates = results.tariff_rate.unique()
         assert len(unique_rates) == 2
-        assert 0.09 in unique_rates
-        assert 0.25 in unique_rates
+        assert PRESET_RATES["economy_7"].off_peak_rate in unique_rates
+        assert PRESET_RATES["economy_7"].peak_rate in unique_rates
 
         # Import costs should be calculated
         assert results.import_cost.sum() > 0

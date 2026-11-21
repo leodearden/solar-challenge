@@ -21,7 +21,7 @@ from solar_challenge.flow import (
     EnergyFlowResult,
 )
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.tariff import PRESET_RATES, TariffConfig, TariffPeriod
 from solar_challenge.dispatch import (
     DispatchDecision,
     DispatchStrategy,
@@ -488,7 +488,7 @@ HOURLY_DEMAND_KW = [
 
 @pytest.fixture
 def economy7_tariff() -> TariffConfig:
-    """Economy 7 tariff (off-peak 0.09 @ 00:30-07:30, peak 0.25)."""
+    """Economy 7 tariff at its preset rates, off-peak 00:30-07:30."""
     return TariffConfig.economy_7()
 
 
@@ -732,8 +732,8 @@ class TestSimulateTimestepGridCharge:
         )
         ctx = stub.received_ctx
         assert ctx is not None, "grid_charge_ctx should have been forwarded to strategy"
-        assert ctx.current_rate == pytest.approx(0.09)
-        assert ctx.peak_rate == pytest.approx(0.25)
+        assert ctx.current_rate == pytest.approx(PRESET_RATES["economy_7"].off_peak_rate)
+        assert ctx.peak_rate == pytest.approx(PRESET_RATES["economy_7"].peak_rate)
         assert ctx.is_cheap_period is True
         assert ctx.target_soc_kwh == pytest.approx(4.5)
         assert ctx.max_charge_kw == pytest.approx(2.5)
