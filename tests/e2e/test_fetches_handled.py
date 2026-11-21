@@ -169,6 +169,33 @@ def test_waiting_fails_naming_a_fetch_whose_body_the_page_never_reads(page: Page
     assert failure.value.unhandled == (live_server + "/api/presets",)
 
 
+def test_a_fetch_the_page_starts_while_handling_another_after_the_wait_has_begun_is_waited_for_too(
+    page: Page, live_server: str
+) -> None:
+    """The page reads the presets' body 500 ms after their answer comes, by when the wait has begun, then fetches the scenario presets and never reads that body.
+
+    The wait's first check finds only the presets' fetch started, so the wait names the scenario presets' fetch only if
+    it checks every fetch started by the time of each check.
+    """
+    record_fetches_started_and_handled(page)
+    page.goto(live_server + "/")
+    page.evaluate(
+        """() => {
+            fetch('/api/presets')
+                .then(response => new Promise(resolve => setTimeout(() => resolve(response), 500)))
+                .then(response => response.json())
+                .then(() => { fetch('/api/scenarios/presets').then(() => {}); });
+        }"""
+    )
+    page.set_default_timeout(5000)
+
+    with pytest.raises(FetchesLeftUnhandled) as failure:
+        wait_until_the_page_has_handled_every_fetch_it_started(page)
+
+    assert failure.value.unhandled == (live_server + "/api/scenarios/presets",)
+    assert live_server + "/api/presets" in failure.value.handled
+
+
 def test_waiting_on_a_page_opened_without_the_recorder_fails_naming_it(page: Page, live_server: str) -> None:
     page.goto(live_server + "/")
 
