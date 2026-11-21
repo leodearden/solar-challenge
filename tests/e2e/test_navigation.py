@@ -13,6 +13,8 @@ them.
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._css_transitions import finish_the_css_transitions
+
 # The desktop sidebar is only visible at lg breakpoint (>= 1024px).
 # Playwright's default viewport (1280x720) satisfies this.
 
@@ -244,13 +246,11 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const describe = target => target === sidebar() ? 'sidebar'
         : target.contains(content()) ? 'main column'
         : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
-    const documentTransitions = () => document.getAnimations().filter(animation => animation instanceof CSSTransition);
-    const transitions = () => documentTransitions()
+    const transitions = () => document.getAnimations()
+        .filter(animation => animation instanceof CSSTransition)
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    const finishDocumentTransitions = () => documentTransitions().forEach(transition => transition.finish());
-    const settled = () => { finishDocumentTransitions(); return drawn(); };
-    window.sidebarProbe = {drawn, transitions, settled, load: {}};
+    window.sidebarProbe = {drawn, transitions, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
@@ -288,7 +288,8 @@ def _finish_the_transitions_and_read_the_layout(page: Page) -> dict[str, object]
     slide, which a loaded host can withhold for seconds. The page is one _open_with_the_sidebar_stored
     opened. No transition is left running, so the probe's transitions() reads empty afterwards.
     """
-    return page.evaluate("() => window.sidebarProbe.settled().layout")
+    finish_the_css_transitions(page)
+    return page.evaluate("() => window.sidebarProbe.drawn().layout")
 
 
 def _finish_the_transitions_and_read_the_highlighted_groups(page: Page) -> list[str]:
@@ -298,7 +299,8 @@ def _finish_the_transitions_and_read_the_highlighted_groups(page: Page) -> list[
     highlight, not one half drawn, and needs none of the frames a loaded host can withhold for
     seconds. The page is one _open_with_the_sidebar_stored opened.
     """
-    return page.evaluate("() => window.sidebarProbe.settled().highlighted_groups")
+    finish_the_css_transitions(page)
+    return page.evaluate("() => window.sidebarProbe.drawn().highlighted_groups")
 
 
 @pytest.mark.parametrize(
