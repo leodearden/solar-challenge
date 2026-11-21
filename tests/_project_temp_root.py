@@ -24,7 +24,12 @@ def project_temp_root(temp_dir: Path) -> Path:
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Name the project's temp root in TEMP_ROOT_VARIABLE while *config* is in use, having made the root, in which pytest makes pytest-of-<user> without parents."""
+    """Name the project's temp root in TEMP_ROOT_VARIABLE while *config* is in use, having made the root, in which pytest makes pytest-of-<user> without parents.
+
+    A root the environment already names stands, so the sessions a test starts use their parent's root, and those pytester runs the one pytester names.
+    """
+    if os.environ.get(TEMP_ROOT_VARIABLE):
+        return
     root = project_temp_root(Path(tempfile.gettempdir()))
     root.mkdir(mode=0o700, exist_ok=True)
     patch = pytest.MonkeyPatch()
