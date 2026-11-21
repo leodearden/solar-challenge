@@ -30,6 +30,15 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+
+_SUMMER = SimulationPeriod("2024-06-01", "2024-08-31")
+"""June to August 2024, as ISO strings."""
+
+_SUMMER_AT_A_TIME_OF_DAY = SimulationPeriod(
+    pd.Timestamp("2024-06-01 06:00", tz="Europe/London"), pd.Timestamp("2024-08-31 18:00", tz="Europe/London")
+)
+"""June to August 2024, as zoned Timestamps at 06:00 on the first day and 18:00 on the last."""
 
 
 def _home() -> HomeConfig:
@@ -51,6 +60,11 @@ def _scenario(
         homes=homes or [],
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
     )
+
+
+def _bristol_scenario(period: SimulationPeriod = _SUMMER) -> ScenarioConfig:
+    """Scenario 'x' in Bristol over *period*, holding one home."""
+    return ScenarioConfig(name="x", period=period, location=Location.bristol(), home=_home())
 
 
 def _naming(*pieces: str) -> str:
@@ -464,6 +478,79 @@ class TestMapHomes:
 
         with pytest.raises(ConfigurationError, match=_naming("homes[0]", "3.0", "5.0")):
             scenario.map_homes(lambda home: dataclasses.replace(home, seg_tariff=SEGTariff("", 3.0)))
+
+
+class TestScenarioWindow:
+    """window(), with_window() and simulation_bounds() read the scenario's period as the days it simulates."""
+
+    def test_the_window_is_the_periods_days_at_one_minute_in_the_scenarios_zone(self) -> None:
+        assert _bristol_scenario().window() == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
+
+    def test_with_no_scenario_location_the_zone_is_the_first_homes(self) -> None:
+        new_york = dataclasses.replace(
+            _home(), location=Location(latitude=40.71, longitude=-74.0, timezone="America/New_York")
+        )
+        scenario = ScenarioConfig(name="x", period=_SUMMER, homes=[new_york, _home()])
+
+        assert scenario.window().timezone == "America/New_York"
+
+    @pytest.mark.parametrize(
+        "period",
+        [
+            pytest.param(SimulationPeriod(date(2024, 6, 1), date(2024, 8, 31)), id="dates"),
+            pytest.param(_SUMMER_AT_A_TIME_OF_DAY, id="zoned-timestamps-at-a-time-of-day"),
+        ],
+    )
+    def test_a_period_of_dates_or_timestamps_gives_the_window_of_the_same_days_as_iso_strings(
+        self, period: SimulationPeriod
+    ) -> None:
+        assert _bristol_scenario(period).window() == _bristol_scenario(_SUMMER).window()
+
+    def test_with_window_replaces_the_last_day(self) -> None:
+        assert _bristol_scenario().with_window(last_day=date(2024, 6, 7)).window().days == 7
+
+    def test_with_window_keeps_the_day_it_is_not_given(self) -> None:
+        assert _bristol_scenario().with_window(first_day=date(2024, 7, 1)).window() == SimulationWindow(
+            date(2024, 7, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
+
+    def test_with_window_keeps_every_other_field_and_leaves_the_scenario_as_built(self) -> None:
+        scenario = ScenarioConfig(
+            name="full",
+            period=_SUMMER,
+            description="every scenario-level field set",
+            location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
+            homes=[_home(), _home()],
+            output=OutputConfig(aggregation="daily"),
+            seg_tariff_pence_per_kwh=5.0,
+            finance=FinanceConfig(standing_charge_pence_per_day=28.0),
+        )
+
+        windowed = scenario.with_window(first_day=date(2024, 7, 1), last_day=date(2024, 7, 31))
+
+        assert dataclasses.replace(windowed, period=scenario.period) == scenario
+        assert scenario.period == _SUMMER
+
+    def test_with_window_refuses_a_first_day_after_the_last_naming_both_fields(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("period.start_date", "period.end_date")):
+            _bristol_scenario().with_window(first_day=date(2024, 9, 1))
+
+    def test_the_simulation_bounds_are_the_first_and_last_days_local_midnights(self) -> None:
+        bounds = _bristol_scenario().simulation_bounds()
+
+        assert bounds == (
+            pd.Timestamp("2024-06-01", tz="Europe/London"),
+            pd.Timestamp("2024-08-31", tz="Europe/London"),
+        )
+        assert all(bound.tz is not None for bound in bounds)
+
+    def test_a_period_of_timestamps_at_a_time_of_day_bounds_at_its_dates_local_midnights(self) -> None:
+        assert _bristol_scenario(_SUMMER_AT_A_TIME_OF_DAY).simulation_bounds() == (
+            pd.Timestamp("2024-06-01", tz="Europe/London"),
+            pd.Timestamp("2024-08-31", tz="Europe/London"),
+        )
 
 
 class TestLoadConfigYaml:
