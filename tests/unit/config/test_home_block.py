@@ -310,8 +310,9 @@ class TestOmittedAndNullKeys:
 
     An omitted key takes the dataclass's declared default, or the table's when-omitted value where
     the dataclass declares none, and a key written as null reads as absent; tests/unit/config/test_component_blocks.py
-    sweeps every key of every table. One null is a kept gap, owned by a task: a null grid_charging
-    target_soc_fraction is refused by GridChargeConfig itself (task 866).
+    sweeps every key of every table. One null is refused rather than read as absent: a null
+    grid_charging target_soc_fraction reaches GridChargeConfig, which refuses it, prefixed by the
+    block's path.
     """
 
     def test_omitted_home_keys_take_the_declared_defaults(self) -> None:

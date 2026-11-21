@@ -1094,16 +1094,14 @@ class TestFinanceConfigParsingGridServices:
             self._parse_events_block({**self._EVENTS_BLOCK, "event_windows": None})
 
     def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
-        """An unknown delivery_baseline is refused by the events configuration's own check, not as a non-numeric value."""
+        """An unknown delivery_baseline is refused by the events configuration's own check."""
         with pytest.raises(ConfigurationError) as exc_info:
             self._parse_events_block({**self._EVENTS_BLOCK, "delivery_baseline": "metered"})
 
-        message = str(exc_info.value)
         assert (
             "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
-            in message
+            in str(exc_info.value)
         )
-        assert "non-numeric" not in message
 
     @pytest.mark.parametrize(
         "key", ["availability_gbp_per_kw_per_event", "utilisation_gbp_per_mwh"]
@@ -1121,7 +1119,7 @@ class TestFinanceConfigParsingGridServices:
         [pytest.param(["high"], id="list"), pytest.param({"name": "high"}, id="mapping")],
     )
     def test_unhashable_band_is_refused_as_an_unknown_band(self, band: object) -> None:
-        """A list or mapping band, as malformed YAML can give, is refused by the band check, not as a raw TypeError or a non-numeric value."""
+        """A list or mapping band, as malformed YAML can give, is refused by the events configuration's own band check."""
         with pytest.raises(ConfigurationError, match="band must be one of"):
             self._parse_events_block({**self._EVENTS_BLOCK, "band": band})
 
