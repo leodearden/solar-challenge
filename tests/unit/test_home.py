@@ -1304,11 +1304,11 @@ class TestSummaryStatistics:
             home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
 
     def test_refuses_a_field_assignment(self) -> None:
-        """A summary is a frozen value: assigning one of its fields raises FrozenInstanceError."""
-        summary = home_summary()
+        """A summary is a frozen value, so a simulation_days construction checked against its window cannot be assigned after it."""
+        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
 
         with pytest.raises(dataclasses.FrozenInstanceError):
-            summary.net_cost_gbp = 0.0  # type: ignore[misc]
+            summary.simulation_days = 3  # type: ignore[misc]
 
     def test_each_flow_property_is_the_difference_of_two_of_its_totals(self):
         summary = home_summary(

@@ -1483,7 +1483,7 @@ class TestEnergyFlowResultIsAFrozenValue:
         result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=0.0)
 
         with pytest.raises(dataclasses.FrozenInstanceError):
-            result.grid_import = 1.0  # type: ignore[misc]
+            result.grid_import = -0.5  # type: ignore[misc]
 
 
 class _BatteryReportingANegativeDischarge(Battery):
