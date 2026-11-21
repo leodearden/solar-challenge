@@ -461,7 +461,7 @@ class Battery:
 
     @property
     def charge_efficiency(self) -> float:
-        """Fraction of the energy charged that is stored."""
+        """Fraction of the energy charge draws that is stored."""
         return self._soc_limits_and_efficiencies.charge_efficiency
 
     @charge_efficiency.setter
@@ -554,7 +554,11 @@ class Battery:
             duration_minutes: Duration of charging in minutes, positive and finite
 
         Returns:
-            Actual energy charged in kWh (after efficiency losses)
+            The energy drawn from the bus in kWh, before charge_efficiency. The SOC rises
+            by it times charge_efficiency, capped at max_soc_kwh; when the cap binds, only
+            what can be stored, divided by charge_efficiency, is drawn. Like discharge's
+            return, it is the energy that crossed the bus
+            (docs/prds/one-dispatch-engine.md §5.2).
 
         Raises:
             ValueError: If power_kw is negative, NaN or infinite, or duration_minutes is
@@ -565,20 +569,21 @@ class Battery:
         # Limit to max charge rate
         actual_power = min(power_kw, self.max_charge_kw)
 
-        # Calculate energy input and stored (with efficiency)
+        # The energy drawn from the bus, and the part of it stored
         duration_hours = duration_minutes * HOURS_PER_MINUTE
-        energy_input_kwh = actual_power * duration_hours
-        energy_stored_kwh = energy_input_kwh * self.charge_efficiency
+        energy_drawn_kwh = actual_power * duration_hours
+        energy_stored_kwh = energy_drawn_kwh * self.charge_efficiency
 
-        # Limit to available capacity
+        # Limit to available capacity, drawing only what can be stored
         max_storable = self.available_charge_capacity_kwh
         if energy_stored_kwh > max_storable:
             energy_stored_kwh = max_storable
+            energy_drawn_kwh = energy_stored_kwh / self.charge_efficiency
 
         # Update SOC
         self._soc_kwh += energy_stored_kwh
 
-        return energy_stored_kwh
+        return energy_drawn_kwh
 
     def discharge(self, power_kw: float, duration_minutes: float) -> float:
         """Discharge the battery.

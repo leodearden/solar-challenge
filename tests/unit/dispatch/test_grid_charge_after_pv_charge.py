@@ -92,7 +92,8 @@ class TestTheMorningDrainDay:
         inline = [result.grid_charge for result in _inline_day(_battery(1.0))]
         routed = [result.grid_charge for result in _strategy_day(_battery(1.0), _TOU)]
 
-        assert sum(inline) == pytest.approx(5.045223, abs=1e-6)
+        # The grid energy the battery drew; the 0.975 of it the battery stored is the PRD's 5.045223 kWh.
+        assert sum(inline) == pytest.approx(5.174588, abs=1e-6)
         assert routed == pytest.approx(inline, abs=1e-9)
         assert sum(routed) == pytest.approx(sum(inline), abs=1e-9)
 

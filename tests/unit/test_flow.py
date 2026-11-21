@@ -259,8 +259,9 @@ class TestBatteryChargeFromExcess:
             battery=battery,
             timestep_minutes=60,
         )
-        # Charge limited to ~1 kW * 1 hour * efficiency
-        assert result.battery_charge <= 1.0 * 0.975 + 0.01
+        # The 1 kW limit for 1 hour drawn, 0.975 kWh of it stored
+        assert result.battery_charge == pytest.approx(1.0)
+        assert battery.soc_kwh == pytest.approx(1.975)
 
 
 class TestGridExport:
@@ -672,10 +673,10 @@ class TestSimulateTimestepTouGridCharge:
             tariff=TariffConfig.economy_7(),
             timestep_minutes=60,
         )
-        # excess = 2 kWh; battery.charge(2.0, 60) = 2.0 * 0.975 = 1.95 kWh
-        # grid_export = max(0, 2.0 - 1.95) = 0.05 kWh; shortfall=0 → grid_import=0
-        assert result.battery_charge == pytest.approx(1.95)
-        assert result.grid_export == pytest.approx(0.05)
+        # excess = 2 kWh; the battery draws all of it, battery.charge(2.0, 60) = 2.0 kWh, storing 1.95
+        # grid_export = max(0, 2.0 - 2.0) = 0 kWh; shortfall=0 → grid_import=0
+        assert result.battery_charge == pytest.approx(2.0)
+        assert result.grid_export == pytest.approx(0.0)
         assert result.grid_import == pytest.approx(0.0)
         assert result.self_consumption == pytest.approx(1.0)
 

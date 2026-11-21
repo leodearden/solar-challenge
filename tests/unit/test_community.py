@@ -1010,17 +1010,11 @@ class TestCommunityRowLength:
     def test_community_battery_dispatches_a_single_row_as_one_minute(
         self, single_row: pd.DatetimeIndex
     ) -> None:
-        # Lossless, so no charge loss is booked as export. Starting half full, the battery
-        # takes all of a 10 kW surplus for a minute; over an hour its 4 kWh of headroom
-        # would bind, leaving 4 kW of charge and 6 kW of export.
+        # Starting half full, the battery draws all of a 10 kW surplus for a minute; over an
+        # hour its 4 kWh of headroom would bind, so it would draw only 4 / 0.975 kWh and
+        # export the rest.
         fleet = make_balanced_fleet(single_row, [([11.0], [1.0])])
-        battery = BatteryConfig(
-            capacity_kwh=10.0,
-            max_charge_kw=30.0,
-            max_discharge_kw=30.0,
-            charge_efficiency=1.0,
-            discharge_efficiency=1.0,
-        )
+        battery = BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0)
 
         cr = simulate_community(
             fleet, CommunityConfig(sharing_mode="community_battery", community_battery=battery)
