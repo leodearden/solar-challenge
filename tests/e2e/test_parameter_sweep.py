@@ -389,7 +389,8 @@ def test_each_sweep_rows_status_badge_takes_the_classes_the_server_draws_for_its
     """
     sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
     page.goto(live_server + "/scenarios/sweep")
-    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    with page.expect_request("**/api/jobs/sweep-1-point-2/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
     rows = _result_rows(page)
 
     for row, status in ((rows.nth(0), "completed"), (rows.nth(1), "pending")):
