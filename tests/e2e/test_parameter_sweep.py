@@ -31,7 +31,8 @@ Once every point of a sweep has ended, the page posts the finished points to
 POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
 shows the chart panels it answers in the region named "Sweep charts", or why
 it could not draw them; a sweep run after it drops that request and clears the
-region.
+region. The region is shown, and its chart containers laid out, as the panels
+the page is answered with are added to it.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
@@ -653,6 +654,46 @@ def test_a_sweep_run_after_another_clears_the_earlier_sweeps_charts(
 
     expect(page.get_by_text("The first sweep's charts", exact=True)).to_have_count(0)
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+_RECORD_THE_SWEEP_CHARTS_REGION_AS_ITS_PANELS_ARE_ADDED = """
+window.__sweepChartsAsPanelsAdded = [];
+new MutationObserver(records => {
+  for (const record of records) {
+    const region = record.target;
+    if (region instanceof Element && region.matches('section[aria-label="Sweep charts"]') && record.addedNodes.length > 0) {
+      window.__sweepChartsAsPanelsAdded.push({
+        region_shown: region.checkVisibility(),
+        chart_containers_laid_out: [...region.querySelectorAll('[data-chart-figure]')].map(container => container.offsetWidth > 0),
+      });
+    }
+  }
+}).observe(document, { childList: true, subtree: true });
+"""
+
+_ONE_CHART_PANEL = """<div id="chart-sweep-generation" data-chart-figure='{"data": [], "layout": {}}'></div>"""
+
+
+def test_the_sweep_charts_region_is_shown_with_its_chart_containers_laid_out_as_its_panels_are_added(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """The init script's observer is created before chart-renderer.js's, so it is notified in the same microtask as the renderer's own, and reads the region as the renderer finds it. A region that Alpine's x-show showed only at the next animation frame would read hidden there: the renderer would then wait for a frame to draw, and a browser that withholds frames would draw none of the sweep's charts."""
+    page.add_init_script(_RECORD_THE_SWEEP_CHARTS_REGION_AS_ITS_PANELS_ARE_ADDED)
+    page.route(
+        _SWEEP_CHARTS_URL,
+        lambda route: route.fulfill(status=200, content_type="text/html", body=_ONE_CHART_PANEL),
+    )
+    sweep_jobs.progress.answer("sweep-1-point-1", _completion("sweep-1-point-1"))
+    sweep_jobs.progress.answer("sweep-1-point-2", _completion("sweep-1-point-2"))
+    page.goto(live_server + "/scenarios/sweep")
+
+    with page.expect_request_finished(_is_the_sweep_charts_request):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    expect(page.locator("#chart-sweep-generation")).to_be_attached()
+
+    assert page.evaluate("window.__sweepChartsAsPanelsAdded") == [
+        {"region_shown": True, "chart_containers_laid_out": [True]}
+    ]
 
 
 @pytest.mark.parametrize(
