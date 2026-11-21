@@ -3,10 +3,11 @@
 Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
 - The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
-  the package to them, and the member guards, which accept the writes to self that
-  REVIEWED_COMPUTED_NAME_WRITES lists.  A surface change edits the frozen tables' rows,
-  and adds its release note, docs/unreleased/domain-library-consumption/<task id>.md, in
-  the same commit.
+  the package to them, the member guards, which accept the writes to self that
+  REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned dataclass is
+  frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that freezes each.
+  A surface change edits the frozen tables' rows, and adds its release note,
+  docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms.
 - Name resolution: every exported name resolves to its typed import, the object the
@@ -20,6 +21,7 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
 
 import abc
 import ast
+import dataclasses
 import enum
 import functools
 import inspect
@@ -38,6 +40,7 @@ import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 from tests._surface_forms import (
+    is_frozen_dataclass,
     member_forms,
     signature_closure,
     surface_form,
@@ -591,6 +594,40 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
     assert not stale, (
         "REVIEWED_COMPUTED_NAME_WRITES names paths that are no pinned class's "
         f"(stale/misspelled?): {sorted(stale)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The pinned dataclasses not frozen yet, each with the task that freezes it
+#
+# Keys are pinned-class paths, as _pinned_classes() spells them; each value is
+# the task that freezes the class.  An entry whose class is frozen, is no
+# pinned dataclass, or is misspelled fails the guard, so drop the entry then.
+# ---------------------------------------------------------------------------
+UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {
+    "FleetConfig": "task 910",
+    "FleetResults": "task 910",
+    "CommunityResults": "task 910",
+}
+
+
+def test_every_pinned_dataclass_is_frozen() -> None:
+    """Every pinned dataclass is frozen but those UNFROZEN_PINNED_DATACLASSES names, each with the later task that freezes it: review/briefing.yaml's frozen-dataclass convention rests on this test."""
+    unfrozen = {
+        path
+        for path, cls in _pinned_classes().items()
+        if dataclasses.is_dataclass(cls) and not is_frozen_dataclass(cls)
+    }
+    unlisted = sorted(unfrozen - UNFROZEN_PINNED_DATACLASSES.keys())
+    stale = sorted(UNFROZEN_PINNED_DATACLASSES.keys() - unfrozen)
+    assert not unlisted and not stale, (
+        f"Pinned dataclasses that are not frozen: {unlisted}. Freeze each with "
+        "@dataclass(frozen=True), add frozen to its kind in FROZEN_SURFACE or "
+        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen]', and add its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit; "
+        "or list it in UNFROZEN_PINNED_DATACLASSES with the task that freezes it. "
+        "UNFROZEN_PINNED_DATACLASSES entries that name no unfrozen pinned dataclass "
+        f"(frozen, no pinned dataclass, or misspelled): {stale}. Drop each."
     )
 
 

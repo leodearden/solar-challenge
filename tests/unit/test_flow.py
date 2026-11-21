@@ -1476,6 +1476,16 @@ class TestEnergyFlowResultRefusesANegativeFlow:
         assert result.battery_soc == pytest.approx(soc, nan_ok=True)
 
 
+class TestEnergyFlowResultIsAFrozenValue:
+    """A step's flows are a frozen value, so a flow construction checked cannot be assigned after it."""
+
+    def test_refuses_a_field_assignment(self) -> None:
+        result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=0.0)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            result.grid_import = 1.0  # type: ignore[misc]
+
+
 class _BatteryReportingANegativeDischarge(Battery):
     """Test double: a Battery whose discharge() reports -0.975 kWh whatever it is asked, leaving its SOC alone."""
 
