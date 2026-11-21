@@ -1367,3 +1367,52 @@ def test_the_one_spelling_scan_reads_src_and_tests_at_any_scope(
     found = _one_spelling_violations_under(root)
 
     assert [(violation.path.as_posix(), violation.line, violation.rule) for violation in found] == expected
+
+
+def test_a_grammar_class_named_as_a_dispatch_dataclass_is_reported_with_its_file_and_line(
+    tmp_path: Path,
+) -> None:
+    """A grammar module's top-level class named as a dataclass of dispatch.py, however dispatch spells the decorator, is reported at its class line; a class named as dispatch's plain class, or as no class of dispatch, is not: the real-tree test passes for a scan that finds nothing."""
+    src_dir = _write_package(
+        tmp_path / "src",
+        {
+            "dispatch.py": (
+                "import dataclasses\n"
+                "from dataclasses import dataclass\n"
+                "\n"
+                "\n"
+                "@dataclass(frozen=True)\n"
+                "class GridChargeConfig:\n"
+                "    start: int\n"
+                "\n"
+                "\n"
+                "@dataclasses.dataclass\n"
+                "class PeakShavingConfig:\n"
+                "    limit: float\n"
+                "\n"
+                "\n"
+                "class Strategy:\n"
+                "    pass\n"
+            ),
+            "scenario_blocks.py": "import json\n\n\nclass GridChargeConfig:\n    pass\n",
+            "fleet_distribution.py": (
+                "from dataclasses import dataclass\n"
+                "\n"
+                "\n"
+                "@dataclass\n"
+                "class PeakShavingConfig:\n"
+                "    limit: float\n"
+            ),
+            "config.py": "class Strategy:\n    pass\n\n\nclass ScenarioConfig:\n    pass\n",
+        },
+    )
+
+    found = _dispatch_types_defined_in_the_grammar(src_dir)
+
+    assert [(violation.path.as_posix(), violation.line, violation.rule) for violation in found] == [
+        ("src/solar_challenge/fleet_distribution.py", 5, _GrammarRule.NO_DISPATCH_TYPE),
+        ("src/solar_challenge/scenario_blocks.py", 4, _GrammarRule.NO_DISPATCH_TYPE),
+    ]
+    for violation, name in zip(found, ("PeakShavingConfig", "GridChargeConfig")):
+        assert name in str(violation)
+        assert "solar_challenge.dispatch" in str(violation)
