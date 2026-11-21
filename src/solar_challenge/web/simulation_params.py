@@ -212,7 +212,7 @@ def with_default_days(data: Mapping[str, Any], days: int) -> dict[str, Any]:
 
 
 def parse_seg_tariff(seg_data: object) -> SEGTariff | None:
-    """Read a request body's ``seg`` value with :func:`~solar_challenge.config.parse_seg_rate`'s grammar.
+    """Read a request body's ``seg`` value with :func:`~solar_challenge.scenario_blocks.parse_seg_rate`'s grammar.
 
     ``None`` means no SEG.  A value that grammar refuses raises ``ValueError``
     carrying its message, the error every web caller answers with HTTP 400.

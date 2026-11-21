@@ -224,7 +224,7 @@ def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     """The location: block for the form's location_preset: a key of location.LOCATION_PRESETS, or 'custom'.
 
     A custom block holds the coordinates the form gives, as numbers, and leaves out each
-    one the form leaves out; config.parse_location_block reads it as any location: block.
+    one the form leaves out; scenario_blocks.parse_location_block reads it as any location: block.
 
     Raises:
         ValueError: for any other preset, naming it, or for a custom coordinate that is

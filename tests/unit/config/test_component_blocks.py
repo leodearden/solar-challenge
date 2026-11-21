@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Each table of config.py's scenario grammar, a component block table, held to its dataclass."""
+"""Each of scenario_blocks.py's component block tables held to its dataclass."""
 
 import dataclasses
 import re

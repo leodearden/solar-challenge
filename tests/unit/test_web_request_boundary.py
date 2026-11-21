@@ -153,7 +153,7 @@ class TestRefuseUnencodableText:
 
 
 class TestReadLocation:
-    """read_location reads a string as location.parse_location reads it and a JSON object as config.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
+    """read_location reads a string as location.parse_location reads it and a JSON object as scenario_blocks.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
 
     @pytest.mark.parametrize(
         "text",
