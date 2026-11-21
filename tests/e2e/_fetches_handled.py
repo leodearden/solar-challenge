@@ -53,6 +53,18 @@ _RECORD_FETCHES_STARTED_AND_HANDLED = """(() => {
 })();"""
 
 
+class FetchesLeftUnhandled(AssertionError):
+    """The page had not handled the fetch of each URL in unhandled when the wait ran out; it had handled each in handled."""
+
+    def __init__(self, page_url: str, unhandled: tuple[str, ...], handled: tuple[str, ...]) -> None:
+        super().__init__(
+            f"{page_url} had not handled the failure or the body of the fetches of {list(unhandled)} "
+            f"(it had handled those of {list(handled)})"
+        )
+        self.unhandled = unhandled
+        self.handled = handled
+
+
 def record_fetches_started_and_handled(page: Page) -> None:
     """Record, in each document page opens from now on, every fetch the document starts and when it has handled it; call it before the page opens."""
     page.add_init_script(_RECORD_FETCHES_STARTED_AND_HANDLED)
@@ -61,8 +73,8 @@ def record_fetches_started_and_handled(page: Page) -> None:
 def wait_until_the_page_has_handled_every_fetch_it_started(page: Page) -> None:
     """Return once page has handled every fetch it has started by the time of the check, so a fetch started while handling another is waited for too.
 
-    If Playwright's default timeout runs out first, fail naming the URL of each fetch the page had not handled and of
-    each it had. On a page opened without record_fetches_started_and_handled, fail at once naming it.
+    If Playwright's default timeout runs out first, raise FetchesLeftUnhandled naming the URL of each fetch the page had
+    not handled and of each it had. On a page opened without record_fetches_started_and_handled, fail at once naming it.
     """
     if not page.evaluate("() => Array.isArray(window.fetchesStarted)"):
         raise AssertionError(
@@ -72,9 +84,8 @@ def wait_until_the_page_has_handled_every_fetch_it_started(page: Page) -> None:
         page.wait_for_function("() => window.fetchesStarted.every(entry => entry.handled)")
     except PlaywrightTimeoutError as timeout:
         started = page.evaluate("() => window.fetchesStarted")
-        unhandled = [entry["url"] for entry in started if not entry["handled"]]
-        handled = [entry["url"] for entry in started if entry["handled"]]
-        raise AssertionError(
-            f"{page.url} had not handled the failure or the body of the fetches of {unhandled} "
-            f"(it had handled those of {handled})"
+        raise FetchesLeftUnhandled(
+            page.url,
+            unhandled=tuple(entry["url"] for entry in started if not entry["handled"]),
+            handled=tuple(entry["url"] for entry in started if entry["handled"]),
         ) from timeout

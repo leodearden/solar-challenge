@@ -9,6 +9,7 @@ from playwright.sync_api import Page, Route
 
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._fetches_handled import (
+    FetchesLeftUnhandled,
     record_fetches_started_and_handled,
     wait_until_the_page_has_handled_every_fetch_it_started,
 )
@@ -149,10 +150,10 @@ def test_waiting_fails_naming_a_fetch_whose_answer_never_comes(page: Page, live_
     open_once_alpine_has_started(page, live_server + "/history/runs")
     page.set_default_timeout(1000)
 
-    with pytest.raises(AssertionError) as failure:
+    with pytest.raises(FetchesLeftUnhandled) as failure:
         wait_until_the_page_has_handled_every_fetch_it_started(page)
 
-    assert live_server + "/api/history/runs?" in str(failure.value)
+    assert {urlsplit(url).path for url in failure.value.unhandled} == {"/api/history/runs"}
 
 
 def test_waiting_fails_naming_a_fetch_whose_body_the_page_never_reads(page: Page, live_server: str) -> None:
@@ -162,10 +163,10 @@ def test_waiting_fails_naming_a_fetch_whose_body_the_page_never_reads(page: Page
     page.evaluate("() => fetch('/api/presets').then(() => {})")
     page.set_default_timeout(1000)
 
-    with pytest.raises(AssertionError) as failure:
+    with pytest.raises(FetchesLeftUnhandled) as failure:
         wait_until_the_page_has_handled_every_fetch_it_started(page)
 
-    assert live_server + "/api/presets" in str(failure.value)
+    assert failure.value.unhandled == (live_server + "/api/presets",)
 
 
 def test_waiting_on_a_page_opened_without_the_recorder_fails_naming_it(page: Page, live_server: str) -> None:
