@@ -194,6 +194,22 @@ _SIMULATING_RUNS = (
         ),
         id="fleet-sweep",
     ),
+    pytest.param(
+        _SimulatingRun(
+            files={"home.yaml": {"home": {"name": "My Home", "pv": {"capacity_kw": 4.0}, "load": _DETERMINISTIC_LOAD}}},
+            argv=("home", "run", "home.yaml", *_ONE_JUNE_DAY),
+            fleets_asked=((("My Home", 4.0, None),),),
+        ),
+        id="home-run",
+    ),
+    pytest.param(
+        _SimulatingRun(
+            files={},
+            argv=("home", "quick", "4", "5", "--days", "1"),
+            fleets_asked=((("Quick Simulation", 4.0, 5.0),),),
+        ),
+        id="home-quick",
+    ),
 )
 
 

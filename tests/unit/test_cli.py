@@ -19,8 +19,6 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
-import solar_challenge.cli.home as _cli_home_module
-import solar_challenge.home as _home_module
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
@@ -41,13 +39,13 @@ from solar_challenge.config import load_config, parse_finance_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
-from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
+from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.location import parse_location
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
-from solar_challenge.weather import WeatherCache, WeatherDataError
-from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
+from solar_challenge.weather import WeatherDataError
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
@@ -714,7 +712,6 @@ class TestCreateSummaryTableTitle:
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 
 
-@pytest.mark.usefixtures("bristol_june_tmy")
 class TestHomeRunFullConfigParity:
     """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
 
@@ -742,57 +739,29 @@ home:
         )
         return cfg_path
 
-    def _run_home(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        seg_yaml: str,
-        *extra_args: str,
-    ) -> tuple[Result, dict[str, HomeConfig]]:
-        """Run `home run --report` for _DAY on a config ending in *seg_yaml*.
+    def _run_home(self, tmp_path: Path, seg_yaml: str, *extra_args: str) -> tuple[Result, RecordingSimulate]:
+        """Run `home run --report` for _DAY on a config ending in *seg_yaml*, its simulation answered by a RecordingSimulate.
 
         *extra_args* are appended to the command line after ``--report``.
-        Returns the CLI result and the spy's capture; ``captured["home_config"]``
-        is the HomeConfig passed to simulate_home, absent if it was never called.
+        Returns the CLI result and the recorder, whose homes are the HomeConfigs
+        `home run` asked the invocation's runner to simulate.
         """
-        # Capture the home_config passed to simulate_home by wrapping the real function
-        captured: dict[str, HomeConfig] = {}
-        real_simulate_home = _home_module.simulate_home
-
-        def spy_simulate_home(home_config, *args, **kwargs):  # type: ignore[no-untyped-def]
-            captured["home_config"] = home_config
-            return real_simulate_home(home_config, *args, **kwargs)
-
-        # Patch simulate_home in the CLI module (local binding)
-        monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
-
+        recorder = RecordingSimulate()
         cfg_path = self._write_home_config(tmp_path, seg_yaml)
-        result = runner.invoke(
-            app,
-            [
-                "home", "run", str(cfg_path),
-                "--start", _DAY,
-                "--end", _DAY,
-                "--report",
-                *extra_args,
-            ],
-            catch_exceptions=False,
+        result = invoke_cli(
+            ["home", "run", str(cfg_path), "--start", _DAY, "--end", _DAY, "--report", *extra_args],
+            answering(recorder),
         )
-        return result, captured
+        return result, recorder
 
-    def test_home_run_threads_tariff_and_seg(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
-        result, captured = self._run_home(
-            monkeypatch, tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n"
-        )
+    def test_home_run_threads_tariff_and_seg(self, tmp_path: Path) -> None:
+        """home run passes tariff + seg to the home it simulates and reports SEG Revenue."""
+        result, recorder = self._run_home(tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n")
 
         assert result.exit_code == 0, f"CLI failed: {result.stdout}"
 
+        (home_cfg,) = recorder.homes
         # Tariff must be honoured by the canonical parser
-        home_cfg = captured.get("home_config")
-        assert home_cfg is not None, "spy was not called"
         assert home_cfg.tariff_config is not None, (
             "tariff_config should not be None — canonical parser must pick it up"
         )
@@ -808,37 +777,27 @@ home:
             "generate_summary_report must include a SEG Revenue section"
         )
 
-    def test_home_run_resolves_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_home_run_resolves_seg_preset(self, tmp_path: Path) -> None:
         """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Octopus\n")
+        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Octopus\n")
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
-        seg_tariff = captured["home_config"].seg_tariff
-        assert seg_tariff is not None
-        assert seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
+        (home_cfg,) = recorder.homes
+        assert home_cfg.seg_tariff is not None
+        assert home_cfg.seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
         assert "SEG Revenue" in result.stdout
 
-    def test_home_run_rejects_unknown_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_home_run_rejects_unknown_seg_preset(self, tmp_path: Path) -> None:
         """An unknown SEG preset is refused with exit 1 before anything is simulated."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Nonexistent\n")
+        result, recorder = self._run_home(tmp_path, "seg:\n  preset: Nonexistent\n")
 
         assert result.exit_code == 1
         assert "Nonexistent" in result.output
-        assert "home_config" not in captured
+        assert recorder.homes == []
 
-    def test_home_run_location_option_reaches_home_config(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, weather_cache: WeatherCache
-    ) -> None:
+    def test_home_run_location_option_reaches_home_config(self, tmp_path: Path) -> None:
         """``--location`` places the simulated home where location.parse_location puts it."""
-        edinburgh = parse_location("55.95,-3.19")
-        weather_cache.put(_JUNE_DAYS.hourly_weather(), "tmy", edinburgh)
-
-        result, captured = self._run_home(
-            monkeypatch,
+        result, recorder = self._run_home(
             tmp_path,
             "seg:\n  rate_pence_per_kwh: 15.0\n",
             "--location",
@@ -846,7 +805,8 @@ home:
         )
 
         assert result.exit_code == 0, f"CLI failed: {result.output}"
-        assert captured["home_config"].location == edinburgh
+        (home_cfg,) = recorder.homes
+        assert home_cfg.location == parse_location("55.95,-3.19")
 
 
 @pytest.fixture
