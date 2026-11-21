@@ -442,23 +442,26 @@ class TOUOptimizedStrategyConfig:
     Attributes:
         peak_hours: The (start, end) hours of the peak periods the strategy discharges the
             battery in: a list of at least one window, each a pair of whole hours from 0 to
-            24 that starts before it ends, held as a tuple of int pairs.
+            24 that starts before it ends, held as a tuple of int pairs. None, the default,
+            is the tariff's clock: the strategy discharges in the home tariff's expensive
+            minutes and grid-charges in its cheap ones. A set peak_hours narrows discharge,
+            and the strategy checks it against the home's tariff when it is built.
 
     Raises:
         ConfigurationError: With the refusal TOUOptimizedStrategy gives, if peak_hours is
-            not a list of at least one window; if an hour is a bool, is not a finite whole
-            number, or is outside 0 to 24, naming it peak_hours[i][j] and the value; or if
-            a window is not a (start, end) pair that starts before it ends, naming it
-            peak_hours[i] and the window.
+            not None and not a list of at least one window; if an hour is a bool, is not a
+            finite whole number, or is outside 0 to 24, naming it peak_hours[i][j] and the
+            value; or if a window is not a (start, end) pair that starts before it ends,
+            naming it peak_hours[i] and the window.
     """
 
-    peak_hours: tuple[tuple[int, int], ...]
+    peak_hours: tuple[tuple[int, int], ...] | None = None
     strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
     _charges_from_the_grid: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
-        """Read peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
-        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS)
+        """Read a set peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
+        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS, optional=True)
 
 
 @dataclass(frozen=True)
@@ -959,15 +962,20 @@ def build_dispatch_strategy(
     """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff.
 
     Raises:
-        ConfigurationError: grid_charging is set, but the strategy would ignore it: its variant
-            does not charge from the grid, or there is no tariff to find a cheap period in.
+        ConfigurationError: The strategy's constructor refuses the variant at tariff: a
+            tou_optimized variant with no peak_hours and no tariff, or with peak_hours that
+            reach a cheap minute of tariff. Then grid_charging is set, but the strategy would
+            ignore it: its variant does not charge from the grid, or there is no tariff to
+            find a cheap period in.
     """
     strategy: DispatchStrategy
     match config:
         case SelfConsumptionStrategyConfig():
             strategy = SelfConsumptionStrategy()
         case TOUOptimizedStrategyConfig():
-            strategy = TOUOptimizedStrategy(list(config.peak_hours))
+            strategy = TOUOptimizedStrategy(
+                None if config.peak_hours is None else list(config.peak_hours), tariff=tariff
+            )
         case PeakShavingStrategyConfig():
             strategy = PeakShavingStrategy(config.import_limit_kw)
         case _:

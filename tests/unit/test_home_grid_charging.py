@@ -160,7 +160,11 @@ def economy7_tariff_config() -> TariffConfig:
 
 @pytest.fixture
 def tou_grid_charge_home_config(economy7_tariff_config: TariffConfig) -> HomeConfig:
-    """HomeConfig with TOU tariff + grid-charging enabled battery (overnight charging scenario)."""
+    """HomeConfig with TOU tariff + grid-charging enabled battery (overnight charging scenario).
+
+    Its battery dispatches on Economy 7's clock: it grid-charges in the cheap 00:30-07:30 and
+    discharges in every other minute. A peak window of its own may not reach a cheap minute.
+    """
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
@@ -168,7 +172,7 @@ def tou_grid_charge_home_config(economy7_tariff_config: TariffConfig) -> HomeCon
             capacity_kwh=5.0,
             max_charge_kw=2.5,
             max_discharge_kw=2.5,
-            dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((7, 24),)),
+            dispatch_strategy=TOUOptimizedStrategyConfig(),
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         ),
         tariff_config=economy7_tariff_config,
