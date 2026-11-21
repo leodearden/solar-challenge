@@ -45,7 +45,7 @@ from tests._command_runner import Command, describe_outcome, run_command
 
 
 def uv_is_installed() -> bool:
-    """Whether uv is on the PATH this process has now; requires_uv skips a test where it is not."""
+    """Whether uv is on the PATH this process has now."""
     return shutil.which("uv") is not None
 
 
