@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_blocked_imports.py, which imports a module in a fresh interpreter whose sys.modules blocks given modules.
+"""Unit tests for tests/_blocked_imports.py, which runs Python source, or imports a module, in a fresh interpreter whose sys.modules blocks given modules.
 
 Each import names a standard-library module, which every interpreter has installed, so a refusal comes from the block alone.
 """
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._blocked_imports import extra_modules, import_with_modules_blocked
+from tests._blocked_imports import extra_modules, import_with_modules_blocked, run_with_modules_blocked
 
 
 @pytest.mark.parametrize(
@@ -39,6 +39,35 @@ def test_importing_a_module_with_nothing_blocked_succeeds(project_root: Path) ->
     result = import_with_modules_blocked("json", [], project_root)
 
     assert result.returncode == 0, f"importing json with nothing blocked exited {result.returncode}:\n{result.stderr}"
+
+
+def test_the_source_runs_with_the_args_as_its_sys_argv_after_the_program_name(project_root: Path) -> None:
+    result = run_with_modules_blocked(
+        "import sys; print(sys.argv[1:])", ["a", "--", "b"], ["json"], project_root, timeout=60
+    )
+
+    assert result.returncode == 0 and result.stdout == "['a', '--', 'b']\n", (
+        f"printing sys.argv[1:] with args ['a', '--', 'b'] and json blocked exited {result.returncode} "
+        f"and printed {result.stdout!r}:\n{result.stderr}"
+    )
+
+
+def test_the_source_cannot_import_a_blocked_module(project_root: Path) -> None:
+    refusal = "ModuleNotFoundError: import of json halted; None in sys.modules"
+
+    result = run_with_modules_blocked("import json", [], ["json"], project_root, timeout=60)
+
+    assert result.returncode != 0 and refusal in result.stderr, (
+        f"running `import json` with json blocked exited {result.returncode}:\n{result.stderr}"
+    )
+
+
+def test_the_process_exits_with_the_status_the_source_raises(project_root: Path) -> None:
+    result = run_with_modules_blocked("raise SystemExit(3)", [], [], project_root, timeout=60)
+
+    assert result.returncode == 3, (
+        f"running `raise SystemExit(3)` with nothing blocked exited {result.returncode}:\n{result.stderr}"
+    )
 
 
 def test_extra_modules_are_the_installed_top_level_modules_of_the_distributions_the_extra_requires(
