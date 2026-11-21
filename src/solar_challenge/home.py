@@ -643,7 +643,7 @@ def _price_imports(
             import_cost=pd.Series([0.0] * len(flows), index=rows),
             grid_charge_cost=None,
         )
-    rates = [tariff.get_rate(timestamp) for timestamp in rows]
+    rates = tariff.rates_for(rows)
     return _ImportPricing(
         tariff_rate=pd.Series(rates, index=rows),
         import_cost=pd.Series(
