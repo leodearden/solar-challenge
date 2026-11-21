@@ -85,6 +85,26 @@ def test_a_fetch_is_handled_once_the_page_reads_its_body(page: Page, live_server
     wait_until_the_page_has_handled_every_fetch_it_started(page)
 
 
+def test_a_page_in_a_browser_without_a_reader_finds_none_and_the_readers_it_has_still_count(
+    page: Page, live_server: str
+) -> None:
+    """A context script deleting Response.prototype.bytes stands in for a browser without it, and must run before the recorder's script: after it, the deletion would take away the recorder's own bytes() and the test would pass whatever the recorder does."""
+    page.context.add_init_script(
+        """window.recorderHadRunBeforeBytesWasDeleted = Array.isArray(window.fetchesStarted);
+        delete Response.prototype.bytes;"""
+    )
+    record_fetches_started_and_handled(page)
+    page.goto(live_server + "/")
+
+    assert page.evaluate("() => window.recorderHadRunBeforeBytesWasDeleted") is False, (
+        "the recorder ran before the script that deletes bytes(), so the test no longer stands in for a browser without it"
+    )
+    assert page.evaluate("() => 'bytes' in Response.prototype") is False
+    page.evaluate("() => fetch('/api/presets').then(response => response.json())")
+
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
+
+
 def test_a_fetch_is_handled_once_the_page_catches_its_failure(page: Page, live_server: str) -> None:
     """The presets request is aborted, as if the network were down."""
     page.route("**/api/presets", lambda route: route.abort())
