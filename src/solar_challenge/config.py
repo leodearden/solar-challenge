@@ -55,7 +55,7 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow, covered_days
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,8 @@ class ScenarioConfig:
         name: Scenario identifier
         description: Human-readable description
         location: Geographic location (defaults to Bristol)
-        period: Simulation period
+        period: Simulation period; construction refuses one whose days are not a date,
+            a 'YYYY-MM-DD' string or a Timestamp, or whose last day precedes its first
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
@@ -204,6 +205,35 @@ class ScenarioConfig:
         if self.home is not None:
             return replace(self, home=transform(self.home))
         return replace(self, homes=tuple(transform(home) for home in self.homes))
+
+    def window(self) -> SimulationWindow:
+        """The period's first and last calendar days at ONE_MINUTE, in the zone of location, or of the first home's location when location is None."""
+        first_day, last_day = self._period_days()
+        return SimulationWindow(first_day, last_day, ONE_MINUTE, self._timezone())
+
+    def with_window(
+        self, *, first_day: Optional[date] = None, last_day: Optional[date] = None
+    ) -> "ScenarioConfig":
+        """A copy whose period keeps each day not given, checked as construction checks."""
+        changes: dict[str, str] = {}
+        if first_day is not None:
+            changes["start_date"] = first_day.isoformat()
+        if last_day is not None:
+            changes["end_date"] = last_day.isoformat()
+        return replace(self, period=replace(self.period, **changes))
+
+    def simulation_bounds(self) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """The window's first and last days' local midnights: the start and end, end inclusive, that simulate_home and a fleet simulator take."""
+        window = self.window()
+        return (
+            pd.Timestamp(window.first_day, tz=window.timezone),
+            pd.Timestamp(window.last_day, tz=window.timezone),
+        )
+
+    def _timezone(self) -> str:
+        """The zone of the window's clock: location's, else the first stored home's location's."""
+        location = self.location if self.location is not None else self._stored_homes()[0].location
+        return location.timezone
 
     def _period_days(self) -> tuple[date, date]:
         """The period's first and last calendar days, each read by _period_day, whose refusal is prefixed with the scenario's name."""
