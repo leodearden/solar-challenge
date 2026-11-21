@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
+
+from tests._throwaway_lane_project import PROBE_JOB, throwaway_lane_project
 
 GIVES_EACH_COMMAND_THIS_PROCESS_ENVIRONMENT = """\
 import os
@@ -33,15 +34,11 @@ with (Path(__file__).parent.parent / "collections.log").open("a", encoding="utf-
 
 
 def _lane_project_logging_each_collection(lane_project: Path) -> Path:
-    """Make *lane_project* a throwaway project whose one lane job, probe, runs this interpreter's pytest on suite/.
+    """Make *lane_project* a throwaway project whose one lane job, PROBE_JOB, runs this interpreter's pytest on suite/.
 
     The suite's conftest appends a line to the project's collections.log each time a collection loads it.
     """
-    (lane_project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    command = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider suite"
-    (lane_project / "dark-factory-orchestrator.yaml").write_text(
-        yaml.safe_dump({"git": {"offline_lane_commands": [{"name": "probe", "command": command}]}}), encoding="utf-8"
-    )
+    throwaway_lane_project(lane_project, f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider suite")
     suite = lane_project / "suite"
     suite.mkdir()
     (suite / "test_case.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
@@ -56,7 +53,7 @@ from pathlib import Path
 
 
 def test_reads_the_probe_jobs_collection(lane_job_collection):
-    collection = lane_job_collection(Path({str(lane_project)!r}), "probe")
+    collection = lane_job_collection(Path({str(lane_project)!r}), {PROBE_JOB!r})
     assert collection.node_ids() == ("suite/test_case.py::test_case",), collection.describe()
 """
 
@@ -85,7 +82,7 @@ def test_a_session_collects_a_lane_job_once_however_many_test_modules_ask_for_it
     result.assert_outcomes(passed=2)
     collections = (lane_project / "collections.log").read_text(encoding="utf-8").splitlines()
     assert len(collections) == 1, (
-        f"one session collected the probe lane job's suite {len(collections)} times for the two test modules that "
-        "asked lane_job_collection for it; the modules of one session must share one collection, else each xdist "
+        f"one session collected the {PROBE_JOB!r} lane job's suite {len(collections)} times for the two test modules "
+        "that asked lane_job_collection for it; the modules of one session must share one collection, else each xdist "
         "worker collects a lane job once for every module that asks for it"
     )
