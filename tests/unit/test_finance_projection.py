@@ -134,7 +134,8 @@ class TestProjectMultiYearRequiresASimulator:
 
 class TestProjectMultiYearRefusesNonFiniteAggregates:
     """A simulated age whose fleet aggregates are not all finite is refused,
-    naming the age and each such aggregate with its value.
+    naming the age and each such aggregate with its value, unless a home's
+    summary has already refused its totals.
     """
 
     @pytest.mark.parametrize("asset_life_years", [1, 25])
@@ -201,7 +202,9 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         """A home whose battery discharge is infinite is refused at age 0, by its place in the fleet.
 
         Only the discharge series changes, so demand, own-use and revenue stay
-        finite and no UserWarning fires.
+        finite and no UserWarning fires. The discharge is -inf because a +inf
+        one is more than the self-consumption that counts it, which the home's
+        summary refuses before finance can name the home.
         """
         scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=asset_life_years)
         finite = make_sim_results()
@@ -216,4 +219,32 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
 
         assert str(exc_info.value) == (
             "every aggregate of the fleet simulated at age 0 must be finite: got per_home_discharge[1]=-inf"
+        )
+
+    @pytest.mark.parametrize("asset_life_years", [1, 25])
+    def test_an_infinite_battery_discharge_above_its_self_consumption_is_refused_by_its_summary(
+        self, asset_life_years: int
+    ) -> None:
+        """A home whose battery discharge is +inf is refused as its summary is built, naming both totals.
+
+        The discharge is more than the self-consumption that counts it, so
+        SummaryStatistics refuses it before finance's own check of the fleet's
+        aggregates, which names the home, runs.
+        """
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=asset_life_years)
+        finite = make_sim_results()
+        infinite_discharge = dataclasses.replace(finite, battery_discharge=finite.battery_discharge + math.inf)
+
+        with pytest.raises(ValueError) as exc_info:
+            project_multi_year(
+                scenario,
+                finance,
+                simulate=lambda fc, s, e: make_fleet_results_of([finite, infinite_discharge], homes=fc.homes),
+            )
+
+        self_consumption_kwh = calculate_summary(finite).total_self_consumption_kwh
+        message = str(exc_info.value)
+        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert message.endswith(
+            f"got total_battery_discharge_kwh=inf, total_self_consumption_kwh={self_consumption_kwh!r}"
         )
