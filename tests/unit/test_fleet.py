@@ -23,6 +23,7 @@ from solar_challenge.fleet import (
     calculate_fleet_summary,
     calculate_home_summaries,
     default_runner,
+    fleet_home_seed,
 )
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
@@ -122,6 +123,19 @@ class TestFleetConfigCreation:
                 battery_capacities_kwh=[None, 5.0, 5.0],  # Wrong length
                 annual_consumptions_kwh=[3400, 3400],
             )
+
+
+class TestFleetHomeSeeds:
+    """Home i of a seeded fleet has load seed fleet_seed + i, by fleet.fleet_home_seed; an unseeded fleet's homes are unseeded (docs/prds/rng-hand-off.md C8, C9)."""
+
+    @pytest.mark.parametrize(
+        ("fleet_seed", "index", "expected"),
+        [(None, 0, None), (None, 5, None), (7, 0, 7), (7, 2, 9), (-3, 4, 1)],
+    )
+    def test_fleet_home_seed_is_none_for_an_unseeded_fleet_and_the_fleet_seed_plus_the_index_otherwise(
+        self, fleet_seed: int | None, index: int, expected: int | None
+    ) -> None:
+        assert fleet_home_seed(fleet_seed, index) == expected
 
 
 def _home_whose_series_all_differ(offset: float) -> SimulationResults:
