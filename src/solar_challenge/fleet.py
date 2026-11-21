@@ -7,7 +7,7 @@ import math
 import os
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
@@ -365,6 +365,36 @@ class FleetRunner:
 def default_runner() -> FleetRunner:
     """FleetRunner(weather=default_weather(), home_simulator=simulate_home): the runner a root uses when given none."""
     return FleetRunner(weather=default_weather(), home_simulator=simulate_home)
+
+
+def reusing(
+    simulate: FleetSimulate, results: FleetResults, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> FleetSimulate:
+    """simulate, except that a fleet whose homes simulate as results' homes from start_date to end_date is answered from results, paired with the asked homes.
+
+    The asked homes simulate as results' when they are equal with each battery at its starting soh; the fleet's name is
+    not compared. Every other request goes to simulate, and nothing beyond results is kept: the reason is decision 8 of
+    docs/prds/fleet-execution-policy.md.
+    """
+    held_homes = _at_starting_soh(results.home_configs)
+
+    def simulate_reusing(fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        """results paired with fleet's homes when they simulate as results' homes from start_date to end_date, else simulate's answer."""
+        if start == start_date and end == end_date and _at_starting_soh(fleet.homes) == held_homes:
+            return FleetResults(per_home_results=list(results.per_home_results), home_configs=list(fleet.homes))
+        return simulate(fleet, start, end)
+
+    return simulate_reusing
+
+
+def _at_starting_soh(homes: Sequence[HomeConfig]) -> list[HomeConfig]:
+    """homes with each battery's soh set to its resolved_soh, the state of health a Battery built from it starts at."""
+    return [
+        home
+        if home.battery_config is None
+        else replace(home, battery_config=replace(home.battery_config, soh=home.battery_config.resolved_soh))
+        for home in homes
+    ]
 
 
 def _job_weather(weather: PrefetchedWeather, home: HomeConfig) -> PrefetchedWeather:
