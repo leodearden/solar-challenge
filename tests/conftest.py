@@ -71,11 +71,11 @@ _CALLERS_FROZEN_LOCK_MODE = ("UV_FROZEN", "1")
 
 @pytest.fixture
 def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set UV_FROZEN=1 in this process's environment for the test, as the shell running the suite may.
+    """Set _CALLERS_FROZEN_LOCK_MODE in this process's environment for the test, as the shell running the suite may.
 
     The orchestrator gives the offline lane no uv lock mode, so a test that runs a
     lane job's command as the lane runs it must pass whatever lock mode its own
-    shell has: inherited, UV_FROZEN makes that command's `uv run --locked` an error.
+    shell has: inherited, a frozen one makes that command's `uv run --locked` an error.
     """
     monkeypatch.setenv(*_CALLERS_FROZEN_LOCK_MODE)
 
@@ -107,7 +107,7 @@ def shared_uv_probe_environments(tmp_path_factory: pytest.TempPathFactory) -> Sh
 
 
 def _assert_asked_with_uv_installed_and_its_lock_mode_frozen(job: str) -> None:
-    """Assert that the test asking lane_job_collection for *job* runs as @requires_uv and callers_uv_lock_mode_is_frozen make it run: uv on PATH, UV_FROZEN=1."""
+    """Assert that the test asking lane_job_collection for *job* runs as @requires_uv and callers_uv_lock_mode_is_frozen make it run: uv on PATH, and _CALLERS_FROZEN_LOCK_MODE set."""
     assert uv_is_installed(), (
         f"a test asked lane_job_collection for the {job!r} lane job where uv is not on PATH. Any test that asks may be "
         "the one that collects the job, which runs it through uv, so each carries @requires_uv, which skips it where "
