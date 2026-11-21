@@ -22,6 +22,9 @@
 - TestTheTariffClockFlowsAsTheHomesTariffRoute: a battery dispatched by
   TOUOptimizedStrategyConfig() flows, minute by minute, as a home dispatched tou_optimized
   by its tariff, the route S3 sends that home key through the strategy by (§9 row 6).
+- TestGridChargingOnATariffWithNoCheapPeriod: the factory refuses grid_charging for
+  tou_optimized on a flat tariff, naming grid_charging, the strategy and the tariff, and
+  builds the same strategy without grid charging (§5.4, §9 row 9).
 
 The section and row numbers are those of docs/prds/tariff-coverage-classifier-presets.md.
 Every tariff, strategy and battery is built inside a test, never at import, so a refusal
@@ -410,3 +413,19 @@ class TestTheTariffClockFlowsAsTheHomesTariffRoute:
                 check_names=False,
             )
         assert (calculate_summary(on_the_battery).total_grid_charge_kwh > 0) == (grid_charging is not None)
+
+
+class TestGridChargingOnATariffWithNoCheapPeriod:
+    def test_the_factory_refuses_it_naming_grid_charging_the_strategy_and_the_tariff(self) -> None:
+        tariff = _flat_rate()
+
+        with pytest.raises(ConfigurationError) as refused:
+            build_dispatch_strategy(TOUOptimizedStrategyConfig(), grid_charging=GridChargeConfig(0.9), tariff=tariff)
+
+        for name in ("grid_charging", "'tou_optimized'", tariff.name, "no cheap period"):
+            assert name in str(refused.value), (name, str(refused.value))
+
+    def test_without_grid_charging_the_factory_builds_it_and_it_discharges_at_every_shortfall(self) -> None:
+        strategy = build_dispatch_strategy(TOUOptimizedStrategyConfig(), grid_charging=None, tariff=_flat_rate())
+
+        assert (_discharge_kw(strategy, time(3)), _discharge_kw(strategy, time(18))) == (1.0, 1.0)

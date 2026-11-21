@@ -668,6 +668,11 @@ home:
                 id="dispatched-greedy",
             ),
             pytest.param(lambda home: home.pop("tariff"), ["tou_optimized", "tariff"], id="without-its-tariff"),
+            pytest.param(
+                lambda home: home.update(tariff={"type": "flat_rate", "rate_per_kwh": 0.25}),
+                ["grid_charging", "tou_optimized", "no cheap period"],
+                id="on-a-flat-tariff",
+            ),
         ],
     )
     def test_a_grid_charging_home_whose_dispatch_would_ignore_it_is_an_error_row(

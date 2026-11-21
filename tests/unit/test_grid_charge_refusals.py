@@ -3,7 +3,9 @@
 
 The home is f44's probe: 4 kW of PV, a deterministic 3400 kWh a year and a 5 kWh battery that
 grid-charges to 0.9, simulated on 2024-06-15 in synthetic June weather. The probe found three
-settings that ran storing 0 kWh from the grid, with no warning.
+settings that ran storing 0 kWh from the grid, with no warning. A tariff with no cheap period,
+such as a flat rate, is a fourth: a strategy that grid-charges never finds a minute to charge in
+(docs/prds/tariff-coverage-classifier-presets.md §5.4, §9 row 9).
 
 No HomeConfig or BatteryConfig is built at import: each test builds its own, so a config
 refused by mistake fails its own cases and not the module's collection.
@@ -23,6 +25,7 @@ from solar_challenge.dispatch import (
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategy,
+    TOUOptimizedStrategyConfig,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep
@@ -35,6 +38,8 @@ from tests._synthetic_weather import synthetic_june_weather, weather_for
 _DAY = pd.Timestamp("2024-06-15")
 
 _E7 = TariffConfig.economy_7()
+
+_FLAT = TariffConfig.flat_rate(0.25)
 
 
 def _battery(strategy: DispatchStrategyConfig | None = None) -> BatteryConfig:
@@ -72,6 +77,10 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
         "tou_optimized",
     ),
     "battery-peak_shaving-on-e7": (lambda: _home(_battery(_PEAK_SHAVING), tariff=_E7), "peak_shaving"),
+    "battery-tou_optimized-on-the-tariff-clock-on-e7": (
+        lambda: _home(_battery(TOUOptimizedStrategyConfig()), tariff=_E7),
+        "tou_optimized",
+    ),
     "both-levels-the-battery-s-strategy-wins": (
         lambda: _home(_battery(_PEAK_SHAVING), tariff=_E7, dispatch_strategy="tou_optimized"),
         "peak_shaving",
@@ -79,47 +88,69 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
 }
 
 
+# Each refused row builds its battery's strategy, None for its home's, when the test runs.
 @pytest.mark.parametrize(
-    ("battery_strategy", "tariff", "dispatch_strategy", "named"),
+    ("build_battery_strategy", "tariff", "dispatch_strategy", "named"),
     [
-        pytest.param(None, None, "greedy", ["grid_charging", "self_consumption"], id="default-dispatch"),
+        pytest.param(lambda: None, None, "greedy", ["grid_charging", "self_consumption"], id="default-dispatch"),
         pytest.param(
-            SelfConsumptionStrategyConfig(),
+            SelfConsumptionStrategyConfig,
             None,
             "greedy",
             ["grid_charging", "self_consumption"],
             id="battery-self_consumption",
         ),
         pytest.param(
-            SelfConsumptionStrategyConfig(),
+            SelfConsumptionStrategyConfig,
             _E7,
             "greedy",
             ["grid_charging", "self_consumption"],
             id="battery-self_consumption-on-e7",
         ),
         pytest.param(
-            None,
+            lambda: None,
             None,
             "tou_optimized",
             ["dispatch_strategy 'tou_optimized'", "tariff"],
             id="home-tou_optimized-without-a-tariff",
         ),
         pytest.param(
-            _PEAK_SHAVING,
+            lambda: _PEAK_SHAVING,
             None,
             "greedy",
             ["grid_charging", "peak_shaving", "tariff"],
             id="battery-peak_shaving-without-a-tariff",
         ),
+        pytest.param(
+            TOUOptimizedStrategyConfig,
+            _FLAT,
+            "greedy",
+            ["grid_charging", "'tou_optimized'", _FLAT.name, "no cheap period"],
+            id="battery-tou_optimized-on-a-flat-tariff",
+        ),
+        pytest.param(
+            lambda: _PEAK_SHAVING,
+            _FLAT,
+            "greedy",
+            ["grid_charging", "'peak_shaving'", _FLAT.name, "no cheap period"],
+            id="battery-peak_shaving-on-a-flat-tariff",
+        ),
+        pytest.param(
+            lambda: None,
+            _FLAT,
+            "tou_optimized",
+            ["grid_charging", "'tou_optimized'", _FLAT.name, "no cheap period"],
+            id="home-tou_optimized-on-a-flat-tariff",
+        ),
     ],
 )
 def test_a_home_whose_dispatch_would_ignore_its_grid_charging_is_refused_when_built(
-    battery_strategy: DispatchStrategyConfig | None,
+    build_battery_strategy: Callable[[], DispatchStrategyConfig | None],
     tariff: TariffConfig | None,
     dispatch_strategy: str,
     named: list[str],
 ) -> None:
-    battery = _battery(battery_strategy)
+    battery = _battery(build_battery_strategy())
 
     with pytest.raises(ConfigurationError) as refused:
         _home(battery, tariff=tariff, dispatch_strategy=dispatch_strategy)
