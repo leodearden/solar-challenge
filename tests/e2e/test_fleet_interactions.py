@@ -1,7 +1,9 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, that each distribution editor's controls are named
-for their card, that each card's row buttons change only its rows, that a
+for their card, that choosing a card's distribution type shows that type's
+inputs and hides the previous type's even when the browser renders no
+animation frame, that each card's row buttons change only its rows, that a
 card's last row has no remove button, that each card's row inputs show their
 whole value at desktop widths, that each card offers Fixed Value, which Run
 sends as the card's capacity, that Import YAML, clicked or reached with Tab
@@ -117,6 +119,38 @@ def test_fleet_distribution_parameters_are_named_for_their_card(
         expect(
             page.get_by_role("spinbutton", name=f"{card} {field}", exact=True)
         ).to_have_count(1)
+
+
+def _withhold_animation_frames(page: Page) -> None:
+    """From the next page load on, the page's requestAnimationFrame never calls back, while its timers and microtasks still run. That is what headless Chromium did on the loaded offline-lane host: no frame for 5-8 s, while setTimeout(0) fired within 2 ms."""
+    page.add_init_script("window.requestAnimationFrame = () => 0;")
+
+
+# Each Distribution Type option's label, to the one parameter caption only that type shows; named exactly, "Min" is not normal's "Min (clamp)".
+TYPE_SIGNATURE_FIELDS = {
+    "Fixed Value": "Fixed Value",
+    "Normal (Gaussian)": "Mean",
+    "Uniform": "Min",
+    "Weighted Discrete": "Weight 1",
+    "Shuffled Pool": "Count 1",
+}
+
+
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_type_select_switches_its_cards_parameters_while_the_browser_renders_no_frame(
+    page: Page, live_server: str, card: str
+) -> None:
+    """Choosing a card's distribution type shows that type's inputs and hides the previous type's, even when the browser renders no animation frame."""
+    _withhold_animation_frames(page)
+    page.goto(live_server + "/simulate/fleet")
+    type_select = page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True)
+
+    for label, field in TYPE_SIGNATURE_FIELDS.items():
+        type_select.select_option(label=label)
+        for other in TYPE_SIGNATURE_FIELDS.values():
+            expect(
+                page.get_by_role("spinbutton", name=f"{card} {other}", exact=True)
+            ).to_have_count(1 if other == field else 0)
 
 
 @pytest.mark.parametrize(
