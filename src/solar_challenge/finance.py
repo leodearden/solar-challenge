@@ -2070,12 +2070,21 @@ def annuity_payment(principal: float, rate: float, n_years: int) -> float:
 
     Args:
         principal: Loan principal (£).
-        rate: Annual interest rate as a fraction (e.g., 0.07 for 7%).
-        n_years: Loan term in years (must be > 0).
+        rate: Annual interest rate as a fraction (e.g., 0.07 for 7%), finite
+            and above -1.
+        n_years: Loan term in years, at least 1.
 
     Returns:
         Annual level payment (£).  When rate == 0 returns principal / n_years.
+
+    Raises:
+        ValueError: If *n_years* is below 1, or *rate* is not finite or is at
+            or below -1, naming it and its value.
     """
+    if n_years < 1:
+        raise ValueError(f"annuity_payment repays a loan over at least one year: got n_years={n_years!r}")
+    if not -1.0 < rate < math.inf:
+        raise ValueError(f"annuity_payment's rate is a finite annual fraction above -1: got rate={rate!r}")
     if principal == 0.0:
         return 0.0
     if rate == 0.0:

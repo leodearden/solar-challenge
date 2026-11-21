@@ -375,6 +375,28 @@ class TestProjectEconomicsDebtService:
         result = annuity_payment(1000.0, 0.0, 8)
         assert result == pytest.approx(125.0, rel=1e-9)
 
+    @pytest.mark.parametrize(
+        ("rate", "n_years", "refused"),
+        [
+            (0.0, 0, "n_years=0"),
+            (0.07, 0, "n_years=0"),
+            (0.07, -3, "n_years=-3"),
+            (-1.0, 10, "rate=-1.0"),
+            (-1.5, 10, "rate=-1.5"),
+            (math.nan, 10, "rate=nan"),
+            (math.inf, 10, "rate=inf"),
+        ],
+        ids=["no-term-at-zero-rate", "no-term", "negative-term", "rate-minus-one", "rate-below-minus-one", "nan", "inf"],
+    )
+    def test_annuity_helper_refuses_a_term_under_a_year_or_a_rate_not_above_minus_one(
+        self, rate: float, n_years: int, refused: str
+    ) -> None:
+        """Each would otherwise divide by zero, or price a payment no loan has."""
+        with pytest.raises(ValueError, match="annuity_payment") as refusal:
+            annuity_payment(1000.0, rate, n_years)
+
+        assert refused in str(refusal.value)
+
 
 # ---------------------------------------------------------------------------
 # Step-7: per-year surplus + min_dscr + net_surplus_per_home
