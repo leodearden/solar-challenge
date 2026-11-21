@@ -82,13 +82,13 @@ def collect_lane_job_once(
 ) -> Collection:
     """Return collect_lane_job's collection of the lane job *name* of *project_root*, collected only by the first call given *collections*.
 
-    That call, made in this process or another, collects the job itself before
-    it returns, so in the environment and offline window of the test that made
-    it, and saves the collection under *collections*, the directory tests/conftest.py's
-    lane_job_collection takes from run_shared_path. Every call loads it back
-    from there. collect_lane_job reports a failure by assert, an Exception, so
-    built_once records it and every later call raises it rather than collecting
-    again.
+    *collections* is a directory shared by every caller, in this process or
+    another, that should share one collection of each job. The first call
+    collects the job itself before it returns, so in the environment and
+    offline window of the test that made it, and saves the collection under
+    *collections*. Every call loads it back from there. collect_lane_job
+    reports a failure by assert, an Exception, so built_once records it and
+    every later call raises it rather than collecting again.
     """
     directory = built_once(
         collections / _collection_directory_name(project_root, name),
