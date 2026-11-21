@@ -460,6 +460,14 @@ import, so the export a projection reports is the export its SEG revenue is pric
 Battery discharge stays the simulated flow, and so does the throughput battery ageing
 integrates from it: discharge is physical throughput, not a billed quantity.
 
+**Node selection.** The adaptive bisection measures each driven metric's PCHIP midpoint
+deviation, as a percentage, against one fixed age-0 scale: own-use and revenue against
+their own magnitude, export and import against the fleet's generation and demand, the
+flows they are parts of.  So a flow that is 0 at age 0, such as the import of an override
+fleet whose own-use is capped at demand, or of a fleet whose battery covers its demand,
+still converges
+(`tests/unit/test_finance_projection_adaptive.py::TestTheDeviationScaleSeesAZeroAtAgeZero`).
+
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,
 `min(override × generation, demand)`, and `seg_revenue` prices the export that
