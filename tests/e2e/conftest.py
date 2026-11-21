@@ -35,9 +35,8 @@ collects. So the suite runs serially unless its command passes an explicit
 `-n N`.
 
 It imports playwright's and pytest-playwright's types for annotations only,
-so nothing from the e2e extra when it loads: tests/unit/test_e2e_job_wait.py
-and tests/unit/test_e2e_network_change_reruns.py run copies of this module
-in the verify environment, which lacks that extra.
+so nothing from the e2e extra when it loads;
+tests/unit/test_e2e_conftest_needs_no_e2e_extra.py says why, and pins it.
 """
 
 from __future__ import annotations
@@ -51,7 +50,6 @@ from collections.abc import Callable, Generator, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
 
 import pandas as pd
 import pytest
@@ -73,6 +71,7 @@ from tests._server_drawn_badges import dashboard_macros_of
 from tests._synthetic_weather import synthetic_tmy
 from tests._web_app import build_test_app, database_of, run_storage_of
 from tests._web_runs import store_fleet_run, store_home_run
+from tests.e2e._run_history_requests import hold_requests, is_runs_list_request
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, Route
@@ -387,10 +386,6 @@ def home_preset_saved_under_a_builtin_name(_e2e_app: Flask) -> Iterator[dict[str
 # ---------------------------------------------------------------------------
 
 
-def _is_runs_list_request(url: str) -> bool:
-    return urlsplit(url).path == "/api/history/runs"
-
-
 @pytest.fixture
 def runs_api_returns_no_runs(page, live_server: str) -> None:
     """Answer the Run History page's runs-list requests as the live API answers a search no run matches."""
@@ -400,7 +395,7 @@ def runs_api_returns_no_runs(page, live_server: str) -> None:
         fail_on_status_code=True,
     ).json()
     page.route(
-        _is_runs_list_request,
+        is_runs_list_request,
         lambda route: route.fulfill(json=no_runs_response),
     )
 
@@ -430,7 +425,7 @@ def runs_api_returns_a_run_of_each_badge(
         for n, (run_type, status) in enumerate(badges, start=1)
     ]
     page.route(
-        _is_runs_list_request,
+        is_runs_list_request,
         lambda route: route.fulfill(json={**listed, "runs": runs}),
     )
     return badges
@@ -439,8 +434,7 @@ def runs_api_returns_a_run_of_each_badge(
 @pytest.fixture
 def runs_api_never_answers(page) -> Iterator[None]:
     """Hold the Run History page's runs-list requests unanswered for the whole test, then abort them."""
-    held_requests = []
-    page.route(_is_runs_list_request, lambda route: held_requests.append(route))
+    held_requests = hold_requests(page, is_runs_list_request)
     yield
     assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
     for route in held_requests:
