@@ -9,7 +9,7 @@ solar_challenge.cli.utils for which commands read it.
 
 Usage::
 
-    from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
+    from tests._cli_fleet_simulator import ReachedTheSweep, RecordingSimulate, answering, invoke_cli, invoke_finance_run, simulate_reaching_the_sweep
 
     result = invoke_finance_run(["--project", str(scenario_file)], fleet_results)
     result = invoke_cli(["optimize", "configs", str(scenario_file)], answering(simulate))
@@ -17,11 +17,15 @@ Usage::
     recorder = RecordingSimulate()
     result = invoke_cli(["finance", "run", str(scenario_file)], answering(recorder))
     asked_homes = recorder.homes
+
+    result = invoke_cli(["optimize", "configs", str(scenario_file)], answering(simulate_reaching_the_sweep))
+    reached_the_sweep = isinstance(result.exception, ReachedTheSweep)
 """
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Iterator, Sequence
+from typing import NoReturn
 
 import pandas as pd
 from typer.testing import CliRunner, Result
@@ -110,3 +114,12 @@ class RecordingSimulate:
     def homes(self) -> list[HomeConfig]:
         """Every home of every fleet asked for, in the order asked."""
         return [home for fleet in self.fleets for home in fleet.homes]
+
+
+class ReachedTheSweep(Exception):
+    """Raised by simulate_reaching_the_sweep, the sign that a command got as far as its first fleet simulation."""
+
+
+def simulate_reaching_the_sweep(fleet_config: object, start: object, end: object) -> NoReturn:
+    """A fleet simulate that stops the command at its first fleet simulation, raising ReachedTheSweep."""
+    raise ReachedTheSweep
