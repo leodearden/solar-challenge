@@ -1995,7 +1995,7 @@ def project_multi_year(
 # ---------------------------------------------------------------------------
 
 
-def _annuity_payment(principal: float, rate: float, n_years: int) -> float:
+def annuity_payment(principal: float, rate: float, n_years: int) -> float:
     """Compute the level annual payment on a loan (closed-form annuity).
 
     Args:
@@ -2013,7 +2013,7 @@ def _annuity_payment(principal: float, rate: float, n_years: int) -> float:
     return principal * rate / (1.0 - (1.0 + rate) ** (-n_years))
 
 
-def _npv(rate: float, cashflows: List[float]) -> float:
+def npv(rate: float, cashflows: Sequence[float]) -> float:
     """Compute NPV of cashflows discounted at *rate*.
 
     cashflows[0] is the t=0 outflow (negative equity), cashflows[1..N] are
@@ -2021,7 +2021,7 @@ def _npv(rate: float, cashflows: List[float]) -> float:
 
     Args:
         rate: Discount rate as a fraction.
-        cashflows: List of cash flows starting at t=0.
+        cashflows: Cash flows starting at t=0.
 
     Returns:
         Net present value (£).
@@ -2032,15 +2032,16 @@ def _npv(rate: float, cashflows: List[float]) -> float:
     return total
 
 
-def _irr_bisection(cashflows: List[float]) -> float:
+def irr(cashflows: Sequence[float]) -> float:
     """Internal rate of return via NPV bisection root-find.
 
-    Finds *r* such that NPV(r, cashflows) ≈ 0.  Returns float('nan') when
-    there is no sign change (non-conventional or never-profitable cashflow) or
-    when cashflows[0] == 0 (no equity invested).
+    Finds *r* such that npv(r, cashflows) ≈ 0.  Returns float('nan') when the
+    IRR is undefined: no cashflows, cashflows[0] == 0 (no equity invested), or
+    no sign change of the NPV in its bracket of -50% to +10000%
+    (non-conventional or never-profitable cashflows).
 
     Args:
-        cashflows: Cash flow list; cashflows[0] is typically −equity (negative).
+        cashflows: Cash flows starting at t=0; cashflows[0] is typically −equity (negative).
 
     Returns:
         IRR as a fraction, or float('nan') if undefined.
@@ -2052,8 +2053,8 @@ def _irr_bisection(cashflows: List[float]) -> float:
     # very profitable low-equity projects (where true IRR >> 500%) are still
     # captured rather than returning nan.
     lo, hi = -0.5, 100.0
-    npv_lo = _npv(lo, cashflows)
-    npv_hi = _npv(hi, cashflows)
+    npv_lo = npv(lo, cashflows)
+    npv_hi = npv(hi, cashflows)
 
     if npv_lo * npv_hi > 0.0:
         # No sign change in bracket → IRR undefined
@@ -2063,7 +2064,7 @@ def _irr_bisection(cashflows: List[float]) -> float:
     tol = 1e-10
     for _ in range(200):
         mid = 0.5 * (lo + hi)
-        npv_mid = _npv(mid, cashflows)
+        npv_mid = npv(mid, cashflows)
         if abs(npv_mid) < tol or (hi - lo) < tol:
             return mid
         if npv_lo * npv_mid <= 0.0:
@@ -2094,7 +2095,7 @@ def project_economics(
        inverter_cost_per_kw_gbp == 0.0 (the default).
     3. financed = max(capex − grant, 0); equity = financed × equity_fraction;
        debt = financed × (1 − equity_fraction).
-    4. annual_debt_service via level annuity (_annuity_payment).
+    4. annual_debt_service via level annuity (annuity_payment).
     5. fleet_opex = opex_per_home × n_homes.
     6. per_year_surplus[y] = revenue[y] − fleet_opex − debt_service (y < loan_term)
        or revenue[y] − fleet_opex (y ≥ loan_term).
@@ -2142,7 +2143,7 @@ def project_economics(
     debt_gbp = financed * (1.0 - finance.equity_fraction)
 
     # 4. Annual debt service
-    annual_debt_service_gbp = _annuity_payment(
+    annual_debt_service_gbp = annuity_payment(
         debt_gbp, finance.loan_rate, finance.loan_term_years
     )
 
@@ -2178,7 +2179,7 @@ def project_economics(
 
     # 8. Equity IRR
     cashflows: List[float] = [-equity_gbp] + per_year_surplus
-    equity_irr = _irr_bisection(cashflows)
+    equity_irr = irr(cashflows)
 
     # 9. Payback years
     payback_years: Optional[float] = None
