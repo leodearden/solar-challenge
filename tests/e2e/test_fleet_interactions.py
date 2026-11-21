@@ -2,8 +2,9 @@
 
 Verifies slider-input sync, that each distribution editor's controls are named
 for their card, that choosing a card's distribution type shows that type's
-inputs and hides the previous type's even when the browser renders no
-animation frame, that each card's row buttons change only its rows, that a
+inputs and hides the previous type's, and that a card's last row loses its
+remove button, even when the browser renders no animation frame, that each
+card's row buttons change only its rows, that a
 card's last row has no remove button, that each card's row inputs show their
 whole value at desktop widths, that each card offers Fixed Value, which Run
 sends as the card's capacity, that Import YAML, clicked or reached with Tab
@@ -233,6 +234,28 @@ def test_fleet_distribution_last_row_has_no_remove_button(
         expect(_value_inputs(page, card)).to_have_count(remaining)
 
     expect(remove_buttons).to_have_count(0)
+
+
+@pytest.mark.parametrize(("distribution_type", "row_field"), ROW_LIST_TYPES)
+@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
+def test_fleet_distribution_last_row_loses_its_remove_button_while_the_browser_renders_no_frame(
+    page: Page, live_server: str, card: str, distribution_type: str, row_field: str
+) -> None:
+    """A card's last row loses its remove button even when the browser renders no animation frame."""
+    _withhold_animation_frames(page)
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
+        label=distribution_type
+    )
+    _expect_only_row_list_shown(page, card, row_field)
+
+    for remaining in range(_value_inputs(page, card).count() - 1, 0, -1):
+        page.get_by_role("button", name=f"{card} Remove Row 1", exact=True).click()
+        expect(_value_inputs(page, card)).to_have_count(remaining)
+
+    expect(
+        page.get_by_role("button", name=re.compile(rf"^{card} Remove Row \d+$"))
+    ).to_have_count(0)
 
 
 # -- Distribution editor row inputs show their whole values ----------------
