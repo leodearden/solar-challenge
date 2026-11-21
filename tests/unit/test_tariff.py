@@ -1,6 +1,7 @@
 """Tests for tariff configuration and rate matching."""
 
 import dataclasses
+import math
 import pickle
 from collections.abc import Iterable
 from datetime import datetime, time
@@ -989,6 +990,34 @@ class TestCalculateBill:
         assert bill_peak == pytest.approx(3.00)
         assert bill_offpeak == pytest.approx(1.00)
         assert bill_peak > bill_offpeak
+
+    @pytest.mark.parametrize(
+        "tariff",
+        [
+            pytest.param(TariffConfig.economy_7(), id="economy-7"),
+            pytest.param(TariffConfig.economy_10(), id="economy-10"),
+            pytest.param(TariffConfig.flat_rate(0.20), id="flat"),
+        ],
+    )
+    def test_calculate_bill_prices_each_minute_of_a_day_the_clocks_go_back_at_its_own_rate(
+        self, tariff: TariffConfig
+    ) -> None:
+        """Each minute weighs differently, so one mispriced minute moves the bill far beyond rel=1e-12, while summing in another order moves a minute year's by about 4e-14."""
+        index = pd.date_range(
+            "2024-10-27", "2024-10-28", freq="min", tz="Europe/London", inclusive="left"
+        )
+        energy = pd.Series(np.linspace(0.0, 0.05, len(index)), index=index)
+
+        each_minute_at_its_rate = math.fsum(
+            kwh * tariff.get_rate(timestamp) for timestamp, kwh in energy.items()
+        )
+        assert calculate_bill(energy, tariff) == pytest.approx(each_minute_at_its_rate, rel=1e-12)
+
+    def test_a_nan_energy_gives_a_nan_bill(self) -> None:
+        index = pd.date_range("2024-01-15", periods=3, freq="h")
+        energy = pd.Series([1.0, float("nan"), 2.0], index=index)
+
+        assert math.isnan(calculate_bill(energy, TariffConfig.economy_7()))
 
 
 class TestDescribeMinutesOfDay:
