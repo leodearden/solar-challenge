@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests._project_temp_root import project_temp_root
+from tests._project_temp_root import TEMP_ROOT_VARIABLE, project_temp_root
 
 _RECORDS_ITS_BASETEMP = """
     def test_records_its_basetemp(tmp_path_factory, request):
@@ -30,7 +30,7 @@ def test_a_session_started_with_no_temp_root_named_keeps_its_temp_dirs_under_the
     temp_dir = tmp_path / "tmp"
     temp_dir.mkdir()
     monkeypatch.setenv("TMPDIR", str(temp_dir))
-    monkeypatch.delenv("PYTEST_DEBUG_TEMPROOT", raising=False)
+    monkeypatch.delenv(TEMP_ROOT_VARIABLE, raising=False)
 
     basetemp = _basetemp_of_a_session(pytester_under_root_conftest)
 
@@ -49,12 +49,12 @@ def test_a_session_started_with_a_temp_root_named_keeps_its_temp_dirs_there(
     monkeypatch.setenv("TMPDIR", str(temp_dir))
     chosen = tmp_path / "chosen"
     chosen.mkdir()
-    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(chosen))
+    monkeypatch.setenv(TEMP_ROOT_VARIABLE, str(chosen))
 
     basetemp = _basetemp_of_a_session(pytester_under_root_conftest)
 
     assert basetemp.is_relative_to(chosen), (
-        f"a session started with PYTEST_DEBUG_TEMPROOT={chosen} kept its temp dirs in {basetemp}: the root that a "
+        f"a session started with {TEMP_ROOT_VARIABLE}={chosen} kept its temp dirs in {basetemp}: the root that a "
         "parent session or the caller named was overridden, so the child sessions a test starts would not share "
         "their parent's root"
     )
