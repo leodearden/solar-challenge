@@ -87,7 +87,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "GridChargeContext": "dataclass[eq, frozen] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float) -> None",
     "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
-    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]]) -> None",
+    "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]] | None = None, *, tariff: TariffConfig | None = None) -> None",
     "PeakShavingStrategy": "(import_limit_kw: float) -> None",
     "DispatchTariffPeriod": "PEAK='peak', OFF_PEAK='off_peak'",
     # --- battery (battery.py) ---
@@ -226,7 +226,7 @@ FROZEN_CLOSURE: dict[str, str] = {
     "dispatch.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9) -> None",
     "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen] (import_limit_kw: float) -> None",
     "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
-    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen] (peak_hours: tuple[tuple[int, int], ...]) -> None",
+    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen] (peak_hours: tuple[tuple[int, int], ...] | None = None) -> None",
     "ev.EVConfig": "dataclass[eq, frozen] (charger_type: str, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
@@ -295,8 +295,8 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "map_homes": "(self, transform: Callable[[HomeConfig], HomeConfig]) -> ScenarioConfig",
     },
     "FleetConfig": {
-        "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
-        "create_heterogeneous": "classmethod (cls, pv_capacities_kw: list[float], battery_capacities_kwh: list[float | None], annual_consumptions_kwh: list[float], location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '') -> FleetConfig",
+        "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', *, seed: int | None = None) -> FleetConfig",
+        "create_heterogeneous": "classmethod (cls, pv_capacities_kw: list[float], battery_capacities_kwh: list[float | None], annual_consumptions_kwh: list[float], location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', *, seed: int | None = None) -> FleetConfig",
     },
     "FleetResults": {
         "get_aggregate_series": "(self, series_name: str) -> Series",

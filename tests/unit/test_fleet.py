@@ -2,7 +2,7 @@
 
 import multiprocessing
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from datetime import date
@@ -24,6 +24,7 @@ from solar_challenge.fleet import (
     calculate_fleet_summary,
     calculate_home_summaries,
     default_runner,
+    fleet_home_seed,
     reusing,
 )
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary, simulate_home
@@ -124,6 +125,59 @@ class TestFleetConfigCreation:
                 battery_capacities_kwh=[None, 5.0, 5.0],  # Wrong length
                 annual_consumptions_kwh=[3400, 3400],
             )
+
+
+#: Builds a fleet of three homes with one of FleetConfig's constructors, passing it the seed keyword it is given, if any.
+_FleetBuild = Callable[..., FleetConfig]
+
+_THREE_HOMES_BY_CONSTRUCTOR = [
+    pytest.param(
+        lambda **seed_keyword: FleetConfig.create_uniform(3, PVConfig(4.0), LoadConfig(3400.0), **seed_keyword),
+        id="create_uniform",
+    ),
+    pytest.param(
+        lambda **seed_keyword: FleetConfig.create_heterogeneous([4.0] * 3, [None] * 3, [3400.0] * 3, **seed_keyword),
+        id="create_heterogeneous",
+    ),
+]
+
+
+class TestFleetHomeSeeds:
+    """Home i of a seeded fleet has load seed fleet_seed + i, by fleet.fleet_home_seed; an unseeded fleet's homes are unseeded (docs/prds/rng-hand-off.md C8, C9)."""
+
+    @pytest.mark.parametrize(
+        ("fleet_seed", "index", "expected"),
+        [(None, 0, None), (None, 5, None), (7, 0, 7), (7, 2, 9), (-3, 4, 1)],
+    )
+    def test_fleet_home_seed_is_none_for_an_unseeded_fleet_and_the_fleet_seed_plus_the_index_otherwise(
+        self, fleet_seed: int | None, index: int, expected: int | None
+    ) -> None:
+        assert fleet_home_seed(fleet_seed, index) == expected
+
+    @pytest.mark.parametrize("build", _THREE_HOMES_BY_CONSTRUCTOR)
+    def test_a_seeded_constructor_gives_home_i_the_load_seed_fleet_seed_plus_i(self, build: _FleetBuild) -> None:
+        assert [home.load_config.seed for home in build(seed=7).homes] == [7, 8, 9]
+
+    @pytest.mark.parametrize("build", _THREE_HOMES_BY_CONSTRUCTOR)
+    def test_an_unseeded_constructor_leaves_every_load_unseeded(self, build: _FleetBuild) -> None:
+        assert [home.load_config.seed for home in build(seed=None).homes] == [None, None, None]
+        assert [home.load_config.seed for home in build().homes] == [None, None, None]
+
+    def test_create_uniform_gives_each_home_the_template_with_its_own_seed(self) -> None:
+        template = LoadConfig(annual_consumption_kwh=3400.0, household_occupants=4, name="template", use_stochastic=False)
+
+        fleet = FleetConfig.create_uniform(3, PVConfig(4.0), template, seed=7)
+
+        assert [home.load_config for home in fleet.homes] == [replace(template, seed=seed) for seed in (7, 8, 9)]
+
+    @pytest.mark.parametrize("fleet_seed", [None, 7])
+    def test_create_uniform_refuses_a_seeded_load_template(self, fleet_seed: int | None) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            FleetConfig.create_uniform(3, PVConfig(4.0), LoadConfig(3400.0, seed=42), seed=fleet_seed)
+
+        assert "load_config.seed" in str(refusal.value)
+        assert "42" in str(refusal.value)
+        assert "seed=" in str(refusal.value)
 
 
 def _home_whose_series_all_differ(offset: float) -> SimulationResults:

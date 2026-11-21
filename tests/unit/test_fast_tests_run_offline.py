@@ -2,16 +2,21 @@
 """Pins that tests/conftest.py runs every test not marked slow offline, the e2e suite's included, with every fixture it sets up or tears down.
 
 Each such test also runs on a weather cache of its own, which default_weather()
-reads in the test and in a child process that inherits its environment.
+reads in the test and in a child process that inherits its environment, made
+inside the project's temp root, and on an xdist worker inside the run's
+basetemp, which pytest's retention reaps, never directly in the temp dir
+(tests/_project_temp_root.py).
 
 The guard decides outcomes at teardown, so the scenarios run in a session of
 their own under a copy of tests/conftest.py. They need no session apiece, so
 they share one (tests/_scenario_session.py). The e2e suite's scenario runs in a
 session of its own that names e2e/, as the offline lane's e2e job names
 tests/e2e, because the root conftest's collect_ignore keeps e2e/ out of the
-shared session.
+shared session. The scenario that kills its own process runs in a session of
+its own in each mode it is killed in.
 """
 
+import getpass
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +27,7 @@ import pytest
 
 from solar_challenge.location import Location
 from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, PVGIS_API_URL, WeatherCache, default_weather
+from tests._project_temp_root import TEMP_ROOT_VARIABLE, project_temp_root
 from tests._scenario_session import ScenarioSession
 from tests._synthetic_weather import synthetic_june_weather
 
@@ -324,6 +330,60 @@ def test_a_fast_test_whose_weather_cache_directory_cannot_be_removed_leaves_the_
 
     assert run.outcomes("test_cache_directory_cannot_be_removed") == {"passed": 2}
     assert run.result.ret in (pytest.ExitCode.OK, pytest.ExitCode.TESTS_FAILED)
+
+
+KILLED_WITH_ITS_WINDOW_OPEN = """
+    import os
+    import signal
+
+
+    def test_is_killed_with_its_window_open(weather_cache, request):
+        (request.config.rootpath / "cache_dir.txt").write_text(str(weather_cache.cache_dir))
+        os.kill(os.getpid(), signal.SIGKILL)
+    """
+
+
+def _weather_cache_left_by_a_killed_test(suite: pytest.Pytester, *mode: str) -> Path:
+    """Return the weather cache that KILLED_WITH_ITS_WINDOW_OPEN's test leaves behind, run in *mode* in a session of its own, since the kill ends its process, with no --basetemp, which runpytest_subprocess would pass."""
+    suite.makepyfile(test_killed_with_its_window_open=KILLED_WITH_ITS_WINDOW_OPEN)
+    result = suite.run(sys.executable, "-m", "pytest", *mode, "-p", "no:cacheprovider", timeout=120)
+
+    recorded = suite.path / "cache_dir.txt"
+    assert recorded.is_file(), (
+        f"the test to be killed never recorded its weather cache:\n{result.stdout.str()}\n{result.stderr.str()}"
+    )
+    left = Path(recorded.read_text())
+    assert left.is_dir(), f"the killed test's weather cache {left} is gone, so nothing shows where a leftover lands"
+    return left
+
+
+def test_a_fast_test_killed_on_an_xdist_worker_leaves_its_weather_cache_in_the_runs_basetemp_which_pytests_retention_reaps(
+    suite: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, sessions_temp_dir: Path
+) -> None:
+    """The run's basetemp is the controller's, the first numbered dir of a fresh temp root, which xdist makes before it starts a worker."""
+    monkeypatch.delenv(TEMP_ROOT_VARIABLE, raising=False)
+    run_basetemp = project_temp_root(sessions_temp_dir) / f"pytest-of-{getpass.getuser()}" / "pytest-0"
+
+    left = _weather_cache_left_by_a_killed_test(suite, "-n", "1")
+
+    assert left.is_relative_to(run_basetemp), (
+        f"a fast test killed on an xdist worker left its weather cache {left} outside the run's basetemp "
+        f"{run_basetemp}, where nothing reaps a killed session's leftover"
+    )
+
+
+def test_a_fast_test_killed_in_a_session_without_workers_leaves_its_weather_cache_in_the_projects_temp_root(
+    suite: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, sessions_temp_dir: Path
+) -> None:
+    monkeypatch.delenv(TEMP_ROOT_VARIABLE, raising=False)
+    root = project_temp_root(sessions_temp_dir)
+
+    left = _weather_cache_left_by_a_killed_test(suite, "-p", "no:xdist")
+
+    assert left.is_relative_to(root), (
+        f"a fast test killed in a session without workers left its weather cache {left} outside the project's temp "
+        f"root {root}, which holds a killed session's leftover rather than the temp dir {sessions_temp_dir} itself"
+    )
 
 
 SLOW_REQUESTS_WEATHER_CACHE = """

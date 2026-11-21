@@ -8,13 +8,14 @@ import socket
 import socketserver
 import textwrap
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum, auto
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path, PurePosixPath
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -46,16 +47,31 @@ class _ReceivedRequest:
     query: dict[str, list[str]]
 
 
+class _BodyFault(Enum):
+    """How an answer fails to deliver the whole body its Content-Length gives: it sends the first half, then ..."""
+
+    CUT_SHORT = auto()
+    """... closes the connection, as PVGIS's did partway through a TMY."""
+
+    STALLED = auto()
+    """... sends nothing more until the stand-in's stalls are over."""
+
+
 class _ServiceStandIn(socketserver.TCPServer):
-    """An HTTP server on this machine that answers each GET with the status *statuses* sets for its name, 200 for any other, recording each request it receives."""
+    """An HTTP server on this machine that answers each GET with the status *statuses* sets for its name, 200 for any other, and with the whole of its body unless *body_faults* sets a fault for the name, recording each request it receives.
 
-    def __init__(self, statuses: Mapping[str, int]) -> None:
+    The stalls of its answers end when *stalls_over* is set.
+    """
+
+    def __init__(self, statuses: Mapping[str, int], body_faults: Mapping[str, _BodyFault]) -> None:
         self.statuses = statuses
+        self.body_faults = body_faults
+        self.stalls_over = threading.Event()
         self.received: list[_ReceivedRequest] = []
-        super().__init__((_THIS_MACHINE, 0), _AnswersWithTheNamesStatus)
+        super().__init__((_THIS_MACHINE, 0), _AnswersWithTheNamesStatusAndBodyFault)
 
 
-class _AnswersWithTheNamesStatus(BaseHTTPRequestHandler):
+class _AnswersWithTheNamesStatusAndBodyFault(BaseHTTPRequestHandler):
     server: _ServiceStandIn
 
     def do_GET(self) -> None:
@@ -63,24 +79,30 @@ class _AnswersWithTheNamesStatus(BaseHTTPRequestHandler):
         name = PurePosixPath(url.path).name
         self.server.received.append(_ReceivedRequest(name, parse_qs(url.query)))
         body = b"stand-in"
+        fault = self.server.body_faults.get(name)
         self.send_response(self.server.statuses.get(name, HTTPStatus.OK))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(body if fault is None else body[: len(body) // 2])
+        if fault is _BodyFault.STALLED:
+            self.server.stalls_over.wait()
 
     def log_message(self, format: str, *args: object) -> None:
         pass
 
 
 @contextmanager
-def _stand_in(statuses: Mapping[str, int]) -> Iterator[tuple[str, list[_ReceivedRequest]]]:
-    """Serve a _ServiceStandIn answering with *statuses*, and yield its origin and the requests it receives."""
-    with _ServiceStandIn(statuses) as server:
+def _stand_in(
+    statuses: Mapping[str, int], *, body_faults: Mapping[str, _BodyFault] = MappingProxyType({})
+) -> Iterator[tuple[str, list[_ReceivedRequest]]]:
+    """Serve a _ServiceStandIn answering with *statuses* and failing the bodies *body_faults* names, and yield its origin and the requests it receives."""
+    with _ServiceStandIn(statuses, body_faults) as server:
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
             yield _origin_on(server.server_address[1]), server.received
         finally:
+            server.stalls_over.set()
             server.shutdown()
             thread.join()
 
@@ -131,6 +153,39 @@ def test_an_answer_pvgis_gave_to_a_request_it_judged_is_no_outage(
         exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
 
     assert (exit_status, capsys.readouterr().out) == (0, "")
+
+
+@pytest.mark.parametrize("fault", list(_BodyFault))
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_an_endpoint_pvgis_refuses_or_fails_is_named_by_its_status_whatever_its_body_does(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], status: int, fault: _BodyFault
+) -> None:
+    """The body is read only after a status that is no outage, so one outage prints one line: otherwise a body cut short or stalled would name its own cause on some runs and the status on others."""
+    with _stand_in({"tmy": status}, body_faults={"tmy": fault}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: tmy: HTTP {status}\n")
+
+
+@pytest.mark.parametrize("endpoint", ["tmy", "seriescalc"])
+def test_a_pvgis_answer_whose_body_is_cut_short_is_an_outage_named_on_one_line(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], endpoint: str
+) -> None:
+    """The tests read each body whole, so an answer that closes the connection before its body is whole was not served."""
+    with _stand_in({}, body_faults={endpoint: _BodyFault.CUT_SHORT}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: {endpoint}: ChunkedEncodingError\n")
+
+
+def test_a_pvgis_answer_whose_body_stops_arriving_is_an_outage_within_the_timeout(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """requests names a body that stops arriving for the timeout a ConnectionError, not a Timeout."""
+    with _stand_in({}, body_faults={"tmy": _BodyFault.STALLED}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: ConnectionError\n")
 
 
 def test_a_connection_this_machine_refuses_is_an_outage(probe: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
@@ -273,6 +328,46 @@ def test_the_npm_registry_is_asked_for_the_first_tarball_resolved_at_an_http_url
 
     assert (exit_status, capsys.readouterr().out) == (0, "")
     assert [request.name for request in received] == ["demo-1.0.0.tgz"]
+
+
+@pytest.mark.parametrize(
+    ("service", "option", "lock_name", "lock_text_at", "asked"),
+    [
+        pytest.param(
+            "pypi",
+            "--uv-lock",
+            "uv.lock",
+            lambda origin: _uv_lock(_EDITABLE_PROJECT, _demo_package_pinned_from(origin)),
+            ["demo-package", "demo_package-1.0-py3-none-any.whl"],
+            id="pypi",
+        ),
+        pytest.param(
+            "npm",
+            "--package-lock",
+            "package-lock.json",
+            lambda origin: _package_lock(_NPM_ROOT, _demo_resolved_at(origin)),
+            ["demo-1.0.0.tgz"],
+            id="npm",
+        ),
+    ],
+)
+def test_the_pypi_and_npm_probes_read_no_body(
+    probe: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    service: str,
+    option: str,
+    lock_name: str,
+    lock_text_at: Callable[[str], str],
+    asked: list[str],
+) -> None:
+    """Reading a wheel or a tarball would download it, so the answer to each request they send has a body cut short, and is still served."""
+    with _stand_in({}, body_faults=dict.fromkeys(asked, _BodyFault.CUT_SHORT)) as (origin, received):
+        lock = _write(tmp_path / lock_name, lock_text_at(origin))
+        exit_status = probe.main([service, option, str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (0, "")
+    assert [request.name for request in received] == asked
 
 
 @pytest.mark.parametrize(

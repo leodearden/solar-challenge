@@ -19,24 +19,27 @@ from tests._heap_freeze import freeze_the_heap_once
 from tests._lane_collection import collect_lane_job_once
 from tests._network_guard import refusing_network
 from tests._once_per_run import run_shared_path
+from tests._project_temp_root import name_the_project_temp_root, pre_fixture_temp_dir
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
 if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache
 
-pytest_plugins = ["pytester", "tests._project_temp_root"]
+pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
 collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Drop COLUMNS and LINES from os.environ and from the C environment beneath it, so no process of the suite, serial or an xdist worker, holds a terminal size, and no child a test starts inherits one.
+    """Name the project's temp root for *config*'s session before any other plugin configures (tests/_project_temp_root.py), and drop COLUMNS and LINES from os.environ and from the C environment beneath it, so no process of the suite, serial or an xdist worker, holds a terminal size, and no child a test starts inherits one.
 
     A console the CLI builds at import then reads COLUMNS when it prints.
     tests/unit/test_parallel_suite.py says where the two come from.
     """
+    name_the_project_temp_root(config)
     for name in ("COLUMNS", "LINES"):
         os.environ.pop(name, None)
         os.unsetenv(name)
@@ -188,6 +191,15 @@ def pytester_laid_out_as_the_e2e_suite(
     return pytester_under_root_conftest
 
 
+@pytest.fixture
+def sessions_temp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Return the temp dir under the test's tmp_path that TMPDIR names for the sessions the test runs, so they write nowhere outside tmp_path."""
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temp_dir))
+    return temp_dir
+
+
 @dataclass(frozen=True)
 class _OfflineWindow:
     """What a test not marked slow runs in: its own empty weather cache, which CACHE_DIR_VARIABLE names while the window is open, and the destinations it was refused."""
@@ -200,16 +212,16 @@ _OFFLINE_WINDOW_KEY = pytest.StashKey[_OfflineWindow]()
 
 
 @contextmanager
-def _open_offline_window() -> Iterator[_OfflineWindow]:
+def _open_offline_window(temp_dir: Path) -> Iterator[_OfflineWindow]:
     """Open a test's window, which closes after the test is reported, where an error would abort the session.
 
-    CACHE_DIR_VARIABLE names the window's weather cache until it closes, so default_weather() reads that cache.
+    CACHE_DIR_VARIABLE names the window's weather cache, a temp dir in *temp_dir*, until it closes, so default_weather() reads that cache.
     The first window imports solar_challenge.weather, before it refuses the network, so sessions that run no test never load it.
     """
     from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
 
     with (
-        tempfile.TemporaryDirectory(prefix="weather-cache-", ignore_cleanup_errors=True) as cache_dir,
+        tempfile.TemporaryDirectory(prefix="weather-cache-", dir=temp_dir, ignore_cleanup_errors=True) as cache_dir,
         refusing_network() as refused,
         pytest.MonkeyPatch.context() as patch,
     ):
@@ -244,7 +256,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     """
     if item.get_closest_marker("slow"):
         return (yield)
-    with _open_offline_window() as window, _pytest_sessions_it_starts_run_serially():
+    with _open_offline_window(pre_fixture_temp_dir(item.config)) as window, _pytest_sessions_it_starts_run_serially():
         item.stash[_OFFLINE_WINDOW_KEY] = window
         try:
             return (yield)

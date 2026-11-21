@@ -9,6 +9,7 @@ Tests cover:
 - A summary's window survives home and fleet roundtrips and is stored as ISO 8601
   text; a summary saved without one loads it as None, and one whose simulation_days
   is not its window's days is refused
+- A stored summary whose battery discharge exceeds its self-consumption is refused
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
@@ -493,6 +494,32 @@ class TestSummaryWindowRoundtrip:
         assert refused.value.document == "summary.json"
 
 
+class TestStoredSummaryDischargeBound:
+    """SummaryStatistics refuses, as a run loads, a stored summary whose battery discharge is more than the self-consumption that counts it."""
+
+    def test_a_stored_summary_whose_discharge_exceeds_its_self_consumption_is_refused(
+        self, storage: RunStorage
+    ) -> None:
+        storage.save_home_run(
+            run_id="discharge-bound-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "discharge-bound-001") / "summary.json"
+        stored = _read_json(summary_path)
+        stored["total_battery_discharge_kwh"] = 61.0
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        with pytest.raises(
+            StoredRunUnreadable, match=r"total_battery_discharge_kwh=61\.0, total_self_consumption_kwh=60\.0"
+        ) as refused:
+            storage.load_run("discharge-bound-001")
+
+        assert refused.value.document == "summary.json"
+
+
 class TestCompletedAtTimestamp:
     """completed_at should be a real timestamp, distinct from created_at."""
 
@@ -969,9 +996,10 @@ _GRID_CHARGE_TO_80_PERCENT = GridChargeConfig(target_soc_fraction=0.8)
 _DISPATCHED_BATTERY_SETTINGS = (
     pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
     pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized"),
+    pytest.param(TOUOptimizedStrategyConfig(), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized-on-the-tariff-clock"),
     pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), _GRID_CHARGE_TO_80_PERCENT, id="peak_shaving"),
 )
-"""One example of each dispatch strategy, with grid charging to 0.8 for those that charge from the grid."""
+"""One example of each dispatch strategy, tou_optimized both with peak_hours and on the tariff's clock, with grid charging to 0.8 for those that charge from the grid."""
 
 
 def _dispatching_home(

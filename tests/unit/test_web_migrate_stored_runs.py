@@ -25,6 +25,9 @@ the steps the migration applied; the migration run again goes on from that versi
 none of their values again.
 A store at version 2, whose runs a solar-challenge at that version saved in format 2, is brought
 forward by the steps after version 2 alone, version 3's reading each home's dispatch as it ran.
+A store at version 3, whose runs were saved in format 3, is brought forward by version 4's step
+alone, which drops each battery's grid_charging that its run ignored on a tariff with no cheap
+period.
 A run that store's migration left in format 1, with no format.json, has its files brought
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
 steps, migrate_store catches up: it brings forward each run an earlier migration left in its
@@ -56,7 +59,9 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.home import HomeConfig, SummaryStatistics
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.database import Database
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.schema import (
     MIGRATIONS,
     SCHEMA_VERSION,
@@ -112,11 +117,13 @@ def legacy_run_ids(store_at_version_1: Path) -> dict[str, str]:
     return {name: install_stored_run_fixture(name, database, store_at_version_1.parent) for name in STORED_RUN_FIXTURES}
 
 
-_FIXTURES_IN_FORMAT_2 = ("pre_469_home", "legacy_fleet", "pre_787_dispatch_fleet")
+_FIXTURES_IN_FORMAT_2 = ("pre_469_home", "legacy_fleet", "pre_787_dispatch_fleet", "pre_839_flat_grid_charging_fleet")
 """The legacy stored-run fixtures whose documents version 2's step leaves as they are, so a store at schema version 2 holds them as committed.
 
-pre_787_dispatch_fleet is the one a solar-challenge at format 2 saved. pre_786_dispatch_home is
-left out: its dispatch strategy holds the other variants' null keys, which v2 drops.
+pre_787_dispatch_fleet is the one a solar-challenge at format 2 saved. pre_839_flat_grid_charging_fleet,
+which one at format 3 saved, is in format 2 too, as v3 leaves its documents as they are.
+pre_786_dispatch_home is left out: its dispatch strategy holds the other variants' null keys, which
+v2 drops.
 """
 
 
@@ -136,6 +143,30 @@ def format_2_run_ids(store_at_version_2: Path) -> dict[str, str]:
     return run_ids
 
 
+_FIXTURES_IN_FORMAT_3 = ("pre_469_home", "legacy_fleet", "pre_839_flat_grid_charging_fleet")
+"""The legacy stored-run fixtures whose documents versions 2 and 3's steps leave as they are, so a store at schema version 3 holds them as committed.
+
+pre_839_flat_grid_charging_fleet is the one a solar-challenge at format 3 saved. pre_787_dispatch_fleet
+is left out: v3 rewrites its dispatch to the one each home ran by.
+"""
+
+
+@pytest.fixture
+def store_at_version_3(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 3 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 3)
+
+
+@pytest.fixture
+def format_3_run_ids(store_at_version_3: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_3, by name, each installed in store_at_version_3 with the format.json naming 3 a save at format 3 left."""
+    database = Database(store_at_version_3)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_3.parent) for name in _FIXTURES_IN_FORMAT_3}
+    for run_id in run_ids.values():
+        write_run_documents(_run_dir(store_at_version_3, run_id), (), 3)
+    return run_ids
+
+
 @dataclass(frozen=True)
 class _OlderStore:
     """A store a solar-challenge at schema *version*, below SCHEMA_VERSION, left at *path*, its run files in that file's directory.
@@ -152,10 +183,11 @@ class _OlderStore:
     params=[
         pytest.param((1, "store_at_version_1", "legacy_run_ids"), id="store-at-version-1"),
         pytest.param((2, "store_at_version_2", "format_2_run_ids"), id="store-at-version-2"),
+        pytest.param((3, "store_at_version_3", "format_3_run_ids"), id="store-at-version-3"),
     ]
 )
 def older_store(request: pytest.FixtureRequest) -> _OlderStore:
-    """store_at_version_1 holding legacy_run_ids, then store_at_version_2 holding format_2_run_ids."""
+    """store_at_version_1 holding legacy_run_ids, store_at_version_2 holding format_2_run_ids, then store_at_version_3 holding format_3_run_ids."""
     version, path_fixture, run_ids_fixture = request.param
     return _OlderStore(request.getfixturevalue(path_fixture), version, request.getfixturevalue(run_ids_fixture))
 
@@ -241,13 +273,40 @@ def _values_v3_changes_in_the_pre_787_fleet(run_id: str) -> tuple[RewrittenValue
     )
 
 
-def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_after_its_own_reporting_only_the_values_v3_changes_in_the_pre_787_fleet(
+_PRE_839_FLEET_FIELDS_V4_CHANGES = tuple(
+    (f"homes[{index}].battery_config.grid_charging", {"target_soc_fraction": 0.8}, None) for index in range(3)
+)
+"""Each field of pre_839_flat_grid_charging_fleet's config that v4 drops, as its run ignored it on a flat tariff, the value it held and the one it holds now."""
+
+
+def _values_v4_changes_in_the_pre_839_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports v4 rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*: its config.json's, then its runs row's."""
+    return tuple(
+        RewrittenValue(run_id, document, field, was, now)
+        for document in ("config.json", "runs.config_json")
+        for field, was, now in _PRE_839_FLEET_FIELDS_V4_CHANGES
+    )
+
+
+def _values_the_steps_after_version_1_rewrite(run_ids: Mapping[str, str]) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports the steps after schema version 1 rewrote in the legacy runs installed as *run_ids*, by fixture name: v3's in the pre-787 fleet, then v4's in the pre-839 fleet."""
+    return (
+        *_values_v3_changes_in_the_pre_787_fleet(run_ids["pre_787_dispatch_fleet"]),
+        *_values_v4_changes_in_the_pre_839_fleet(run_ids["pre_839_flat_grid_charging_fleet"]),
+    )
+
+
+def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_after_its_own_reporting_only_the_values_they_rewrite_in_the_pre_787_and_pre_839_fleets(
     older_store: _OlderStore,
 ) -> None:
-    """A store at version 2, each run's format.json naming 2, is migrated without version 2's step.
+    """A store at version 2 or 3, each run's format.json naming its version, is migrated without the steps up to its version.
 
-    The legacy runs hold no key v2 drops but the null keys of the other dispatch variants, a null value it drops unreported.
+    The legacy runs hold no key v2 drops but the null keys of the other dispatch variants, a null
+    value it drops unreported. A store at version 3 holds no pre-787 fleet, as v3 rewrites it.
     """
+    pre_787_fleet = older_store.run_ids.get("pre_787_dispatch_fleet")
+    rewritten_by_v3 = _values_v3_changes_in_the_pre_787_fleet(pre_787_fleet) if pre_787_fleet is not None else ()
+
     report = migrate_store(older_store.path, older_store.path.parent)
 
     assert report == MigrationReport(
@@ -255,7 +314,10 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
         from_version=older_store.version,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[older_store.version :],
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(older_store.run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=(
+            *rewritten_by_v3,
+            *_values_v4_changes_in_the_pre_839_fleet(older_store.run_ids["pre_839_flat_grid_charging_fleet"]),
+        ),
     )
     assert user_version_of(older_store.path) == SCHEMA_VERSION
 
@@ -596,10 +658,12 @@ def test_migrate_store_drops_the_keys_v2_drops_from_a_run_s_files_and_its_runs_r
 _CONFIG_EACH_RUN_DOCUMENT_STEP_REWRITES = (
     (2, "pre_786_dispatch_home"),
     (3, "pre_787_dispatch_fleet"),
+    (4, "pre_839_flat_grid_charging_fleet"),
 )
 """Each run-document step's version and the legacy stored-run fixture whose config it rewrites.
 
-v2 drops the pre-786 run's null dispatch keys, and v3 sets the pre-787 fleet's dispatch to the one each home ran by.
+v2 drops the pre-786 run's null dispatch keys, v3 sets the pre-787 fleet's dispatch to the one each
+home ran by, and v4 drops the grid_charging each home of the pre-839 fleet ignored on its flat tariff.
 """
 
 
@@ -690,6 +754,47 @@ def test_migrate_store_leaves_each_run_it_cannot_migrate_as_it_was_reports_it_an
     assert user_version_of(store_at_version_1) == SCHEMA_VERSION
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
+def _discharging_in_economy_10_s_cheap_minutes(config: dict[str, Any]) -> None:
+    """Edit a home run's stored *config* to a battery dispatching tou_optimized over 16:00-21:00, with no grid_charging, on Economy 10, whose 20:00-21:00 is cheap."""
+    config["battery_config"]["dispatch_strategy"] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]}
+    config["battery_config"]["grid_charging"] = None
+    config["tariff_config"] = field_tree(TariffConfig.economy_10())
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_a_run_whose_tou_peak_hours_reach_a_cheap_minute_unmigrated_naming_the_window_and_migrates_the_rest(
+    store_at_version_3: Path, format_3_run_ids: dict[str, str]
+) -> None:
+    """Task 839's recorded decision: a run whose battery discharged in cheap minutes of its tariff no longer loads.
+
+    No configuration now accepted dispatches as it ran, so no step brings it forward. The run
+    stands for one the home page stored with its former default window, 16:00-21:00, on Economy 10.
+    """
+    left = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_3), store_at_version_3.parent, run_id="peak-in-cheap-minutes"
+    )
+    run_dir = _run_dir(store_at_version_3, left)
+    write_run_documents(run_dir, (), 3)
+    _edit_stored_document(run_dir / "config.json", _discharging_in_economy_10_s_cheap_minutes)
+    _edit_runs_document(store_at_version_3, left, "config_json", _discharging_in_economy_10_s_cheap_minutes)
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_3, store_at_version_3.parent)
+
+    assert user_version_of(store_at_version_3) == SCHEMA_VERSION
+    assert len(report.unmigrated_runs) == 2
+    assert {(each.run_id, each.document) for each in report.unmigrated_runs} == {
+        (left, "config.json"),
+        (left, "runs.config_json"),
+    }
+    for each in report.unmigrated_runs:
+        assert "peak_hours[0]" in each.reason and "20:00-21:00" in each.reason, each.reason
+    assert _files_of(run_dir) == files_before
+    assert json.loads((run_dir / "format.json").read_text()) == {"format_version": 3}
+    storage = _storage_of(store_at_version_3)
+    assert [storage.load_run(run_id).run_id for run_id in format_3_run_ids.values()] == list(format_3_run_ids.values())
 
 
 def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
@@ -842,7 +947,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
 
     The step stops there, leaving the database at version 1 and no temporary file in the run's
     directory; the runs it brought forward before the fault keep their format.json naming 2, so
-    the migration run again brings them on by v3 alone.
+    the migration run again brings them on by the steps after v2 alone.
     """
     fleet_dir = _run_dir(store_at_version_1, legacy_run_ids["legacy_fleet"])
     _put_a_directory_in_place_of(fleet_dir / "format.json")
@@ -869,7 +974,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
@@ -916,7 +1021,7 @@ def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
         dropped_values=(DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),),
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
 
 
@@ -958,7 +1063,7 @@ def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_th
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
         dropped_values=(DroppedValue(unwritable, "runs.summary_json", "retired_figure", 12.5),),
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"]),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
 
 
@@ -1043,7 +1148,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     The refusal names each run whose files stay brought forward; v2 drops only null keys from
     them, so it names no value. Run again once the trigger is dropped, the migration leaves
     those files as they are until v3, as they are in format 2 already, then brings them forward
-    by v3, and brings the runs rows forward.
+    by v3 and v4, and brings the runs rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(
@@ -1068,18 +1173,18 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         conn.execute("DROP TRIGGER refuse_run_updates")
     report = migrate_store(store_at_version_1, store_at_version_1.parent)
 
-    pre_787 = legacy_run_ids["pre_787_dispatch_fleet"]
     assert report == MigrationReport(
         path=store_at_version_1,
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        rewritten_values=_values_v3_changes_in_the_pre_787_fleet(pre_787),
+        rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
+    rewritten_fleets = {legacy_run_ids["pre_787_dispatch_fleet"], legacy_run_ids["pre_839_flat_grid_charging_fleet"]}
     for run_id, before in files_after_refusal.items():
         after = _files_of(_run_dir(store_at_version_1, run_id))
         assert {path for path in before if after[path] != before[path]} == (
-            {"format.json", "config.json"} if run_id == pre_787 else {"format.json"}
+            {"format.json", "config.json"} if run_id in rewritten_fleets else {"format.json"}
         )
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
@@ -1096,9 +1201,10 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
     """Version 3's step is refused once version 2's has committed, so the value v2 dropped from the copy of pre_469_home is in the report the refusal carries, and only there.
 
     v3 brought every run's files forward before its transaction failed, so the refusal also
-    carries those runs and v3's rewrites of the fleet's config.json, in files_brought_forward.
-    Run again, the migration goes on from version 2, leaves those files as they are, and so
-    reports v3's rewrites of the fleet's runs row alone.
+    carries those runs and v3's rewrites of the pre-787 fleet's config.json, in
+    files_brought_forward. Run again, the migration goes on from version 2, leaves those files as
+    they are, and so reports v3's rewrites of that fleet's runs row alone, then v4's of the pre-839
+    fleet's config.json and runs row.
     """
     run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
 
@@ -1137,11 +1243,14 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
         path=store_at_version_1,
         from_version=2,
         to_version=SCHEMA_VERSION,
-        applied_steps=(MIGRATIONS[2],),
-        rewritten_values=tuple(
-            each
-            for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
-            if each.document == "runs.config_json"
+        applied_steps=MIGRATIONS[2:],
+        rewritten_values=(
+            *(
+                each
+                for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
+                if each.document == "runs.config_json"
+            ),
+            *_values_v4_changes_in_the_pre_839_fleet(legacy_run_ids["pre_839_flat_grid_charging_fleet"]),
         ),
     )
 

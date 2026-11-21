@@ -30,6 +30,14 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_weather
 
 
+def fleet_home_seed(fleet_seed: int | None, index: int) -> int | None:
+    """Home *index*'s load seed in a fleet seeded with *fleet_seed*: fleet_seed + index, or None for an unseeded fleet.
+
+    The one home of the per-home seed rule.
+    """
+    return None if fleet_seed is None else fleet_seed + index
+
+
 @dataclass
 class FleetConfig:
     """Configuration for a fleet of homes.
@@ -63,6 +71,8 @@ class FleetConfig:
         battery_config: Optional[BatteryConfig] = None,
         location: Location = Location.bristol(),
         name: str = "",
+        *,
+        seed: int | None = None,
     ) -> "FleetConfig":
         """Create a fleet with uniform home configurations.
 
@@ -73,14 +83,26 @@ class FleetConfig:
             battery_config: Battery configuration (or None) for all homes
             location: Location for all homes
             name: Fleet name
+            seed: Fleet seed: home i's load seed is fleet_home_seed(seed, i); None leaves every
+                home's load unseeded, drawing fresh profiles each run
 
         Returns:
-            FleetConfig with identical home configurations
+            FleetConfig whose homes share every setting but their load seed
+
+        Raises:
+            ConfigurationError: If load_config's seed is set, since the fleet's seed is passed
+                as seed=
         """
+        if load_config.seed is not None:
+            raise ConfigurationError.must_be(
+                "load_config.seed",
+                "None (pass the fleet's seed as seed=; home i then gets seed + i)",
+                got=load_config.seed,
+            )
         homes = [
             HomeConfig(
                 pv_config=pv_config,
-                load_config=load_config,
+                load_config=replace(load_config, seed=fleet_home_seed(seed, i)),
                 battery_config=battery_config,
                 location=location,
                 name=f"Home {i+1}",
@@ -97,6 +119,8 @@ class FleetConfig:
         annual_consumptions_kwh: list[float],
         location: Location = Location.bristol(),
         name: str = "",
+        *,
+        seed: int | None = None,
     ) -> "FleetConfig":
         """Create a fleet with heterogeneous home configurations.
 
@@ -106,6 +130,8 @@ class FleetConfig:
             annual_consumptions_kwh: Annual consumption for each home
             location: Location for all homes
             name: Fleet name
+            seed: Fleet seed: home i's load seed is fleet_home_seed(seed, i); None leaves every
+                home's load unseeded, drawing fresh profiles each run
 
         Returns:
             FleetConfig with varied home configurations
@@ -127,7 +153,7 @@ class FleetConfig:
             homes.append(
                 HomeConfig(
                     pv_config=PVConfig(capacity_kw=pv_kw),
-                    load_config=LoadConfig(annual_consumption_kwh=load_kwh),
+                    load_config=LoadConfig(annual_consumption_kwh=load_kwh, seed=fleet_home_seed(seed, i)),
                     battery_config=battery_config,
                     location=location,
                     name=f"Home {i+1}",

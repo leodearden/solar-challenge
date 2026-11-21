@@ -11,7 +11,12 @@ import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
+from solar_challenge.dispatch import (
+    DispatchStrategy,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+    build_dispatch_strategy,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
@@ -63,7 +68,9 @@ class HomeConfig:
             ev_config's smart_charging_mode is 'off_peak' and there is no tariff_config whose
             cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
             battery whose dispatch would ignore a setting: tou_optimized with no tariff to
-            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
+            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy), a
+            tariff with no cheap period included; or a battery tou_optimized whose peak_hours
+            reach a cheap minute of tariff_config (TOUOptimizedStrategy).
     """
 
     pv_config: PVConfig
@@ -94,6 +101,9 @@ class HomeConfig:
                     "dispatch_strategy 'tou_optimized' dispatches the battery by the tariff's rates, "
                     "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
                 )
+            build_dispatch_strategy(
+                TOUOptimizedStrategyConfig(), grid_charging=self.battery_config.grid_charging, tariff=self.tariff_config
+            )
             return
         _configured_strategy(self)
 
@@ -101,7 +111,9 @@ class HomeConfig:
 def _runs_tariff_tou(config: HomeConfig) -> bool:
     """Whether the home asks for the tariff-rate TOU path: tou_optimized, and its battery, if any, names no strategy of its own.
 
-    The home runs that path only when it has a tariff.
+    The home runs that path only when it has a tariff. It dispatches as a battery
+    TOUOptimizedStrategyConfig() does (tests/unit/test_tou_tariff_clock.py, Row 6), so its
+    grid_charging is refused as that variant's is.
     """
     return config.dispatch_strategy == "tou_optimized" and (
         config.battery_config is None or config.battery_config.dispatch_strategy is None
@@ -393,6 +405,8 @@ class SummaryStatistics:
     total_grid_import_kwh: float
     total_grid_export_kwh: float
     total_battery_charge_kwh: float
+    # Energy the battery delivered to the home's bus, after its discharge losses: a part of
+    # total_self_consumption_kwh, which counts it.
     total_battery_discharge_kwh: float
     peak_generation_kw: float
     peak_demand_kw: float
@@ -418,7 +432,7 @@ class SummaryStatistics:
     window: Optional[SimulationWindow] = None
 
     def __post_init__(self) -> None:
-        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and, when a window is set, a simulation_days other than its days."""
+        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and, when a window is set, a simulation_days other than its days."""
         grid_charge = self.total_grid_charge_kwh
         if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
             raise ValueError(
@@ -427,6 +441,14 @@ class SummaryStatistics:
                 f"got total_grid_charge_kwh={grid_charge!r}, "
                 f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
                 f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
+            )
+        discharge = self.total_battery_discharge_kwh
+        if not discharge <= self.total_self_consumption_kwh:
+            raise ValueError(
+                "SummaryStatistics' total_battery_discharge_kwh is a part of total_self_consumption_kwh, which "
+                "counts the battery's discharge, so it is at most it: "
+                f"got total_battery_discharge_kwh={discharge!r}, "
+                f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}"
             )
         window = self.window
         if window is not None and self.simulation_days != window.days:
@@ -443,7 +465,7 @@ class SummaryStatistics:
 
     @property
     def total_direct_self_consumption_kwh(self) -> float:
-        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too."""
+        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too, so at least 0."""
         return self.total_self_consumption_kwh - self.total_battery_discharge_kwh
 
     @property

@@ -415,9 +415,9 @@ _DISPATCH_STRATEGY_PATH = "home.battery.dispatch_strategy"
 """The path parse_home_block names a home battery's dispatch_strategy: block by."""
 
 
-def _parsed_strategy(block: object) -> object:
-    """The dispatch strategy a home battery's dispatch_strategy: block reads as, through parse_home_block."""
-    battery_config = _parsed_home(battery={"dispatch_strategy": block}).battery_config
+def _parsed_strategy(block: object, **home_blocks: Any) -> object:
+    """The dispatch strategy a home battery's dispatch_strategy: block reads as, through parse_home_block, in a home also holding *home_blocks*."""
+    battery_config = _parsed_home(battery={"dispatch_strategy": block}, **home_blocks).battery_config
     assert battery_config is not None
     return battery_config.dispatch_strategy
 
@@ -539,11 +539,23 @@ class TestDispatchStrategyParsing:
             _parsed_strategy(block)
 
     @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, id="absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="null"),
+        ],
+    )
+    def test_a_tou_optimized_block_without_peak_hours_reads_as_the_tariff_clock(self, block: dict[str, Any]) -> None:
+        """Its home is on Economy 7: with no tariff the strategy would have no clock (tests/unit/test_tou_tariff_clock.py)."""
+        assert _parsed_strategy(block, tariff={"type": "economy_7"}) == TOUOptimizedStrategyConfig()
+
+    @pytest.mark.parametrize(
         ("block", "required_key"),
         [
-            pytest.param({"strategy_type": "tou_optimized"}, "peak_hours", id="tou_optimized-absent"),
-            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, "peak_hours", id="tou_optimized-null"),
             pytest.param({"strategy_type": "peak_shaving"}, "import_limit_kw", id="peak_shaving-absent"),
+            pytest.param(
+                {"strategy_type": "peak_shaving", "import_limit_kw": None}, "import_limit_kw", id="peak_shaving-null"
+            ),
         ],
     )
     def test_a_required_key_left_out_or_null_is_refused_by_its_path(

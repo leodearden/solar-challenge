@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A stochastic load profile depends only on its LoadConfig: not on what ran before it in the process, nor on what runs beside it on another thread, nor, in a forked child, on a window a parent thread held. load.py's RNG hand-off makes it so, and refuses a household model that generates a profile inside its own window (docs/prds/rng-hand-off.md §5 C3, C4 and C5, §7)."""
+"""A stochastic load profile depends only on its LoadConfig: not on what ran before it in the process, nor on what runs beside it on another thread, nor, in a forked child, on a window a parent thread held. load.py's RNG hand-off makes it so, and refuses a household model that generates a profile inside its own window (docs/prds/rng-hand-off.md §5 C3, C4 and C5, §7). A fleet built with a seed gives home i the load seed fleet_seed + i (fleet.fleet_home_seed, C8 and C9), so each home's profile repeats and differs from its neighbours'."""
 
 import datetime
+import itertools
 import logging
 import logging.handlers
 import multiprocessing
 import random
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
@@ -15,7 +16,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from solar_challenge.fleet import FleetConfig
 from solar_challenge.load import DaySimulator, HouseholdModel, LoadConfig, generate_load_profile
+from solar_challenge.pv import PVConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 
@@ -157,6 +160,32 @@ def test_a_negative_seed_and_its_absolute_value_give_different_profiles(seed: in
     positive = generate_load_profile(_stochastic(seed), window)
 
     assert not negative.equals(positive)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda: FleetConfig.create_uniform(3, PVConfig(4.0), LoadConfig(3400.0), seed=7),
+            id="create_uniform",
+        ),
+        pytest.param(
+            lambda: FleetConfig.create_heterogeneous([4.0] * 3, [None] * 3, [3400.0] * 3, seed=7),
+            id="create_heterogeneous",
+        ),
+    ],
+)
+def test_a_seeded_fleet_s_homes_each_repeat_their_profile_and_differ_from_each_other(
+    build: Callable[[], FleetConfig],
+) -> None:
+    window = _june_2024(21, 21)
+    homes = build().homes
+
+    first = [generate_load_profile(home.load_config, window) for home in homes]
+    again = [generate_load_profile(home.load_config, window) for home in homes]
+
+    assert [repeat.equals(profile) for repeat, profile in zip(again, first, strict=True)] == [True, True, True]
+    assert [one.equals(other) for one, other in itertools.combinations(first, 2)] == [False, False, False]
 
 
 _needs_fork = pytest.mark.skipif(

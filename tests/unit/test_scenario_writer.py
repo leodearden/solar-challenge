@@ -311,6 +311,7 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
         pytest.param(
             TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))), GridChargeConfig(0.8), id="tou_optimized"
         ),
+        pytest.param(TOUOptimizedStrategyConfig(), GridChargeConfig(0.8), id="tou_optimized-on-the-tariff-clock"),
         pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), GridChargeConfig(0.8), id="peak_shaving"),
     ],
 )

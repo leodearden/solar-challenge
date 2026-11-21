@@ -415,7 +415,13 @@ class TestHomeBlockKeys:
             "pv": pv,
             "battery": battery,
             "load": load,
-            "tariff": {"type": "flat_rate", "rate_per_kwh": 0.25, "name": "Flat"},
+            "tariff": {
+                "type": "economy_7",
+                "off_peak_rate": 0.10,
+                "peak_rate": 0.30,
+                "off_peak_start": "01:00",
+                "off_peak_end": "08:00",
+            },
             "dispatch_strategy": "tou_optimized",
             "heat_pump": heat_pump,
             "ev": ev,
@@ -433,7 +439,9 @@ class TestHomeBlockKeys:
             load_config=LoadConfig(**load),
             location=Location.bristol(),
             name="Every key",
-            tariff_config=TariffConfig.flat_rate(rate_per_kwh=0.25, name="Flat"),
+            tariff_config=TariffConfig.economy_7(
+                off_peak_rate=0.10, peak_rate=0.30, off_peak_start="01:00", off_peak_end="08:00"
+            ),
             dispatch_strategy="tou_optimized",
             heat_pump_config=HeatPumpConfig(**heat_pump),
             ev_config=EVConfig(**ev),
