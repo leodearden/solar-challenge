@@ -573,23 +573,32 @@ class TestPresetRates:
             "economy_10": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
         }
 
-    def test_the_table_is_read_only(self) -> None:
+    def test_the_table_and_its_rates_are_read_only(self) -> None:
         with pytest.raises(TypeError):
             PRESET_RATES["economy_7"] = PresetRates(off_peak_rate=0.1, peak_rate=0.2)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            PRESET_RATES["economy_7"].peak_rate = 1.0
 
     @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
-    @pytest.mark.parametrize("rate", [-0.1, float("nan"), float("inf")])
-    def test_a_preset_rate_that_is_negative_or_not_finite_is_refused_naming_it(
-        self, field: str, rate: float
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_preset_rate_that_is_not_a_finite_number_is_refused_with_the_leafs_wording(
+        self, field: str, value: object
     ) -> None:
-        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: rate}
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: value}
 
         with pytest.raises(ConfigurationError) as refusal:
             PresetRates(**rates)
 
-        message = str(refusal.value)
-        assert names_as_a_word(message, field)
-        assert names_as_a_word(message, rate)
+        assert str(refusal.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
+    def test_a_negative_preset_rate_is_refused_naming_its_bound(self, field: str) -> None:
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: -0.1}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PresetRates(**rates)
+
+        assert str(refusal.value) == f"{field} must be at least 0, got -0.1"
 
     def test_presets_built_without_rates_charge_their_table_rates(self) -> None:
         economy_7 = TariffConfig.economy_7()
