@@ -414,13 +414,7 @@ def calculate_bill(
     if not isinstance(energy_kwh.index, pd.DatetimeIndex):
         raise ValueError("energy_kwh must have a DatetimeIndex")
 
-    total_cost = 0.0
-
-    for timestamp, energy in energy_kwh.items():
-        rate = tariff.get_rate(timestamp)
-        total_cost += energy * rate
-
-    return total_cost
+    return float(np.sum(energy_kwh.to_numpy() * tariff.rates_for(energy_kwh.index)))
 
 
 def FlatRateTariff(rate_per_kwh: float, name: str = "") -> TariffConfig:
