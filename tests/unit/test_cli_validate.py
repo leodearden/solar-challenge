@@ -212,12 +212,17 @@ def _dispatched_by_its_battery(dispatch_strategy: dict[str, Any]) -> Callable[[d
     return edit
 
 
+def _tariff_name(block: dict[str, Any]) -> str:
+    """The name of the tariff the tariff: block *block* builds."""
+    tariff = parse_tariff_config(block)
+    assert tariff is not None
+    return tariff.name
+
+
 def _bristol_arbitrage_tariff_name() -> str:
     """The name of the tariff scenarios/bristol-arbitrage.yaml's home is on."""
     document: dict[str, Any] = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
-    tariff = parse_tariff_config(document["home"]["tariff"])
-    assert tariff is not None
-    return tariff.name
+    return _tariff_name(document["home"]["tariff"])
 
 
 def _example_economy7_with_an_off_peak_ev(edit_home: Callable[[dict[str, Any]], object]) -> str:
@@ -668,11 +673,6 @@ home:
                 id="dispatched-greedy",
             ),
             pytest.param(lambda home: home.pop("tariff"), ["tou_optimized", "tariff"], id="without-its-tariff"),
-            pytest.param(
-                lambda home: home.update(tariff={"type": "flat_rate", "rate_per_kwh": 0.25}),
-                ["grid_charging", "tou_optimized", "no cheap period"],
-                id="on-a-flat-tariff",
-            ),
         ],
     )
     def test_a_grid_charging_home_whose_dispatch_would_ignore_it_is_an_error_row(
@@ -689,6 +689,34 @@ home:
         error_row = text[text.index("ERROR"):]
         for name in named:
             assert name in error_row
+
+    @pytest.mark.parametrize(
+        "dispatch_by",
+        [
+            pytest.param(lambda home: None, id="its-home-as-committed"),
+            pytest.param(_dispatched_by_its_battery({"strategy_type": "tou_optimized"}), id="its-battery"),
+        ],
+    )
+    def test_a_grid_charging_home_on_a_flat_tariff_is_an_error_row_naming_the_tariff(
+        self, tmp_path: Path, dispatch_by: Callable[[dict[str, Any]], object]
+    ) -> None:
+        """scenarios/bristol-arbitrage.yaml on a flat 0.25 £/kWh tariff, which has no cheap period, its tou_optimized on its home or moved to its battery without peak_hours."""
+        flat_rate = {"type": "flat_rate", "rate_per_kwh": 0.25}
+
+        def edit(home: dict[str, Any]) -> None:
+            dispatch_by(home)
+            home["tariff"] = flat_rate
+
+        result = self._validate_config(
+            tmp_path, _bristol_arbitrage_with_its_home(edit), file_name="bristol-arbitrage.yaml"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        for name in ("grid_charging", "'tou_optimized'", "no cheap period", _tariff_name(flat_rate)):
+            assert name in error_row, (name, error_row)
 
     def test_a_grid_charging_battery_dispatched_on_its_tariffs_clock_is_valid(self, tmp_path: Path) -> None:
         """scenarios/bristol-arbitrage.yaml, its tou_optimized moved from the home to its battery without peak_hours: it dispatches on Economy 7's clock."""
