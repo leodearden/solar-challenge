@@ -62,7 +62,7 @@ if TYPE_CHECKING:
     from solar_challenge.battery import BatteryConfig
     from solar_challenge.config import ScenarioConfig
     from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
-    from solar_challenge.home import HomeConfig, SummaryStatistics
+    from solar_challenge.home import HomeConfig, RunPricing, SummaryStatistics
 
 
 # ---------------------------------------------------------------------------
@@ -561,12 +561,35 @@ def _one_window(summaries: Sequence["SummaryStatistics"]) -> SimulationWindow:
 
 
 # ---------------------------------------------------------------------------
+# How a summary's run was priced
+# ---------------------------------------------------------------------------
+
+
+def _summary_pricing(summary: "SummaryStatistics") -> "RunPricing":
+    """How *summary*'s run was priced: the rates finance prices its grid flows at.
+
+    Raises:
+        ValueError: If its pricing is None, which a hand-built summary or the
+            summary of results simulate_home did not make has, naming
+            calculate_summary, which copies the results' pricing.
+    """
+    pricing = summary.pricing
+    if pricing is None:
+        raise ValueError(
+            "finance prices a summary's grid flows by how its run was priced, and this SummaryStatistics' "
+            "pricing is None: build it with calculate_summary from simulate_home's results, which record "
+            "their pricing, or set pricing to the RunPricing its run was priced at"
+        )
+    return pricing
+
+
+# ---------------------------------------------------------------------------
 # _annualise_physics — the one annualisation rule
 # ---------------------------------------------------------------------------
 
 
 class _AnnualisedPhysics(NamedTuple):
-    """Simulation physics quantities scaled to the year of the summary's window.
+    """Simulation physics quantities scaled to the year of the summary's window, and how its run was priced.
 
     Returned by :func:`_annualise_physics`.  All energy values are in kWh;
     monetary values are in GBP (£).
@@ -583,29 +606,31 @@ class _AnnualisedPhysics(NamedTuple):
     demand_kwh: float
     sc_kwh: float
     import_kwh: float
-    import_cost_physics: float
+    import_cost_gbp: float
     export_kwh: float
-    export_rev_physics: float
     battery_discharge_kwh: float
+    pricing: RunPricing
+    """The rates the summary's run was priced at (:func:`_summary_pricing`), which its import and export are billed at."""
 
 
 def _annualise_physics(summary: "SummaryStatistics") -> _AnnualisedPhysics:
-    """Scale a summary's energy and cost totals to the year of its window.
+    """Scale a summary's energy and import cost totals to the year of its window, beside how its run was priced.
 
-    The one annualisation rule: :func:`householder_bill` and
-    :func:`project_multi_year` both annualise through here.  Every quantity is
-    multiplied by the window's annualisation_scale, year_days / days, whatever
-    the window's length.
+    The one annualisation rule, and the one place finance reads a summary's
+    pricing: :func:`householder_bill` and :func:`project_multi_year` both
+    annualise through here.  Every quantity is multiplied by the window's
+    annualisation_scale, year_days / days, whatever the window's length.
 
     Args:
         summary: Per-home simulation output (read-only).
 
     Returns:
-        An :class:`_AnnualisedPhysics` namedtuple with ``scale`` and the
-        annualised energy/cost quantities.
+        An :class:`_AnnualisedPhysics` namedtuple with ``scale``, the
+        annualised energy/cost quantities and the run's pricing.
 
     Raises:
-        ValueError: If the summary has no window (:func:`_summary_window`).
+        ValueError: If the summary has no window (:func:`_summary_window`), or
+            no pricing (:func:`_summary_pricing`).
     """
     scale = _summary_window(summary).annualisation_scale
     return _AnnualisedPhysics(
@@ -614,10 +639,10 @@ def _annualise_physics(summary: "SummaryStatistics") -> _AnnualisedPhysics:
         demand_kwh=summary.total_demand_kwh * scale,
         sc_kwh=summary.total_self_consumption_kwh * scale,
         import_kwh=summary.total_grid_import_kwh * scale,
-        import_cost_physics=summary.total_import_cost_gbp * scale,
+        import_cost_gbp=summary.total_import_cost_gbp * scale,
         export_kwh=summary.total_grid_export_kwh * scale,
-        export_rev_physics=summary.total_export_revenue_gbp * scale,
         battery_discharge_kwh=summary.total_battery_discharge_kwh * scale,
+        pricing=_summary_pricing(summary),
     )
 
 
@@ -690,34 +715,31 @@ def _billed_energy(
 
 
 # ---------------------------------------------------------------------------
-# _physics_import_cost_gbp — the missing-tariff retail fallback
+# _billed_import_cost_gbp — the billed import at the price its run paid
 # ---------------------------------------------------------------------------
 
 
-def _physics_import_cost_gbp(phys: _AnnualisedPhysics, retail_rate_pence: float) -> float:
-    """A home's annualised import cost, priced at retail when no tariff priced it.
+def _billed_import_cost_gbp(phys: _AnnualisedPhysics, energy: _BilledEnergy, finance: "FinanceConfig") -> float:
+    """The £ of *energy*'s import over the window's year, at the price the home's run was priced at.
 
-    Missing-tariff fallback.  Homes generated from a
-    fleet_distribution carry ``tariff_config=None`` (config.py), and
-    ``simulate_home`` then reports ``total_import_cost_gbp == 0`` even though
-    energy was genuinely imported (home.py: import costs are all-zero when
-    ``tariff_config`` is None).  Billing real imported energy at £0 would
-    silently understate the outlay for the canonical scenario
-    (scenarios/bristol-phase1.yaml has no ``tariff_config``), so a £0 cost on
-    a positive import is priced at the retail baseline rate instead, with a
-    :class:`UserWarning` attributed to :func:`householder_bill`'s caller.
+    * No tariff priced the run (``phys.pricing``'s import rate is None): the
+      retail baseline rate, on either basis; :func:`householder_bill` warns.
+      Homes generated from a fleet_distribution with no tariff are such homes,
+      e.g. scenarios/bristol-phase1.yaml's.
+    * Physics basis (``finance.self_consumption_override`` is None): the
+      simulated import cost, £0 on a £0 tariff.
+    * Override basis: the run's own price per kWh imported, simulated cost ÷
+      simulated import kWh, or the tariff's time-weighted mean rate when the
+      run imported nothing.
     """
-    if phys.import_cost_physics == 0.0 and phys.import_kwh > 0.0:
-        warnings.warn(
-            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
-            f"has a £0 cost (no tariff configured on this home), so its import "
-            f"rate falls back to the retail baseline rate "
-            f"({retail_rate_pence:.1f} p/kWh).",
-            UserWarning,
-            stacklevel=3,
-        )
-        return phys.import_kwh * retail_rate_pence / 100.0
-    return phys.import_cost_physics
+    tariff_mean_rate_gbp_per_kwh = phys.pricing.import_tariff_mean_rate_gbp_per_kwh
+    if tariff_mean_rate_gbp_per_kwh is None:
+        return energy.import_kwh * finance.retail_baseline_rate_pence_per_kwh / 100.0
+    if finance.self_consumption_override is None:
+        return phys.import_cost_gbp
+    if phys.import_kwh > 0.0:
+        return energy.import_kwh * (phys.import_cost_gbp / phys.import_kwh)
+    return energy.import_kwh * tariff_mean_rate_gbp_per_kwh
 
 
 # ---------------------------------------------------------------------------
@@ -738,40 +760,37 @@ def _seg_export_income_gbp(
     the CBS fleet revenue formula (model doc §4), from the same annualised physics
     the home's own-use reads.
 
-    * **Physics path** (``finance.self_consumption_override`` is None):
-      the annualised ``summary.total_export_revenue_gbp``.
-    * **Override path**: export = generation − min(override × generation,
-      demand) (:func:`_override_energy_split`), priced at the effective
-      export rate derived from the physics figures (falls back to 0.0 if
-      physics export kWh == 0).  Silent when the cap binds, since this runs
-      per home at every sampled age; :func:`householder_bill` warns instead.
+    The home's export earns the SEG rate its run was priced at,
+    ``phys.pricing.seg_rate_pence_per_kwh``, and nothing when no SEG tariff
+    priced it.  The export is:
+
+    * **Physics path** (``finance.self_consumption_override`` is None): the
+      simulated export.
+    * **Override path**: generation − min(override × generation, demand)
+      (:func:`_override_energy_split`), whatever the simulated export, none
+      included.  Silent when the cap binds, since this runs per home at every
+      sampled age; :func:`householder_bill` warns instead.
 
     Args:
         phys: The home's simulation totals, annualised to the window's year:
             its totals × annualisation_scale (year_days / days)
-            (:func:`_annualise_physics`).
+            (:func:`_annualise_physics`), and its run's pricing.
         finance: FinanceConfig with tariff + assumption parameters.
 
     Returns:
         SEG export income in GBP (£) over the window's year.
     """
+    seg_rate_pence_per_kwh = phys.pricing.seg_rate_pence_per_kwh
+    if seg_rate_pence_per_kwh is None:
+        return 0.0
     override = finance.self_consumption_override
-
     if override is None:
-        # Physics path: annualised SEG revenue from simulation
-        return float(phys.export_rev_physics)
+        export_kwh = phys.export_kwh
     else:
-        # Spreadsheet path: recompute from override fraction
-        override_export_kwh = _override_energy_split(
+        export_kwh = _override_energy_split(
             override, generation_kwh=phys.gen_kwh, demand_kwh=phys.demand_kwh
         ).export_kwh
-        if phys.export_kwh > 0.0:
-            effective_export_rate_pence = (
-                phys.export_rev_physics / phys.export_kwh
-            ) * 100.0
-        else:
-            effective_export_rate_pence = 0.0
-        return float(override_export_kwh * effective_export_rate_pence / 100.0)
+    return export_kwh * seg_rate_pence_per_kwh / 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -969,9 +988,13 @@ def householder_bill(
         physics/override switch :func:`project_multi_year` also reads.  The
         override's own-use is capped at demand, with a :class:`UserWarning`
         when the cap binds.
-      * Apply the missing-tariff retail fallback (:func:`_physics_import_cost_gbp`,
-        with a :class:`UserWarning`) before the physics/override switch, so
-        both paths price an untariffed home's import at retail.
+      * Price the billed import as the summary's run was priced
+        (:func:`_billed_import_cost_gbp`).  A run no tariff priced is billed
+        at retail on both paths, with a :class:`UserWarning` whatever it
+        imported; a £0 tariff priced its run, so it is billed £0 on the
+        physics path.  The override's import is billed at the run's own price
+        per kWh imported, or at the tariff's time-weighted mean rate when the
+        run imported nothing.
       * Price the no-solar baseline at the retail rate (demand × retail / 100),
         so bill()'s effective rate, and with it self_consumption_saving, is
         the retail rate.
@@ -1000,9 +1023,10 @@ def householder_bill(
 
     Raises:
         ValueError: If the summary has no window; if *simulation_days* is not
-            the summary's own day count (INV-8), naming both; or if
+            the summary's own day count (INV-8), naming both; if
             *annual_self_consumption_kwh* is not from 0 to the summary's
-            ``total_demand_kwh``, naming both, NaN included.
+            ``total_demand_kwh``, naming both, NaN included; or if the summary
+            has no pricing, naming calculate_summary (:func:`_summary_pricing`).
     """
     window = _summary_window(summary)
     _require_summary_days(simulation_days, summary)
@@ -1022,46 +1046,37 @@ def householder_bill(
     # (caller-supplied, may differ from summary.total_self_consumption_kwh when the
     # caller has an independently-computed self-consumption figure, e.g. fleet_distribution).
     sc_kwh_physics = annual_self_consumption_kwh * phys.scale
-    gen_kwh = phys.gen_kwh
-    demand_kwh = phys.demand_kwh
-    import_kwh = phys.import_kwh
-    import_cost_physics = _physics_import_cost_gbp(phys, retail_rate_pence)
-    # export_kwh / export_rev_physics not needed here: export income is the CBS's
-    # and is computed by _seg_export_income_gbp, not by the householder bill.
+    # Export income is the CBS's, computed by _seg_export_income_gbp, not by the householder bill.
+    if phys.pricing.import_tariff_mean_rate_gbp_per_kwh is None:
+        warnings.warn(
+            f"This home's simulated grid import ({phys.import_kwh:.1f} kWh/yr) "
+            f"has a £0 cost (no tariff configured on this home), so its import "
+            f"rate falls back to the retail baseline rate "
+            f"({retail_rate_pence:.1f} p/kWh).",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # ---- Self-consumption switch (docs/cost-recovery-finance-model.md §3, Override path) ----
     energy = _billed_energy(phys, finance, physics_own_use_kwh=sc_kwh_physics)
-    if override is None:
-        # Physics path: the simulated import, at its simulated cost
-        import_cost_gbp = import_cost_physics
-    else:
-        # Spreadsheet path: the override's import, at the home's physics import rate
-        if energy.capped_at_demand:
-            warnings.warn(
-                f"self_consumption_override={override:g} implies more own-use than "
-                f"this home's demand; own-use is capped at demand and the surplus "
-                f"generation is counted as export.",
-                UserWarning,
-                stacklevel=2,
-            )
-
-        # Effective import unit rate from physics (fall back to retail if zero physics import)
-        if import_kwh > 0.0:
-            effective_import_rate_pence = (import_cost_physics / import_kwh) * 100.0
-        else:
-            effective_import_rate_pence = retail_rate_pence
-
-        import_cost_gbp = energy.import_kwh * effective_import_rate_pence / 100.0
+    if override is not None and energy.capped_at_demand:
+        warnings.warn(
+            f"self_consumption_override={override:g} implies more own-use than "
+            f"this home's demand; own-use is capped at demand and the surplus "
+            f"generation is counted as export.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # ---- Delegate all bill arithmetic to bill() (single source of truth) ----
-    baseline_import_cost_gbp = demand_kwh * retail_rate_pence / 100.0
+    baseline_import_cost_gbp = phys.demand_kwh * retail_rate_pence / 100.0
     return bill(
         period_days=window.year_days,
-        generation_kwh=gen_kwh,
-        demand_kwh=demand_kwh,
+        generation_kwh=phys.gen_kwh,
+        demand_kwh=phys.demand_kwh,
         self_consumption_kwh=energy.own_use_kwh,
         import_kwh=energy.import_kwh,
-        import_cost_gbp=import_cost_gbp,
+        import_cost_gbp=_billed_import_cost_gbp(phys, energy, finance),
         baseline_import_cost_gbp=baseline_import_cost_gbp,
         finance=finance,
     )
@@ -1365,8 +1380,9 @@ def bill_distribution(
     Raises:
         ValueError: If ``summaries`` is empty; if a summary has no window; if
             the summaries cover different windows, naming the first position
-            whose window differs and both windows; or if *simulation_days* is
-            not the summaries' own day count (INV-8), naming both.
+            whose window differs and both windows; if *simulation_days* is
+            not the summaries' own day count (INV-8), naming both; or if a
+            summary has no pricing, naming calculate_summary.
     """
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
@@ -1658,6 +1674,9 @@ def project_multi_year(
             import or revenue, its mean PV or battery state of health, or a
             home's battery discharge or cumulative battery throughput.  The
             message names the age and each such aggregate with its value.
+        ValueError: If ``simulate`` returns a home's results that record no
+            pricing, which only results simulate_home did not make lack, naming
+            calculate_summary (:func:`_summary_pricing`).
     """
     homes = scenario.simulated_homes()
 
@@ -1698,10 +1717,7 @@ def project_multi_year(
         fleet_results = simulate(fleet_config, start_ts, end_ts)
         _refuse_results_without_the_fleets_batteries(fleet_config, fleet_results)
 
-        per_home_summaries = [
-            calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
-            for r in fleet_results.per_home_results
-        ]
+        per_home_summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
 
         # Each home is annualised once, by its own window, and every figure
         # below reads that annual record.  Own-use is billed through _billed_energy,
@@ -1725,8 +1741,9 @@ def project_multi_year(
         #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
         # Grid-charge energy is paid by the householder inside grid import, not a CBS
         # outgoing (docs/cost-recovery-finance-model.md §4).
-        # SEG revenue comes from _seg_export_income_gbp, which honours
-        # self_consumption_override and seg scaling.
+        # SEG revenue comes from _seg_export_income_gbp, which prices each home's
+        # export at the SEG rate its run was priced at and honours
+        # self_consumption_override.
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
         seg_revenue = sum(_seg_export_income_gbp(phys, finance) for _, phys in annualised_homes)
         with warnings.catch_warnings(record=True) as raised_by_pricing:
@@ -2379,10 +2396,7 @@ def solve_cost_recovery_rate(
     fleet_cfg = FleetConfig(homes=aged0, name="cr4-solve-age0")
     fr_age0 = simulate(fleet_cfg, start_ts, end_ts)
 
-    summaries = [
-        calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
-        for r in fr_age0.per_home_results
-    ]
+    summaries = [calculate_summary(r) for r in fr_age0.per_home_results]
     sim_days = summaries[0].simulation_days
     finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
     outlay = bill_distribution(summaries, finance_solved, sim_days)
