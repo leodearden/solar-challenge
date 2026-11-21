@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""tests/conftest.py's lane_job_collection: a session collects each lane job once, whichever test modules ask for it.
+"""tests/conftest.py's lane_job_collection: a run collects each lane job once, whichever of its workers and test modules ask for it.
 
 Whichever test asks first, it fails each asking test that lacks a premise of
 that collection: @requires_uv, or the callers_uv_lock_mode_is_frozen fixture.
-Each scenario is one session, under a copy of the root conftest, whose test
+Each scenario is one pytest run, under a copy of the root conftest, whose test
 modules ask for a throwaway lane job. The job runs this interpreter's pytest
 and no uv, so the scenario's conftest gives each command this process's
 environment in place of the uv environments shared_uv_probe_environments builds.
@@ -61,7 +61,11 @@ def _lane_project_logging_each_collection(lane_project: Path) -> Path:
 
 
 def _module_asking_for_the_probe_job_of(lane_project: Path, *decorators: str) -> str:
-    """Return a test module whose one test, under *decorators*, reads lane_job_collection's collection of *lane_project*'s probe job."""
+    """Return a test module whose one test, under *decorators*, reads lane_job_collection's collection of *lane_project*'s probe job.
+
+    Before it asks, the test writes the id of the worker it runs on, "master" in
+    a run without workers, to the file named for its module with the suffix .worker.
+    """
     decorations = "".join(f"{decorator}\n" for decorator in decorators)
     return f"""\
 from pathlib import Path
@@ -71,38 +75,50 @@ import pytest
 from tests._collect_only import requires_uv
 
 
-{decorations}def test_reads_the_probe_jobs_collection(lane_job_collection):
+{decorations}def test_reads_the_probe_jobs_collection(lane_job_collection, request):
+    worker = getattr(request.config, "workerinput", {{}}).get("workerid", "master")
+    Path(__file__).with_suffix(".worker").write_text(worker, encoding="utf-8")
     collection = lane_job_collection(Path({str(lane_project)!r}), {PROBE_JOB!r})
     assert collection.node_ids() == ("suite/test_case.py::test_case",), collection.describe()
 """
 
 
-def _run_scenario(pytester: pytest.Pytester, asking_modules: Mapping[str, str]) -> pytest.RunResult:
-    """Run one session of *asking_modules*, each written under scenario/ by its name, beside the scenario's conftest."""
+def _run_scenario(pytester: pytest.Pytester, asking_modules: Mapping[str, str], *pytest_args: str) -> pytest.RunResult:
+    """Run one pytest run, given *pytest_args*, of *asking_modules*, each written under scenario/ by its name, beside the scenario's conftest."""
     modules = {f"scenario/{name}": source for name, source in asking_modules.items()}
     pytester.makepyfile(**{"scenario/conftest": GIVES_EACH_COMMAND_THIS_PROCESS_ENVIRONMENT, **modules})
-    return pytester.runpytest_subprocess("-p", "no:cacheprovider", "--tb=short")
+    return pytester.runpytest_subprocess(*pytest_args, "-p", "no:cacheprovider", "--tb=short")
 
 
 @requires_uv
-def test_a_session_collects_a_lane_job_once_however_many_test_modules_ask_for_it(
-    pytester_under_root_conftest: pytest.Pytester, tmp_path_factory: pytest.TempPathFactory
+@pytest.mark.parametrize("mode", [("-n", "0"), ("-n", "2")], ids=["serially", "on-two-workers"])
+def test_a_run_collects_a_lane_job_once_however_many_of_its_workers_and_test_modules_ask_for_it(
+    pytester_under_root_conftest: pytest.Pytester, tmp_path_factory: pytest.TempPathFactory, mode: tuple[str, str]
 ) -> None:
-    """Two test modules of one session ask for a throwaway lane job, whose suite's conftest logs each collection.
+    """Two test modules of one run ask for a throwaway lane job, whose suite's conftest logs each collection; on two workers, each worker runs one.
 
     Each asks with both premises every asking test carries, so this runs only where uv is installed.
     """
     lane_project = _lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
     asking_module = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV, FREEZES_THE_CALLERS_UV_LOCK_MODE)
 
-    result = _run_scenario(pytester_under_root_conftest, {"test_first": asking_module, "test_second": asking_module})
+    result = _run_scenario(
+        pytester_under_root_conftest, {"test_first": asking_module, "test_second": asking_module}, *mode
+    )
 
     result.assert_outcomes(passed=2)
+    if mode == ("-n", "2"):
+        recorded = (pytester_under_root_conftest.path / "scenario").glob("*.worker")
+        workers = sorted(path.read_text(encoding="utf-8") for path in recorded)
+        assert workers == ["gw0", "gw1"], (
+            f"the two asking tests ran on {workers}, so not both workers asked for the lane job and this test cannot "
+            "tell whether they share its collection"
+        )
     collections = (lane_project / "collections.log").read_text(encoding="utf-8").splitlines()
     assert len(collections) == 1, (
-        f"one session collected the {PROBE_JOB!r} lane job's suite {len(collections)} times for the two test modules "
-        "that asked lane_job_collection for it; the modules of one session must share one collection, else each xdist "
-        "worker collects a lane job once for every module that asks for it"
+        f"a run under {shlex.join(mode)} collected the {PROBE_JOB!r} lane job's suite {len(collections)} times for "
+        "the two tests that asked lane_job_collection for it; the workers and test modules of one run must share one "
+        "collection, else each worker collects the job itself"
     )
 
 
