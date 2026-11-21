@@ -108,8 +108,9 @@ def _is_outage_status(status: int) -> bool:
 
 
 def _read_body_whole(response: requests.Response) -> None:
-    """Read all of *response*'s body, which requests raises for when it is cut short or stops arriving for the timeout."""
-    response.content
+    """Read all of *response*'s body a chunk at a time, discarding it; requests raises when the body is cut short or stops arriving for the timeout."""
+    for _ in response.iter_content(chunk_size=1 << 16):
+        pass
 
 
 def _outage_at(request: _Request, timeout: float) -> _Outage | None:
