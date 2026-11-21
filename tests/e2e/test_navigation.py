@@ -249,7 +249,8 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
     const finishTransitions = () => documentTransitions().forEach(transition => transition.finish());
-    window.sidebarProbe = {drawn, transitions, finishTransitions, load: {}};
+    const settled = () => { finishTransitions(); return drawn(); };
+    window.sidebarProbe = {drawn, transitions, settled, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
@@ -287,7 +288,7 @@ def _finish_the_transitions_and_read_the_layout(page: Page) -> dict[str, object]
     slide, which a loaded host can withhold for seconds. The page is one _open_with_the_sidebar_stored
     opened. No transition is left running, so the probe's transitions() reads empty afterwards.
     """
-    return page.evaluate("() => { window.sidebarProbe.finishTransitions(); return window.sidebarProbe.drawn().layout; }")
+    return page.evaluate("() => window.sidebarProbe.settled().layout")
 
 
 def _finish_the_transitions_and_read_the_highlighted_groups(page: Page) -> list[str]:
@@ -297,7 +298,7 @@ def _finish_the_transitions_and_read_the_highlighted_groups(page: Page) -> list[
     highlight, not one half drawn, and needs none of the frames a loaded host can withhold for
     seconds. The page is one _open_with_the_sidebar_stored opened.
     """
-    return page.evaluate("() => { window.sidebarProbe.finishTransitions(); return window.sidebarProbe.drawn().highlighted_groups; }")
+    return page.evaluate("() => window.sidebarProbe.settled().highlighted_groups")
 
 
 @pytest.mark.parametrize(
