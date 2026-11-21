@@ -33,7 +33,7 @@ from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_
 def fleet_home_seed(fleet_seed: int | None, index: int) -> int | None:
     """Home *index*'s load seed in a fleet seeded with *fleet_seed*: fleet_seed + index, or None for an unseeded fleet.
 
-    The one home of the per-home seed rule: FleetConfig's constructors and config.generate_homes_from_distribution call it.
+    The one home of the per-home seed rule.
     """
     return None if fleet_seed is None else fleet_seed + index
 
@@ -95,7 +95,9 @@ class FleetConfig:
         """
         if load_config.seed is not None:
             raise ConfigurationError.must_be(
-                "load_config.seed", "None: pass the fleet's seed as seed=, and home i gets seed + i", got=load_config.seed
+                "load_config.seed",
+                "None (pass the fleet's seed as seed=; home i then gets seed + i)",
+                got=load_config.seed,
             )
         homes = [
             HomeConfig(
