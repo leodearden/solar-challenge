@@ -27,8 +27,8 @@ _BROWSER = "chromium-headless-shell"
 
 _SKIP_BROWSER_GC = "PLAYWRIGHT_SKIP_BROWSER_GC=1"
 
-# The per-test budget of a serial lane run at idle priority on a loaded host: the measured mean, with headroom.
-_SERIAL_BUDGET_SECS_PER_TEST = 15
+# The per-test budget of a serial lane run at idle priority on a loaded host: the slowest pace a lane pass has been measured at, with headroom (docs/orchestrator-config.md §8).
+_SERIAL_BUDGET_SECS_PER_TEST = 30
 
 
 def _holds_run(words: Sequence[str], run: Sequence[str]) -> bool:
