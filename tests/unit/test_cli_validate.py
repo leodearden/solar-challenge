@@ -399,6 +399,11 @@ home:
                 id="fleet-distribution",
             ),
             pytest.param(
+                "fleet_distribution:\n  n_homes: 2.7\n  pv: {capacity_kw: 4.0}\n",
+                "fleet_distribution: n_homes must be a whole number, got 2.7",
+                id="fleet-distribution-fractional-n-homes",
+            ),
+            pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
                 "fleet_distribution.battery, home 1: max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",

@@ -17,9 +17,10 @@ from solar_challenge.fleet_distribution import (
     SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    parse_fleet_distribution_config,
 )
 from solar_challenge.number_fields import as_finite_float, as_whole_number
-from tests._construction_refusals import construction_refusal
+from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 
 _WEIGHTED_DISCRETE = WeightedDiscreteDistribution(values=(30.0, 40.0), weights=(1.0, 2.0))
 _NORMAL = NormalDistribution(mean=35.0, std=8.0, min=15.0, max=50.0)
@@ -194,3 +195,102 @@ class TestEachFleetTypeReadsItsNumbers:
             build(values)
 
         assert str(refusal.value) == f"values must be a list, got {values!r}"
+
+
+_TILT_PATH = "fleet_distribution.pv.tilt"
+_BATTERY_CAPACITY_PATH = "fleet_distribution.battery.capacity_kwh"
+_PV = {"capacity_kw": 4.0}
+
+
+def _fleet_with_tilt(tilt: dict[str, Any]) -> dict[str, Any]:
+    """A fleet_distribution: block of 2 homes with 4 kW of PV whose pv.tilt is *tilt*."""
+    return {"n_homes": 2, "pv": {**_PV, "tilt": tilt}}
+
+
+def _fleet_with_battery_proportional_to_pv(**spec: object) -> dict[str, Any]:
+    """A fleet_distribution: block of 2 homes whose battery.capacity_kwh is proportional_to pv.capacity_kw, with *spec*'s multiplier or offset."""
+    return {
+        "n_homes": 2,
+        "pv": _PV,
+        "battery": {"capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", **spec}},
+    }
+
+
+class TestAFleetBlockRefusesANumberItsTypeRefusesNamingItsPath:
+    """A number a fleet_distribution: block gives a type is passed as written, and the type's refusal of it is named after the path of the spec or block that gave it."""
+
+    @pytest.mark.parametrize(
+        ("block", "path", "build"),
+        [
+            pytest.param(
+                _fleet_with_tilt({"type": "normal", "mean": "abc", "std": 1}),
+                _TILT_PATH,
+                lambda: NormalDistribution(mean="abc", std=1),
+                id="normal-mean-text",
+            ),
+            pytest.param(
+                _fleet_with_tilt({"type": "uniform", "min": 10, "max": math.nan}),
+                _TILT_PATH,
+                lambda: UniformDistribution(min=10, max=math.nan),
+                id="uniform-max-nan",
+            ),
+            pytest.param(
+                _fleet_with_tilt({"type": "weighted_discrete", "values": [30], "weights": [True]}),
+                _TILT_PATH,
+                lambda: WeightedDiscreteDistribution(values=[30], weights=[True]),
+                id="weighted_discrete-weight-bool",
+            ),
+            pytest.param(
+                _fleet_with_tilt({"type": "shuffled_pool", "values": [30, 40], "counts": [1.5, 0.5]}),
+                _TILT_PATH,
+                lambda: ShuffledPoolDistribution(values=[30, 40], counts=[1.5, 0.5]),
+                id="shuffled_pool-fractional-counts",
+            ),
+            pytest.param(
+                _fleet_with_battery_proportional_to_pv(offset=True),
+                _BATTERY_CAPACITY_PATH,
+                lambda: ProportionalDistribution(source="pv.capacity_kw", offset=True),
+                id="proportional_to-offset-bool",
+            ),
+            pytest.param(
+                _fleet_with_battery_proportional_to_pv(multiplier=True),
+                _BATTERY_CAPACITY_PATH,
+                lambda: ProportionalDistribution(source="pv.capacity_kw", multiplier=True),
+                id="proportional_to-multiplier-bool",
+            ),
+            pytest.param(
+                _fleet_with_battery_proportional_to_pv(
+                    multiplier={"type": "sweep", "min": 0.5, "max": 2.0, "steps": 2.5}
+                ),
+                f"{_BATTERY_CAPACITY_PATH}.multiplier",
+                lambda: SweepSpec(min=0.5, max=2.0, steps=2.5),
+                id="sweep-fractional-steps",
+            ),
+            pytest.param(
+                {"n_homes": 2.7, "pv": _PV},
+                "fleet_distribution",
+                lambda: FleetDistributionConfig(n_homes=2.7, pv=ComponentDistribution(_PV)),
+                id="fractional-n_homes",
+            ),
+            pytest.param(
+                {"n_homes": 2, "seed": True, "pv": _PV},
+                "fleet_distribution",
+                lambda: FleetDistributionConfig(n_homes=2, pv=ComponentDistribution(_PV), seed=True),
+                id="bool-seed",
+            ),
+        ],
+    )
+    def test_the_refusal_is_the_types_after_the_path(
+        self, block: dict[str, Any], path: str, build: Callable[[], object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config(block)
+
+        assert str(refusal.value) == prefixed_construction_refusal(path, build)
+
+    def test_a_fractional_n_homes_is_refused_naming_the_block_and_the_value(self) -> None:
+        """C1: a fleet of 2.7 homes is refused, where it ran 2."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config({"n_homes": 2.7, "pv": _PV})
+
+        assert str(refusal.value) == "fleet_distribution: n_homes must be a whole number, got 2.7"

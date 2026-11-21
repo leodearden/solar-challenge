@@ -41,6 +41,11 @@ def _pool_size_refusal(path: str, n_homes: int, total: int) -> str:
     )
 
 
+def _parsed_pool_size_refusal(path: str, n_homes: int, total: int) -> str:
+    """The refusal _pool_size_refusal states, as parse_fleet_distribution_config gives it: after the fleet_distribution block's path."""
+    return f"fleet_distribution: {_pool_size_refusal(path, n_homes, total)}"
+
+
 def _charger_type_value_refusal(value: object) -> str:
     """The refusal of *value*, listed in a fleet's ev.charger_type, which names no charger type."""
     return (
@@ -437,7 +442,7 @@ class TestShuffledPoolHoldsOneValuePerHome:
                     },
                 }
             )
-        assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", n_homes, total)
+        assert str(refusal.value) == _parsed_pool_size_refusal("pv.capacity_kw", n_homes, total)
 
     @pytest.mark.parametrize(
         ("sections", "path"),
@@ -471,7 +476,7 @@ class TestShuffledPoolHoldsOneValuePerHome:
         """The rule holds for every component's parameters, including those only battery or heat-pump homes draw."""
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_distribution_config({"n_homes": 3, "pv": {"capacity_kw": 4.0}, **sections})
-        assert str(refusal.value) == _pool_size_refusal(path, 3, 2)
+        assert str(refusal.value) == _parsed_pool_size_refusal(path, 3, 2)
 
     def test_a_fleet_distribution_built_in_code_is_refused_as_a_parsed_one_is(self) -> None:
         """The refusal comes from FleetDistributionConfig itself, not only from the parser."""
