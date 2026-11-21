@@ -28,19 +28,36 @@ import pytest
 _DEPRECATION = "a call a later release removes"
 
 
-def test_a_deprecation_warning_attributed_to_a_solar_challenge_module_fails_the_test_that_meets_it() -> None:
-    """A DeprecationWarning attributed to a solar_challenge module is raised as an error, not recorded."""
+@pytest.mark.parametrize(
+    ("module", "filename"),
+    [
+        pytest.param("solar_challenge.weather", "weather.py", id="solar_challenge"),
+        pytest.param("tests._synthetic_weather", "_synthetic_weather.py", id="tests"),
+    ],
+)
+def test_a_deprecation_warning_attributed_to_solar_challenge_or_its_test_suite_fails_the_test_that_meets_it(
+    module: str, filename: str
+) -> None:
+    """A DeprecationWarning attributed to a solar_challenge module, or to one of the suite's own tests.* modules, is raised as an error, not recorded."""
     with pytest.raises(DeprecationWarning, match=_DEPRECATION):
-        warnings.warn_explicit(_DEPRECATION, DeprecationWarning, "weather.py", 1, module="solar_challenge.weather")
+        warnings.warn_explicit(_DEPRECATION, DeprecationWarning, filename, 1, module=module)
 
 
-def test_a_deprecation_warning_attributed_to_a_dependency_is_recorded_not_raised() -> None:
+@pytest.mark.parametrize(
+    ("module", "filename"),
+    [
+        pytest.param("pvlib.tools", "tools.py", id="pvlib"),
+        pytest.param("testscenarios", "__init__.py", id="a-name-that-begins-with-tests"),
+    ],
+)
+def test_a_deprecation_warning_attributed_to_a_dependency_is_recorded_not_raised(module: str, filename: str) -> None:
     """A DeprecationWarning attributed to a dependency's module is recorded as a warning, not raised.
 
-    It is recorded under the filters the test runs with: pytest.warns would set
-    them to always, hiding the error filter.
+    A dependency whose name merely begins with "tests", such as testscenarios,
+    is a dependency too. It is recorded under the filters the test runs with:
+    pytest.warns would set them to always, hiding the error filter.
     """
     with warnings.catch_warnings(record=True) as caught:
-        warnings.warn_explicit(_DEPRECATION, DeprecationWarning, "tools.py", 216, module="pvlib.tools")
+        warnings.warn_explicit(_DEPRECATION, DeprecationWarning, filename, 1, module=module)
 
     assert [str(warning.message) for warning in caught] == [_DEPRECATION]
