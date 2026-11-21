@@ -172,6 +172,10 @@ def _decode_sealed_content(content: TextIO) -> pd.DataFrame:
     return frame.set_axis(pd.DatetimeIndex(instants, freq=freq, name=frame.index.name))
 
 
+_NO_FILE_AT_PATH: tuple[type[OSError], ...] = (FileNotFoundError, NotADirectoryError)
+"""The OSErrors that opening or removing a cache file raises when no file is at its path: nothing is there, or a regular file stands where the cache directory, or one of its parents, should be."""
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
@@ -237,7 +241,8 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            The cached DataFrame, or None if not found, as when the cache directory is absent
+            The cached DataFrame, or None if not found, as when the cache directory is absent or a regular file lies
+            where it, or a parent of it, should be
 
         Raises:
             ValueError: Naming the entry's file and how to remove it, if its first line does not seal the rest, as
@@ -245,14 +250,14 @@ class WeatherCache:
                 put writes: a header holding anything but a timezone and a frequency, each a str or null, a
                 timezone str that names none, which put refuses to record, rows that are no CSV of instants, or
                 rows not on the header's frequency
-            OSError: If the entry's file cannot be opened or read for a reason other than its absence, as when the
-                cache directory lies under a regular file or the process may not open files in it
+            OSError: If the entry's file cannot be opened or read for a reason other than its absence, as when a
+                directory lies at its path or the process may not open files in the cache directory
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
             with open(cache_file, encoding="utf-8", newline="") as file:
                 return _read_entry(file)
-        except FileNotFoundError:
+        except _NO_FILE_AT_PATH:
             return None
         except ValueError as e:
             raise ValueError(
@@ -323,12 +328,13 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            True if cache entry was removed, False if not found
+            True if the entry's file was removed, False if not found, as when the cache directory is absent or a
+            regular file lies where it, or a parent of it, should be
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
             cache_file.unlink()
-        except FileNotFoundError:
+        except _NO_FILE_AT_PATH:
             return False
         return True
 
@@ -353,9 +359,9 @@ class PvgisTmy:
         Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
         the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
 
-        If its cache's put raises OSError, as where the process may not create the cache directory, get returns the
-        fetched TMY uncached, with a UserWarning attributed to its caller naming the directory and the error, so
-        the next get fetches it again.
+        If its cache's put raises OSError, as where the process may not create the cache directory or a regular file
+        lies where it, or a parent of it, should be, get returns the fetched TMY uncached, with a UserWarning
+        attributed to its caller naming the directory and the error, so the next get fetches it again.
 
         Returns:
             DataFrame with columns including:
@@ -376,7 +382,8 @@ class PvgisTmy:
                 note on it says what removing the entry, by deleting the file or with WeatherCache.invalidate,
                 leads to: the next get fetches the TMY afresh and puts it
             OSError: From its cache's get, if the entry's file cannot be opened or read for a reason other than its
-                absence, as when the cache directory lies under a regular file; nothing is then fetched
+                absence, as when a directory lies at its path or the process may not open files in the cache
+                directory; nothing is then fetched
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)

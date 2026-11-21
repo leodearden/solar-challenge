@@ -624,8 +624,7 @@ class TestPvgisTmy:
         """A cache whose directory is a symlink to nowhere, so that its get finds no entry and its put's mkdir raises
         FileExistsError for the link, even as root.
 
-        Not a directory under a regular file, where get raises NotADirectoryError too, nor a read-only directory,
-        which root can write.
+        Not a read-only directory, which root can write.
         """
         cache_dir = tmp_path / "weather"
         cache_dir.symlink_to(tmp_path / "nowhere", target_is_directory=True)
