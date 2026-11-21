@@ -19,26 +19,27 @@ from tests._heap_freeze import freeze_the_heap_once
 from tests._lane_collection import collect_lane_job_once
 from tests._network_guard import refusing_network
 from tests._once_per_run import run_shared_path
+from tests._project_temp_root import name_the_project_temp_root, pre_fixture_temp_dir
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
 if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache
 
-# Hooks and fixtures import tests._project_temp_root when they run, never this module's top, directly or through another
-# helper: imported before pytest_plugins registers it, pytest cannot rewrite the plugin and warns so in every session.
-pytest_plugins = ["pytester", "tests._project_temp_root"]
+pytest_plugins = ["pytester"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
 collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Drop COLUMNS and LINES from os.environ and from the C environment beneath it, so no process of the suite, serial or an xdist worker, holds a terminal size, and no child a test starts inherits one.
+    """Name the project's temp root for *config*'s session before any other plugin configures (tests/_project_temp_root.py), and drop COLUMNS and LINES from os.environ and from the C environment beneath it, so no process of the suite, serial or an xdist worker, holds a terminal size, and no child a test starts inherits one.
 
     A console the CLI builds at import then reads COLUMNS when it prints.
     tests/unit/test_parallel_suite.py says where the two come from.
     """
+    name_the_project_temp_root(config)
     for name in ("COLUMNS", "LINES"):
         os.environ.pop(name, None)
         os.unsetenv(name)
@@ -253,8 +254,6 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     starts runs `-n auto` in its own process, while a slow test's sessions, such as
     the lanes' verify runs, keep a worker per core.
     """
-    from tests._project_temp_root import pre_fixture_temp_dir
-
     if item.get_closest_marker("slow"):
         return (yield)
     with _open_offline_window(pre_fixture_temp_dir(item.config)) as window, _pytest_sessions_it_starts_run_serially():
