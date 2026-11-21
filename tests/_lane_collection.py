@@ -5,13 +5,11 @@ They collect an offline-lane job's suite step as the lane runs it, a default
 collection of tests/, a suite by its explicit path under a mark expression, and
 every test under tests/, the lane-only suites included, under a mark expression.
 
-A test that needs an offline-lane job's collection does not call collect_lane_job
-itself: it requests tests/conftest.py's session fixture lane_job_collection and
-calls lane_job_collection(project_root, name), which calls collect_lane_job once
-per pytest process and shares the result. Such a test carries @requires_uv and
-@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen"). The first example
-below is collect_lane_job's own usage, as that fixture and the helper's throwaway
-projects call it.
+A test reads the collection of one of the repository's offline-lane jobs from
+tests/conftest.py's fixture lane_job_collection, called as
+lane_job_collection(project_root, name), rather than calling collect_lane_job
+itself; the fixture's docstring gives the premises each caller carries. The
+first example below is collect_lane_job's own usage.
 
 Usage::
 
