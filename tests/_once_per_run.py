@@ -75,7 +75,8 @@ def run_shared_path(request: pytest.FixtureRequest, tmp_path_factory: pytest.Tem
 
     On an xdist worker that is the parent of the worker's basetemp, the controller's basetemp, which the
     controller made for this run. In a session without workers it is the session's own basetemp, never its
-    parent, which other runs share, as /tmp/pytest-of-<user> is when no --basetemp is given.
+    parent, which other runs share, as the temp root's pytest-of-<user> is when no --basetemp is given
+    (tests/_project_temp_root.py).
     """
     if _on_an_xdist_worker(request):
         return tmp_path_factory.getbasetemp().parent / name

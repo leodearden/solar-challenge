@@ -26,7 +26,7 @@ from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 if TYPE_CHECKING:
     from solar_challenge.weather import WeatherCache
 
-pytest_plugins = ["pytester"]
+pytest_plugins = ["pytester", "tests._project_temp_root"]
 
 # Out of every default collection, even with `-o addopts=`; the offline lane runs them by explicit path.
 collect_ignore = ["e2e", "interpreter_matrix", "css_build", "newest_releases"]
