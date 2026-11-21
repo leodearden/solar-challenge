@@ -1002,11 +1002,11 @@ class TestCalculateBill:
     def test_calculate_bill_prices_each_minute_of_a_day_the_clocks_go_back_at_its_own_rate(
         self, tariff: TariffConfig
     ) -> None:
-        """Each minute weighs differently, so one mispriced minute moves the bill far beyond rel=1e-12, while summing in another order moves a minute year's by about 4e-14."""
+        """Each minute, the first included, carries its own non-zero weight, so one mispriced minute moves the bill far beyond rel=1e-12, while summing in another order moves a minute year's by about 4e-14."""
         index = pd.date_range(
             "2024-10-27", "2024-10-28", freq="min", tz="Europe/London", inclusive="left"
         )
-        energy = pd.Series(np.linspace(0.0, 0.05, len(index)), index=index)
+        energy = pd.Series(np.linspace(0.01, 0.05, len(index)), index=index)
 
         each_minute_at_its_rate = math.fsum(
             kwh * tariff.get_rate(timestamp) for timestamp, kwh in energy.items()
