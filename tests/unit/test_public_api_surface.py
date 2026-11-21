@@ -307,18 +307,22 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
         "name": "abstract property (self) -> str",
+        "charges_from_the_grid": "property (self) -> bool",
         "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "SelfConsumptionStrategy": {
         "name": "property (self) -> str",
+        "charges_from_the_grid": "property (self) -> bool",
         "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "TOUOptimizedStrategy": {
         "name": "property (self) -> str",
+        "charges_from_the_grid": "property (self) -> bool",
         "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "PeakShavingStrategy": {
         "name": "property (self) -> str",
+        "charges_from_the_grid": "property (self) -> bool",
         "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     # --- battery (battery.py) ---
