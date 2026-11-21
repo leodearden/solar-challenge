@@ -142,13 +142,21 @@ to no workers, so a lane command without `-n 0` still runs it serially.
   step runs its tests serially, at the lane's idle priority, so its run grows with the host's
   load as well as with the suite. Its `timeout` gives each test it collects the per-test budget
   `tests/unit/test_e2e_lane.py` states, and that test fails the per-task verify once the suite
-  outgrows the bound, rather than the lane killing a green run before pytest reports. A raised
-  `timeout` reaches the running lane only when the orchestrator reloads its config. Only a
-  missing browser sends the install to the download host, and an outage there fails it, which
-  the lane files as `e2e::nonzero-exit`: the job declares no outage probe, since its suite needs
-  no live service. The lane contract probes collect only the suite step
-  (`tests/_lane_collection.py::collect_lane_job`), so no verify runs the install, and
-  `tests/unit/test_e2e_lane.py` checks that the job keeps it.
+  outgrows the bound, rather than the lane killing a green run before pytest reports. That
+  budget follows the slowest pace a lane pass has been measured at, with headroom, not a typical
+  pace (task 1569 measured the lane's own passes), because a serial run slows steeply as the
+  host's load rises: a budget below the pace the lane meets would let the suite outgrow the
+  bound while that test stays green. No check compares a lane pass's pace with the budget. A
+  pass slower than the budget that still ends inside the bound raises nothing, so a slower pace
+  first shows when the step's `timeout` kills passes and the lane files a task for them that
+  names no test. Whoever triages that task reads each pass's pace from the record directories
+  it names, as task 1570's triage did. A pace slower than the budget is the cue to raise the
+  budget and the step's `timeout` together. A raised `timeout` reaches the running lane only
+  when the orchestrator reloads its config. Only a missing browser sends the install to the
+  download host, and an outage there fails it, which the lane files as `e2e::nonzero-exit`: the
+  job declares no outage probe, since its suite needs no live service. The lane contract probes
+  collect only the suite step (`tests/_lane_collection.py::collect_lane_job`), so no verify runs
+  the install, and `tests/unit/test_e2e_lane.py` checks that the job keeps it.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
   live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. One of
   them also checks that the Bristol TMY committed under `tests/fixtures/weather_cache`, which
