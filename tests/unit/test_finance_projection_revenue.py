@@ -41,10 +41,16 @@ from tests._finance_builders import (
 
 
 def _fleet_whose_export_revenue_sums_to(
-    export_revenue_gbp: float, homes: Sequence[HomeConfig], *, self_kwh: float, export_kwh: float, import_kwh: float
+    export_revenue_gbp: float,
+    homes: Sequence[HomeConfig],
+    *,
+    self_kwh: float,
+    export_kwh: float,
+    import_kwh: float,
+    pricing: RunPricing,
 ) -> FleetResults:
-    """Each of *homes* with make_sim_results of the totals, unpriced, its export_revenue series replaced by one summing to *export_revenue_gbp*."""
-    results = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh)
+    """Each of *homes* with make_sim_results of the totals at *pricing*, its export_revenue series replaced by one summing to *export_revenue_gbp*."""
+    results = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh, pricing=pricing)
     rows = results.export_revenue.index
     with_revenue = dataclasses.replace(results, export_revenue=pd.Series(export_revenue_gbp / len(rows), index=rows))
     return make_fleet_results_of([with_revenue for _ in homes], homes=homes)
@@ -188,9 +194,9 @@ class TestSegIncomeAtTheHomesRate:
 
     The export is the simulated export on the physics basis, and generation −
     own-use with the override set, whatever the simulated export.  A home whose
-    results record no SEG rate earns none, whatever its export_revenue series
-    holds, and results that record no pricing at all are refused.  The default
-    finance has no grid services.
+    results record no SEG rate earns none.  A home's export_revenue series never
+    moves the income, and results that record no pricing at all are refused.
+    The default finance has no grid services.
     """
 
     @pytest.mark.parametrize(
@@ -244,20 +250,30 @@ class TestSegIncomeAtTheHomesRate:
 
         assert curve.points[0].fleet_revenue_gbp == pytest.approx(15.0 + seg_income_gbp)
 
-    def test_an_export_revenue_series_earns_nothing_without_a_seg_rate(self) -> None:
-        """A home that records no SEG rate projects its own-use revenue alone, 15 p × 100 kWh = £15 a year, though its export_revenue series sums to −£50."""
+    @pytest.mark.parametrize(
+        ("pricing", "seg_income_gbp"),
+        [
+            pytest.param(RunPricing(None, 5.0), 800.0 * 5.0 / 100.0, id="5p"),
+            pytest.param(RunPricing(None, None), 0.0, id="no-seg-rate"),
+        ],
+    )
+    def test_an_export_revenue_series_does_not_move_the_seg_income(
+        self, pricing: RunPricing, seg_income_gbp: float
+    ) -> None:
+        """The home's export_revenue series sums to −£50, yet it projects 15 p × 100 kWh = £15 of own-use a year plus its 800 kWh at the SEG rate its results record: £40 at 5 p, nothing with none."""
         scenario, finance = make_scenario_and_finance(asset_life_years=5)
         assert finance.own_use_rate_pence_per_kwh == 15.0, "premise: own-use at 15 p"
+        assert finance.self_consumption_override is None, "premise: the physics basis"
 
         curve = project_multi_year(
             scenario,
             finance,
             simulate=lambda fc, s, e: _fleet_whose_export_revenue_sums_to(
-                -50.0, fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0
+                -50.0, fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, pricing=pricing
             ),
         )
 
-        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([15.0] * 5)
+        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([15.0 + seg_income_gbp] * 5)
 
     def test_a_negative_export_at_a_seg_rate_is_refused_naming_it(self) -> None:
         """seg.calculate_seg_revenue prices the SEG income, as it prices simulate_home's, and refuses an export below 0 kWh."""
@@ -429,8 +445,9 @@ def _make_grid_charging_sim_results(
     grid-charged discharge), so basis-C own-use = demand − import = sc − grid_charge.
     Defaults give per home: total_import_cost_gbp £258.00, of which
     total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.  Every row imports
-    at the same blended rate, £258.00 / 1,000 kWh = 0.258 £/kWh, which the pricing
-    records as the tariff's time-weighted rate, with no SEG.
+    at the same blended rate, £258.00 / 1,000 kWh = 0.258 £/kWh, which each
+    tariff_rate row holds and the pricing records as the tariff's time-weighted
+    rate, with no SEG.
 
     Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
     each row over the hour it lasts, returns the kWh totals and simulation_days is 365:
@@ -447,6 +464,7 @@ def _make_grid_charging_sim_results(
     zeros = pd.Series(0.0, index=idx)
     grid_charge_pence = grid_charge_kwh * off_peak_pence
     import_pence = import_to_load_kwh * peak_pence + grid_charge_pence
+    blended_rate_gbp_per_kwh = import_pence / (import_to_load_kwh + grid_charge_kwh) / 100.0
     return SimulationResults(
         generation=constant_kw(sc_kwh + export_kwh),
         demand=constant_kw(sc_kwh + import_to_load_kwh),
@@ -458,9 +476,9 @@ def _make_grid_charging_sim_results(
         grid_export=constant_kw(export_kwh),
         import_cost=constant_gbp(import_pence),
         export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
+        tariff_rate=pd.Series(blended_rate_gbp_per_kwh, index=idx),
         grid_charge_cost=constant_gbp(grid_charge_pence),
-        pricing=RunPricing(import_pence / (import_to_load_kwh + grid_charge_kwh) / 100.0, None),
+        pricing=RunPricing(blended_rate_gbp_per_kwh, None),
     )
 
 
