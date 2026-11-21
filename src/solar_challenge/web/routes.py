@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
+from dataclasses import asdict
 from typing import Any, assert_never
 
 from flask import (
@@ -14,6 +15,7 @@ from flask import (
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_presets import fleet_preset_names
@@ -48,6 +50,7 @@ def simulate_home_page() -> str:
         "simulate/home.html",
         fleet_components=FLEET_COMPONENTS,
         seg_presets=SEG_PRESETS,
+        tariff_preset_rates=_tariff_preset_rates(),
         default_system_losses=PVWATTS_DEFAULT_SYSTEM_LOSSES,
         default_run_name=RUN_KINDS["home"].default_name(()),
         location_presets=LOCATION_PRESETS,
@@ -66,8 +69,14 @@ def simulate_fleet_page() -> str:
         fleet_components=FLEET_COMPONENTS,
         presets=fleet_preset_names(),
         seg_presets=SEG_PRESETS,
+        tariff_preset_rates=_tariff_preset_rates(),
         default_run_name=RUN_KINDS["fleet"].default_name(()),
     ))
+
+
+def _tariff_preset_rates() -> dict[str, dict[str, float]]:
+    """PRESET_RATES as the simulate pages' forms read it: each economy type's off_peak_rate and peak_rate."""
+    return {tariff_type: asdict(rates) for tariff_type, rates in PRESET_RATES.items()}
 
 
 

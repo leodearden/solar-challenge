@@ -94,6 +94,9 @@ self-consumption dispatch ignored the stored configs' grid charging."""
 
 Keys = tuple[str | int, ...]
 
+_ECONOMY_7_AS_STORED = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
+"""The Economy 7 tariff the stored runs below were priced at, the preset's default rates when they ran."""
+
 
 def _dispatching_home(strategy: Any, grid_charging: GridChargeConfig | None, name: str) -> HomeConfig:
     """A home on Economy 7 whose battery dispatches by *strategy* and grid-charges by *grid_charging*."""
@@ -101,7 +104,7 @@ def _dispatching_home(strategy: Any, grid_charging: GridChargeConfig | None, nam
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0),
         battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=grid_charging),
-        tariff_config=TariffConfig.economy_7(),
+        tariff_config=_ECONOMY_7_AS_STORED,
         name=name,
     )
 
@@ -525,7 +528,7 @@ def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_
         _fleet_fixture_home(
             "Elm Row 1",
             BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig()),
-            tariff_config=TariffConfig.economy_7(),
+            tariff_config=_ECONOMY_7_AS_STORED,
         ),
         _fleet_fixture_home(
             "Elm Row 2",

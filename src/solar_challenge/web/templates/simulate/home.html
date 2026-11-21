@@ -10,7 +10,7 @@
 {% block head %}
 <script>
 document.addEventListener('alpine:init', () => {
-    Alpine.data('homeSimulator', () => ({
+    Alpine.data('homeSimulator', (tariffPresetRates) => ({
         activeTab: {{ configuration_tabs[0].key | tojson }},
         submitting: false,
         submittedJob: null,
@@ -49,8 +49,11 @@ document.addEventListener('alpine:init', () => {
             tariff_enabled: false,
             tariff_type: 'flat_rate',
             tariff_rate_per_kwh: 0.28,
-            tariff_peak_rate: 0.35,
-            tariff_off_peak_rate: 0.13,
+            tariff_rates: tariffPresetRates,
+            get tariff_peak_rate() { return this.tariff_rates[this.tariff_type]?.peak_rate; },
+            set tariff_peak_rate(rate) { this.tariff_rates[this.tariff_type].peak_rate = rate; },
+            get tariff_off_peak_rate() { return this.tariff_rates[this.tariff_type]?.off_peak_rate; },
+            set tariff_off_peak_rate(rate) { this.tariff_rates[this.tariff_type].off_peak_rate = rate; },
             system_age_years: 0,
             degradation_rate_per_year: 0.005,
             system_losses: null,
@@ -214,7 +217,7 @@ document.addEventListener('alpine:init', () => {
     breadcrumbs=[{"label": "Simulate"}, {"label": "Single Home"}]
 ) }}
 
-<div x-data="homeSimulator()">
+<div x-data='homeSimulator({{ tariff_preset_rates|tojson }})'>
     {% set configuration %}
         <!-- Tab navigation -->
         {{ tab_bar(configuration_tabs, label='Configuration tabs', tab_classes='px-6') }}

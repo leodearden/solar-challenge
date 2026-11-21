@@ -12,6 +12,8 @@ import pytest
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.tariff import (
+    PRESET_RATES,
+    PresetRates,
     TariffConfig,
     TariffPeriod,
     calculate_bill,
@@ -24,6 +26,9 @@ from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
 )
 from tests._unusable_numbers import UNUSABLE_NUMBERS
+
+_E7 = PRESET_RATES["economy_7"]
+_E10 = PRESET_RATES["economy_10"]
 
 REPEATED_OFF_PEAK_TARIFF = TariffConfig(
     periods=(
@@ -559,6 +564,52 @@ class TestTariffConfigFlatRate:
         assert result == pytest.approx(1440 * 0.20)
 
 
+class TestPresetRates:
+    """PRESET_RATES states each economy preset's default rates, the rates a preset built without rates charges."""
+
+    def test_both_economy_presets_charge_d34s_rates(self) -> None:
+        assert PRESET_RATES == {
+            "economy_7": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+            "economy_10": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+        }
+
+    def test_the_table_and_its_rates_are_read_only(self) -> None:
+        with pytest.raises(TypeError):
+            PRESET_RATES["economy_7"] = PresetRates(off_peak_rate=0.1, peak_rate=0.2)
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            PRESET_RATES["economy_7"].peak_rate = 1.0
+
+    @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
+    @pytest.mark.parametrize("value", [*UNUSABLE_NUMBERS, pytest.param("x", id="word")])
+    def test_a_preset_rate_that_is_not_a_finite_number_is_refused_with_the_leafs_wording(
+        self, field: str, value: object
+    ) -> None:
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: value}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PresetRates(**rates)
+
+        assert str(refusal.value) == f"{field} must be a finite number, got {value!r}"
+
+    @pytest.mark.parametrize("field", ["off_peak_rate", "peak_rate"])
+    def test_a_negative_preset_rate_is_refused_naming_its_bound(self, field: str) -> None:
+        rates = {"off_peak_rate": 0.13, "peak_rate": 0.35, field: -0.1}
+
+        with pytest.raises(ConfigurationError) as refusal:
+            PresetRates(**rates)
+
+        assert str(refusal.value) == f"{field} must be at least 0, got -0.1"
+
+    def test_presets_built_without_rates_charge_their_table_rates(self) -> None:
+        economy_7 = TariffConfig.economy_7()
+        economy_10 = TariffConfig.economy_10()
+
+        assert economy_7.get_rate(pd.Timestamp("2024-01-15 03:00")) == _E7.off_peak_rate
+        assert economy_7.get_rate(pd.Timestamp("2024-01-15 12:00")) == _E7.peak_rate
+        assert economy_10.get_rate(pd.Timestamp("2024-01-15 03:00")) == _E10.off_peak_rate
+        assert economy_10.get_rate(pd.Timestamp("2024-01-15 09:00")) == _E10.peak_rate
+
+
 class TestTariffConfigEconomy7:
     """Test Economy 7 tariff factory method."""
 
@@ -572,9 +623,9 @@ class TestTariffConfigEconomy7:
         """Economy 7 uses correct default rates."""
         tariff = TariffConfig.economy_7()
         # Off-peak time (00:30-07:30)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == _E7.off_peak_rate
         # Peak time (07:30-00:30)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == _E7.peak_rate
 
     def test_economy_7_custom_rates(self):
         """Economy 7 accepts custom rates."""
@@ -592,9 +643,9 @@ class TestTariffConfigEconomy7:
             off_peak_end="08:00"
         )
         # Within custom off-peak
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 04:00:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 04:00:00")) == _E7.off_peak_rate
         # Outside custom off-peak
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 12:00:00")) == _E7.peak_rate
 
     def test_economy_7_off_peak_hours(self):
         """Economy 7 off-peak period is 7 hours."""
@@ -603,7 +654,7 @@ class TestTariffConfigEconomy7:
         off_peak_hours = 0
         for hour in range(24):
             timestamp = pd.Timestamp(f"2024-01-15 {hour:02d}:30:00")
-            if tariff.get_rate(timestamp) == 0.09:
+            if tariff.get_rate(timestamp) == _E7.off_peak_rate:
                 off_peak_hours += 1
         assert off_peak_hours == 7
 
@@ -611,13 +662,13 @@ class TestTariffConfigEconomy7:
         """Economy 7 boundaries work correctly."""
         tariff = TariffConfig.economy_7()  # 00:30-07:30 off-peak
         # Just before off-peak starts (peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:29:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:29:00")) == _E7.peak_rate
         # At off-peak start (off-peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:30:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 00:30:00")) == _E7.off_peak_rate
         # Just before off-peak ends (off-peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:29:00")) == 0.09
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:29:00")) == _E7.off_peak_rate
         # At off-peak end (peak)
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:30:00")) == 0.25
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 07:30:00")) == _E7.peak_rate
 
 
 class TestTariffConfigEconomy10:
@@ -633,12 +684,12 @@ class TestTariffConfigEconomy10:
         """Economy 10 uses correct default rates."""
         tariff = TariffConfig.economy_10()
         # Off-peak times
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 02:00:00")) == 0.08  # Night
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 14:00:00")) == 0.08  # Afternoon
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 21:00:00")) == 0.08  # Evening
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 02:00:00")) == _E10.off_peak_rate  # Night
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 14:00:00")) == _E10.off_peak_rate  # Afternoon
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 21:00:00")) == _E10.off_peak_rate  # Evening
         # Peak times
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 10:00:00")) == 0.27  # Morning
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 17:00:00")) == 0.27  # Afternoon peak
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 10:00:00")) == _E10.peak_rate  # Morning
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 17:00:00")) == _E10.peak_rate  # Afternoon peak
 
     def test_economy_10_custom_rates(self):
         """Economy 10 accepts custom rates."""
@@ -660,9 +711,9 @@ class TestTariffConfigEconomy10:
             evening_end="23:00"
         )
         # Check custom times work
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == 0.08
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 15:00:00")) == 0.08
-        assert tariff.get_rate(pd.Timestamp("2024-01-15 22:00:00")) == 0.08
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 03:00:00")) == _E10.off_peak_rate
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 15:00:00")) == _E10.off_peak_rate
+        assert tariff.get_rate(pd.Timestamp("2024-01-15 22:00:00")) == _E10.off_peak_rate
 
     def test_economy_10_off_peak_hours(self):
         """Economy 10 off-peak periods total 10 hours."""
@@ -671,7 +722,7 @@ class TestTariffConfigEconomy10:
         off_peak_hours = 0
         for hour in range(24):
             timestamp = pd.Timestamp(f"2024-01-15 {hour:02d}:30:00")
-            if tariff.get_rate(timestamp) == 0.08:
+            if tariff.get_rate(timestamp) == _E10.off_peak_rate:
                 off_peak_hours += 1
         assert off_peak_hours == 10
 
@@ -697,8 +748,8 @@ class TestTariffConfigPeakAndMeanPeriodRate:
     @pytest.mark.parametrize(
         ("tariff", "expected_peak"),
         [
-            pytest.param(TariffConfig.economy_7(), 0.25, id="economy_7"),
-            pytest.param(TariffConfig.economy_10(), 0.27, id="economy_10"),
+            pytest.param(TariffConfig.economy_7(), _E7.peak_rate, id="economy_7"),
+            pytest.param(TariffConfig.economy_10(), _E10.peak_rate, id="economy_10"),
             # Its float mean is 0.10000000000000002; only an exact peak shows no spread.
             pytest.param(
                 TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
@@ -715,7 +766,8 @@ class TestTariffConfigPeakAndMeanPeriodRate:
 
     def test_mean_period_rate_counts_each_period_once_whatever_its_length(self) -> None:
         """Economy 7 is 7 h at 0.09 and 17 h at 0.25; weighting by hours would give 0.2033."""
-        assert TariffConfig.economy_7().mean_period_rate == pytest.approx(0.17)
+        tariff = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
+        assert tariff.mean_period_rate == pytest.approx(0.17)
 
     def test_mean_period_rate_counts_a_repeated_rate_once_per_period(self) -> None:
         """Averaging the distinct rates would give 0.25, and weighting by hours 0.2125."""
@@ -865,7 +917,7 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
         assert _derived_values(unpickled) == expected
 
     def test_replace_derives_the_replacement_periods_rates(self) -> None:
-        tariff = TariffConfig.economy_7()
+        tariff = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
         peak, mean, cheap_minutes = _derived_values(tariff)
 
         replaced = dataclasses.replace(tariff, periods=TariffConfig.flat_rate(0.30).periods)

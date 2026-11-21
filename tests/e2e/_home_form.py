@@ -10,7 +10,7 @@ SECOND_DAY = "2024-06-02"
 def form_data(page: Page) -> dict[str, object]:
     """The home form's Alpine formData, as the page holds it now."""
     snapshot: dict[str, object] = page.evaluate("""() => {
-        const el = document.querySelector('[x-data="homeSimulator()"]');
+        const el = document.querySelector('[x-data^="homeSimulator("]');
         return { ...Alpine.$data(el).formData };
     }""")
     return snapshot

@@ -13,7 +13,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.tariff import PRESET_RATES, TariffConfig, TariffPeriod
 from solar_challenge.timebase import HOURS_PER_MINUTE
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._finance_builders import make_sim_results
@@ -154,7 +154,7 @@ class TestSimulateHomeStrategyPathGridCharging:
 
 @pytest.fixture
 def economy7_tariff_config() -> TariffConfig:
-    """Economy 7 tariff: off-peak 0.09/kWh (00:30-07:30), peak 0.25/kWh."""
+    """Economy 7 tariff at its preset rates: off-peak 00:30-07:30, peak the rest of the day."""
     return TariffConfig.economy_7()
 
 
@@ -391,8 +391,8 @@ class TestSimulateHomeGridChargeCost:
         """grid_charge_cost only occurs at off-peak rate timesteps.
 
         Verifies the pricing relationship rather than just non-negativity.
-        A regression pricing at peak rate (0.25 £/kWh instead of 0.09) or
-        multiplying by the wrong rate series would fail this test.
+        A regression pricing at the peak rate instead of the off-peak rate, or
+        multiplying by the wrong rate series, would fail this test.
         """
         results = simulate_home(
             tou_grid_charge_home_config,
@@ -403,18 +403,18 @@ class TestSimulateHomeGridChargeCost:
         )
         assert results.grid_charge_cost is not None
 
-        off_peak_rate = 0.09  # £/kWh (Economy 7 off-peak rate)
+        off_peak_rate = PRESET_RATES["economy_7"].off_peak_rate
         rates = results.tariff_rate.to_numpy()
         costs = results.grid_charge_cost.to_numpy()
 
         # (1) At peak-rate timesteps (rate > off_peak_rate), no grid-charging cost must appear
         # (grid charging is only dispatched during cheap off-peak windows)
-        peak_mask = rates > off_peak_rate  # Economy7 peak rate == 0.25, off-peak == 0.09
+        peak_mask = rates > off_peak_rate
         np.testing.assert_allclose(
             costs[peak_mask],
             0.0,
             atol=1e-10,
-            err_msg="Grid-charging cost must be zero at peak-rate (0.25 £/kWh) timesteps",
+            err_msg="Grid-charging cost must be zero at peak-rate timesteps",
         )
 
         # (2) All non-zero costs must correspond to off-peak rate timesteps
@@ -427,7 +427,7 @@ class TestSimulateHomeGridChargeCost:
             rates[nonzero_cost_mask],
             off_peak_rate,
             rtol=1e-9,
-            err_msg="All non-zero grid-charging costs must be at the off-peak rate (0.09 £/kWh)",
+            err_msg="All non-zero grid-charging costs must be at the off-peak rate",
         )
 
     def test_grid_charge_cost_numerical_pricing_formula(

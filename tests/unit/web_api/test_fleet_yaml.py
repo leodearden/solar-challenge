@@ -20,7 +20,7 @@ from solar_challenge.config import (
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
@@ -524,6 +524,19 @@ class TestFleetPresetEndpoint:
         answer = resp.get_json()
         assert {block: answer["form"][block] for block in fixed_blocks} == fixed_blocks
         assert [path for path in named_not_loaded if path not in answer["not_loaded"]] == []
+
+    def test_the_board_flex_preset_loads_its_rate_less_economy_7_at_the_preset_rates(
+        self, client: FlaskClient
+    ) -> None:
+        """bristol-phase1-flex names Economy 7 and no rate, so the form holds PRESET_RATES' Economy 7 rates."""
+        resp = client.get("/api/fleet/presets/bristol-phase1-flex")
+
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["form"]["tariff"] == {
+            "type": "economy_7",
+            "peak_rate": PRESET_RATES["economy_7"].peak_rate,
+            "off_peak_rate": PRESET_RATES["economy_7"].off_peak_rate,
+        }
 
     @pytest.mark.parametrize("name", _BUILTIN_SCENARIO_STEMS)
     def test_every_builtin_scenario_loads_or_is_refused_with_a_reason(
