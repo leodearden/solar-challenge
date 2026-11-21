@@ -1,6 +1,8 @@
 """Tests for the CLI module."""
 
+import errno
 import io
+import os
 import re
 import sys
 import tempfile
@@ -45,7 +47,7 @@ from solar_challenge.location import parse_location
 from solar_challenge.output import generate_finance_report
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.timebase import ONE_MINUTE
-from solar_challenge.weather import WeatherDataError
+from solar_challenge.weather import WeatherCache, WeatherDataError
 from tests._cli_fleet_simulator import (
     ReachedTheSweep,
     RecordingSimulate,
@@ -311,6 +313,8 @@ def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, e
 _HANDLED_ERRORS_AND_LABELS = [
     pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),
     pytest.param(FileNotFoundError, "File not found", id="FileNotFoundError"),
+    pytest.param(OSError, "System error", id="OSError"),
+    pytest.param(PermissionError, "System error", id="PermissionError"),
     pytest.param(ValueError, "Invalid value", id="ValueError"),
     pytest.param(WeatherDataError, "Weather data unavailable", id="WeatherDataError"),
 ]
@@ -359,6 +363,20 @@ class TestErrorHandling:
         assert " ".join(result.stderr.split()).endswith(
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
+
+    def test_a_weather_cache_entry_it_cannot_read_is_reported_in_one_line(self, weather_cache: WeatherCache) -> None:
+        """`home quick`, whose Bristol TMY entry in the weather cache is a directory, so reading it raises IsADirectoryError even as root, exits 1 with nothing on stdout, and its stderr ends with one line naming the entry. It raises nothing. The stderr is compared with its whitespace removed, since Rich folds a word wider than CliRunner's 80 columns, as a long TMPDIR's path is."""
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+        (entry,) = weather_cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+
+        result = runner.invoke(app, ["home", "quick", "4", "--days", "1"], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        expected = f"System error: [Errno {errno.EISDIR}] {os.strerror(errno.EISDIR)}: {str(entry)!r}"
+        assert "".join(result.stderr.split()).endswith("".join(expected.split()))
 
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
