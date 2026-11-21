@@ -263,6 +263,15 @@ class TestGridServicesBand:
         assert [band.value for band in GridServicesBand] == ["low", "central", "high"]
 
     @pytest.mark.parametrize("band", list(GridServicesBand))
+    def test_a_band_formats_as_its_value(self, band: GridServicesBand) -> None:
+        assert str(band) == band.value
+        assert f"{band}" == band.value
+        assert format(band) == band.value
+        assert "{}".format(band) == band.value
+        assert band == band.value
+        assert hash(band) == hash(band.value)
+
+    @pytest.mark.parametrize("band", list(GridServicesBand))
     def test_parse_returns_the_member_its_value_names(self, band: GridServicesBand) -> None:
         assert GridServicesBand.parse(band.value, what="test band") is band
 
@@ -316,6 +325,15 @@ class TestDeliveryBaseline:
 
     def test_members_are_operational_then_capacity(self) -> None:
         assert [baseline.value for baseline in DeliveryBaseline] == ["operational", "capacity"]
+
+    @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
+    def test_a_baseline_formats_as_its_value(self, baseline: DeliveryBaseline) -> None:
+        assert str(baseline) == baseline.value
+        assert f"{baseline}" == baseline.value
+        assert format(baseline) == baseline.value
+        assert "{}".format(baseline) == baseline.value
+        assert baseline == baseline.value
+        assert hash(baseline) == hash(baseline.value)
 
     @pytest.mark.parametrize("baseline", list(DeliveryBaseline))
     def test_parse_returns_the_member_its_value_names(self, baseline: DeliveryBaseline) -> None:
