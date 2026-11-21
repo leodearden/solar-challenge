@@ -64,20 +64,35 @@ def test_a_child_process_of_a_fast_test_reads_the_tmy_the_test_seeds_into_weathe
 
 
 RUNS_A_ROOT_UNSEEDED = """
+    import pytest
     from typer.testing import CliRunner
 
     from solar_challenge.cli import app
+    from solar_challenge.location import Location
+    from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache
+    from tests._synthetic_weather import synthetic_june_weather
 
 
-    def test_runs_home_quick():
+    @pytest.fixture
+    def working_directory_caching_bristols_tmy(tmp_path, monkeypatch):
+        WeatherCache(cache_dir=tmp_path / DEFAULT_CACHE_DIR).put(
+            synthetic_june_weather("2024-06-01"), "tmy", Location.bristol()
+        )
+        monkeypatch.chdir(tmp_path)
+
+
+    def test_runs_home_quick(working_directory_caching_bristols_tmy):
         CliRunner().invoke(app, ["home", "quick", "4", "--days", "1"])
     """
 
 
-def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_and_leaves_no_weather_cache_behind(
+def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_though_its_working_directory_caches_the_tmy(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
-    """CliRunner keeps the refused fetch's error in its result, so the test itself passes and only the guard can catch it."""
+    """CliRunner keeps the refused fetch's error in its result, so the test itself passes and only the guard can catch it.
+
+    The root reads the test's own empty weather cache, not the TMY its working directory caches, so it fetches, and the refused fetch is what the guard names.
+    """
     run = offline_scenarios.run_in(suite)
 
     assert run.outcomes("test_runs_a_root_unseeded") == {"passed": 1, "errors": 1}
@@ -87,7 +102,6 @@ def test_a_fast_test_that_runs_a_root_unseeded_fails_naming_pvgis_and_leaves_no_
             f"({urlsplit(PVGIS_API_URL).hostname}:443)*"
         ]
     )
-    assert not (run.session_dir / DEFAULT_CACHE_DIR).exists()
 
 
 E2E_SUITE_TEST_LOOKS_UP_A_HOST = """
@@ -178,11 +192,23 @@ MODULE_FIXTURE_FETCHES = """
     import pytest
 
     from solar_challenge.location import Location
-    from solar_challenge.weather import default_weather
+    from solar_challenge.weather import DEFAULT_CACHE_DIR, WeatherCache, default_weather
+    from tests._synthetic_weather import synthetic_june_weather
 
 
     @pytest.fixture(scope="module")
-    def bristols_tmy():
+    def working_directory_caching_bristols_tmy(tmp_path_factory):
+        working = tmp_path_factory.mktemp("working")
+        WeatherCache(cache_dir=working / DEFAULT_CACHE_DIR).put(
+            synthetic_june_weather("2024-06-21"), "tmy", Location.bristol()
+        )
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.chdir(working)
+            yield
+
+
+    @pytest.fixture(scope="module")
+    def bristols_tmy(working_directory_caching_bristols_tmy):
         return default_weather().get(Location.bristol())
 
 
@@ -191,15 +217,17 @@ MODULE_FIXTURE_FETCHES = """
     """
 
 
-def test_a_module_fixture_that_fetches_a_tmy_fails_the_fast_test_that_sets_it_up_and_leaves_no_weather_cache_behind(
+def test_a_module_fixture_that_fetches_a_tmy_fails_the_fast_test_that_sets_it_up_though_its_working_directory_caches_the_tmy(
     suite: pytest.Pytester, offline_scenarios: ScenarioSession
 ) -> None:
-    """It errors at setup, where the PVGIS fetch is refused, and at teardown, where the guard names it."""
+    """It errors at setup, where the PVGIS fetch is refused, and at teardown, where the guard names it.
+
+    The fixture's default_weather() reads the window's empty cache, not its working directory's TMY.
+    """
     run = offline_scenarios.run_in(suite)
 
     assert run.outcomes("test_module_fixture_fetches") == {"errors": 2}
     run.result.stdout.fnmatch_lines(["*test_sets_up_bristols_tmy reached the network*"])
-    assert not (run.session_dir / DEFAULT_CACHE_DIR).exists()
 
 
 MODULE_FIXTURE_LOOKS_UP_AT_TEARDOWN = """
