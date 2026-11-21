@@ -3,7 +3,8 @@
 
 householder_bill and bill_distribution bill over their summaries' own day count and
 refuse any other, refuse a summary with no window and summaries over different
-windows, and the home's ledger refuses an own-use outside 0 to the demand.
+windows, and householder_bill refuses an own-use outside 0 to the window's
+demand with the ledger's invariants, naming it as passed.
 `finance run` bills the day count of the summaries its fleet simulator returns.
 
 A bill is the window's year, by one rule with no threshold and no warning: the
