@@ -109,7 +109,7 @@ def test_the_e2e_suite_steps_timeout_gives_each_test_it_collects_a_loaded_hosts_
         f"the suite step of the {suite.label}, {suite.command!r}, is bounded at {bound:g} s, less than the serial "
         f"budget of the {collected} tests it collects, {_SERIAL_BUDGET_SECS_PER_TEST} s each, {budget} s. Run "
         "serially at the lane's idle priority on a loaded host, the suite can then be killed while still green, "
-        "before pytest reports, and the lane files e2e::nonzero-exit, unconfirmable, naming no test. Raise the "
+        "before pytest reports, and the lane files e2e::unconfirmable, naming no test. Raise the "
         "step's `timeout` in dark-factory-orchestrator.yaml; the running lane reads the raise only once the "
         "orchestrator reloads its config"
     )

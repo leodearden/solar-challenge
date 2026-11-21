@@ -203,7 +203,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   before changing code.
 - The lane's `e2e` job runs the non-slow Playwright suite after every merge. A
   fix task it files names the failing e2e node-ids, e.g.
-  `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::nonzero-exit` when
+  `tests/e2e/test_history.py::<test>[chromium]`, or `e2e::unconfirmable` when
   the red run printed no failing node-id (it hit the job's `timeout`, its
   browser install failed, or pytest could not start, e.g. uv refused a stale
   `uv.lock`). Reproduce with
@@ -219,7 +219,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   the sandbox. The lane job installs that browser before its suite, so neither
   another project's `playwright install` nor a `uv.lock` move of playwright
   turns the lane red (`docs/orchestrator-config.md` says why). An
-  `e2e::nonzero-exit` whose install could not reach playwright's download host
+  `e2e::unconfirmable` whose install could not reach playwright's download host
   was an outage: retry later before changing code. If e2e tests
   ERROR at setup in a sandboxed session with
   `Executable doesn't exist at ~/.cache/ms-playwright/chromium_headless_shell-<revision>/...`,
@@ -229,7 +229,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   contract tests, after every merge. They check PVGIS's live response, never a
   cached TMY, so a change in PVGIS's or pvlib's response turns the lane red.
   Its outage probe asks PVGIS (`scripts/outage_probe.py pvgis`). A
-  fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::nonzero-exit`
+  fix task it files names `tests/integration/test_pvgis.py` node-ids, or `pvgis::unconfirmable`
   when the red run printed no failing node-id (it hit the job's `timeout`, or
   pytest could not start, e.g. uv refused a stale `uv.lock`). Reproduce with
   `uv run --locked --extra dev pytest -n 0 <node-id> -p no:cacheprovider`. The
@@ -251,7 +251,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   could not reach the registry, retry later before changing code. A fix
   task it files names
   `tests/css_build/test_dist_style_css.py::test_dist_style_css_matches_a_fresh_build_of_its_sources`,
-  or `css-build::nonzero-exit` when the red run printed no failing node-id (it
+  or `css-build::unconfirmable` when the red run printed no failing node-id (it
   hit the job's `timeout`, or pytest could not start). The fix is the Tailwind
   rebuild in Commands, then a commit of the stylesheet. The job also rebuilds
   `static/dist/favicon.svg`, which `build-favicon.js` draws in the theme's
@@ -277,7 +277,7 @@ This project is a dark-factory orchestrator target (onboarded via `factory-init`
   merged commit in the fix task's suspect range. Its outage probe asks PyPI
   (`scripts/outage_probe.py pypi`). A fix task it files names
   `tests/newest_releases/test_verify_suite_on_newest_releases.py::test_verify_suite_passes_on_the_newest_releases_the_dependency_ranges_admit`,
-  or `newest-releases::nonzero-exit` when the red run printed no failing
+  or `newest-releases::unconfirmable` when the red run printed no failing
   node-id (pytest could not start, e.g. uv refused a stale `uv.lock`). Its
   failure message, in the pass's `detect.log` under the main checkout's
   `data/orchestrator/offline-lane/newest-releases/`, lists the releases
