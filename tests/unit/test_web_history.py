@@ -961,11 +961,11 @@ class TestExportAPI:
                     "load_config": {},
                     "battery_config": {
                         "capacity_kwh": 5.0,
-                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
+                        "dispatch_strategy": {"strategy_type": "peak_shaving"},
                     },
                 },
-                "battery_config.dispatch_strategy.peak_hours",
-                id="TOU dispatch strategy without peak hours",
+                "battery_config.dispatch_strategy.import_limit_kw",
+                id="peak shaving dispatch strategy without its import limit",
             ),
             pytest.param(
                 {

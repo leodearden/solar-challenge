@@ -36,7 +36,9 @@ pure, and applying it to its own result changes nothing and drops nothing. v2, t
 drops each key a document's dataclass does not have, by without_unknown_keys, as the reader
 skipped such keys before runs carried a format version, and reports each dropped value that is
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
-dispatch ignores, and reports each value it rewrites, with the value it holds now.
+dispatch ignores, and reports each value it rewrites, with the value it holds now. v4 drops each
+battery's grid_charging that its run ignored on a tariff with no cheap period, one whose periods
+all charge the same rate, and reports each value it rewrites the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -837,28 +839,30 @@ _FORMAT_2_HOME_DISPATCH = ("greedy", "tou_optimized")
 _FieldChange = tuple[str, Any, Any]
 """A field a step rewrote, as its dotted path, the value it held before and the value it holds now."""
 
+_HomeRule = Callable[[Any], tuple[Any, list[_FieldChange]]]
+"""A step's rule for one stored HomeConfig object: the object brought forward, and each field it changed."""
 
-def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """v3's step: *documents* with each home's config set to the dispatch its run ran by, and each value it rewrote.
+
+def _homes_brought_forward(run_type: RunType, documents: StoredRunDocuments, rule: _HomeRule) -> StepResult:
+    """*documents* with each home's object in the config brought forward by *rule*, and each value it rewrote.
 
     A home run's config is one home's object and a fleet run's holds one in each item of its
-    homes; _home_as_it_ran brings each forward. The summaries and any content that is not such
-    an object are left as they are.
+    homes. The summaries and any content that is not such an object are left as they are.
     """
     config = documents.config
     if run_type == "home":
-        content, changes = _home_as_it_ran(config.content)
+        content, changes = rule(config.content)
     else:
-        content, changes = _fleet_homes_as_they_ran(config.content)
+        content, changes = _fleet_homes_brought_forward(config.content, rule)
     rewritten = tuple(RewrittenValue(config.run_id, config.name, field, was, now) for field, was, now in changes)
     return StepResult(documents=replace(documents, config=replace(config, content=content)), rewritten=rewritten)
 
 
-def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
-    """A fleet run's *config* with each item of its homes brought forward by _home_as_it_ran, and each change, at homes[i]."""
+def _fleet_homes_brought_forward(config: Any, rule: _HomeRule) -> tuple[Any, list[_FieldChange]]:
+    """A fleet run's *config* with each item of its homes brought forward by *rule*, and each change, at homes[i]."""
     if not isinstance(config, dict) or not isinstance(config.get("homes"), list):
         return config, []
-    brought_forward = [_home_as_it_ran(home) for home in config["homes"]]
+    brought_forward = [rule(home) for home in config["homes"]]
     changes = [
         (f"homes[{index}].{field}", was, now)
         for index, (_, home_changes) in enumerate(brought_forward)
@@ -867,6 +871,11 @@ def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
     if not changes:
         return config, []
     return {**config, "homes": [home for home, _ in brought_forward]}, changes
+
+
+def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v3's step: *documents* with each home's config set to the dispatch its run ran by, as _home_as_it_ran sets it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_as_it_ran)
 
 
 def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
@@ -902,6 +911,43 @@ def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
     return {**home, "battery_config": {**battery, "grid_charging": None}}, changes
 
 
+def _grid_charging_without_a_cheap_period_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v4's step: *documents* with each home's config rid of the grid_charging its run ignored, as _home_without_grid_charging_on_one_rate drops it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_without_grid_charging_on_one_rate)
+
+
+def _home_without_grid_charging_on_one_rate(home: Any) -> tuple[Any, list[_FieldChange]]:
+    """*home*, a stored HomeConfig object, with its battery's grid_charging dropped when its tariff's periods all charge one rate, and each field it changed.
+
+    That is the home as its run ran. A tariff's periods tile the day, so each covers a minute,
+    and at format 3 its cheap_minutes_of_day was empty exactly when its periods shared one rate:
+    neither GridChargeContext.is_cheap_period nor simulate_timestep_tou then ever charged from
+    the grid. v3 had already dropped grid_charging under self-consumption dispatch or with no
+    tariff, so any left at format 3 is on a dispatch that grid-charges. The rule reads format
+    3's JSON, not a TariffConfig, so a later change to the tariff's classifier cannot change the
+    step. A home it cannot read as a grid-charging battery on such a tariff is left as it is.
+    """
+    if not isinstance(home, dict):
+        return home, []
+    battery = home.get("battery_config")
+    if not isinstance(battery, dict) or battery.get("grid_charging") is None:
+        return home, []
+    if not _periods_charge_one_rate(home.get("tariff_config")):
+        return home, []
+    change = ("battery_config.grid_charging", battery["grid_charging"], None)
+    return {**home, "battery_config": {**battery, "grid_charging": None}}, [change]
+
+
+def _periods_charge_one_rate(tariff: Any) -> bool:
+    """Whether *tariff*, a stored TariffConfig object, has periods: a list, not empty, of objects whose rate_per_kwh is each the same number, an int or a float, never a bool."""
+    periods = tariff.get("periods") if isinstance(tariff, dict) else None
+    if not isinstance(periods, list) or not periods or not all(isinstance(period, dict) for period in periods):
+        return False
+    rates = [period.get("rate_per_kwh") for period in periods]
+    is_number = [isinstance(rate, (int, float)) and not isinstance(rate, bool) for rate in rates]
+    return all(is_number) and all(rate == rates[0] for rate in rates)
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -915,6 +961,12 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "ignored, under self-consumption dispatch or with no tariff, and read as greedy a home "
         "dispatch_strategy its run did not dispatch by",
         _dispatch_as_it_ran,
+    ),
+    RunDocumentStep(
+        4,
+        "Drop each battery's grid_charging that its run ignored on a tariff with no cheap period, "
+        "one whose periods all charge the same rate",
+        _grid_charging_without_a_cheap_period_dropped,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

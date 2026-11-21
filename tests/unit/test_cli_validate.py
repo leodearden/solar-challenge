@@ -14,6 +14,7 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
+from solar_challenge.config import parse_tariff_config
 from tests._cli_table_text import table_text
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
@@ -199,6 +200,29 @@ def _bristol_arbitrage_with_its_home(edit_home: Callable[[dict[str, Any]], objec
     document: dict[str, Any] = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
     edit_home(document["home"])
     return yaml.safe_dump(document)
+
+
+def _dispatched_by_its_battery(dispatch_strategy: dict[str, Any]) -> Callable[[dict[str, Any]], None]:
+    """An edit of a home: block that drops its dispatch_strategy key and gives its battery the dispatch_strategy: block *dispatch_strategy*."""
+
+    def edit(home: dict[str, Any]) -> None:
+        home.pop("dispatch_strategy")
+        home["battery"]["dispatch_strategy"] = dispatch_strategy
+
+    return edit
+
+
+def _tariff_name(block: dict[str, Any]) -> str:
+    """The name of the tariff the tariff: block *block* builds."""
+    tariff = parse_tariff_config(block)
+    assert tariff is not None
+    return tariff.name
+
+
+def _bristol_arbitrage_tariff_name() -> str:
+    """The name of the tariff scenarios/bristol-arbitrage.yaml's home is on."""
+    document: dict[str, Any] = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
+    return _tariff_name(document["home"]["tariff"])
 
 
 def _example_economy7_with_an_off_peak_ev(edit_home: Callable[[dict[str, Any]], object]) -> str:
@@ -665,6 +689,60 @@ home:
         error_row = text[text.index("ERROR"):]
         for name in named:
             assert name in error_row
+
+    @pytest.mark.parametrize(
+        "dispatch_by",
+        [
+            pytest.param(lambda home: None, id="its-home-as-committed"),
+            pytest.param(_dispatched_by_its_battery({"strategy_type": "tou_optimized"}), id="its-battery"),
+        ],
+    )
+    def test_a_grid_charging_home_on_a_flat_tariff_is_an_error_row_naming_the_tariff(
+        self, tmp_path: Path, dispatch_by: Callable[[dict[str, Any]], object]
+    ) -> None:
+        """scenarios/bristol-arbitrage.yaml on a flat 0.25 £/kWh tariff, which has no cheap period, its tou_optimized on its home or moved to its battery without peak_hours."""
+        flat_rate = {"type": "flat_rate", "rate_per_kwh": 0.25}
+
+        def edit(home: dict[str, Any]) -> None:
+            dispatch_by(home)
+            home["tariff"] = flat_rate
+
+        result = self._validate_config(
+            tmp_path, _bristol_arbitrage_with_its_home(edit), file_name="bristol-arbitrage.yaml"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        for name in ("grid_charging", "'tou_optimized'", "no cheap period", _tariff_name(flat_rate)):
+            assert name in error_row, (name, error_row)
+
+    def test_a_grid_charging_battery_dispatched_on_its_tariffs_clock_is_valid(self, tmp_path: Path) -> None:
+        """scenarios/bristol-arbitrage.yaml, its tou_optimized moved from the home to its battery without peak_hours: it dispatches on Economy 7's clock."""
+        document = _bristol_arbitrage_with_its_home(_dispatched_by_its_battery({"strategy_type": "tou_optimized"}))
+
+        result = self._validate_config(tmp_path, document, file_name="bristol-arbitrage.yaml")
+
+        assert result.exit_code == 0, result.stdout
+        assert "OK Configuration is valid" in table_text(result.stdout)
+
+    def test_a_battery_whose_peak_hours_reach_a_cheap_minute_of_its_tariff_is_an_error_row(
+        self, tmp_path: Path
+    ) -> None:
+        """scenarios/bristol-arbitrage.yaml, its battery dispatched by tou_optimized at 07:00-09:00, which reaches Economy 7's cheap 07:00-07:30."""
+        document = _bristol_arbitrage_with_its_home(
+            _dispatched_by_its_battery({"strategy_type": "tou_optimized", "peak_hours": [[7, 9]]})
+        )
+
+        result = self._validate_config(tmp_path, document, file_name="bristol-arbitrage.yaml")
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        for name in ("07:00-07:30", _bristol_arbitrage_tariff_name()):
+            assert name in error_row, (name, error_row)
 
     def test_a_home_with_an_off_peak_ev_and_no_tariff_is_an_error_row(self, tmp_path: Path) -> None:
         """scenarios/example-economy7.yaml with an off_peak EV: valid on Economy 10, an error row without a tariff."""

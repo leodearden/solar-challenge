@@ -996,9 +996,10 @@ _GRID_CHARGE_TO_80_PERCENT = GridChargeConfig(target_soc_fraction=0.8)
 _DISPATCHED_BATTERY_SETTINGS = (
     pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
     pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized"),
+    pytest.param(TOUOptimizedStrategyConfig(), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized-on-the-tariff-clock"),
     pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), _GRID_CHARGE_TO_80_PERCENT, id="peak_shaving"),
 )
-"""One example of each dispatch strategy, with grid charging to 0.8 for those that charge from the grid."""
+"""One example of each dispatch strategy, tou_optimized both with peak_hours and on the tariff's clock, with grid charging to 0.8 for those that charge from the grid."""
 
 
 def _dispatching_home(

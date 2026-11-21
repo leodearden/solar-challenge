@@ -45,7 +45,7 @@ document.addEventListener('alpine:init', () => {
         tariffOffPeakRate: 0.13,
         dispatchStrategyType: 'self_consumption',
         dispatchPeakStart: 16,
-        dispatchPeakEnd: 21,
+        dispatchPeakEnd: 19,
         dispatchImportLimitKw: 3.0,
         segEnabled: false,
         segPreset: 'custom',
