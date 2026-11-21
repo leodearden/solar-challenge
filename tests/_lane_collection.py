@@ -7,8 +7,8 @@ every test under tests/, the lane-only suites included, under a mark expression.
 
 A test reads the collection of one of the repository's offline-lane jobs from
 tests/conftest.py's fixture lane_job_collection, as the first example below
-does, rather than calling collect_lane_job itself; the fixture's docstring gives
-the premises each caller carries.
+does, rather than calling collect_lane_job or collect_lane_job_once itself; the
+fixture's docstring gives the premises each caller carries.
 
 Usage::
 
@@ -41,6 +41,9 @@ Usage::
     slow_node_ids = [test.node_id for test in every_slow_test]
 """
 
+import functools
+import hashlib
+import json
 import shlex
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -50,7 +53,10 @@ import pytest
 
 from tests._collect_only import CollectedTest, Collection, collect
 from tests._command_runner import ShellCommand
+from tests._once_per_run import built_once
 from tests._orchestrator_config import lane_job_steps
+
+_COLLECTION_FILE = "collection.json"
 
 
 def collect_lane_job(project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]) -> Collection:
@@ -69,6 +75,38 @@ def collect_lane_job(project_root: Path, name: str, *, env_for: Callable[[str], 
         f"the {suite.label} {suite.command!r} failed to collect\n{collection.describe()}"
     )
     return collection
+
+
+def collect_lane_job_once(
+    collections: Path, project_root: Path, name: str, *, env_for: Callable[[str], Mapping[str, str]]
+) -> Collection:
+    """Return collect_lane_job's collection of the lane job *name* of *project_root*, collected only by the first call given *collections*.
+
+    *collections* is a directory shared by every caller, in this process or
+    another, that should share one collection of each job. The first call
+    collects the job itself before it returns, so in the environment and
+    offline window of the test that made it, and saves the collection under
+    *collections*. Every call loads it back from there. collect_lane_job
+    reports a failure by assert, an Exception, so built_once records it and
+    every later call raises it rather than collecting again.
+    """
+    directory = built_once(
+        collections / _collection_directory_name(project_root, name),
+        functools.partial(_collect_lane_job_into, project_root=project_root, name=name, env_for=env_for),
+    )
+    return Collection.load(directory / _COLLECTION_FILE)
+
+
+def _collection_directory_name(project_root: Path, name: str) -> str:
+    """Return the name of the directory holding the collection of *project_root*'s lane job *name*: a digest telling both apart, a valid file name whatever the job's name holds."""
+    return hashlib.sha256(json.dumps([str(project_root), name]).encode()).hexdigest()
+
+
+def _collect_lane_job_into(
+    directory: Path, *, project_root: Path, name: str, env_for: Callable[[str], Mapping[str, str]]
+) -> None:
+    """Save collect_lane_job's collection of the lane job *name* of *project_root* in *directory*."""
+    collect_lane_job(project_root, name, env_for=env_for).save(directory / _COLLECTION_FILE)
 
 
 def default_collection_node_ids_under(project_root: Path, suite: str) -> tuple[str, ...]:

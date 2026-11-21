@@ -7,7 +7,7 @@ PYTHONPATH kept; that what it collected is read from the collection-report plugi
 its output, with each test's file and parametrize id and each module or directory skipped at
 collection with its skip reason, and a run that wrote no report never reads as an empty collection,
 nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
-command's stderr, and the output of a command that failed before pytest started.
+command's stderr, and the output of a command that failed before pytest started; and that a collection saved and loaded back is the same collection.
 That no process a hung collect started outlives it is pinned with every other probe's,
 in tests/unit/test_command_runner_helper.py::test_no_process_a_hung_probe_started_outlives_it.
 """
@@ -24,6 +24,7 @@ from tests._collect_only import (
     COLLECTION_REPORT_PLUGIN,
     COLLECTION_REPORT_PLUGIN_DIRECTORY,
     CollectedTest,
+    Collection,
     collect,
     uv_is_installed,
 )
@@ -286,6 +287,66 @@ def test_a_collection_that_selects_nothing_is_an_empty_report_not_a_missing_one(
     assert collection.returncode == pytest.ExitCode.NO_TESTS_COLLECTED, collection.describe()
     assert collection.report is not None, collection.describe()
     assert collection.report.tests == (), collection.describe()
+
+
+def test_a_saved_collection_loads_back_equal_to_the_collection_and_described_alike(tmp_path: Path) -> None:
+    """Its report holds a parametrised test, a test that is not, and a module skipped at collection, so each kind of entry makes the round trip."""
+    project = tmp_path / "project"
+    (project / "sub").mkdir(parents=True)
+    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (project / "sub" / "test_ids.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+
+            @pytest.mark.parametrize("minor", ["3.12", "3.13"])
+            def test_matrix(minor):
+                raise AssertionError("collect-only ran test_matrix")
+
+
+            def test_plain():
+                raise AssertionError("collect-only ran test_plain")
+            """
+        ),
+        encoding="utf-8",
+    )
+    (project / "test_needs_absent.py").write_text(
+        _SKIP_AT_IMPORT + _module_of_failing_tests("test_case"), encoding="utf-8"
+    )
+
+    collection = collect(ShellCommand(_PYTEST, project))
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    report = collection.written_report()
+    assert any(test.parametrize_id is not None for test in report.tests), (
+        "the collection holds no parametrised test, so the round trip cannot show its parametrize id survives\n"
+        f"{collection.describe()}"
+    )
+    assert report.skipped_collectors, (
+        f"the collection skipped no collector, so the round trip cannot show a skip survives\n{collection.describe()}"
+    )
+
+    collection.save(tmp_path / "collection.json")
+    loaded = Collection.load(tmp_path / "collection.json")
+
+    assert loaded == collection
+    assert loaded.describe() == collection.describe()
+
+
+def test_a_saved_collection_that_wrote_no_report_loads_back_without_one_and_reading_its_node_ids_still_fails_naming_its_command(
+    tmp_path: Path,
+) -> None:
+    """So a run that wrote no report never reads as an empty collection once loaded back, either."""
+    collection = collect(ShellCommand("false", tmp_path))
+    collection.save(tmp_path / "collection.json")
+
+    loaded = Collection.load(tmp_path / "collection.json")
+
+    assert loaded == collection
+    assert loaded.report is None, loaded.describe()
+    with pytest.raises(AssertionError) as failure:
+        loaded.node_ids()
+    assert repr("false") in str(failure.value)
 
 
 def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_last_session(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ command's exit code and output.
 
 Usage::
 
-    from tests._collect_only import collect, requires_uv, run_collect_only, uv_is_installed
+    from tests._collect_only import Collection, collect, requires_uv, run_collect_only, uv_is_installed
     from tests._command_runner import ShellCommand, describe_outcome
     from tests._orchestrator_config import lane_job_steps, verify_command
 
@@ -22,6 +22,9 @@ Usage::
     node_ids = collection.node_ids()
     outside = collection.node_ids_outside("tests/e2e")
     skipped = collection.written_report().skipped_collectors
+
+    collection.save(path)
+    assert Collection.load(path) == collection
 
     collection = collect(ShellCommand("python -m pytest tests/unit", project_root), "-k", "battery")
 
@@ -38,6 +41,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from subprocess import CompletedProcess
+from typing import Any, Self
 
 import pytest
 
@@ -113,6 +117,29 @@ class Collection:
         """Describe how the run ended, for an assertion message."""
         return describe_outcome(self)
 
+    def save(self, path: Path) -> None:
+        """Write this collection to *path* as one JSON file, for load to read back; its report is in the collection-report plugin's format."""
+        saved = {
+            "command": self.command,
+            "returncode": self.returncode,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "report": None if self.report is None else _report_as_json(self.report),
+        }
+        path.write_text(json.dumps(saved), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> Self:
+        """Return the collection save wrote to *path*."""
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        return cls(
+            command=saved["command"],
+            returncode=saved["returncode"],
+            stdout=saved["stdout"],
+            stderr=saved["stderr"],
+            report=None if saved["report"] is None else _report_from_json(saved["report"]),
+        )
+
 
 def collect(
     command: Command,
@@ -151,8 +178,12 @@ def collect(
 
 
 def _read_report(path: Path) -> CollectionReport:
-    """Read the collection-report plugin's report at *path*; the plugin's module docstring defines its format."""
-    report = json.loads(path.read_text(encoding="utf-8"))
+    """Read the collection-report plugin's report at *path*."""
+    return _report_from_json(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _report_from_json(report: Mapping[str, Any]) -> CollectionReport:
+    """Return the CollectionReport that *report*, parsed JSON in the collection-report plugin's format, holds; the plugin's module docstring defines that format."""
     return CollectionReport(
         tests=tuple(
             CollectedTest(
@@ -162,6 +193,17 @@ def _read_report(path: Path) -> CollectionReport:
         ),
         skipped_collectors=tuple((skipped["node_id"], skipped["reason"]) for skipped in report["skipped_collectors"]),
     )
+
+
+def _report_as_json(report: CollectionReport) -> dict[str, Any]:
+    """Return *report* as JSON-ready data in the collection-report plugin's format, which _report_from_json reads back."""
+    return {
+        "tests": [
+            {"node_id": test.node_id, "path": test.path.as_posix(), "parametrize_id": test.parametrize_id}
+            for test in report.tests
+        ],
+        "skipped_collectors": [{"node_id": node_id, "reason": reason} for node_id, reason in report.skipped_collectors],
+    }
 
 
 def run_collect_only(
