@@ -66,6 +66,9 @@ def e2e_conftest(project_root: Path) -> Path:
     return project_root / "tests" / "e2e" / "conftest.py"
 
 
+_CALLERS_FROZEN_LOCK_MODE = ("UV_FROZEN", "1")
+
+
 @pytest.fixture
 def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set UV_FROZEN=1 in this process's environment for the test, as the shell running the suite may.
@@ -74,7 +77,7 @@ def callers_uv_lock_mode_is_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
     lane job's command as the lane runs it must pass whatever lock mode its own
     shell has: inherited, UV_FROZEN makes that command's `uv run --locked` an error.
     """
-    monkeypatch.setenv("UV_FROZEN", "1")
+    monkeypatch.setenv(*_CALLERS_FROZEN_LOCK_MODE)
 
 
 @pytest.fixture
@@ -110,9 +113,10 @@ def _assert_asked_with_uv_installed_and_its_lock_mode_frozen(job: str) -> None:
         "the one that collects the job, which runs it through uv, so each carries @requires_uv, which skips it where "
         "uv is not installed"
     )
-    frozen = os.environ.get("UV_FROZEN")
-    assert frozen == "1", (
-        f"a test asked lane_job_collection for the {job!r} lane job with UV_FROZEN={frozen!r}. Any test that asks may "
+    variable, frozen = _CALLERS_FROZEN_LOCK_MODE
+    lock_mode = os.environ.get(variable)
+    assert lock_mode == frozen, (
+        f"a test asked lane_job_collection for the {job!r} lane job with {variable}={lock_mode!r}. Any test that asks may "
         "be the one that collects the job for its session, so each carries "
         '@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen"); else the job is collected without the uv lock '
         "mode a caller's shell may freeze, and every later test that asks reads that collection"
