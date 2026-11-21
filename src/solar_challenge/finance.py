@@ -685,13 +685,13 @@ def _require_finite_and_not_negative(figures: Mapping[str, float]) -> None:
         raise _ledger_refusal("L1", "every figure is finite and >= 0", refused)
 
 
-def _require_own_use_within_demand(own_use_name: str, own_use_kwh: float, demand_kwh: float) -> None:
-    """L2: refuse an own-use, named *own_use_name*, above the demand, naming both."""
+def _require_own_use_within_demand(own_use_name: str, own_use_kwh: float, demand_name: str, demand_kwh: float) -> None:
+    """L2: refuse an own-use above the demand, naming both by *own_use_name* and *demand_name*."""
     if not _at_most(own_use_kwh, demand_kwh):
         raise _ledger_refusal(
             "L2",
-            "a home cannot own-use more than it demands, so own-use <= demand_kwh",
-            {own_use_name: own_use_kwh, "demand_kwh": demand_kwh},
+            f"a home cannot own-use more than it demands, so {own_use_name} <= {demand_name}",
+            {own_use_name: own_use_kwh, demand_name: demand_kwh},
         )
 
 
@@ -782,7 +782,7 @@ class HomeLedger:
                 "seg_income_gbp": self.seg_income_gbp,
             }
         )
-        _require_own_use_within_demand("own_use_kwh", self.own_use_kwh, self.demand_kwh)
+        _require_own_use_within_demand("own_use_kwh", self.own_use_kwh, "demand_kwh", self.demand_kwh)
         _require_own_use_and_import_cover_demand(
             demand_kwh=self.demand_kwh, own_use_kwh=self.own_use_kwh, import_kwh=self.import_kwh
         )
@@ -847,7 +847,7 @@ def home_ledger(
     """
     if simulated_own_use_kwh is not None:
         _require_finite_and_not_negative({"simulated_own_use_kwh": simulated_own_use_kwh})
-        _require_own_use_within_demand("simulated_own_use_kwh", simulated_own_use_kwh, physics.demand_kwh)
+        _require_own_use_within_demand("simulated_own_use_kwh", simulated_own_use_kwh, "demand_kwh", physics.demand_kwh)
     override = finance.self_consumption_override
     if override is None:
         basis = OwnUseBasis.SIMULATED
@@ -1088,6 +1088,9 @@ def householder_bill(
     truth.
 
     Responsibilities of this wrapper (not in bill()):
+      * Refuse an *annual_self_consumption_kwh* outside 0 to the summary's
+        ``total_demand_kwh``, on either basis, with the ledger's L1 and L2
+        checks, before it is scaled, so the refusal names the caller's figure.
       * Build the home's ledger, ``home_ledger(annualise(summary), finance,
         simulated_own_use_kwh=annual_self_consumption_kwh × scale)``: the
         window's totals × its annualisation_scale, year_days / days, own-use
@@ -1126,14 +1129,20 @@ def householder_bill(
 
     Raises:
         ValueError: If the summary has no window; if *simulation_days* is not
-            the summary's own day count (INV-8), naming both; if the summary
-            has no pricing, naming calculate_summary (:func:`_summary_pricing`);
-            or if the home's ledger refuses its year, naming the invariant and
-            its values: an own-use that is negative or not finite (L1), above
-            the demand (L2), or that with the import does not cover the demand
-            (L3), on either basis (:class:`HomeLedger`).
+            the summary's own day count (INV-8), naming both; if
+            *annual_self_consumption_kwh* is negative or not finite (L1), or
+            above the summary's ``total_demand_kwh`` (L2), on either basis,
+            naming the invariant and the figures as passed; if the summary has
+            no pricing, naming calculate_summary (:func:`_summary_pricing`); or
+            if the home's ledger refuses its year, naming the invariant and its
+            values, such as an own-use that with the import does not cover the
+            demand (L3) (:class:`HomeLedger`).
     """
     _require_summary_days(simulation_days, summary)
+    _require_finite_and_not_negative({"annual_self_consumption_kwh": annual_self_consumption_kwh})
+    _require_own_use_within_demand(
+        "annual_self_consumption_kwh", annual_self_consumption_kwh, "total_demand_kwh", summary.total_demand_kwh
+    )
     physics = annualise(summary)
     ledger = home_ledger(physics, finance, simulated_own_use_kwh=annual_self_consumption_kwh * physics.scale)
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh

@@ -140,10 +140,10 @@ windows, and names their one window in `BillDistribution.annualised_from`
 (`tests/unit/test_finance_window.py`).
 
 `annual_self_consumption_kwh` is the home's own-use over the window, so it lies from 0
-to the window's demand.  `home_ledger` refuses one outside, with or without the
-override, raising `ValueError` naming the invariant it breaks and the figure scaled to
-the window's year: L1 for an own-use below 0 or not finite, L2 for one above the
-demand
+to the window's demand.  `householder_bill` refuses one outside, with or without the
+override, before it scales it, raising `ValueError` naming the ledger's invariant it
+breaks and the figures as passed, whatever the window's length: L1 for an own-use
+below 0 or not finite, L2 for one above the summary's `total_demand_kwh`, naming both
 (`tests/unit/test_finance_window.py::TestOwnUseWithinTheWindowsDemand`).  With no
 override, the ledger's L3 also refuses an own-use that with the import falls short of
 the demand, such as a window's own-use beside a year's import, naming the demand, the
@@ -269,7 +269,8 @@ A `HomeLedger` is one home's year as the CBS bills it, in kWh and £ a year:
 ledger's import is at retail and when its own-use is capped, and the projection stays
 silent.  `householder_bill` passes `simulated_own_use_kwh`, its caller's own-use scaled
 to the window's year, and `home_ledger` checks it against L1 and L2 with or without
-the override, naming it, though the override does not read it.
+the override, naming it, though the override does not read it; `householder_bill` has
+already checked its caller's figure over the window against the same two (§3, above).
 
 Construction refuses a ledger whose balances break, in this order, with a `ValueError`
 naming the invariant and every value in it:
