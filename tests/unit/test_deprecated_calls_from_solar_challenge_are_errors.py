@@ -25,6 +25,8 @@ import warnings
 
 import pytest
 
+from tests._collect_only import COLLECTION_REPORT_PLUGIN
+
 _DEPRECATION = "a call a later release removes"
 
 
@@ -33,12 +35,13 @@ _DEPRECATION = "a call a later release removes"
     [
         pytest.param("solar_challenge.weather", "weather.py", id="solar_challenge"),
         pytest.param("tests._synthetic_weather", "_synthetic_weather.py", id="tests"),
+        pytest.param(COLLECTION_REPORT_PLUGIN, f"{COLLECTION_REPORT_PLUGIN}.py", id="collection-report-plugin"),
     ],
 )
 def test_a_deprecation_warning_attributed_to_solar_challenge_or_its_test_suite_fails_the_test_that_meets_it(
     module: str, filename: str
 ) -> None:
-    """A DeprecationWarning attributed to a solar_challenge module, or to one of the suite's own tests.* modules, is raised as an error, not recorded."""
+    """A DeprecationWarning attributed to a solar_challenge module, or to one of the suite's own modules, tests.* or the collection-report plugin, is raised as an error, not recorded."""
     with pytest.raises(DeprecationWarning, match=_DEPRECATION):
         warnings.warn_explicit(_DEPRECATION, DeprecationWarning, filename, 1, module=module)
 
