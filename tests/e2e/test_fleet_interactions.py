@@ -1,24 +1,22 @@
 """End-to-end tests for Fleet Simulation page interactions (/simulate/fleet).
 
 Verifies slider-input sync, that each distribution editor's controls are named
-for their card, that choosing a card's distribution type shows that type's
-inputs and hides the previous type's, and that a card's last row loses its
-remove button, even when the browser renders no animation frame, that each
-card's row buttons change only its rows, that a
-card's last row has no remove button, that each card's row inputs show their
-whole value at desktop widths, that each card offers Fixed Value, which Run
-sends as the card's capacity, that Import YAML, clicked or reached with Tab
-and pressed with Enter or Space, shows each distribution in its card, that a
-fleet exported as YAML imports back into the form, that Load Preset offers
-only presets that load, fills the form and names the preset's settings the
-form has no control for, that Load Preset of a fleet of identical homes shows
-each card at Fixed Value, that a preset without a period runs the page's
-default period, that the page shows why an imported file cannot load or a
-fleet cannot export, that the simulation name reaches the submitted run, that
-Run shows why the page refuses a form, submits nothing and leaves the results
-link of an earlier run in place, that the period selector offers presets and a
-custom date range, and that each economy tariff type shows and keeps its own
-rates, Run submitting the selected type's.
+for their card, that a card shows only its chosen distribution type's inputs
+and no remove button on its last row, even when the browser renders no
+animation frame, that each card's row buttons change only its rows, that each
+card's row inputs show their whole value at desktop widths, that each card
+offers Fixed Value, which Run sends as the card's capacity, that Import YAML,
+clicked or reached with Tab and pressed with Enter or Space, shows each
+distribution in its card, that a fleet exported as YAML imports back into the
+form, that Load Preset offers only presets that load, fills the form and names
+the preset's settings the form has no control for, that Load Preset of a fleet
+of identical homes shows each card at Fixed Value, that a preset without a
+period runs the page's default period, that the page shows why an imported
+file cannot load or a fleet cannot export, that the simulation name reaches
+the submitted run, that Run shows why the page refuses a form, submits nothing
+and leaves the results link of an earlier run in place, that the period
+selector offers presets and a custom date range, and that each economy tariff
+type shows and keeps its own rates, Run submitting the selected type's.
 """
 
 import re
@@ -28,6 +26,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
+from tests.e2e._animation_frames import withhold_animation_frames
 from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._economy_rates import (
     ECONOMY_7_AT_THE_TYPED_PEAK_RATE,
@@ -122,11 +121,6 @@ def test_fleet_distribution_parameters_are_named_for_their_card(
         ).to_have_count(1)
 
 
-def _withhold_animation_frames(page: Page) -> None:
-    """From the next page load on, the page's requestAnimationFrame never calls back, while its timers and microtasks still run. That is what headless Chromium did on the loaded offline-lane host: no frame for 5-8 s, while setTimeout(0) fired within 2 ms."""
-    page.add_init_script("window.requestAnimationFrame = () => 0;")
-
-
 # Each Distribution Type option's label, to the one parameter caption only that type shows; named exactly, "Min" is not normal's "Min (clamp)".
 TYPE_SIGNATURE_FIELDS = {
     "Fixed Value": "Fixed Value",
@@ -142,7 +136,7 @@ def test_fleet_distribution_type_select_switches_its_cards_parameters_while_the_
     page: Page, live_server: str, card: str
 ) -> None:
     """Choosing a card's distribution type shows that type's inputs and hides the previous type's, even when the browser renders no animation frame."""
-    _withhold_animation_frames(page)
+    withhold_animation_frames(page)
     page.goto(live_server + "/simulate/fleet")
     type_select = page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True)
 
@@ -221,7 +215,8 @@ def test_fleet_distribution_row_buttons_change_only_their_cards_rows(
 def test_fleet_distribution_last_row_has_no_remove_button(
     page: Page, live_server: str, card: str, distribution_type: str, row_field: str
 ) -> None:
-    """Removing a card's first row until one is left leaves that row without a remove button."""
+    """Removing a card's first row until one is left leaves that row without a remove button, even when the browser renders no animation frame."""
+    withhold_animation_frames(page)
     page.goto(live_server + "/simulate/fleet")
     page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
         label=distribution_type
@@ -234,28 +229,6 @@ def test_fleet_distribution_last_row_has_no_remove_button(
         expect(_value_inputs(page, card)).to_have_count(remaining)
 
     expect(remove_buttons).to_have_count(0)
-
-
-@pytest.mark.parametrize(("distribution_type", "row_field"), ROW_LIST_TYPES)
-@pytest.mark.parametrize("card", DISTRIBUTION_CARDS)
-def test_fleet_distribution_last_row_loses_its_remove_button_while_the_browser_renders_no_frame(
-    page: Page, live_server: str, card: str, distribution_type: str, row_field: str
-) -> None:
-    """A card's last row loses its remove button even when the browser renders no animation frame."""
-    _withhold_animation_frames(page)
-    page.goto(live_server + "/simulate/fleet")
-    page.get_by_role("combobox", name=f"{card} Distribution Type", exact=True).select_option(
-        label=distribution_type
-    )
-    _expect_only_row_list_shown(page, card, row_field)
-
-    for remaining in range(_value_inputs(page, card).count() - 1, 0, -1):
-        page.get_by_role("button", name=f"{card} Remove Row 1", exact=True).click()
-        expect(_value_inputs(page, card)).to_have_count(remaining)
-
-    expect(
-        page.get_by_role("button", name=re.compile(rf"^{card} Remove Row \d+$"))
-    ).to_have_count(0)
 
 
 # -- Distribution editor row inputs show their whole values ----------------
