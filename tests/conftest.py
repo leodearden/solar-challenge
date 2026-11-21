@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import os
 import sys
 import tempfile
@@ -16,10 +15,10 @@ import pytest
 from pathlib import Path
 
 from tests._collect_only import Collection, uv_is_installed
-from tests._computed_once import ComputedOnce
 from tests._heap_freeze import freeze_the_heap_once
-from tests._lane_collection import collect_lane_job
+from tests._lane_collection import collect_lane_job_once
 from tests._network_guard import refusing_network
+from tests._once_per_run import run_shared_path
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
@@ -117,28 +116,33 @@ def _assert_asked_with_uv_installed_and_its_lock_mode_frozen(job: str) -> None:
     lock_mode = os.environ.get(variable)
     assert lock_mode == frozen, (
         f"a test asked lane_job_collection for the {job!r} lane job with {variable}={lock_mode!r}. Any test that asks may "
-        "be the one that collects the job for its session, so each carries "
+        "be the one that collects the job for its run, so each carries "
         '@pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen"); else the job is collected without the uv lock '
         "mode a caller's shell may freeze, and every later test that asks reads that collection"
     )
 
 
 @pytest.fixture(scope="session")
-def lane_job_collection(shared_uv_probe_environments: SharedUvEnvironments) -> Callable[[Path, str], Collection]:
+def lane_job_collection(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+    shared_uv_probe_environments: SharedUvEnvironments,
+) -> Callable[[Path, str], Collection]:
     """Return each offline-lane job's collection as the lane runs it, read as lane_job_collection(project_root, name).
 
-    The first test of the session, so of an xdist worker, that asks for a job
-    collects it through collect_lane_job, in the environment
-    shared_uv_probe_environments builds at that call, and later tests read that
-    collection. Any test that asks may be the one that collects, so each
-    carries @requires_uv and @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen"),
-    and every call, not only the one that collects, asserts both hold.
+    The first test of the run, on whichever worker, that asks for a job collects
+    it through collect_lane_job_once, in the environment its worker's
+    shared_uv_probe_environments builds at that call, inside that test's
+    offline window. Every later test, on any worker, reads that collection. Any
+    test that asks may be the one that collects, so each carries @requires_uv
+    and @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen"), and every
+    call, not only the one that collects, first asserts both hold.
     """
-    collections = ComputedOnce(functools.partial(collect_lane_job, env_for=shared_uv_probe_environments.for_command))
+    collections = run_shared_path(request, tmp_path_factory, "lane-job-collections")
 
     def collected(project_root: Path, name: str) -> Collection:
         _assert_asked_with_uv_installed_and_its_lock_mode_frozen(name)
-        return collections(project_root, name)
+        return collect_lane_job_once(collections, project_root, name, env_for=shared_uv_probe_environments.for_command)
 
     return collected
 
