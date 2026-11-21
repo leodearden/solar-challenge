@@ -182,9 +182,14 @@
         });
     }
 
-    /** Whether container is shown: laid out with a width, as no container in a hidden tab is. */
+    /**
+     * Whether container is shown: laid out with a width, as no container in a
+     * hidden tab is. Its layout width ignores transforms, as the
+     * ResizeObservers that report a container shown do, so a transform cannot
+     * leave a container waiting for a report that never comes.
+     */
     function _isShown(container) {
-        return container.getBoundingClientRect().width > 0;
+        return container.offsetWidth > 0;
     }
 
     /**
@@ -247,11 +252,6 @@
         });
     }
 
-    /** Draws container now if shown, else the first time it is shown (AC3). */
-    function _drawWhenShown(container) {
-        _drawOnceShown.request(container);
-    }
-
     /**
      * Forgets container, which has left the page, so the renderer keeps
      * nothing of it: it is no longer drawn, fitted or recoloured, and its
@@ -269,32 +269,41 @@
     }
 
     /**
-     * Follows the page's containers after load: each container added is drawn
-     * once shown, each given another figure is redrawn, by _draw's
-     * Plotly.newPlot, once shown, and each removed is forgotten. A container
-     * whose figure was removed is left as it is. Nodes added to or removed
-     * from inside a container are its chart's own drawing, such as a hover
-     * label, so they are skipped.
+     * Follows the page's containers after load, acting once on each container
+     * a batch of mutations names, however many of its records name it: each
+     * removed is forgotten, and then each added or given another figure, if
+     * still on the page, is drawn, by _draw's Plotly.newPlot, once shown. A
+     * container whose figure was removed is left as it is. Nodes added to or
+     * removed from inside a container are its chart's own drawing, such as a
+     * hover label, so they are skipped.
      */
     var _followContainersAfterLoad = new MutationObserver(function (records) {
+        var removed = new Set();
+        var toDraw = new Set();
         records.forEach(function (record) {
             if (record.type === 'attributes') {
                 if (record.target.hasAttribute('data-chart-figure')) {
-                    _drawWhenShown(record.target);
+                    toDraw.add(record.target);
                 }
             } else if (!record.target.closest('[data-chart-figure]')) {
                 record.removedNodes.forEach(function (node) {
-                    _forEachContainerIn(node, _forget);
+                    _forEachContainerIn(node, removed.add.bind(removed));
                 });
                 record.addedNodes.forEach(function (node) {
-                    _forEachContainerIn(node, _drawWhenShown);
+                    _forEachContainerIn(node, toDraw.add.bind(toDraw));
                 });
+            }
+        });
+        removed.forEach(_forget);
+        toDraw.forEach(function (container) {
+            if (container.isConnected) {
+                _drawOnceShown.request(container);
             }
         });
     });
 
     document.addEventListener('DOMContentLoaded', function () {
-        _forEachContainerIn(document.body, _drawWhenShown);
+        _forEachContainerIn(document.body, _drawOnceShown.request);
         _followContainersAfterLoad.observe(document.body, {
             childList: true, subtree: true, attributes: true, attributeFilter: ['data-chart-figure'],
         });
