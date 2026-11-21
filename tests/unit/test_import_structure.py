@@ -149,6 +149,8 @@ class _GrammarRule(Enum):
         "scenario_blocks <- fleet_distribution <- config, at any scope"
     )
     NO_RUNNER = "C2: no grammar module imports a simulate_* runner"
+    ONE_SPELLING = "C3: a grammar name is imported from the module that defines it"
+    NO_PRIVATE_NAME = "C3: no module imports an underscore name from a grammar module"
 
 
 @dataclass(frozen=True)
@@ -206,12 +208,15 @@ def _import_statements(
         )
 
 
-def _import_sites(src_dir: Path) -> list[_ImportSite]:
-    """Return a site for every module an import statement of the package under *src_dir* imports, at any scope, in path then line order."""
+def _import_sites(
+    src_dir: Path, package: str = _PACKAGE, root: Path | None = None
+) -> list[_ImportSite]:
+    """Return a site for every module an import statement of *package*, the top-level package under *src_dir*, imports, at any scope, in path then line order; each path is relative to *root*, *src_dir*'s parent unless given."""
+    paths_from = src_dir.parent if root is None else root
     sites: list[_ImportSite] = []
-    for source in sorted((src_dir / _PACKAGE).rglob("*.py")):
+    for source in sorted((src_dir / package).rglob("*.py")):
         importer = _module_name(source, src_dir)
-        path = source.relative_to(src_dir.parent)
+        path = source.relative_to(paths_from)
         tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
         for node, in_function in _import_statements(tree):
             imports = _imported_modules_and_names(node, importer, source.name == "__init__.py")
@@ -292,6 +297,78 @@ def _grammar_layering_violations(sites: Iterable[_ImportSite]) -> list[_GrammarV
     return sorted(violations, key=lambda violation: (violation.path, violation.line))
 
 
+def _src_and_test_import_sites(root: Path) -> list[_ImportSite]:
+    """Return the import sites of the package under root/src and of the tests package under *root*, at any scope, each path relative to *root*."""
+    return [*_import_sites(root / "src"), *_import_sites(root, package=_TEST_SUITE, root=root)]
+
+
+def _bound_names(target: ast.expr) -> Iterator[str]:
+    """Yield each name an assignment to *target* binds, unpacking tuples, lists and starred targets."""
+    if isinstance(target, ast.Name):
+        yield target.id
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for element in target.elts:
+            yield from _bound_names(element)
+    elif isinstance(target, ast.Starred):
+        yield from _bound_names(target.value)
+
+
+def _top_level_names(statements: Iterable[ast.stmt]) -> Iterator[str]:
+    """Yield each name *statements* bind by def, async def, class, assignment or annotated assignment, those of an if's or a try's bodies included, never by an import."""
+    for statement in statements:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            yield statement.name
+        elif isinstance(statement, ast.Assign):
+            for target in statement.targets:
+                yield from _bound_names(target)
+        elif isinstance(statement, ast.AnnAssign):
+            yield from _bound_names(statement.target)
+        elif isinstance(statement, ast.If):
+            yield from _top_level_names([*statement.body, *statement.orelse])
+        elif isinstance(statement, ast.Try):
+            handled = [line for handler in statement.handlers for line in handler.body]
+            yield from _top_level_names(
+                [*statement.body, *handled, *statement.orelse, *statement.finalbody]
+            )
+
+
+def _defined_names(source: str) -> frozenset[str]:
+    """Return the names the module whose text is *source* defines at top level, as _top_level_names reads them."""
+    return frozenset(_top_level_names(ast.parse(source).body))
+
+
+def _definers(src_dir: Path) -> Mapping[str, tuple[str, ...]]:
+    """Return, for each name a module of the package under *src_dir* defines, the modules that define it, in path order."""
+    definers: dict[str, list[str]] = {}
+    for source in sorted((src_dir / _PACKAGE).rglob("*.py")):
+        module = _module_name(source, src_dir)
+        for name in _defined_names(source.read_text(encoding="utf-8")):
+            definers.setdefault(name, []).append(module)
+    return {name: tuple(modules) for name, modules in definers.items()}
+
+
+def _one_spelling_violations(sites: Iterable[_ImportSite], src_dir: Path) -> list[_GrammarViolation]:
+    """Return, in path then line order, each name the *sites* import from a grammar module that is an underscore name, or that the module does not define, as the package under *src_dir* defines its names."""
+    definers = _definers(src_dir)
+    violations: list[_GrammarViolation] = []
+    for site in sites:
+        if site.imported not in _GRAMMAR_MODULES:
+            continue
+        for name in site.names:
+            imports = f"{site.importer} imports {name} from {site.imported}"
+            defined_by = definers.get(name, ())
+            if name.startswith("_"):
+                rule, detail = _GrammarRule.NO_PRIVATE_NAME, imports
+            elif site.imported in defined_by:
+                continue
+            elif defined_by:
+                rule, detail = _GrammarRule.ONE_SPELLING, f"{imports}, which {' and '.join(defined_by)} defines"
+            else:
+                rule, detail = _GrammarRule.ONE_SPELLING, f"{imports}, and no module of the package defines it"
+            violations.append(_GrammarViolation(site.path, site.line, rule, name, detail))
+    return sorted(violations, key=lambda violation: (violation.path, violation.line))
+
+
 def _unlisted(
     found: Iterable[_ImportSite], allowed: Collection[tuple[str, str]]
 ) -> list[_ImportSite]:
@@ -311,6 +388,12 @@ def _stale(
 def real_tree_imports() -> tuple[_ImportSite, ...]:
     """The import sites of src/solar_challenge, at any scope, scanned once for every real-tree test."""
     return tuple(_import_sites(_SRC_DIR))
+
+
+@pytest.fixture(scope="module")
+def real_tree_src_and_test_imports() -> tuple[_ImportSite, ...]:
+    """The import sites of src/solar_challenge and of tests, at any scope, scanned once for the one-spelling tests."""
+    return tuple(_src_and_test_import_sites(REPOSITORY_ROOT))
 
 
 def test_every_function_local_package_import_is_allowed(
@@ -515,6 +598,49 @@ def test_the_scan_reads_the_imports_of_every_grammar_module(
         "test_the_scenario_grammar_imports_in_one_direction_and_imports_no_runner checks "
         "nothing of it. If a module was renamed or moved, update _GRAMMAR_STRATA with it, and "
         "docs/prds/scenario-grammar-partition.md §4.1"
+    )
+
+
+def test_every_grammar_import_names_a_public_name_its_module_defines(
+    real_tree_src_and_test_imports: tuple[_ImportSite, ...],
+) -> None:
+    """Every name src/solar_challenge and tests import from a grammar module, at any scope, is a public name that module defines."""
+    found = _one_spelling_violations(real_tree_src_and_test_imports, _SRC_DIR)
+
+    violations = "\n".join(str(violation) for violation in found)
+    assert not found, (
+        "these import statements of src/solar_challenge and tests import a grammar name from a "
+        f"module that does not define it, or an underscore name from a grammar module:\n{violations}\n"
+        "Import each name from the module the report names as defining it: no grammar module "
+        "re-exports a name or keeps a shim for one that moved (docs/prds/scenario-grammar-partition.md "
+        "§3 decision 4, §4.2 C3). mypy --strict refuses such an import in src, since implicit "
+        "re-export is off, but tests are not type-checked, so this test reads both. An underscore "
+        "name is private to its module: if another module needs it, make it public in the module "
+        "that defines it (decision 3)"
+    )
+
+
+def test_the_one_spelling_scan_reads_grammar_imports_in_src_and_tests(
+    real_tree_src_and_test_imports: tuple[_ImportSite, ...],
+) -> None:
+    """The one-spelling scan reads a from-import of each grammar module in src and in tests, so its rule cannot pass by reading none."""
+    read = {
+        (site.path.parts[0], site.imported)
+        for site in real_tree_src_and_test_imports
+        if site.imported in _GRAMMAR_MODULES and site.names
+    }
+
+    unread = [
+        f"{module} in {tree}"
+        for module in _GRAMMAR_MODULES
+        for tree in ("src", _TEST_SUITE)
+        if (tree, module) not in read
+    ]
+    assert not unread, (
+        f"the scan read no from-import of {', '.join(unread)}, so "
+        "test_every_grammar_import_names_a_public_name_its_module_defines checks nothing of it. "
+        "If the scan no longer finds src/solar_challenge or tests, point _src_and_test_import_sites "
+        "at them; if a grammar module was renamed, update _GRAMMAR_STRATA"
     )
 
 
