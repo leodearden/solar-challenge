@@ -2,12 +2,13 @@
 """The surface form of a public name: the text that pins what its callers rely on.
 
 A surface form reads the same on every Python minor that requires-python admits, which
-inspect's own rendering does not. surface_form spells a name's form. member_forms spells
-the forms of the public members a class's own body defines or declares. named_classes
-gives the classes those forms name, and signature_closure the classes of a package that
-some names' forms name, directly or through another such class. member_forms reads class
-bodies, so undeclared_attributes and unset_attributes check the attributes a class
-declares against those its own __init__ and __post_init__ set on self.
+inspect's own rendering does not. surface_form spells a name's form, and
+is_frozen_dataclass says whether a class's form is a frozen dataclass's. member_forms
+spells the forms of the public members a class's own body defines or declares.
+named_classes gives the classes those forms name, and signature_closure the classes of a
+package that some names' forms name, directly or through another such class. member_forms
+reads class bodies, so undeclared_attributes and unset_attributes check the attributes a
+class declares against those its own __init__ and __post_init__ set on self.
 
 tests/unit/surface_forms_helper/ pins each function's rules, one rule per test; its
 __init__.py says which module holds which. This module reads signatures through
@@ -367,6 +368,11 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
         - _defaulted_fields(cls)
         - _fields_read_from_the_tuple(cls)
     )
+
+
+def is_frozen_dataclass(cls: type) -> bool:
+    """Whether *cls* is a dataclass the decorator recorded as frozen, for *cls* or for the base it inherits the record from, as dataclass_parameter reads it: the frozen that surface_form(cls) spells in its kind."""
+    return dataclasses.is_dataclass(cls) and dataclass_parameter(cls, "frozen")
 
 
 class _Spelling(str):
