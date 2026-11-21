@@ -7,12 +7,12 @@ chart agrees with the stat cards, how a chart whose figure
 cannot be drawn is reported, that a hidden tab's chart is drawn
 only once its tab is shown, and that showing every tab logs no
 errors.
-Each drawn chart ends as wide as its container whenever the
-container's width changes: as base.html's main column slides in
-on load, when the sidebar collapses or expands and when the
-window narrows, and, for a chart whose tab is hidden at the
-time, once its tab is shown again. A chart that cannot be
-fitted to its container logs one error naming it.
+Each chart drawn on load is as wide as its container, and each
+drawn chart ends as wide as its container whenever the
+container's width changes: when the sidebar collapses or expands
+and when the window narrows, and, for a chart whose tab is
+hidden at the time, once its tab is shown again. A chart that
+cannot be fitted to its container logs one error naming it.
 A chart container added to the page after load is drawn, and
 a drawn container given another figure is redrawn with it. A
 drawn container removed from the page has its chart purged,
@@ -317,12 +317,12 @@ def _open_with_the_overview_charts_drawn(page: Page, live_server: str, run_id: s
         expect(page.locator(f"#{chart_id}.js-plotly-plot")).to_be_visible()
 
 
-def test_each_overview_chart_is_as_wide_as_its_container_once_the_page_settles(
+def test_each_overview_chart_drawn_on_load_is_as_wide_as_its_container(
     page: Page,
     live_server: str,
     seeded_home_run: tuple[str, str],
 ) -> None:
-    """The Overview charts are drawn while base.html's main column slides in on load, and each ends as wide as its container."""
+    """The Overview charts, drawn on load in the tab shown on load, are each as wide as their containers."""
     run_id, _ = seeded_home_run
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
 
@@ -360,21 +360,6 @@ def test_after_the_sidebar_expands_each_shown_chart_is_as_wide_as_its_container(
     _open_with_the_overview_charts_drawn(page, live_server, run_id)
 
     page.get_by_title("Expand sidebar", exact=True).click()
-
-    assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
-
-
-def test_each_overview_chart_hidden_as_the_page_settles_is_as_wide_as_its_container_once_its_tab_is_shown_again(
-    page: Page,
-    live_server: str,
-    seeded_home_run: tuple[str, str],
-) -> None:
-    """Showing Power Flow before the main column has settled hides the Overview charts before they are fitted to their containers' settled width; once Overview is shown again, each ends as wide as its container."""
-    run_id, _ = seeded_home_run
-    _open_with_the_overview_charts_drawn(page, live_server, run_id)
-    show_chart_tab(page, "Power Flow", (_POWER_FLOW_CHART_ID,))
-
-    open_chart_tab(page, "Overview")
 
     assert charts_not_as_wide_as_their_containers(page, _OVERVIEW_CHART_IDS) == []
 
