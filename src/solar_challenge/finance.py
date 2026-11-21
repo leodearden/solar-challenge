@@ -1781,7 +1781,8 @@ def project_multi_year(
     caller.
 
     Args:
-        scenario: ScenarioConfig with homes, period, and location.
+        scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
+            them, are simulated over ``simulation_bounds()``.
         finance: FinanceConfig with ``asset_life_years`` and other parameters.
         error_target_pct: Target maximum PCHIP midpoint deviation (%) before
             adaptive bisection stops.
@@ -1831,17 +1832,7 @@ def project_multi_year(
             the export.
     """
     homes = scenario.simulated_homes()
-
-    # ---- Derive timezone from scenario location (or first home) -------------
-    tz: str
-    if scenario.location is not None:
-        tz = scenario.location.timezone
-    else:
-        tz = homes[0].location.timezone
-
-    # ---- Derive start/end timestamps from scenario period -------------------
-    start_ts = scenario.period.get_start_timestamp(tz)
-    end_ts = scenario.period.get_end_timestamp(tz)
+    start_ts, end_ts = scenario.simulation_bounds()
 
     grid_services_model = grid_services_model_of(finance)
     # Each age's grid-services income can raise a warning in the same words as every
@@ -2455,7 +2446,8 @@ def solve_cost_recovery_rate(
       ``rate_clamped_zero``; else → ``infeasible_above_retail``.
 
     Args:
-        scenario: ScenarioConfig with homes, period, and location.
+        scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
+            them, are simulated over ``simulation_bounds()``.
         finance: FinanceConfig with cost-recovery fields populated.
         simulate: Optional inject for testing.  Defaults to None → lazy import
             ``fleet.default_runner().simulate``.  Signature must match
@@ -2475,15 +2467,7 @@ def solve_cost_recovery_rate(
         simulate = default_runner().simulate
 
     homes = scenario.simulated_homes()
-
-    tz: str
-    if scenario.location is not None:
-        tz = scenario.location.timezone
-    else:
-        tz = homes[0].location.timezone
-
-    start_ts = scenario.period.get_start_timestamp(tz)
-    end_ts = scenario.period.get_end_timestamp(tz)
+    start_ts, end_ts = scenario.simulation_bounds()
 
     # ---- (1) Base curve at the configured r0 ---------------------------------
     r0 = finance.own_use_rate_pence_per_kwh
