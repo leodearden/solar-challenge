@@ -121,7 +121,7 @@ class Collection:
         """Write this collection to *path* as one JSON file, for load to read back; its report is in the collection-report plugin's format."""
         saved = {
             "command": self.command,
-            "returncode": int(self.returncode),
+            "returncode": self.returncode,
             "stdout": self.stdout,
             "stderr": self.stderr,
             "report": None if self.report is None else _report_as_json(self.report),
