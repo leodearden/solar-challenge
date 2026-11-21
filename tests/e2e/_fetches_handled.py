@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Record each fetch a page starts, and wait until the page has handled every one.
 
-A fetch is handled once it fails, or once the page has read its answer's body with arrayBuffer(), blob(), formData(),
-json() or text(). fetch() and those readers give the page promises chained on the browser's own, so the recorder
+A fetch is handled once it fails, or once the page has read its answer's body with arrayBuffer(), blob(), bytes(),
+formData(), json() or text(). fetch() and those readers give the page promises chained on the browser's own, so the recorder
 handles none of the page's promises, and a rejection the page leaves unhandled is still uncaught.
 
 The mark is set from a 0 ms timer queued from a 0 ms timer queued as the fetch fails or the body settles. The first
@@ -30,7 +30,7 @@ _RECORD_FETCHES_STARTED_AND_HANDLED = """(() => {
             (error) => { markHandledAfterTwoTimers(entry); throw error; },
         );
     };
-    for (const reader of ['arrayBuffer', 'blob', 'formData', 'json', 'text']) {
+    for (const reader of ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text']) {
         const originalRead = Response.prototype[reader];
         Response.prototype[reader] = function () {
             const entry = fetchOf.get(this);

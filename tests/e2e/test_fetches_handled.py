@@ -82,7 +82,7 @@ def test_an_error_logged_handling_an_answer_the_page_requested_as_alpine_started
     )
 
 
-@pytest.mark.parametrize("reader", ["arrayBuffer", "blob", "formData", "json", "text"])
+@pytest.mark.parametrize("reader", ["arrayBuffer", "blob", "bytes", "formData", "json", "text"])
 def test_a_fetch_is_handled_once_the_page_reads_its_body(page: Page, live_server: str, reader: str) -> None:
     """The dashboard starts no fetch of its own. formData() rejects on the presets' JSON body, which reads it all the same."""
     record_fetches_started_and_handled(page)
