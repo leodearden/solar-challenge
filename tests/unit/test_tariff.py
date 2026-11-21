@@ -1013,9 +1013,17 @@ class TestCalculateBill:
         )
         assert calculate_bill(energy, tariff) == pytest.approx(each_minute_at_its_rate, rel=1e-12)
 
-    def test_a_nan_energy_gives_a_nan_bill(self) -> None:
+    @pytest.mark.parametrize(
+        ("missing", "dtype"),
+        [
+            pytest.param(float("nan"), "float64", id="float64-nan"),
+            pytest.param(pd.NA, "Float64", id="nullable-float64-na"),
+            pytest.param(pd.NA, object, id="object-na"),
+        ],
+    )
+    def test_a_missing_energy_gives_a_nan_bill(self, missing: object, dtype: str | type) -> None:
         index = pd.date_range("2024-01-15", periods=3, freq="h")
-        energy = pd.Series([1.0, float("nan"), 2.0], index=index)
+        energy = pd.Series([1.0, missing, 2.0], index=index, dtype=dtype)
 
         assert math.isnan(calculate_bill(energy, TariffConfig.economy_7()))
 

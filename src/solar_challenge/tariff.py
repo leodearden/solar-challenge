@@ -406,7 +406,7 @@ def calculate_bill(
         tariff: Tariff configuration with rate periods
 
     Returns:
-        Total bill cost in £
+        Total bill cost in £, NaN if any energy is missing, as NaN or pd.NA
 
     Raises:
         ValueError: If energy_kwh doesn't have a DatetimeIndex
@@ -414,7 +414,8 @@ def calculate_bill(
     if not isinstance(energy_kwh.index, pd.DatetimeIndex):
         raise ValueError("energy_kwh must have a DatetimeIndex")
 
-    return float(np.sum(energy_kwh.to_numpy() * tariff.rates_for(energy_kwh.index)))
+    energy = energy_kwh.to_numpy(dtype=np.float64, na_value=np.nan)
+    return float(np.sum(energy * tariff.rates_for(energy_kwh.index)))
 
 
 def FlatRateTariff(rate_per_kwh: float, name: str = "") -> TariffConfig:
