@@ -39,3 +39,22 @@ def test_a_session_started_with_no_temp_root_named_keeps_its_temp_dirs_under_the
         f"root {project_temp_root(temp_dir)}, so its exit would delete the leftover dirs other runs keep in the root "
         "it shares with them"
     )
+
+
+def test_a_session_started_with_a_temp_root_named_keeps_its_temp_dirs_there(
+    pytester_under_root_conftest: pytest.Pytester, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir()
+    monkeypatch.setenv("TMPDIR", str(temp_dir))
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    monkeypatch.setenv("PYTEST_DEBUG_TEMPROOT", str(chosen))
+
+    basetemp = _basetemp_of_a_session(pytester_under_root_conftest)
+
+    assert basetemp.is_relative_to(chosen), (
+        f"a session started with PYTEST_DEBUG_TEMPROOT={chosen} kept its temp dirs in {basetemp}: the root that a "
+        "parent session or the caller named was overridden, so the child sessions a test starts would not share "
+        "their parent's root"
+    )
