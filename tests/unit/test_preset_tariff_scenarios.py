@@ -3,7 +3,7 @@
 
 A scenario that restates the preset's rates keeps charging them when PRESET_RATES moves; one
 that names only the preset follows the table. Each file's validity is
-tests/unit/test_cli_validate.py::test_every_committed_scenario_is_valid's check.
+tests/unit/test_cli_validate.py::TestValidateConfig::test_every_committed_scenario_is_valid's check.
 """
 
 from typing import Any
