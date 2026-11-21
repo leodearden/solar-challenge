@@ -13,8 +13,9 @@ each card at Fixed Value, that a preset without a period runs the page's
 default period, that the page shows why an imported file cannot load or a
 fleet cannot export, that the simulation name reaches the submitted run, that
 Run shows why the page refuses a form, submits nothing and leaves the results
-link of an earlier run in place, and that the period selector offers presets
-and a custom date range.
+link of an earlier run in place, that the period selector offers presets and a
+custom date range, and that each economy tariff type shows and keeps its own
+rates, Run submitting the selected type's.
 """
 
 import re
@@ -25,6 +26,10 @@ import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
 from tests.e2e._css_transitions import finish_the_css_transitions
+from tests.e2e._economy_rates import (
+    ECONOMY_7_AT_THE_TYPED_PEAK_RATE,
+    type_a_peak_rate_under_economy_7_then_visit_economy_10,
+)
 from tests.e2e._job_requests import a_job_state, job_state_frame
 
 
@@ -761,3 +766,24 @@ def test_fleet_period_selector_offers_presets_and_custom_range(
     page.get_by_role("radio", name="Custom range", exact=True).check()
     for boundary in ("Start Date", "End Date"):
         expect(page.get_by_label(boundary, exact=True)).to_be_visible()
+
+
+# -- Each economy type keeps its own rates ----------------------------------
+
+
+def test_each_economy_type_shows_and_keeps_its_own_rates(
+    page: Page, live_server: str, fleet_submissions: list[Any], page_errors: list[str]
+) -> None:
+    """A peak rate typed under Economy 7 is kept while Economy 10 shows its own rates, and Run submits the fleet with it."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("switch", name="Enable Tariff", exact=True).click()
+    type_a_peak_rate_under_economy_7_then_visit_economy_10(page)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+    with page.expect_event(
+        "requestfailed", lambda request: request.url.endswith("/api/simulate/fleet-from-distribution")
+    ):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (sent,) = fleet_submissions
+    assert sent["tariff"] == ECONOMY_7_AT_THE_TYPED_PEAK_RATE
