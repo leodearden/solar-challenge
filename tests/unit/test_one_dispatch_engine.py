@@ -3,7 +3,8 @@
 
 Row 13: TOUOptimizedStrategy on the tariff's clock, run through simulate_timestep, reproduces simulate_timestep_tou's
 flows within 1e-9 kWh in every minute, on §2.2's morning-drain Economy 10 day and on the bristol-arbitrage home's
-sunless 2024-01-15. Row 14: a home's dispatch is refused by build_dispatch_strategy's refusals.
+sunless 2024-01-15. A home asking for tou_optimized runs that route, and simulate_timestep_tou delegates to it, so
+both equal it exactly (§5.5). Row 14: a home's dispatch is refused by build_dispatch_strategy's refusals.
 """
 
 import dataclasses
@@ -54,6 +55,23 @@ class TestTheMorningDrainDay:
             if abs(routed_value - inline_value) > _KWH_PER_MINUTE
         ] == []
         assert sum(flow.grid_charge for flow in routed) > 0
+
+
+class TestTheInlineNameDelegates:
+    """simulate_timestep_tou is one call of TOUOptimizedStrategy on the tariff's clock through simulate_timestep, so it cannot drift from it (§6 decision 6)."""
+
+    @pytest.mark.parametrize("soc_kwh", _MORNING_DRAIN_SOCS)
+    def test_its_morning_drain_day_is_the_strategy_route_s_exactly(self, soc_kwh: float) -> None:
+        inline = inline_day(morning_drain_battery(soc_kwh), morning_drain_demand_kw, _E10)
+        routed = strategy_day(
+            morning_drain_battery(soc_kwh), morning_drain_demand_kw, TOUOptimizedStrategy(tariff=_E10), _E10
+        )
+
+        assert [
+            (minute, inline_flow, routed_flow)
+            for minute, inline_flow, routed_flow in zip(MINUTES, inline, routed, strict=True)
+            if inline_flow != routed_flow
+        ] == []
 
 
 _BRISTOL_ARBITRAGE_FLOWS = (
