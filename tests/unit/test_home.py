@@ -1309,7 +1309,8 @@ class TestSummaryStatistics:
             pytest.param(8.0, 6.0, id="more-than-self-consumed"),
             pytest.param(math.nextafter(60.0, math.inf), 60.0, id="by-one-ulp"),
             pytest.param(math.inf, 60.0, id="infinite"),
-            pytest.param(float("nan"), 60.0, id="not-a-number"),
+            pytest.param(float("nan"), 60.0, id="discharge-not-a-number"),
+            pytest.param(8.0, float("nan"), id="self-consumption-not-a-number"),
         ],
     )
     def test_a_discharge_above_its_self_consumption_is_refused_naming_both_totals(
