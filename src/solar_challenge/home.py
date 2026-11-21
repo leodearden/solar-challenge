@@ -380,7 +380,7 @@ class SimulationResults:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 

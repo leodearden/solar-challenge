@@ -124,7 +124,7 @@ def calculate_shortfall(
     return result
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 

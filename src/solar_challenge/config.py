@@ -515,7 +515,7 @@ def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig)
             _count_bounds(spec, path)
 
 
-@dataclass
+@dataclass(frozen=True)
 class SimulationPeriod:
     """Defines the time period for a simulation.
 
@@ -546,7 +546,7 @@ class SimulationPeriod:
         return ts
 
 
-@dataclass
+@dataclass(frozen=True)
 class OutputConfig:
     """Configuration for simulation output.
 
