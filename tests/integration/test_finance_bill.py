@@ -269,8 +269,14 @@ class TestHouseholderBillPhysics:
         assert breakdown.import_cost_gbp > 0.0
 
     def test_physics_no_import_no_fallback(self) -> None:
-        """When import kWh is genuinely zero, no fallback and no warning fire."""
+        """When import kWh is genuinely zero, no fallback and no warning fire.
+
+        With no import, the home's own-use is its whole 3,400 kWh demand, and its
+        generation that own-use plus the 1,800 kWh it exports.
+        """
         summary = _make_summary(
+            total_generation_kwh=5200.0,
+            total_self_consumption_kwh=3400.0,
             total_grid_import_kwh=0.0,
             total_import_cost_gbp=0.0,
             net_cost_gbp=0.0,
@@ -604,8 +610,8 @@ class TestOverrideExactValues:
         """Override path with zero physics export: total_outlay must still be positive.
 
         CR3: The householder has no SEG field; the export-rate fallback logic
-        is irrelevant to the householder bill (it moved to _seg_export_income_gbp
-        for CBS-revenue use).  Assert the bill computes without error and yields
+        is irrelevant to the householder bill (SEG income is the CBS's, on the
+        home's ledger).  Assert the bill computes without error and yields
         a sensible total_outlay.
         """
         # Summary where physics export is zero (no surplus)

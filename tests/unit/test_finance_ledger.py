@@ -9,7 +9,8 @@ L1 every figure finite and >= 0, L2 own-use within demand, L3 own-use and import
 covering demand, and L4, on the override's basis, own-use + import = demand and
 own-use + export = generation, each to a relative 1e-12.  ``home_ledger`` is the
 one assembly of a ledger from a home's AnnualPhysics, holding every pricing rule
-of the PRD's table and warning about nothing.
+of the PRD's table and warning about nothing.  householder_bill and
+project_multi_year read the same ledger of a home (B5).
 """
 from __future__ import annotations
 
@@ -26,10 +27,20 @@ from solar_challenge.finance import (
     HomeLedger,
     OwnUseBasis,
     annualise,
+    basis_c_own_use_kwh,
     home_ledger,
+    householder_bill,
+    project_multi_year,
 )
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
-from tests._finance_builders import make_sim_results, make_window
+from tests._finance_builders import (
+    make_fleet_results_of,
+    make_home_config,
+    make_scenario_and_finance,
+    make_scenario_of,
+    make_sim_results,
+    make_window,
+)
 
 _PRICING = RunPricing(0.30, 4.1)
 """A run priced by a 30 p/kWh import tariff whose export earns 4.1 p/kWh of SEG."""
@@ -360,3 +371,71 @@ class TestHomeLedgerPricingRules:
             home_ledger(_physics(), _finance(override), simulated_own_use_kwh=own_use_kwh)
 
         assert repr(own_use_kwh) in str(refusal.value)
+
+
+_HOMES_TOTALS = (
+    {"self_kwh": 2000.0, "export_kwh": 1500.0, "import_kwh": 1000.0},
+    {"self_kwh": 1500.0, "export_kwh": 2500.0, "import_kwh": 1800.0},
+    {"self_kwh": 2400.0, "export_kwh": 2100.0, "import_kwh": 1000.0},
+)
+"""Three homes' 30-day totals; at an override of 0.7 none is capped at its demand."""
+
+
+class TestTheBillAndTheProjectionReadOneLedger:
+    """B5: a home's bill and the projection's age 0 read the one ledger home_ledger assembles for it."""
+
+    @pytest.mark.parametrize("override", [None, 0.7], ids=["simulated", "override"])
+    def test_the_bill_and_the_projection_bill_each_homes_ledger_own_use(self, override: float | None) -> None:
+        results = [make_sim_results(days=30, pricing=_PRICING, **totals) for totals in _HOMES_TOTALS]
+        summaries = [calculate_summary(r) for r in results]
+        _, finance = make_scenario_and_finance()
+        finance = dataclasses.replace(finance, self_consumption_override=override)
+        scenario = make_scenario_of([make_home_config() for _ in results])
+        rate = finance.own_use_rate_pence_per_kwh
+
+        ledgers = [home_ledger(annualise(s), finance) for s in summaries]
+        curve = project_multi_year(
+            scenario, finance, simulate=lambda fc, s, e: make_fleet_results_of(results, homes=fc.homes)
+        )
+
+        for s, ledger in zip(summaries, ledgers):
+            bill = householder_bill(s, basis_c_own_use_kwh(s), finance, s.simulation_days)
+            assert bill.own_use_payment_gbp / rate * 100 == pytest.approx(ledger.own_use_kwh, rel=1e-12)
+        assert curve.points[0].fleet_billed_own_use_kwh == pytest.approx(
+            sum(ledger.own_use_kwh for ledger in ledgers), rel=1e-12
+        )
+
+    def test_under_the_override_the_projection_reports_the_export_its_seg_income_is_priced_on(self) -> None:
+        results = [make_sim_results(days=30, pricing=_PRICING, **totals) for totals in _HOMES_TOTALS]
+        _, finance = make_scenario_and_finance()
+        finance = dataclasses.replace(finance, self_consumption_override=0.7)
+        scenario = make_scenario_of([make_home_config() for _ in results])
+        ledgers = [home_ledger(annualise(calculate_summary(r)), finance) for r in results]
+
+        year_0 = project_multi_year(
+            scenario, finance, simulate=lambda fc, s, e: make_fleet_results_of(results, homes=fc.homes)
+        ).points[0]
+
+        assert year_0.fleet_export_kwh == pytest.approx(sum(ledger.export_kwh for ledger in ledgers), rel=1e-12)
+        assert year_0.fleet_import_kwh == pytest.approx(sum(ledger.import_kwh for ledger in ledgers), rel=1e-12)
+        own_use_revenue_gbp = finance.own_use_rate_pence_per_kwh * year_0.fleet_billed_own_use_kwh / 100
+        seg_revenue_gbp = year_0.fleet_revenue_gbp - own_use_revenue_gbp
+        assert seg_revenue_gbp / year_0.fleet_export_kwh * 100 == pytest.approx(4.1)
+
+
+class TestHouseholderBillRefusesALedgerThatBreaksL3:
+    """householder_bill bills the home's ledger, so an own-use that, with the import, falls short of the demand is refused."""
+
+    def test_an_own_use_that_with_the_import_does_not_cover_the_demand_is_refused(self) -> None:
+        summary = calculate_summary(
+            make_sim_results(self_kwh=2200.0, export_kwh=1800.0, import_kwh=1200.0, pricing=_PRICING)
+        )
+        physics = annualise(summary)
+        _, finance = make_scenario_and_finance()
+
+        with pytest.raises(ValueError, match="L3") as refusal:
+            householder_bill(summary, 100.0, finance, summary.simulation_days)
+
+        assert _named("demand_kwh", physics.demand_kwh) in str(refusal.value)
+        assert _named("own_use_kwh", 100.0 * physics.scale) in str(refusal.value)
+        assert _named("import_kwh", physics.import_kwh) in str(refusal.value)

@@ -132,10 +132,24 @@ class TestProjectMultiYearRequiresASimulator:
             project_multi_year(scenario, finance)
 
 
+_L1_REFUSAL = "HomeLedger L1: every figure is finite and >= 0: got "
+"""How a home's ledger begins its refusal of a figure that is negative or not finite."""
+
+_INFINITE_IMPORT_REFUSED = "demand_kwh=inf, own_use_kwh=nan, import_kwh=inf, import_cost_gbp=inf"
+"""What an untariffed home's ledger refuses for an infinite import.
+
+Demand counts the import, so it is infinite too; basis-C own-use, demand −
+import, is inf − inf = NaN; and the import is priced at the retail rate.
+"""
+
+
 class TestProjectMultiYearRefusesNonFiniteAggregates:
-    """A simulated age whose fleet aggregates are not all finite is refused,
-    naming the age and each such aggregate with its value, unless a home's
-    summary has already refused its totals.
+    """A simulated age whose figures are not all finite is refused, unless a home's summary has already refused its totals.
+
+    A home's own-use, export or import is refused by the home's ledger (L1),
+    naming each figure it refuses.  Every other aggregate, a home's battery
+    discharge among them, is refused by the age's own check, which names the
+    age and each such aggregate with its value.
     """
 
     @pytest.mark.parametrize("asset_life_years", [1, 25])
@@ -144,26 +158,22 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         [
             pytest.param(
                 {"self_kwh": math.inf},
-                "fleet_billed_own_use=inf, fleet_revenue=inf",
+                "generation_kwh=inf, demand_kwh=inf, own_use_kwh=inf",
                 id="infinite-self-consumption",
             ),
-            pytest.param({"export_kwh": math.inf}, "fleet_exp=inf", id="infinite-export"),
-            pytest.param(
-                {"import_kwh": math.inf},
-                "fleet_billed_own_use=nan, fleet_imp=inf, fleet_revenue=nan",
-                id="infinite-import-makes-own-use-nan",
-            ),
+            pytest.param({"export_kwh": math.inf}, "generation_kwh=inf, export_kwh=inf", id="infinite-export"),
+            pytest.param({"import_kwh": math.inf}, _INFINITE_IMPORT_REFUSED, id="infinite-import-makes-own-use-nan"),
         ],
     )
-    def test_a_non_finite_aggregate_at_a_seed_age_is_refused_naming_the_age_and_each_aggregate(
+    def test_a_non_finite_ledger_figure_at_a_seed_age_is_refused_by_the_homes_ledger(
         self, asset_life_years: int, totals: dict[str, float], refused: str
     ) -> None:
         """A fleet whose totals are infinite at every age is refused at age 0, the first seed.
 
-        With demand and import both infinite, basis-C own-use (demand − import)
-        is inf − inf = NaN, so the NaN arises in the projection's own arithmetic.
-        An infinite export leaves revenue finite: the scenario sets no SEG rate
-        and the fleet's export revenue is £0, so its SEG income is £0.
+        Generation counts the self-consumption and the export, and demand the
+        self-consumption and the import, so each is infinite beside them.  An
+        infinite export leaves the SEG income finite: the fleet's results record
+        no SEG rate, so it earns £0.
         """
         scenario, finance = make_scenario_and_finance(asset_life_years=asset_life_years)
 
@@ -172,16 +182,15 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
                 scenario, finance, simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, **totals)
             )
 
-        assert str(exc_info.value) == (
-            f"every aggregate of the fleet simulated at age 0 must be finite: got {refused}"
-        )
+        assert str(exc_info.value) == _L1_REFUSAL + refused
 
-    def test_a_non_finite_aggregate_at_a_bisection_trial_age_is_refused_naming_that_age(self) -> None:
+    def test_a_non_finite_ledger_figure_at_a_bisection_trial_age_is_refused(self) -> None:
         """A fleet that is finite at the seeds 0, 12 and 24 is refused at age 6, the adaptive loop's first trial.
 
         A NaN trial's deviation is never above the error target, and max() drops
         it from the error estimate, so unrefused it would vanish from the bisection
-        and the projection would return a curve built from the finite seeds.
+        and the projection would return a curve built from the finite seeds.  Only
+        age 6's fleet imports without bound, so its homes' ledgers are what refuse.
         """
         scenario, finance = make_scenario_and_finance(asset_life_years=25)
 
@@ -192,10 +201,7 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         with pytest.raises(ValueError) as exc_info:
             project_multi_year(scenario, finance, simulate=simulate)
 
-        assert str(exc_info.value) == (
-            "every aggregate of the fleet simulated at age 6 must be finite: "
-            "got fleet_billed_own_use=nan, fleet_imp=inf, fleet_revenue=nan"
-        )
+        assert str(exc_info.value) == _L1_REFUSAL + _INFINITE_IMPORT_REFUSED
 
     @pytest.mark.parametrize("asset_life_years", [1, 25])
     def test_a_non_finite_battery_discharge_is_refused_naming_its_home(self, asset_life_years: int) -> None:
