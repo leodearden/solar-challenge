@@ -12,11 +12,13 @@ a terminal, Rich routes sys.stdout writes through it to stderr.
 messages go unprinted and progress displays stay off, while products,
 warnings and errors print as ever.
 
-`finance run` and `optimize configs` read their fleet simulator from Click's
-context object, ctx.ensure_object(CliFleetSimulator).simulate:
-fleet.default_runner().simulate, unless whoever invokes the CLI passes another
-CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they build
-a fleet.FleetRunner from their --workers and --sequential.
+What one invocation runs with travels as Click's context object, a
+CliInvocation. `finance run` and `optimize configs` simulate with its runner,
+invocation(ctx).runner. The root callback builds that runner from --workers and
+--sequential, as root_invocation says, unless whoever invokes the CLI passes a
+CliInvocation as obj; the root's options leave that invocation's runner as it
+is. `fleet run` and `fleet sweep` still build their own fleet.FleetRunner from
+their --workers and --sequential.
 """
 
 import dataclasses
@@ -45,7 +47,7 @@ from solar_challenge.battery import has_battery
 from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetSimulate, FleetSummary, default_runner
+from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import parse_location
 from solar_challenge.scenario_writer import location_block
@@ -95,10 +97,35 @@ def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
 
 
 @dataclasses.dataclass(frozen=True)
-class CliFleetSimulator:
-    """Fleet simulator a command reads from Click's context object."""
+class CliInvocation:
+    """What one CLI invocation runs with, on Click's context object.
 
-    simulate: FleetSimulate = dataclasses.field(default_factory=lambda: default_runner().simulate)
+    Attributes:
+        runner: Runs every simulation of the commands that simulate
+        quiet: Whether the invocation's status messages and progress go unprinted
+    """
+
+    runner: FleetSimulator = dataclasses.field(default_factory=default_runner)
+    quiet: bool = False
+
+
+def invocation(ctx: typer.Context) -> CliInvocation:
+    """The CliInvocation ctx's command runs with: its context object, else a default CliInvocation()."""
+    return ctx.ensure_object(CliInvocation)
+
+
+def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential: bool) -> CliInvocation:
+    """The invocation the root's options make of obj: with none, default_runner() with parallel=not sequential and max_workers=workers, quiet as quiet says; an injected CliInvocation keeps its runner, and is quiet if it already is or quiet says so.
+
+    Raises:
+        TypeError: obj is neither None nor a CliInvocation, naming CliInvocation and obj's type
+    """
+    if obj is None:
+        runner = dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
+        return CliInvocation(runner=runner, quiet=quiet)
+    if isinstance(obj, CliInvocation):
+        return dataclasses.replace(obj, quiet=obj.quiet or quiet)
+    raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
 
 
 def load_config_with_overrides(

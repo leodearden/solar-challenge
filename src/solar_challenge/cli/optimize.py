@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
+from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
 from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
@@ -346,7 +346,7 @@ def configs(
 
     # ---- Run sweep ----------------------------------------------------------
     print_info("Solving cost-recovery rates…")
-    simulate = ctx.ensure_object(CliFleetSimulator).simulate
+    simulate = invocation(ctx).runner.simulate
     ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.

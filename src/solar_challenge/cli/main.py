@@ -13,7 +13,7 @@ from solar_challenge.cli import home as home_app
 from solar_challenge.cli import optimize as optimize_app
 from solar_challenge.cli import validate as validate_app
 from solar_challenge.cli import web as web_app
-from solar_challenge.cli.utils import console, set_status_quiet
+from solar_challenge.cli.utils import console, root_invocation, set_status_quiet
 
 # Create main app
 app = typer.Typer(
@@ -41,6 +41,7 @@ def version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: Annotated[
         Optional[bool],
         typer.Option(
@@ -57,12 +58,28 @@ def main(
             help="Suppress status messages and progress; results, warnings and errors still print",
         ),
     ] = False,
+    workers: Annotated[
+        Optional[int],
+        typer.Option(
+            "--workers", "-w",
+            min=1,
+            help="Worker processes each fleet simulation runs its homes on; by default as many as its homes, up to the CPU count",
+        ),
+    ] = None,
+    sequential: Annotated[
+        bool,
+        typer.Option(
+            "--sequential",
+            help="Simulate homes one after another in this process, not in a process pool",
+        ),
+    ] = False,
 ) -> None:
     """Solar Challenge Energy Flow Simulator.
 
     A CLI tool for simulating domestic PV and battery systems in the UK.
     """
-    set_status_quiet(quiet)
+    ctx.obj = root_invocation(ctx.obj, quiet=quiet, workers=workers, sequential=sequential)
+    set_status_quiet(ctx.obj.quiet)
 
 
 if __name__ == "__main__":
