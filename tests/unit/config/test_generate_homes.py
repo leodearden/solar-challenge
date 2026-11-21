@@ -327,6 +327,26 @@ class TestGenerateHomesFromDistribution:
         ]
 
 
+class TestPerHomeLoadSeeds:
+    """generate_homes_from_distribution gives home i's load the fleet's seed plus i, and leaves every load unseeded when the fleet has no seed."""
+
+    @staticmethod
+    def _load_seeds(fleet_seed: Optional[int]) -> list[Optional[int]]:
+        config = FleetDistributionConfig(
+            n_homes=3,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            load=ComponentDistribution({"annual_consumption_kwh": 3400.0}),
+            seed=fleet_seed,
+        )
+        return [home.load_config.seed for home in generate_homes_from_distribution(config, Location.bristol())]
+
+    def test_a_seeded_fleet_gives_home_i_the_load_seed_fleet_seed_plus_i(self) -> None:
+        assert self._load_seeds(7) == [7, 8, 9]
+
+    def test_an_unseeded_fleet_leaves_every_load_unseeded(self) -> None:
+        assert self._load_seeds(None) == [None, None, None]
+
+
 class TestAResizedFleetIsRefusedAsConstructionRefusesIt:
     """A fleet resized with dataclasses.replace is refused when its shuffled pool no longer holds one value per home."""
 

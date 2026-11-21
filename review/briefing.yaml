@@ -163,6 +163,8 @@ conventions:
 
   - rule: >
       Fleet simulations must be reproducible from a single seed: per-home seed = fleet_seed + index,
+      computed only by fleet.fleet_home_seed, which FleetConfig.create_uniform,
+      FleetConfig.create_heterogeneous and config.generate_homes_from_distribution call,
       and stochastic draws run only inside load.py's RNG hand-off, which seeds both generators
       (numpy and the stdlib `random` module) from the call's seed (fresh entropy when unset) and
       restores them.
@@ -180,6 +182,10 @@ conventions:
       and tests/unit/web_jobs/test_seeded_jobs_reproduce.py pins it for two seeded dashboard jobs
       run together. tests/unit/test_global_rng_calls.py pins that the hand-off is the only src code
       calling a module-level function of random or numpy.random.
+      tests/unit/test_fleet.py::TestFleetHomeSeeds pins the rule and both constructors' per-home
+      seeds, tests/unit/config/test_generate_homes.py::TestPerHomeLoadSeeds the scenario fleets',
+      and tests/unit/test_load_reproducibility.py::test_a_seeded_fleet_s_homes_each_repeat_their_profile_and_differ_from_each_other
+      that a seeded fleet's homes each repeat their profile and differ from each other.
 
   - rule: >
       mypy --strict must pass; list a package in pyproject.toml's ignore_missing_imports override
