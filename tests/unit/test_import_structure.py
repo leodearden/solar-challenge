@@ -53,7 +53,9 @@ _TEST_SUITE = "tests"
 _WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
 _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
 _SCENARIO_BLOCKS = f"{_PACKAGE}.scenario_blocks"
-_GRAMMAR_ABOVE_SCENARIO_BLOCKS = (f"{_PACKAGE}.fleet_distribution", f"{_PACKAGE}.config")
+_FLEET_DISTRIBUTION = f"{_PACKAGE}.fleet_distribution"
+_CONFIG = f"{_PACKAGE}.config"
+_GRAMMAR_ABOVE_SCENARIO_BLOCKS = (_FLEET_DISTRIBUTION, _CONFIG)
 _SRC_DIR = REPOSITORY_ROOT / "src"
 
 
@@ -398,16 +400,25 @@ def test_the_scan_reads_the_imports_of_web_field_tree(
     )
 
 
-def test_importing_scenario_blocks_loads_neither_fleet_distribution_nor_config() -> None:
-    """A fresh interpreter that imports scenario_blocks has loaded neither fleet_distribution nor config, so no module it imports reaches up into the grammar that reads its blocks."""
-    loaded = package_modules_loaded_by_importing(_SCENARIO_BLOCKS)
+@pytest.mark.parametrize(
+    ("module", "grammar_above"),
+    [
+        pytest.param(_SCENARIO_BLOCKS, (_FLEET_DISTRIBUTION, _CONFIG), id="scenario_blocks"),
+        pytest.param(_FLEET_DISTRIBUTION, (_CONFIG,), id="fleet_distribution"),
+    ],
+)
+def test_importing_a_grammar_module_loads_no_grammar_module_above_it(
+    module: str, grammar_above: tuple[str, ...]
+) -> None:
+    """A fresh interpreter that imports a grammar module has loaded no grammar module above it, so no module it imports reaches up into the grammar that reads through it."""
+    loaded = package_modules_loaded_by_importing(module)
 
-    grammar_loaded = sorted(set(_GRAMMAR_ABOVE_SCENARIO_BLOCKS) & loaded)
+    grammar_loaded = sorted(set(grammar_above) & loaded)
     assert not grammar_loaded, (
-        f"importing {_SCENARIO_BLOCKS} in a fresh interpreter loads {', '.join(grammar_loaded)}. "
+        f"importing {module} in a fresh interpreter loads {', '.join(grammar_loaded)}. "
         "The scenario grammar imports in one direction, errors, number_fields <- scenario_blocks "
         "<- fleet_distribution <- config (docs/prds/scenario-grammar-partition.md §4.2 C1), so "
-        "neither scenario_blocks nor any module it imports may load the grammar above it"
+        f"neither {module} nor any module it imports may load the grammar above it"
     )
 
 
