@@ -36,7 +36,8 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.seg import SEGTariff
 from tests._factories import make_config_result, make_cost_recovery_solution
-from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_scenario
+from tests._finance_builders import make_fleet_results, make_scenario
+from tests._fleet_simulate_stand_in import answering_with
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +293,7 @@ class TestRunSweepSingleConfig:
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         configs = enumerate_configs(
             scenario,
@@ -368,8 +369,8 @@ class TestRunSweepSingleConfig:
 
         sweep_scenario = configs[0][1]
 
-        # The fake simulate always returns fr (ignores fleet config including age)
-        # so the age-0 baseline simulation returns the same fr.
+        # The fake simulate answers every fleet, whatever its age, with fr's
+        # per-home results, so the age-0 baseline simulation bills fr's results.
         # Compute expected baseline_outlay directly using sweep_scenario's tariff.
         summaries = [
             calculate_summary(r, seg_tariff_pence_per_kwh=sweep_scenario.seg_tariff_pence_per_kwh)
@@ -392,10 +393,11 @@ class TestRunSweepSingleConfig:
         baseline outlay fleet included, though no home carries a tariff of its own."""
         _, _, fr, _, configs = self._setup()
         tariffs_simulated: list[SEGTariff | None] = []
+        answer = answering_with(fr)
 
         def recording_simulate(fc: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
             tariffs_simulated.extend(home.seg_tariff for home in fc.homes)
-            return make_fleet_results_of(fr.per_home_results, homes=fc.homes)
+            return answer(fc, start, end)
 
         run_sweep(configs, simulate=recording_simulate)
 
@@ -510,7 +512,7 @@ class TestRunSweepMultiConfig:
         # Combine: 1 feasible + 1 infeasible
         all_configs = feasible_configs + infeasible_configs
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         ranked = run_sweep(all_configs, simulate=simulate)
 
@@ -527,7 +529,7 @@ class TestRunSweepMultiConfig:
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         configs = enumerate_configs(
             scenario, pv_kwp=[3.0, 5.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -552,7 +554,7 @@ class TestRetainedCashFloorOverride:
         finance = _interior_finance(n_homes)
         scenario = _make_scenario(n_homes=n_homes, finance=finance)
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         configs = enumerate_configs(
             scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6]
@@ -628,7 +630,7 @@ class TestRunSweepGuards:
     def test_raises_value_error_on_empty_configs(self) -> None:
         """run_sweep raises ValueError when configs list is empty."""
         with pytest.raises(ValueError, match="(?i)empty|no config"):
-            run_sweep([], simulate=lambda fc, s, e: _make_fleet_results())
+            run_sweep([], simulate=answering_with(_make_fleet_results()))
 
     def test_raises_value_error_when_finance_is_none(self) -> None:
         """run_sweep raises ValueError when any scenario.finance is None."""
@@ -639,7 +641,7 @@ class TestRunSweepGuards:
         configs = [(pt, scenario_no_finance)]
 
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         with pytest.raises(ValueError, match="(?i)finance"):
             run_sweep(configs, simulate=simulate)
@@ -681,7 +683,7 @@ class TestRunSweepRateClampedZero:
             scenario, pv_kwp=[4.0], battery_kwh=[0.0], inverter_kw=[3.6]
         )
 
-        ranked = run_sweep(configs, simulate=lambda fc, s, e: fr)
+        ranked = run_sweep(configs, simulate=answering_with(fr))
 
         assert [r.binding for r in ranked.results] == ["rate_clamped_zero"]
         assert ranked.results[0].solved_own_use_rate_pence_per_kwh == pytest.approx(0.0)
@@ -721,7 +723,7 @@ class TestHeterogeneousFloorEcho:
         configs = configs_a + configs_b  # first config has floor_a
 
         fr = _make_fleet_results(n_homes=n_homes)
-        simulate = lambda fc, s, e: fr  # noqa: E731
+        simulate = answering_with(fr)
 
         ranked = run_sweep(configs, simulate=simulate)
 

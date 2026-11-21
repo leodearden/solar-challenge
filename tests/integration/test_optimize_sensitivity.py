@@ -3,9 +3,10 @@
 """Integration tests for sensitivity_panel (W3 task D/#67).
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected
-constant synthetic simulate stands in for the real fleet simulator.
-The synthetic homes, scenarios and simulation results come from
-tests/_finance_builders.py.
+synthetic simulate stands in for the real fleet simulator: it answers each fleet
+with constant energy, paired with that fleet's homes, through
+tests/_fleet_simulate_stand_in.py.  The synthetic homes, scenarios and
+simulation results come from tests/_finance_builders.py.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ import pytest
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.gridservices import GridServicesEventsConfig
 from solar_challenge.home import SimulationResults
 from solar_challenge.optimize import (
@@ -35,6 +36,7 @@ from tests._finance_builders import (
     make_scenario,
     make_sim_results,
 )
+from tests._fleet_simulate_stand_in import answering_with
 
 
 # ---------------------------------------------------------------------------
@@ -96,23 +98,7 @@ _CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
 )
 
 
-def _const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
-    """Constant simulate: same FleetResults singleton regardless of config.
-
-    Its five homes have no battery, so it suits tests that need no grid-services
-    income; battery capex still comes from the scenario's homes.  The singleton
-    is built once at module import time; args are intentionally ignored.
-    """
-    return _CONST_FLEET_RESULTS
-
-
-def _paired_const_simulate(fc, s, e):  # type: ignore[no-untyped-def]
-    """_CONST_FLEET_RESULTS' energy, paired with the config's own homes, as FleetRunner.simulate pairs them.
-
-    Grid-services income is priced from the simulated fleet's homes, so each
-    config's batteries earn it while every config simulates the same energy.
-    """
-    return make_fleet_results_of(_CONST_FLEET_RESULTS.per_home_results, homes=fc.homes)
+_paired_const_simulate: FleetSimulate = answering_with(_CONST_FLEET_RESULTS)
 
 
 def _home_seg_rates(homes) -> list[Optional[float]]:  # type: ignore[no-untyped-def]
@@ -314,7 +300,7 @@ class TestSensitivityPanelStructure:
             battery_kwh=[0.0, 6.0],
             inverter_kw=[3.6],
         )
-        return base_configs, _const_simulate
+        return base_configs, _paired_const_simulate
 
     def test_one_axis_length(self) -> None:
         """Panel has exactly one SensitivityAxis when one axis is swept."""
@@ -522,7 +508,7 @@ class TestRetainedFloorAxis:
         panel = sensitivity_panel(
             base_configs,
             axes={"retained_cash_floor_per_home_per_year_gbp": [floor_low, floor_high]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
 
         axis = panel.axes[0]
@@ -531,7 +517,7 @@ class TestRetainedFloorAxis:
 
         # Verify per-value results match direct run_sweep calls
         for i, v in enumerate([floor_low, floor_high]):
-            expected = run_sweep(base_configs, retained_cash_floor_gbp=v, simulate=_const_simulate)
+            expected = run_sweep(base_configs, retained_cash_floor_gbp=v, simulate=_paired_const_simulate)
             expected_ranking = tuple(r.config for r in expected.results)
             assert axis.rankings[i] == expected_ranking, (
                 f"rankings[{i}] mismatch at floor={v}: "
@@ -548,7 +534,7 @@ class TestRetainedFloorAxis:
         panel = sensitivity_panel(
             base_configs,
             axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
 
         axis = panel.axes[0]
@@ -563,7 +549,7 @@ class TestRetainedFloorAxis:
         panel = sensitivity_panel(
             base_configs,
             axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 9_999_999.0]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         # baseline_top is the config at panel_floor (None here) — run_sweep at baseline floor
         # The low-floor value (50.0) matches baseline_top (same floor) → 1 stable.
@@ -583,7 +569,7 @@ class TestRetainedFloorAxis:
         sensitivity_panel(
             base_configs,
             axes={"retained_cash_floor_per_home_per_year_gbp": [50.0, 500.0]},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
         after_floors = [
             sc.finance.retained_cash_floor_per_home_per_year_gbp  # type: ignore[union-attr]
@@ -661,7 +647,7 @@ class TestSensitivityPanelGuards:
             sensitivity_panel(
                 [],
                 axes={"battery_cost_per_kwh_gbp": [250.0]},
-                simulate=_const_simulate,
+                simulate=_paired_const_simulate,
             )
 
     def test_empty_axes_raises(self) -> None:
@@ -671,7 +657,7 @@ class TestSensitivityPanelGuards:
             sensitivity_panel(
                 base_configs,
                 axes={},
-                simulate=_const_simulate,
+                simulate=_paired_const_simulate,
             )
 
     def test_empty_axis_values_raises(self) -> None:
@@ -681,7 +667,7 @@ class TestSensitivityPanelGuards:
             sensitivity_panel(
                 base_configs,
                 axes={"battery_cost_per_kwh_gbp": []},
-                simulate=_const_simulate,
+                simulate=_paired_const_simulate,
             )
 
     def test_all_infeasible_baseline_raises(self) -> None:
@@ -693,7 +679,7 @@ class TestSensitivityPanelGuards:
                 base_configs,
                 axes={"battery_cost_per_kwh_gbp": [250.0]},
                 retained_cash_floor_gbp=9_999_999.0,
-                simulate=_const_simulate,
+                simulate=_paired_const_simulate,
             )
 
     def test_unknown_knob_propagates_value_error(self) -> None:
@@ -703,7 +689,7 @@ class TestSensitivityPanelGuards:
             sensitivity_panel(
                 base_configs,
                 axes={"completely_unknown_knob_xyz": [1.0, 2.0]},
-                simulate=_const_simulate,
+                simulate=_paired_const_simulate,
             )
 
     def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
@@ -732,48 +718,12 @@ def test_a_flat_rate_axis_under_the_events_model_is_refused() -> None:
         sensitivity_panel(
             base_configs,
             {"grid_services_income_per_kw_per_year_gbp": (12.0,)},
-            simulate=_const_simulate,
+            simulate=_paired_const_simulate,
         )
 
     message = str(refusal.value)
     assert "capacity_at_events" in message
     assert "grid_services_income_per_kw_per_year_gbp" in message
-
-
-# ---------------------------------------------------------------------------
-# TestConstSimulateCaching — _const_simulate returns a cached singleton
-# ---------------------------------------------------------------------------
-
-
-class TestConstSimulateCaching:
-    """_const_simulate must return the SAME FleetResults object, built once at import, on every call."""
-
-    def test_same_instance_every_call(self) -> None:
-        """Two calls with identical args return the exact same object (identity)."""
-        a = _const_simulate(None, None, None)
-        b = _const_simulate(None, None, None)
-        assert a is b, (
-            "_const_simulate must return the same cached FleetResults instance; "
-            f"got two different objects (id={id(a)} vs id={id(b)})"
-        )
-
-    def test_same_instance_with_different_args(self) -> None:
-        """Different (ignored) args still return the cached singleton."""
-        a = _const_simulate(None, None, None)
-        b = _const_simulate("dummy_fc", "dummy_scenario", "dummy_end")
-        assert a is b, (
-            "_const_simulate should ignore its args and always return the same instance"
-        )
-
-    def test_singleton_is_fleet_results_with_correct_n_homes(self) -> None:
-        """The singleton is a FleetResults and has exactly _N_HOMES per-home results."""
-        result = _const_simulate(None, None, None)
-        assert isinstance(result, FleetResults), (
-            f"_const_simulate must return a FleetResults, got {type(result)}"
-        )
-        assert len(result.per_home_results) == _N_HOMES, (
-            f"Expected {_N_HOMES} homes in singleton, got {len(result.per_home_results)}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -787,7 +737,6 @@ def test_each_home_a_simulate_stand_in_answers_is_a_year_of_hourly_steps() -> No
         homes=_make_seg_priced_scenario(4.1, finance=_interior_finance()).homes
     )
     answers = {
-        "_const_simulate": _const_simulate(fleet_config, None, None),
         "_paired_const_simulate": _paired_const_simulate(fleet_config, None, None),
         "_SegPricingSimulate": _SegPricingSimulate()(fleet_config, None, None),
     }

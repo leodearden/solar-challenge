@@ -5,12 +5,14 @@
 They cover own-use and SEG export income with and without the
 self-consumption override, grid-services income, a negative simulated revenue,
 which the projection and the cost-recovery solve both carry as a loss,
-grid-charge energy paid once on householder import, and the SEG income helper
+grid-charge energy paid once on householder import, the refusal of a simulate
+whose fleet lacks the batteries it was asked for, and the SEG income helper
 _seg_export_income_gbp, all on an injected synthetic simulate.
 """
 from __future__ import annotations
 
 import dataclasses
+import re
 
 import pandas as pd
 import pytest
@@ -27,14 +29,15 @@ from solar_challenge.finance import (
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics, calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
     make_period,
     make_scenario_and_finance,
+    make_scenario_of,
     make_window,
 )
 
@@ -227,6 +230,127 @@ class TestProjectMultiYearRevenue:
         assert seg_loss.own_use_rate_pence_per_kwh - no_seg.own_use_rate_pence_per_kwh == pytest.approx(
             50.0 * 100.0 / 1000.0
         )
+
+
+class TestSimulateMustReturnTheFleetsBatteries:
+    """project_multi_year refuses a simulate whose FleetResults lack the batteries of the fleet it asked for.
+
+    Grid-services income is priced from the batteries of the home_configs that
+    simulate returns, so an answer without the asked homes' batteries would price
+    it silently wrong: a battery-less answer prices a flat rate at £0.  Each age
+    asks for the scenario's batteries at that age's state of health, which the
+    comparison sets aside.
+    """
+
+    _BATTERY = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
+
+    @staticmethod
+    def _homes_with(*batteries: BatteryConfig) -> list[HomeConfig]:
+        """A default home fitted with each of *batteries*, in order."""
+        return [make_home_config(battery_config=battery) for battery in batteries]
+
+    def _scenario_and_flat_finance(
+        self, batteries: tuple[BatteryConfig, ...] = (_BATTERY, _BATTERY)
+    ) -> tuple[ScenarioConfig, FinanceConfig]:
+        """The homes fitted with *batteries*, two with _BATTERY by default, and a finance paying £12 per kW of battery discharge power per year."""
+        _, finance = make_scenario_and_finance(asset_life_years=5)
+        scenario = make_scenario_of(self._homes_with(*batteries))
+        return scenario, dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+
+    @staticmethod
+    def _battery_less(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        """Answer any fleet with two default homes, which have no battery."""
+        return make_fleet_results(n_homes=2)
+
+    def test_an_answer_without_the_batteries_is_refused_naming_the_fleet_the_home_and_both_batteries(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+        asked = dataclasses.replace(self._BATTERY, soh=None)
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=self._battery_less)
+
+        message = str(excinfo.value)
+        assert "proj-age-0" in message
+        assert "home 0" in message
+        assert repr(asked) in message
+        assert "None" in message.replace(repr(asked), "")
+
+    def test_an_answer_with_other_batteries_is_refused_naming_both(self) -> None:
+        """A 10 kWh battery is refused, although its discharge power would price the same flat income."""
+        scenario, finance = self._scenario_and_flat_finance()
+        other = BatteryConfig(capacity_kwh=10.0)
+        assert other.max_discharge_kw == self._BATTERY.max_discharge_kw, "premise: the same discharge power"
+        answer = make_fleet_results(homes=[make_home_config(battery_config=other)] * 2)
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        message = str(excinfo.value)
+        assert repr(dataclasses.replace(other, soh=None)) in message
+        assert repr(dataclasses.replace(self._BATTERY, soh=None)) in message
+
+    def test_the_refusal_names_the_first_home_whose_batteries_differ_and_both_of_its_batteries(self) -> None:
+        """Asked for a 5 and a 7.5 kWh battery and answered with a 5 and a 10 kWh one, it names home 1, 7.5 and 10 kWh."""
+        asked_second, answered_second = BatteryConfig(capacity_kwh=7.5), BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, asked_second))
+        answer = make_fleet_results(homes=self._homes_with(self._BATTERY, answered_second))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        message = str(excinfo.value)
+        assert "home 1" in message
+        assert repr(dataclasses.replace(asked_second, soh=None)) in message
+        assert repr(dataclasses.replace(answered_second, soh=None)) in message
+
+    def test_the_asked_batteries_answered_in_another_order_are_refused_at_the_first_home(self) -> None:
+        """Asked for a 5 and a 10 kWh battery and answered with the two swapped, it names home 0."""
+        larger = BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, larger))
+        answer = make_fleet_results(homes=self._homes_with(larger, self._BATTERY))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        assert "home 0" in str(excinfo.value)
+
+    def test_an_answer_of_another_number_of_homes_is_refused_naming_both_counts(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: make_fleet_results(n_homes=3))
+
+        message = str(excinfo.value)
+        assert "proj-age-0" in message
+        assert re.search(r"\b3\b", message)
+        assert re.search(r"\b2\b", message)
+
+    def test_the_cost_recovery_solve_refuses_it_as_the_projection_does(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+
+        with pytest.raises(ValueError) as from_projection:
+            project_multi_year(scenario, finance, simulate=self._battery_less)
+        with pytest.raises(ValueError) as from_solve:
+            solve_cost_recovery_rate(scenario, finance, simulate=self._battery_less)
+
+        assert "proj-age-0" in str(from_solve.value)
+        assert str(from_solve.value) == str(from_projection.value)
+
+    def test_the_scenarios_unaged_batteries_are_accepted_at_every_age(self) -> None:
+        """An answer of the scenario's own homes at every age prices the 0.5.0 tag's flat income, 12 × 2 × 2.5 = £60.
+
+        Those are the established canned simulate's homes, whose batteries carry
+        no state of health while each age asks for its own.
+        """
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5, battery_config=self._BATTERY)
+        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services by default"
+        flat = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+        answer = make_fleet_results(homes=scenario.homes, self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
+
+        def year_0_revenue_gbp(priced: FinanceConfig) -> float:
+            return project_multi_year(scenario, priced, simulate=lambda fc, s, e: answer).points[0].fleet_revenue_gbp
+
+        assert year_0_revenue_gbp(flat) - year_0_revenue_gbp(finance) == pytest.approx(60.0)
 
 
 def _make_grid_charging_sim_results(

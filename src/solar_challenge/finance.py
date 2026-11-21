@@ -59,9 +59,10 @@ from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
 if TYPE_CHECKING:
+    from solar_challenge.battery import BatteryConfig
     from solar_challenge.config import ScenarioConfig
     from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
-    from solar_challenge.home import SummaryStatistics
+    from solar_challenge.home import HomeConfig, SummaryStatistics
 
 
 # ---------------------------------------------------------------------------
@@ -1558,6 +1559,47 @@ def _throughput_at(age: int, seeds: Mapping[int, _NodeData]) -> List[float]:
     ]
 
 
+def _installed_battery(home: "HomeConfig") -> Optional["BatteryConfig"]:
+    """*home*'s battery with its state of health set aside, or None for a home without one."""
+    return None if home.battery_config is None else dataclasses.replace(home.battery_config, soh=None)
+
+
+def _refuse_results_without_the_fleets_batteries(
+    fleet_config: "FleetConfig", fleet_results: "FleetResults"
+) -> None:
+    """Raise ValueError unless *fleet_results*' home_configs carry the batteries of *fleet_config*'s homes, in order, state of health aside.
+
+    Grid-services income is priced from the batteries of the home_configs that
+    ``simulate`` returns, so they must be those of the homes it was asked to
+    simulate, as :meth:`~solar_challenge.fleet.FleetRunner.simulate` returns
+    them.  Each sampled age asks for its own state of health, which a simulate
+    that ignores ageing does not echo, so it is set aside.
+
+    Raises:
+        ValueError: If the two hold different numbers of homes, naming the fleet
+            and both numbers, or at the first home whose batteries differ,
+            naming the fleet, the home and both batteries.
+    """
+    rule = (
+        "grid-services income is priced from the batteries of the home_configs simulate "
+        "returns, so simulate must return fleet_config.homes' batteries, state of health "
+        "aside, as FleetRunner.simulate does"
+    )
+    asked = [_installed_battery(home) for home in fleet_config.homes]
+    returned = [_installed_battery(home) for home in fleet_results.home_configs]
+    if len(returned) != len(asked):
+        raise ValueError(
+            f"simulate returned {len(returned)} homes for fleet {fleet_config.name!r} "
+            f"of {len(asked)} homes; {rule}"
+        )
+    for index, (asked_battery, returned_battery) in enumerate(zip(asked, returned, strict=True)):
+        if returned_battery != asked_battery:
+            raise ValueError(
+                f"simulate returned home {index} of fleet {fleet_config.name!r} with battery "
+                f"{returned_battery!r} where the fleet's home has {asked_battery!r}; {rule}"
+            )
+
+
 def project_multi_year(
     scenario: "ScenarioConfig",
     finance: "FinanceConfig",
@@ -1586,6 +1628,10 @@ def project_multi_year(
             adaptive bisection stops.
         simulate: The fleet simulator each sampled age runs through, such as
             a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
+            Grid-services income is priced from the batteries of the
+            ``home_configs`` it returns, so it must return the batteries of the
+            ``fleet_config.homes`` it is given, in order and state of health
+            aside, as ``FleetRunner.simulate`` does.
 
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
@@ -1601,6 +1647,12 @@ def project_multi_year(
         metadata about the sampled ages and interpolation error.
 
     Raises:
+        ValueError: If ``simulate`` returns, for a sampled age, a FleetResults
+            whose ``home_configs`` do not carry the batteries of the
+            ``fleet_config.homes`` it was given, in order and state of health
+            aside.  The message names the age's fleet, ``proj-age-<age>``, and
+            the first home whose batteries differ with both batteries, or both
+            numbers of homes.
         ValueError: If a simulated age, seed or bisection trial, gives an
             aggregate that is NaN or infinite: the fleet's own-use, export,
             import or revenue, its mean PV or battery state of health, or a
@@ -1644,6 +1696,7 @@ def project_multi_year(
         aged = _aged_homes(homes, age, cum_tp)
         fleet_config = FleetConfig(homes=aged, name=f"proj-age-{age}")
         fleet_results = simulate(fleet_config, start_ts, end_ts)
+        _refuse_results_without_the_fleets_batteries(fleet_config, fleet_results)
 
         per_home_summaries = [
             calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
@@ -2236,6 +2289,11 @@ def solve_cost_recovery_rate(
         simulate: Optional inject for testing.  Defaults to None → lazy import
             ``fleet.default_runner().simulate``.  Signature must match
             ``(FleetConfig, pd.Timestamp, pd.Timestamp) → FleetResults``.
+            Grid-services income is priced from the batteries of the
+            ``home_configs`` it returns, so it must return the batteries of the
+            ``fleet_config.homes`` it is given, in order and state of health
+            aside, as ``FleetRunner.simulate`` does; :func:`project_multi_year`
+            raises ValueError otherwise.
 
     Returns:
         A :class:`CostRecoverySolution` with the solved rate and outlay.
