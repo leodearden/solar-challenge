@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
+from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._job_requests import a_job_state, job_state_frame
 
 
@@ -198,13 +199,6 @@ def test_fleet_distribution_last_row_has_no_remove_button(
 # -- Distribution editor row inputs show their whole values ----------------
 
 
-def _wait_for_transitions_to_finish(page: Page) -> None:
-    """Wait until no CSS transition is running, so layout measurements see the settled page."""
-    page.wait_for_function(
-        "() => !document.getAnimations().some(animation => animation instanceof CSSTransition)"
-    )
-
-
 def _clipped_row_inputs(page: Page, subject: str, row_field: str) -> list[str]:
     """The names of the card's row inputs too narrow to show their whole value."""
     names = [
@@ -243,7 +237,7 @@ def test_fleet_distribution_row_inputs_show_their_whole_values(
         ).select_option(label=distribution_type)
         _expect_only_row_list_shown(page, subject, row_field)
         page.get_by_role("spinbutton", name=f"{subject} Value 1", exact=True).fill("9999")
-    _wait_for_transitions_to_finish(page)
+    finish_the_css_transitions(page)
 
     clipped = [
         name for subject in CARD_SUBJECTS for name in _clipped_row_inputs(page, subject, row_field)
