@@ -7,7 +7,7 @@ from typing import Any, Callable
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import PeakShavingStrategyConfig, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.heat_pump import HeatPumpConfig
@@ -15,7 +15,13 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.scenario_blocks import constructed, parse_home_block, parse_location_block
+from solar_challenge.scenario_blocks import (
+    constructed,
+    parse_home_block,
+    parse_location_block,
+    parse_tariff_config,
+)
+from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig, TariffPeriod
 from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 
 
@@ -115,6 +121,12 @@ _COMPONENT_BLOCK_ROWS = [
         id="home-battery-tou-window-reversed",
     ),
     pytest.param(
+        _home({"battery": {"capacity_kwh": 5.0, "grid_charging": {"target_soc_fraction": True}}}),
+        "home.battery.grid_charging",
+        lambda: GridChargeConfig(target_soc_fraction=True),
+        id="home-battery-grid-charging-target-boolean",
+    ),
+    pytest.param(
         _home({"load": {"household_occupants": 2.5}}),
         "home.load",
         lambda: LoadConfig(household_occupants=2.5),
@@ -135,7 +147,93 @@ _COMPONENT_BLOCK_ROWS = [
 ]
 
 
-@pytest.mark.parametrize(("read", "label", "construct"), _COMPONENT_BLOCK_ROWS)
+_OFF_PEAK_EV = {"charger_type": "7kW", "smart_charging_mode": "off_peak"}
+
+
+def _home_with_an_off_peak_ev_and_no_tariff() -> HomeConfig:
+    """The home a home: block holding only an ev: block of _OFF_PEAK_EV describes, which HomeConfig refuses: off_peak charging needs a tariff."""
+    return HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(),
+        ev_config=EVConfig(**_OFF_PEAK_EV),
+        location=Location.bristol(),
+    )
+
+
+_HOME_ROWS = [
+    pytest.param(
+        _home({"ev": _OFF_PEAK_EV}),
+        "home",
+        _home_with_an_off_peak_ev_and_no_tariff,
+        id="home-off-peak-ev-without-a-tariff",
+    ),
+    pytest.param(
+        _home({"ev": _OFF_PEAK_EV}, block_path="homes[0]"),
+        "homes[0]",
+        _home_with_an_off_peak_ev_and_no_tariff,
+        id="homes-entry-off-peak-ev-without-a-tariff",
+    ),
+    pytest.param(
+        _home({"ev": _OFF_PEAK_EV}, block_path=""),
+        "the top level",
+        _home_with_an_off_peak_ev_and_no_tariff,
+        id="flat-home-off-peak-ev-without-a-tariff",
+    ),
+]
+
+
+def _tariff(block: dict[str, Any]) -> Callable[[], object]:
+    """Read *block* as a tariff: block at the path parse_tariff_config names by default, "tariff"."""
+    return lambda: parse_tariff_config(block)
+
+
+_TARIFF_ROWS = [
+    pytest.param(
+        _tariff({"type": "flat_rate", "rate_per_kwh": True}),
+        "tariff",
+        lambda: TariffConfig.flat_rate(rate_per_kwh=True),
+        id="flat-rate-boolean",
+    ),
+    pytest.param(
+        _tariff({"type": "flat_rate", "rate_per_kwh": "cheap"}),
+        "tariff",
+        lambda: TariffConfig.flat_rate(rate_per_kwh="cheap"),
+        id="flat-rate-word",
+    ),
+    pytest.param(
+        _tariff({"type": "economy_7", "peak_rate": True}),
+        "tariff",
+        lambda: PresetRates(off_peak_rate=PRESET_RATES["economy_7"].off_peak_rate, peak_rate=True),
+        id="economy-7-peak-rate-boolean",
+    ),
+    pytest.param(
+        _tariff({"type": "economy_10", "off_peak_rate": "cheap"}),
+        "tariff",
+        lambda: PresetRates(off_peak_rate="cheap", peak_rate=PRESET_RATES["economy_10"].peak_rate),
+        id="economy-10-off-peak-rate-word",
+    ),
+    pytest.param(
+        _tariff({"type": "economy_7", "off_peak_start": "25:00"}),
+        "tariff",
+        lambda: TariffConfig.economy_7(off_peak_start="25:00"),
+        id="economy-7-start-off-the-clock",
+    ),
+    pytest.param(
+        _tariff({"type": "custom", "periods": [{"start_time": "00:00", "end_time": "00:00", "rate_per_kwh": True}]}),
+        "tariff.periods[0]",
+        lambda: TariffPeriod("00:00", "00:00", True),
+        id="custom-period-rate-boolean",
+    ),
+    pytest.param(
+        _tariff({"type": "custom", "periods": [{"start_time": "07:00", "end_time": "23:00", "rate_per_kwh": 0.30}]}),
+        "tariff",
+        lambda: TariffConfig(periods=(TariffPeriod("07:00", "23:00", 0.30),)),
+        id="custom-periods-leaving-a-gap",
+    ),
+]
+
+
+@pytest.mark.parametrize(("read", "label", "construct"), [*_COMPONENT_BLOCK_ROWS, *_HOME_ROWS, *_TARIFF_ROWS])
 def test_a_value_its_blocks_type_refuses_is_refused_prefixed_by_the_blocks_path(
     read: Callable[[], object], label: str, construct: Callable[[], object]
 ) -> None:

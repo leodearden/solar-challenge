@@ -18,6 +18,7 @@ from solar_challenge.ev import EVConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_tariff_config
+from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._names_as_a_word import names_as_a_word
@@ -463,6 +464,12 @@ home:
                 "location",
                 lambda: Location(latitude=51.45, longitude=-2.58, altitude=float("nan")),
                 id="location-altitude-nan",
+            ),
+            pytest.param(
+                "home:\n  pv: {capacity_kw: 4.0}\n  tariff: {type: flat_rate, rate_per_kwh: true}\n",
+                "home.tariff",
+                lambda: TariffConfig.flat_rate(rate_per_kwh=True),
+                id="home-flat-rate-boolean",
             ),
         ],
     )
