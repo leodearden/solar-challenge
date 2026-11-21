@@ -222,6 +222,15 @@ def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
         raise ConfigurationError(f"Missing required keys in {block_label(block_path)}: {missing}")
 
 
+def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
+    """The keys a block building *config_type* must set: its init fields with neither a default nor a default factory, in field order."""
+    return tuple(
+        each.name
+        for each in fields(config_type)
+        if each.init and each.default is MISSING and each.default_factory is MISSING
+    )
+
+
 def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -> _Built:
     """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
@@ -364,10 +373,9 @@ def _parse_battery_config(
     _refuse_both_efficiency_forms(block_path, set_keys)
     other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
     battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
-    try:
-        return battery.with_round_trip(round_trip)
-    except ConfigurationError as refusal:
-        raise ConfigurationError(f"{child_path(block_path, 'efficiency')}: {refusal}") from refusal
+    return constructed(
+        child_path(block_path, "efficiency"), battery.with_round_trip, round_trip_efficiency=round_trip
+    )
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
@@ -438,14 +446,7 @@ def parse_dispatch_strategy_config(
         {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
         {"strategy_type", *(each.name for each in variant_fields)},
     )
-    refuse_missing_keys(
-        block_path,
-        [
-            each.name
-            for each in variant_fields
-            if each.name not in set_keys and each.default is MISSING and each.default_factory is MISSING
-        ],
-    )
+    refuse_missing_keys(block_path, [key for key in _required_keys(variant) if key not in set_keys])
     values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
     build_variant: Callable[..., DispatchStrategyConfig] = variant
     return constructed(block_path, build_variant, **values)
@@ -681,14 +682,12 @@ _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
         _build_flat_rate_tariff,
     ),
     "economy_7": BlockType(
-        frozenset({
-            "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
-        }),
+        frozenset({"type", *_PRESET_TARIFF_RATE_KEYS, "off_peak_start", "off_peak_end"}),
         _build_economy_7_tariff,
     ),
     "economy_10": BlockType(
         frozenset({
-            "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
+            "type", *_PRESET_TARIFF_RATE_KEYS, "night_start", "night_end", "afternoon_start",
             "afternoon_end", "evening_start", "evening_end",
         }),
         _build_economy_10_tariff,
@@ -855,8 +854,8 @@ _GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset(
     each.name for each in fields(GridServicesEventsConfig) if each.init
 )
 
-_EVENT_WINDOW_KEYS: tuple[str, ...] = tuple(each.name for each in fields(EventWindow) if each.init)
-"""The keys an event window recognises, every one of which it requires, in EventWindow's field order."""
+_EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(EventWindow) if each.init)
+"""The keys an event window recognises: EventWindow's init fields."""
 
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
@@ -867,7 +866,7 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
     for i, ew_dict in enumerate(data):
         window_path = f"{block_path}[{i}]"
         window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
-        for req_key in _EVENT_WINDOW_KEYS:
+        for req_key in _required_keys(EventWindow):
             if req_key not in window:
                 raise ConfigurationError(f"{window_path} requires '{req_key}' field")
         parsed_windows.append(constructed(window_path, EventWindow, **window))
