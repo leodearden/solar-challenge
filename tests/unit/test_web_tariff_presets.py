@@ -2,12 +2,9 @@
 """Both simulate pages start each economy tariff type at tariff.PRESET_RATES' rates.
 
 Each page hands its Alpine component the table, one rate pair per economy type, in the
-x-data that mounts it, so the forms state no economy rate of their own and a run the home
-form sends at its starting Economy 7 rates is charged the library's preset rates.
+x-data that mounts it, so the forms state no economy rate of their own, and an Economy 7
+home body at the pair the home page hands its form is charged the library's preset rates.
 """
-
-import json
-from typing import Any
 
 import pandas as pd
 import pytest
@@ -18,8 +15,8 @@ from flask.testing import FlaskClient
 from solar_challenge.home import simulate_home
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.simulation_params import parse_home_config
+from tests._alpine_component_arguments import component_arguments
 from tests._home_payload import VALID_HOME_PAYLOAD
-from tests._html_page import element_attributes
 from tests._synthetic_weather import sunless_weather, weather_for
 
 _EXPECTED = {
@@ -29,32 +26,29 @@ _EXPECTED = {
 _DAY = "2024-01-10"
 
 
-def _component_argument(page: str, component: str) -> Any:
-    """The JSON argument *page* hands its Alpine *component* in the x-data of the one div that mounts it."""
-    scopes = [attributes.get("x-data") or "" for attributes in element_attributes(page, "div")]
-    (x_data,) = [scope for scope in scopes if scope.startswith(f"{component}(")]
-    try:
-        return json.loads(x_data.removeprefix(f"{component}(").removesuffix(")"))
-    except json.JSONDecodeError as exc:
-        pytest.fail(f"x-data={x_data!r} does not pass {component} a JSON argument: {exc}")
-
-
 def test_the_home_page_hands_its_form_each_economy_types_preset_rates(client: FlaskClient) -> None:
     page = client.get("/simulate/home").get_data(as_text=True)
 
-    assert _component_argument(page, "homeSimulator") == _EXPECTED
+    assert component_arguments(page, "homeSimulator") == [_EXPECTED]
 
 
 def test_the_fleet_page_hands_its_form_each_economy_types_preset_rates(client: FlaskClient) -> None:
     page = client.get("/simulate/fleet").get_data(as_text=True)
 
-    assert _component_argument(page, "fleetSimulator") == _EXPECTED
+    assert component_arguments(page, "fleetSimulator") == [_EXPECTED]
 
 
-def test_the_home_forms_default_economy_7_payload_runs_at_the_preset_rates(client: FlaskClient) -> None:
-    """The body the home form sends on Economy 7 before any rate is typed, run over one sunless day."""
+def test_an_economy_7_body_at_the_pair_the_home_page_hands_its_form_is_charged_the_preset_rates(
+    client: FlaskClient,
+) -> None:
+    """parse_home_config reads the body as an Economy 7 run charged PRESET_RATES' off-peak rate at 03:00 and its peak rate at 18:00 of one sunless day.
+
+    The body is built here from the page's pair. The body the form's own buildPayload sends is
+    tests/e2e/test_home_form_interactions.py::test_each_economy_type_shows_and_keeps_its_own_rates's to check.
+    """
     page = client.get("/simulate/home").get_data(as_text=True)
-    pair = _component_argument(page, "homeSimulator")["economy_7"]
+    (tariff_rates,) = component_arguments(page, "homeSimulator")
+    pair = tariff_rates["economy_7"]
     body = {
         **{key: value for key, value in VALID_HOME_PAYLOAD.items() if key != "days"},
         "start": _DAY,
