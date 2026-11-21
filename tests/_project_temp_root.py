@@ -9,6 +9,7 @@ Usage: listed in tests/conftest.py's pytest_plugins.
 """
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -31,7 +32,26 @@ def pytest_configure(config: pytest.Config) -> None:
     if os.environ.get(TEMP_ROOT_VARIABLE):
         return
     root = project_temp_root(Path(tempfile.gettempdir()))
-    root.mkdir(mode=0o700, exist_ok=True)
+    _make_private_root(root)
     patch = pytest.MonkeyPatch()
     config.add_cleanup(patch.undo)
     patch.setenv(TEMP_ROOT_VARIABLE, str(root))
+
+
+def _make_private_root(root: Path) -> None:
+    """Make *root* a directory of this user's closed to other users, as pytest makes the pytest-of-<user> inside it, or raise OSError naming *root* when it is a symbolic link or another user's, since whoever controls it could swap that pytest-of-<user> after pytest has checked it."""
+    root.mkdir(mode=0o700, exist_ok=True)
+    root_stat = root.lstat()
+    uid = os.getuid()
+    if stat.S_ISLNK(root_stat.st_mode):
+        raise OSError(
+            f"The temp root {root} is a symbolic link, so whoever made the link chose where pytest makes this "
+            f"session's temp dirs: name another root in {TEMP_ROOT_VARIABLE}"
+        )
+    if root_stat.st_uid != uid:
+        raise OSError(
+            f"The temp root {root} belongs to uid {root_stat.st_uid}, not to uid {uid}, so its owner could swap the "
+            f"temp dirs pytest makes in it: name another root in {TEMP_ROOT_VARIABLE}"
+        )
+    if root_stat.st_mode & 0o077:
+        root.chmod(stat.S_IMODE(root_stat.st_mode) & ~0o077)
