@@ -35,11 +35,12 @@ region.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
-wait for the page to fetch those results gives each job's fetch the default
-timeout from the wait before it and, when it times out, fails naming the jobs
-whose results it has not fetched, while a Playwright timeout raised inside
-that wait's block passes through it unchanged; and that a real three-point
-sweep draws one chart per metric from its points' runs.
+wait for the page to fetch those results ends only once every job's fetch has
+finished, gives each job's fetch the default timeout from the wait before it
+and, when it times out, fails naming the jobs whose results it has not
+fetched, while a Playwright timeout raised inside that wait's block passes
+through it unchanged; and that a real three-point sweep draws one chart per
+metric from its points' runs.
 
 Each faked progress stream is answered with frames the server's own encoder
 builds from its catalogue (tests/e2e/_job_requests.py).
@@ -848,11 +849,21 @@ def test_each_points_results_fetched_passes_a_playwright_timeout_its_block_raise
 def test_each_points_results_fetched_waits_for_each_jobs_fetch_on_the_default_timeout_from_the_wait_before_it(
     page: Page, live_server: str
 ) -> None:
-    """Each of three fetches finishes 3 s after the one before it, so the last finishes past the 8 s default timeout from the block's start. _each_points_results_fetched passes because it gives each job's fetch the default timeout from the wait before it, not all three one window that opened at the block's start."""
-    job_ids = ["job-a", "job-b", "job-c"]
-    pause_ms = 3000
+    """Each of five fetches finishes 2 s after the one before it, so the last finishes 10 s in, past the 8 s default timeout from the block's start. _each_points_results_fetched passes because it gives each job's fetch the default timeout from the wait before it, not all five one window that opened at the block's start, and it leaves the block only once all five fetches have finished."""
+    job_ids = ["job-a", "job-b", "job-c", "job-d", "job-e"]
+    pause_ms = 2000
+    default_timeout_ms = 8000
+    assert len(job_ids) * pause_ms > default_timeout_ms, (
+        "the pauses must add up to more than the default timeout, or this test cannot tell a wait per job from one shared window"
+    )
     page.goto(live_server + "/scenarios/sweep")
-    page.set_default_timeout(8000)
+    page.set_default_timeout(default_timeout_ms)
+    finished_fetches: set[str] = set()
+
+    def note_finished_fetch(request: Request) -> None:
+        finished_fetches.update(job_id for job_id in job_ids if is_job_request(job_id, "results")(request))
+
+    page.on("requestfinished", note_finished_fetch)
 
     with _each_points_results_fetched(page, job_ids):
         page.evaluate(
@@ -866,6 +877,8 @@ def test_each_points_results_fetched_waits_for_each_jobs_fetch_on_the_default_ti
             }""",
             [[f"/api/jobs/{job_id}/results" for job_id in job_ids], pause_ms],
         )
+
+    assert finished_fetches == set(job_ids), "the block ended before the page had finished fetching every job's results"
 
 
 # -- A real sweep's charts, drawn from its points' runs ---------------------
