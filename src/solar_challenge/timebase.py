@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; and a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; and the default window's first and last days."""
 
 import calendar
 import itertools
@@ -22,6 +22,12 @@ MINUTES_PER_DAY: int = 24 * MINUTES_PER_HOUR
 
 ONE_MINUTE: timedelta = timedelta(minutes=1)
 """One minute, as the standard library's timedelta. A simulated run's window has this cadence, and no setting changes it (ruling L9, docs/prds/load-composition-and-calendar-days.md)."""
+
+DEFAULT_FIRST_DAY: date = date(2024, 1, 1)
+"""The first day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+DEFAULT_LAST_DAY: date = date(2024, 12, 31)
+"""The last day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
 
 
 def require_valid_duration(minutes: float, quantity: str) -> None:
