@@ -155,6 +155,18 @@ def test_an_answer_pvgis_gave_to_a_request_it_judged_is_no_outage(
     assert (exit_status, capsys.readouterr().out) == (0, "")
 
 
+@pytest.mark.parametrize("fault", list(_BodyFault))
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_an_endpoint_pvgis_refuses_or_fails_is_named_by_its_status_whatever_its_body_does(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], status: int, fault: _BodyFault
+) -> None:
+    """The body is read only after a status that is no outage, so one outage prints one line: otherwise a body cut short or stalled would name its own cause on some runs and the status on others."""
+    with _stand_in({"tmy": status}, body_faults={"tmy": fault}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: tmy: HTTP {status}\n")
+
+
 @pytest.mark.parametrize("endpoint", ["tmy", "seriescalc"])
 def test_a_pvgis_answer_whose_body_is_cut_short_is_an_outage_named_on_one_line(
     probe: ModuleType, capsys: pytest.CaptureFixture[str], endpoint: str
