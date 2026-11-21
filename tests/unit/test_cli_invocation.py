@@ -11,11 +11,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+import typer
 import yaml
 from typer.testing import CliRunner
 
-from solar_challenge.cli.main import app
-from solar_challenge.cli.utils import CliInvocation, root_invocation
+from solar_challenge.cli.main import app, main
+from solar_challenge.cli.utils import CliInvocation, invocation, root_invocation
 from solar_challenge.fleet import FleetRunner, FleetSimulator, default_runner
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.weather import PvgisTmy, default_weather
@@ -80,6 +81,32 @@ class TestRootWorkerPolicy:
 
         assert result.exit_code == 2
         assert "--workers" in " ".join(result.output.split())
+
+    @pytest.mark.parametrize(
+        ("root_options", "parallel", "max_workers", "quiet"),
+        [
+            pytest.param(("--sequential", "--workers", "3"), False, 3, False, id="sequential-on-3-workers"),
+            pytest.param(("--quiet",), True, None, True, id="quiet"),
+        ],
+    )
+    def test_the_root_callback_builds_the_invocation_from_the_options_it_parses(
+        self, root_options: tuple[str, ...], parallel: bool, max_workers: int | None, quiet: bool
+    ) -> None:
+        """main, as a probe app's callback, gives the command nobody injected an invocation the invocation its options describe."""
+        seen: list[CliInvocation] = []
+        probe = typer.Typer()
+        probe.callback()(main)
+
+        @probe.command()
+        def show(ctx: typer.Context) -> None:
+            seen.append(invocation(ctx))
+
+        result = CliRunner().invoke(probe, [*root_options, "show"])
+
+        assert result.exit_code == 0, result.output
+        assert [(_what_the_runner_runs_with(cli.runner), cli.quiet) for cli in seen] == [
+            ((default_weather().cache.cache_dir, simulate_home, parallel, max_workers), quiet)
+        ]
 
     def test_the_options_apply_to_default_runners_policy(self) -> None:
         """--sequential --workers 3 give replace(default_runner(), parallel=False, max_workers=3), compared field by field."""
