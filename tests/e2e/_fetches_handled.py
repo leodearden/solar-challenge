@@ -4,7 +4,8 @@
 A fetch is handled once it fails, or once the page has read its answer's body with arrayBuffer(), blob(), bytes(),
 formData(), json() or text(). fetch() and those readers give the page promises chained on the browser's own, so the
 recorder handles none of the page's promises, and a rejection the page leaves unhandled is still uncaught. fetch() still
-rejects, rather than throws, on a URL it cannot parse.
+rejects, rather than throws, on a URL it cannot parse. The recorder wraps only the readers the browser has, and adds none
+it lacks.
 
 The mark is set from a 0 ms timer queued from a 0 ms timer queued as the fetch fails or the body settles. The first
 timer runs after every microtask chained from the settle, which includes the page's code awaiting it and the Alpine
@@ -40,6 +41,7 @@ _RECORD_FETCHES_STARTED_AND_HANDLED = """(() => {
     };
     for (const reader of ['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text']) {
         const originalRead = Response.prototype[reader];
+        if (typeof originalRead !== 'function') continue;
         Response.prototype[reader] = function () {
             const entry = fetchOf.get(this);
             const body = originalRead.call(this);
