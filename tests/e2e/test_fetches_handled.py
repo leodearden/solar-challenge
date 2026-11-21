@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """wait_until_the_page_has_handled_every_fetch_it_started (tests/e2e/_fetches_handled.py) returns once every error the page logged or threw handling the answers to its fetches is in page_errors; it fails naming each fetch the page has not handled, or the recorder the page was opened without."""
 
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import Page
+from playwright.sync_api import Page, Route
 
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._fetches_handled import (
@@ -17,21 +18,40 @@ def _is_runs_list_request(url: str) -> bool:
     return urlsplit(url).path == "/api/history/runs"
 
 
+def _open_run_history_answering_its_runs_list_only_then(
+    page: Page, live_server: str, answer: Callable[[Route], None]
+) -> None:
+    """Open Run History once Alpine has started, holding its runs-list request until then, then answer it with answer."""
+    held_requests: list[Route] = []
+
+    def hold(route: Route) -> None:
+        held_requests.append(route)
+
+    page.route(_is_runs_list_request, hold)
+    open_once_alpine_has_started(page, live_server + "/history/runs")
+    (runs_list_request,) = held_requests
+    answer(runs_list_request)
+
+
 def test_an_error_thrown_rendering_an_answer_the_page_requested_as_alpine_started_is_in_page_errors_once_every_fetch_is_handled(
     page: Page, live_server: str, page_errors: list[str], seeded_home_run: tuple[str, str]
 ) -> None:
-    """Run History's runs list lists the seeded run with its total generation as a string, on which the run's row calls toFixed as Alpine renders it."""
+    """Run History's runs list lists the seeded run with its total generation as a string, on which the run's row calls toFixed as Alpine renders it.
+
+    The runs-list answer is held until the page has opened, so it reaches the page only after
+    open_once_alpine_has_started has returned.
+    """
     listed = page.request.get(
         live_server + "/api/history/runs",
         params={"q": seeded_home_run[1]},
         fail_on_status_code=True,
     ).json()
-    page.route(
-        _is_runs_list_request,
+    record_fetches_started_and_handled(page)
+    _open_run_history_answering_its_runs_list_only_then(
+        page,
+        live_server,
         lambda route: route.fulfill(json={**listed, "runs": [{**listed["runs"][0], "total_generation_kwh": "12"}]}),
     )
-    record_fetches_started_and_handled(page)
-    open_once_alpine_has_started(page, live_server + "/history/runs")
 
     wait_until_the_page_has_handled_every_fetch_it_started(page)
 
@@ -43,13 +63,17 @@ def test_an_error_thrown_rendering_an_answer_the_page_requested_as_alpine_starte
 def test_an_error_logged_handling_an_answer_the_page_requested_as_alpine_started_is_in_page_errors_once_every_fetch_is_handled(
     page: Page, live_server: str, page_errors: list[str]
 ) -> None:
-    """Run History's runs list is answered with a body that is no JSON, which the page logs failing to read."""
-    page.route(
-        _is_runs_list_request,
+    """Run History's runs list is answered with a body that is no JSON, which the page logs failing to read.
+
+    The runs-list answer is held until the page has opened, so it reaches the page only after
+    open_once_alpine_has_started has returned.
+    """
+    record_fetches_started_and_handled(page)
+    _open_run_history_answering_its_runs_list_only_then(
+        page,
+        live_server,
         lambda route: route.fulfill(body="not json", content_type="application/json"),
     )
-    record_fetches_started_and_handled(page)
-    open_once_alpine_has_started(page, live_server + "/history/runs")
 
     wait_until_the_page_has_handled_every_fetch_it_started(page)
 
