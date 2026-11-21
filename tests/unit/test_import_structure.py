@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Import-structure contract tests: which modules the import statements of solar_challenge may name.
+"""Import-structure and scenario-grammar contract tests: which modules solar_challenge's import statements may name, how src and tests may spell a grammar name, and which classes a grammar module may define.
 
 INV-5: no import statement inside a function of solar_challenge names another of its modules,
 except for the (importing module, imported module) pairs ALLOWED_FUNCTION_LOCAL_IMPORTS
@@ -35,11 +35,11 @@ module defines, never a re-export or an underscore name (C3). mypy --strict alre
 this, but nothing type-checks tests. No grammar module defines a class named as a dataclass of
 dispatch (decision 5). docs/prds/scenario-grammar-partition.md §3 and §4.2 state the contract.
 
-These rules read import statements only: the lazy loader in solar_challenge/__init__.py
-(`__getattr__`, which calls importlib.import_module) is pinned by
-tests/unit/test_public_api_surface.py. Two tests read what an import loads instead, from a
-fresh interpreter's sys.modules: importing scenario_blocks loads neither module above it, and
-importing fleet_distribution does not load config.
+These rules read the source's import statements and top-level definitions, never what it imports
+when run: the lazy loader in solar_challenge/__init__.py (`__getattr__`, which calls
+importlib.import_module) is pinned by tests/unit/test_public_api_surface.py. Two tests read what
+an import loads instead, from a fresh interpreter's sys.modules: importing scenario_blocks loads
+neither module above it, and importing fleet_distribution does not load config.
 """
 
 import ast
