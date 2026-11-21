@@ -38,7 +38,7 @@ from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyCo
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import CHARGER_TYPES, EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.fleet import FleetConfig
+from solar_challenge.fleet import FleetConfig, fleet_home_seed
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
@@ -1282,7 +1282,7 @@ LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
     }),
     not_in_fleet=MappingProxyType({
         "name": _UNNAMED_IN_A_FLEET,
-        "seed": "the generator gives each home the fleet's seed plus the home's index",
+        "seed": "the generator gives each home fleet.fleet_home_seed(fleet seed, index)",
     }),
 )
 
@@ -2195,14 +2195,14 @@ def _generated_home(
     """The fleet's home at *index*: it draws its components in _HOME_DRAW_ORDER (T3), each by its table's fleet rows.
 
     A component in _EVERY_HOME_HAS is drawn as _drawn_component_every_home_has draws it, any
-    other as _drawn_component does. Each load is given the fleet's seed plus the home's index,
-    when the fleet has a seed. Each component goes into HomeConfig only after it is checked to
+    other as _drawn_component does. Each load's seed is fleet.fleet_home_seed of the fleet's
+    seed and the home's index. Each component goes into HomeConfig only after it is checked to
     be its own field's type.
     """
     home_number = index + 1
     drawn: dict[str, SpecValue] = {}
     components = _fleet_components(config)
-    given = {"load": _NOTHING_GIVEN if config.seed is None else {"seed": config.seed + index}}
+    given = {"load": {"seed": fleet_home_seed(config.seed, index)}}
     built: dict[str, object] = {}
     for name in _HOME_DRAW_ORDER:
         block, component = components[name]

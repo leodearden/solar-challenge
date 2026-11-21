@@ -30,6 +30,14 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_weather
 
 
+def fleet_home_seed(fleet_seed: int | None, index: int) -> int | None:
+    """Home *index*'s load seed in a fleet seeded with *fleet_seed*: fleet_seed + index, or None for an unseeded fleet.
+
+    The one home of the per-home seed rule: FleetConfig's constructors and config.generate_homes_from_distribution call it.
+    """
+    return None if fleet_seed is None else fleet_seed + index
+
+
 @dataclass
 class FleetConfig:
     """Configuration for a fleet of homes.
