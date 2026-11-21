@@ -10,6 +10,10 @@
     Type '' (Fixed Value) edits dist.fixed within its fixed_range.
     subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
     caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
+
+    Visibility binds :hidden, not x-show, whose show and hide wait for an animation frame; the tests in
+    tests/e2e/test_fleet_interactions.py that call withhold_animation_frames pin it. A type's panel puts its classes on
+    an inner element, since a display class such as grid would override [hidden].
 #}
 
 {% macro _caption(subject, text) -%}
@@ -44,7 +48,7 @@
             <span class="block text-xs font-medium text-slate-500 dark:text-slate-400" :class="{ 'sr-only': idx > 0 }">{{ _row_caption(subject, paired_caption) }}</span>
             {{ _number_input('row.' ~ paired_key, paired_step, min=0) }}
         </label>
-        <button type="button" @click="removeRow({{ rows }}, idx)" x-show="canRemoveRow({{ rows }})"
+        <button type="button" @click="removeRow({{ rows }}, idx)" :hidden="!canRemoveRow({{ rows }})"
             class="p-2 rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
         >
             <span class="sr-only">{{ _row_caption(subject, 'Remove Row') }}</span>
@@ -67,6 +71,12 @@
 </div>
 {% endmacro %}
 
+{% macro _type_panel(shown, classes='') %}
+<div :hidden="!({{ shown }})" x-cloak>
+    <div class="{{ classes }}">{{ caller() }}</div>
+</div>
+{% endmacro %}
+
 {% macro distribution_editor(dist, component, subject='') %}
 {% set step = component.step %}
 <div x-data="distributionEditor(() => {{ dist }}, {{ component.new_row_value }})" class="space-y-4">
@@ -83,34 +93,34 @@
         </select>
     </label>
 
-    <div x-show="!dist.type" x-cloak>
+    {% call _type_panel('!dist.type') %}
         {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.fixed_range[0], max=component.fixed_range[1]) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'normal'" x-cloak class="grid grid-cols-2 gap-4">
+    {% call _type_panel("dist.type === 'normal'", 'grid grid-cols-2 gap-4') %}
         {{ _parameter(subject, 'Mean', 'dist.mean', step) }}
         {{ _parameter(subject, 'Std Dev', 'dist.std', step, min=0) }}
         {{ _parameter(subject, 'Min (clamp)', 'dist.min', step) }}
         {{ _parameter(subject, 'Max (clamp)', 'dist.max', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'uniform'" x-cloak class="grid grid-cols-2 gap-4">
+    {% call _type_panel("dist.type === 'uniform'", 'grid grid-cols-2 gap-4') %}
         {{ _parameter(subject, 'Min', 'dist.min', step) }}
         {{ _parameter(subject, 'Max', 'dist.max', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'weighted_discrete'" x-cloak class="space-y-3">
+    {% call _type_panel("dist.type === 'weighted_discrete'", 'space-y-3') %}
         <div class="text-sm text-slate-500 dark:text-slate-400">Define value-weight pairs. Weights are auto-normalised.</div>
         {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'shuffled_pool'" x-cloak class="space-y-3">
+    {% call _type_panel("dist.type === 'shuffled_pool'", 'space-y-3') %}
         <div class="text-sm text-slate-500 dark:text-slate-400">Define exact value-count pairs. Counts should sum to the fleet size.</div>
         {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', step) %}
         <span class="text-xs text-slate-500 dark:text-slate-400">
             Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
         </span>
         {% endcall %}
-    </div>
+    {% endcall %}
 </div>
 {% endmacro %}
