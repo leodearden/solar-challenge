@@ -137,6 +137,17 @@ _OVERRIDE_SPLIT: dict[str, Any] = {
 }
 """_ledger's year split by an override of 0.7: own-use 0.7 × 4000 = 2800, import 3400 − 2800, export 4000 − 2800."""
 
+_CAPPED_OVERRIDE_SPLIT: dict[str, Any] = {
+    "basis": OwnUseBasis.OVERRIDE,
+    "own_use_kwh": 3400.0,
+    "import_kwh": 0.0,
+    "import_cost_gbp": 0.0,
+    "export_kwh": 600.0,
+    "seg_income_gbp": 24.6,
+    "own_use_capped": True,
+}
+"""_ledger's year split by an override of 0.9: 0.9 × 4000 = 3600 is above the 3400 demand, so own-use is cut to it and 600 is exported."""
+
 _FIGURES = (
     "generation_kwh",
     "demand_kwh",
@@ -224,6 +235,22 @@ class TestHomeLedgerBalances:
         figures = {**_OVERRIDE_SPLIT, "basis": OwnUseBasis.SIMULATED, "import_kwh": 700.0}
 
         assert _ledger(**figures).import_kwh == 700.0
+
+    def test_an_override_own_use_cut_to_its_demand_constructs_capped(self) -> None:
+        assert _ledger(**_CAPPED_OVERRIDE_SPLIT).own_use_capped is True
+
+    def test_a_capped_own_use_is_refused_on_the_simulated_basis(self) -> None:
+        with pytest.raises(ValueError, match="HomeLedger own_use_capped:") as refusal:
+            _ledger(own_use_capped=True)
+
+        assert f"basis={OwnUseBasis.SIMULATED!r}" in str(refusal.value)
+
+    def test_a_capped_override_own_use_below_its_demand_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="HomeLedger own_use_capped:") as refusal:
+            _ledger(**{**_OVERRIDE_SPLIT, "own_use_capped": True})
+
+        assert _named("own_use_kwh", 2800.0) in str(refusal.value)
+        assert _named("demand_kwh", 3400.0) in str(refusal.value)
 
     def test_home_ledger_is_frozen(self) -> None:
         ledger = _ledger()

@@ -667,9 +667,9 @@ _BALANCE_REL_TOL = 1e-12
 """The relative tolerance of a ledger's balances L2-L4: the float rounding of one subtraction and one scaling, and nothing more."""
 
 
-def _ledger_refusal(invariant: str, rule: str, figures: Mapping[str, float]) -> ValueError:
-    """The ValueError for a broken ledger balance: the *invariant*, its *rule*, then each of *figures* as name=value."""
-    named = ", ".join(f"{name}={value!r}" for name, value in figures.items())
+def _ledger_refusal(invariant: str, rule: str, values: Mapping[str, object]) -> ValueError:
+    """The ValueError for a broken ledger invariant: the *invariant*, its *rule*, then each of *values* as name=value."""
+    named = ", ".join(f"{name}={value!r}" for name, value in values.items())
     return ValueError(f"HomeLedger {invariant}: {rule}: got {named}")
 
 
@@ -723,6 +723,26 @@ def _require_override_split_balances(
         )
 
 
+def _require_own_use_cap_agrees_with_the_split(
+    *, basis: OwnUseBasis, own_use_capped: bool, own_use_kwh: float, demand_kwh: float
+) -> None:
+    """Refuse an ``own_use_capped`` year that is not on the OVERRIDE basis, or whose own-use is not its demand, naming the values."""
+    if not own_use_capped:
+        return
+    if basis is not OwnUseBasis.OVERRIDE:
+        raise _ledger_refusal(
+            "own_use_capped",
+            "only the override's own-use is capped, so a capped year is on the OVERRIDE basis",
+            {"basis": basis, "own_use_capped": own_use_capped},
+        )
+    if not math.isclose(own_use_kwh, demand_kwh, rel_tol=_BALANCE_REL_TOL):
+        raise _ledger_refusal(
+            "own_use_capped",
+            "a capped own-use is cut to demand, so own_use_kwh == demand_kwh",
+            {"own_use_kwh": own_use_kwh, "demand_kwh": demand_kwh},
+        )
+
+
 class OwnUseBasis(Enum):
     """Where a home's ledger takes its own-use from."""
 
@@ -737,8 +757,9 @@ class HomeLedger:
     """One home's year as the CBS bills it.
 
     Energy is in kWh a year and money in GBP (£) a year.  Construction refuses
-    a year whose balances break, checked in this order, naming the invariant
-    and every value in it; L2-L4 hold to a relative 1e-12:
+    a year whose balances break, or whose ``own_use_capped`` disagrees with
+    them, checked in this order, naming the invariant and every value in it;
+    L2-L4 and the cap hold to a relative 1e-12:
 
     - L1: every figure is finite and >= 0.
     - L2: ``own_use_kwh <= demand_kwh``.
@@ -746,6 +767,8 @@ class HomeLedger:
       demand.
     - L4, on the OVERRIDE basis only: ``own_use_kwh + import_kwh ==
       demand_kwh`` and ``own_use_kwh + export_kwh == generation_kwh``.
+    - ``own_use_capped`` only on the OVERRIDE basis, and then
+      ``own_use_kwh == demand_kwh``.
     """
 
     basis: OwnUseBasis
@@ -770,7 +793,7 @@ class HomeLedger:
     """OVERRIDE only: override × generation exceeded demand, so own-use was cut to demand."""
 
     def __post_init__(self) -> None:
-        """Refuse a year that breaks L1, L2, L3 or, on the OVERRIDE basis, L4, in that order."""
+        """Refuse a year that breaks L1, L2, L3 or, on the OVERRIDE basis, L4, in that order, then one whose cap disagrees with its split."""
         _require_finite_and_not_negative(
             {
                 "generation_kwh": self.generation_kwh,
@@ -794,6 +817,12 @@ class HomeLedger:
                 import_kwh=self.import_kwh,
                 export_kwh=self.export_kwh,
             )
+        _require_own_use_cap_agrees_with_the_split(
+            basis=self.basis,
+            own_use_capped=self.own_use_capped,
+            own_use_kwh=self.own_use_kwh,
+            demand_kwh=self.demand_kwh,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -289,8 +289,12 @@ naming the invariant and every value in it:
   `own_use_kwh + export_kwh == generation_kwh`, each refusal naming its identity's
   three values.
 
-L2–L4 compare to a relative tolerance of 1e-12, the float rounding of one subtraction
-and one scaling, and nothing more
+It then refuses an `own_use_capped` that disagrees with the split, naming
+`own_use_capped` and the values: a capped own-use is the override's, so the ledger is
+on the OVERRIDE basis, and it is cut to demand, so `own_use_kwh == demand_kwh`.
+
+L2–L4 and the cap compare to a relative tolerance of 1e-12, the float rounding of one
+subtraction and one scaling, and nothing more
 (`tests/unit/test_finance_ledger.py::TestHomeLedgerBalances`,
 `tests/unit/test_finance_ledger.py::TestHomeLedgerPricingRules`).
 
