@@ -14,8 +14,6 @@ from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
-    parse_dispatch_strategy_config,
-    parse_home_block,
 )
 from solar_challenge.dispatch import (
     GridChargeConfig,
@@ -30,6 +28,10 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    parse_dispatch_strategy_config,
+    parse_home_block,
+)
 from tests._non_booleans import NON_BOOLEANS
 from tests._repository_paths import SCENARIOS_DIR
 

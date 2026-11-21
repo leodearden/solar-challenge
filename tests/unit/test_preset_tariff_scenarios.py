@@ -11,7 +11,8 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from solar_challenge.config import load_config, parse_tariff_config
+from solar_challenge.config import load_config
+from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._repository_paths import SCENARIOS_DIR
 

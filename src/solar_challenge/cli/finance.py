@@ -17,8 +17,6 @@ from solar_challenge.config import (
     SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
-    parse_seg_rate,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
@@ -44,6 +42,10 @@ from solar_challenge.gridservices import (
 )
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
+from solar_challenge.scenario_blocks import (
+    parse_finance_config,
+    parse_seg_rate,
+)
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import covered_days
 

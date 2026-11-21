@@ -10,9 +10,9 @@ from typing import Any
 
 from flask import request
 
-from solar_challenge.config import parse_location_block
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
+from solar_challenge.scenario_blocks import parse_location_block
 
 
 class NotAJsonObject(ValueError):
@@ -92,7 +92,7 @@ def refuse_unencodable_text(value: object, what: str) -> None:
 
 
 def read_location(value: object) -> Location:
-    """The Location a request's location *value* names: a string as location.parse_location reads it, a JSON object as config.parse_location_block reads a scenario's location: block.
+    """The Location a request's location *value* names: a string as location.parse_location reads it, a JSON object as scenario_blocks.parse_location_block reads a scenario's location: block.
 
     Raises:
         ConfigurationError: From parse_location or parse_location_block, for a value they

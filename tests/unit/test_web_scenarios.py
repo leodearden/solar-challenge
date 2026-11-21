@@ -21,10 +21,12 @@ from solar_challenge.config import (
     WeightedDiscreteDistribution,
     load_fleet_config,
     parse_fleet_distribution_config,
+)
+from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.scenario_blocks import (
     parse_location_block,
     parse_seg_rate,
 )
-from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart

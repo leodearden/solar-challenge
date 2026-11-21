@@ -14,7 +14,7 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
-from solar_challenge.config import parse_tariff_config
+from solar_challenge.scenario_blocks import parse_tariff_config
 from tests._cli_table_text import table_text
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal

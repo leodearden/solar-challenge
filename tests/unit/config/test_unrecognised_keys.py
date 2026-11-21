@@ -15,11 +15,6 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    BATTERY_BLOCK,
-    EV_BLOCK,
-    HEAT_PUMP_BLOCK,
-    LOAD_BLOCK,
-    PV_BLOCK,
     ComponentDistribution,
     FleetDistributionConfig,
     NormalDistribution,
@@ -36,13 +31,8 @@ from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_finance_config,
     parse_fleet_distribution_config,
-    parse_home_block,
-    parse_location_block,
-    parse_seg_rate,
     parse_sweep_fleet_configs,
-    parse_tariff_config,
 )
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
@@ -54,6 +44,18 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    PV_BLOCK,
+    parse_finance_config,
+    parse_home_block,
+    parse_location_block,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.tariff import TariffConfig, TariffPeriod
 from tests._repository_paths import SCENARIOS_DIR
 

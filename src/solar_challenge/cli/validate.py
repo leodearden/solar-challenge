@@ -23,15 +23,17 @@ from solar_challenge.config import (
     load_config,
     load_home_config,
     load_scenarios,
-    parse_finance_config,
     parse_fleet_config,
-    parse_seg_rate,
     parse_sweep_fleet_configs,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    parse_finance_config,
+    parse_seg_rate,
+)
 from solar_challenge.validation import (
     ValidationReport,
     validate_consumption,

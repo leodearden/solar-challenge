@@ -26,9 +26,15 @@ solar_challenge at any scope: it reads any dataclass through its annotations, so
 and modules of the web subpackage import it, web/stored_runs.py among them (§3.1), so an
 import of a web module would close a cycle or reach up past its importers.
 
-All five read import statements only: the lazy loader in solar_challenge/__init__.py
+scenario_blocks.py, the scenario grammar's block readers, imports neither fleet_distribution
+nor config at any scope (docs/prds/scenario-grammar-partition.md §4.2 C1): both read their
+blocks through it, so such an import closes a cycle.
+
+These rules read import statements only: the lazy loader in solar_challenge/__init__.py
 (`__getattr__`, which calls importlib.import_module) is pinned by
-tests/unit/test_public_api_surface.py.
+tests/unit/test_public_api_surface.py. One test reads what an import loads instead, from a
+fresh interpreter's sys.modules: importing scenario_blocks loads neither fleet_distribution nor
+config, so no module that scenario_blocks imports reaches them either.
 """
 
 import ast
@@ -39,12 +45,15 @@ from pathlib import Path
 import pytest
 
 from tests._declared_dependencies import WEB_SUBPACKAGE
+from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 from tests._repository_paths import REPOSITORY_ROOT
 
 _PACKAGE = "solar_challenge"
 _TEST_SUITE = "tests"
 _WEB_DATABASE = f"{WEB_SUBPACKAGE}.database"
 _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
+_SCENARIO_BLOCKS = f"{_PACKAGE}.scenario_blocks"
+_GRAMMAR_ABOVE_SCENARIO_BLOCKS = (f"{_PACKAGE}.fleet_distribution", f"{_PACKAGE}.config")
 _SRC_DIR = REPOSITORY_ROOT / "src"
 
 
@@ -203,6 +212,16 @@ def _imports_by(importer: str, package: str, sites: Iterable[_ImportSite]) -> li
         site
         for site in sites
         if site.importer == importer and _in_package(site.imported, package)
+    ]
+
+
+def _imports_of_the_grammar_above_scenario_blocks(sites: Iterable[_ImportSite]) -> list[_ImportSite]:
+    """Return the *sites* at which scenario_blocks imports fleet_distribution or config, or a module beneath either, at any scope."""
+    return [
+        site
+        for site in sites
+        if site.importer == _SCENARIO_BLOCKS
+        and any(_in_package(site.imported, grammar) for grammar in _GRAMMAR_ABOVE_SCENARIO_BLOCKS)
     ]
 
 
@@ -376,6 +395,50 @@ def test_the_scan_reads_the_imports_of_web_field_tree(
         "test_web_field_tree_imports_no_module_of_the_package checks nothing. If the "
         "module was renamed or moved, point _WEB_FIELD_TREE at the module that holds "
         "read_field_tree, and update docs/prds/run-store-one-owner.md §3.1 with it"
+    )
+
+
+def test_importing_scenario_blocks_loads_neither_fleet_distribution_nor_config() -> None:
+    """A fresh interpreter that imports scenario_blocks has loaded neither fleet_distribution nor config, so no module it imports reaches up into the grammar that reads its blocks."""
+    loaded = package_modules_loaded_by_importing(_SCENARIO_BLOCKS)
+
+    grammar_loaded = sorted(set(_GRAMMAR_ABOVE_SCENARIO_BLOCKS) & loaded)
+    assert not grammar_loaded, (
+        f"importing {_SCENARIO_BLOCKS} in a fresh interpreter loads {', '.join(grammar_loaded)}. "
+        "The scenario grammar imports in one direction, errors, number_fields <- scenario_blocks "
+        "<- fleet_distribution <- config (docs/prds/scenario-grammar-partition.md §4.2 C1), so "
+        "neither scenario_blocks nor any module it imports may load the grammar above it"
+    )
+
+
+def test_scenario_blocks_imports_neither_fleet_distribution_nor_config(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """scenario_blocks.py imports neither fleet_distribution nor config, at any scope."""
+    found = _imports_of_the_grammar_above_scenario_blocks(real_tree_imports)
+
+    sites = "\n".join(str(site) for site in found)
+    assert not found, (
+        "these import statements of scenario_blocks.py import the scenario grammar above it:"
+        f"\n{sites}\n"
+        "config and fleet_distribution read their blocks through scenario_blocks, so an import "
+        "of either from scenario_blocks, at any scope, closes a cycle "
+        "(docs/prds/scenario-grammar-partition.md §4.2 C1). Move what scenario_blocks needs "
+        "from the grammar above it down into scenario_blocks"
+    )
+
+
+def test_the_scan_reads_the_imports_of_scenario_blocks(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """The scan reads the import statements of scenario_blocks.py, so its layering rule cannot pass by reading none once the module is renamed or moved."""
+    importers = {site.importer for site in real_tree_imports}
+
+    assert _SCENARIO_BLOCKS in importers, (
+        f"the scan of src/solar_challenge read no import statement of {_SCENARIO_BLOCKS}, so "
+        "test_scenario_blocks_imports_neither_fleet_distribution_nor_config checks nothing. If "
+        "the module was renamed or moved, point _SCENARIO_BLOCKS at the module that holds the "
+        "block readers, and update docs/prds/scenario-grammar-partition.md §4.1 with it"
     )
 
 
@@ -759,5 +822,76 @@ def test_the_scan_finds_web_field_tree_imports_of_the_package_at_any_scope(
     src_dir = _write_package(tmp_path / "src", {"web/field_tree.py": source})
 
     found = _imports_by(_WEB_FIELD_TREE, _PACKAGE, _import_sites(src_dir))
+
+    assert [(site.imported, site.line) for site in found] == expected
+
+
+@pytest.mark.parametrize(
+    ("module", "source", "expected"),
+    [
+        pytest.param(
+            "scenario_blocks.py",
+            "from solar_challenge.config import load_config\n"
+            "import solar_challenge.fleet_distribution\n",
+            [("solar_challenge.config", 1), ("solar_challenge.fleet_distribution", 2)],
+            id="module-top-absolute",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from .config import load_config\nfrom . import fleet_distribution\n",
+            [("solar_challenge.config", 1), ("solar_challenge.fleet_distribution", 2)],
+            id="relative",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from solar_challenge import config\n",
+            [("solar_challenge.config", 1)],
+            id="the-package-form",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from solar_challenge.fleet_distribution import SweepSpec\n",
+            [("solar_challenge.fleet_distribution", 4)],
+            id="type-checking",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "def parse(data):\n"
+            "    from solar_challenge.config import ScenarioConfig\n"
+            "\n"
+            "\n"
+            "try:\n"
+            "    from .fleet_distribution import parse_fleet_distribution_config\n"
+            "except ImportError:\n"
+            "    parse_fleet_distribution_config = None\n",
+            [("solar_challenge.config", 2), ("solar_challenge.fleet_distribution", 6)],
+            id="in-a-function-and-an-import-error-guard",
+        ),
+        pytest.param(
+            "scenario_blocks.py",
+            "from solar_challenge.errors import ConfigurationError\n"
+            "from .home import HomeConfig\n"
+            "import solar_challenge.config_tools\n",
+            [],
+            id="not-the-grammar-above",
+        ),
+        pytest.param(
+            "config.py",
+            "from solar_challenge.scenario_blocks import child_path\n",
+            [],
+            id="another-module",
+        ),
+    ],
+)
+def test_the_scan_finds_scenario_blocks_imports_of_the_grammar_above_it_at_any_scope(
+    tmp_path: Path, module: str, source: str, expected: list[tuple[str, int]]
+) -> None:
+    """The scan finds an import of fleet_distribution or config in scenario_blocks.py at any scope (module top, a TYPE_CHECKING block, a function, an ImportError guard), absolute, relative or through the package. It finds none of another package module, none of a module merely named config_tools, and none that another module makes."""
+    src_dir = _write_package(tmp_path / "src", {module: source})
+
+    found = _imports_of_the_grammar_above_scenario_blocks(_import_sites(src_dir))
 
     assert [(site.imported, site.line) for site in found] == expected

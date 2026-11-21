@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Write configs as the scenario YAML documents config.py's loaders read.
 
-Each block written here is the inverse of the config.py parser that reads it:
-parse_location_block, parse_home_block and its block parsers, parse_tariff_config's
-custom type, and parse_seg_rate.  location: and each component block carry every
-key of config.py's table for that component, in field order, an unset value as
-null, which the reader reads as absent.  A field the grammar has no key for is
-refused unless it is at its default.  A battery block is written without
-efficiency, as the charge_efficiency and discharge_efficiency it holds.
+Each block written here is the inverse of the scenario_blocks.py reader that reads
+it: parse_location_block, parse_home_block and its block parsers,
+parse_tariff_config's custom type, and parse_seg_rate.  location: and each
+component block carry every key of scenario_blocks.py's table for that component,
+in field order, an unset value as null, which the reader reads as absent.  A field
+the grammar has no key for is refused unless it is at its default.  A battery block
+is written without efficiency, as the charge_efficiency and discharge_efficiency it
+holds.
 """
 
 from collections.abc import Collection, Mapping, Sequence
@@ -15,7 +16,10 @@ from typing import Any, Optional, TypeVar
 
 import yaml
 
-from solar_challenge.config import (
+from solar_challenge.dataclass_instance import DataclassInstance
+from solar_challenge.home import HomeConfig
+from solar_challenge.location import Location
+from solar_challenge.scenario_blocks import (
     BATTERY_BLOCK,
     EV_BLOCK,
     HEAT_PUMP_BLOCK,
@@ -24,16 +28,13 @@ from solar_challenge.config import (
     PV_BLOCK,
     ComponentBlock,
 )
-from solar_challenge.dataclass_instance import DataclassInstance
-from solar_challenge.home import HomeConfig
-from solar_challenge.location import Location
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 
 _Component = TypeVar("_Component", bound=DataclassInstance)
 
 _BATTERY_KEYS_NEVER_WRITTEN: tuple[str, ...] = ("efficiency",)
-"""The battery keys no written battery block holds: efficiency, the round trip config.py's reader reads through BatteryConfig.with_round_trip, since a battery is written as the per-direction pair it holds."""
+"""The battery keys no written battery block holds: efficiency, the round trip scenario_blocks.py's reader reads through BatteryConfig.with_round_trip, since a battery is written as the per-direction pair it holds."""
 
 
 def scenario_yaml(document: Mapping[str, Any]) -> str:
@@ -125,7 +126,7 @@ def _home_block(home: HomeConfig) -> dict[str, Any]:
 def _component_block(
     block: ComponentBlock[_Component], config: _Component, *, omit: Collection[str] = ()
 ) -> dict[str, Any]:
-    """The block config.py's reader of *block*'s table reads back as *config*.
+    """The block scenario_blocks.py's reader of *block*'s table reads back as *config*.
 
     It holds each of the table's keys not in *omit*, in the table's order: a sub-block key's
     value written by its sub-block's writer, and None as null.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Each table of config.py's scenario grammar, a component block table, held to its dataclass."""
+"""Each of scenario_blocks.py's component block tables held to its dataclass."""
 
 import dataclasses
 import re
@@ -8,19 +8,6 @@ from typing import Any, Callable, Optional
 import pytest
 
 from solar_challenge.battery import BatteryConfig, has_battery
-from solar_challenge.config import (
-    BATTERY_BLOCK,
-    EV_BLOCK,
-    HEAT_PUMP_BLOCK,
-    LOAD_BLOCK,
-    LOCATION_BLOCK,
-    PV_BLOCK,
-    ComponentBlock,
-    FieldKind,
-    FleetField,
-    parse_home_block,
-    parse_location_block,
-)
 from solar_challenge.dispatch import (
     GridChargeConfig,
     PeakShavingStrategyConfig,
@@ -33,6 +20,19 @@ from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    LOCATION_BLOCK,
+    PV_BLOCK,
+    ComponentBlock,
+    FieldKind,
+    FleetField,
+    parse_home_block,
+    parse_location_block,
+)
 
 _TABLES: tuple[ComponentBlock[Any], ...] = (
     PV_BLOCK, BATTERY_BLOCK, LOAD_BLOCK, HEAT_PUMP_BLOCK, EV_BLOCK, LOCATION_BLOCK,
