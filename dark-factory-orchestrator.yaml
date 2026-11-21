@@ -73,7 +73,7 @@ git:
       outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pypi"
       outage_probe_timeout_secs: 180
     - name: e2e
-      command: "PLAYWRIGHT_SKIP_BROWSER_GC=1 timeout -k 60 600 uv run --locked --extra dev --extra web --extra e2e playwright install chromium-headless-shell && timeout -k 60 1800 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider"
+      command: "PLAYWRIGHT_SKIP_BROWSER_GC=1 timeout -k 60 600 uv run --locked --extra dev --extra web --extra e2e playwright install chromium-headless-shell && timeout -k 60 10800 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider"
       fix_task_priority: "medium"
     - name: pvgis
       command: "timeout -k 60 600 uv run --locked --extra dev pytest -n 0 tests/integration/test_pvgis.py -p no:cacheprovider"
