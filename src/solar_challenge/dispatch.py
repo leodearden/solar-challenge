@@ -412,7 +412,7 @@ def _refuse_peak_hours_in_cheap_minutes(
     if reaches:
         raise ConfigurationError(
             "dispatch strategy 'tou_optimized' discharges the battery in its peak hours, so none may fall in a "
-            f"cheap period of tariff {tariff.name!r}, but {' and '.join(reaches)}; remove peak_hours to discharge "
+            f"cheap period of {_tariff_label(tariff)}, but {' and '.join(reaches)}; remove peak_hours to discharge "
             "on the tariff's clock, or narrow the window to the tariff's expensive minutes"
         )
 
@@ -421,6 +421,11 @@ def _cheap_minutes_in(window: tuple[int, int], tariff: TariffConfig) -> frozense
     """The minutes of the day in window, a (start, end) pair of whole hours, that tariff prices cheap."""
     start, end = window
     return frozenset(range(start * MINUTES_PER_HOUR, end * MINUTES_PER_HOUR)) & tariff.cheap_minutes_of_day
+
+
+def _tariff_label(tariff: TariffConfig) -> str:
+    """The tariff as a refusal names it: tariff and its quoted name, when it has one, else the tariff."""
+    return f"tariff {tariff.name!r}" if tariff.name else "the tariff"
 
 
 _IMPORT_LIMIT_KW = POSITIVE
@@ -726,7 +731,7 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 not a (start, end) pair that starts before it ends, naming it peak_hours[i] and
                 the window. Then, with a tariff, if a window reaches a minute it prices cheap:
                 one refusal naming each such window as peak_hours[i] and the window given, the
-                cheap clock ranges it reaches and the tariff's name.
+                cheap clock ranges it reaches and the tariff, by its name when it has one.
         """
         self._clock = _tou_clock(peak_hours, tariff)
 
@@ -982,18 +987,18 @@ def build_dispatch_strategy(
             assert_never(config)
     if grid_charging is not None:
         _refuse_grid_charging_it_would_ignore(config, tariff)
-        _require_cheap_minutes_for_grid_charging(config.strategy_type, grid_charging, tariff)
     return strategy
 
 
 def _refuse_grid_charging_it_would_ignore(config: DispatchStrategyConfig, tariff: TariffConfig | None) -> None:
-    """Refuse a battery's grid_charging under dispatch strategy *config*, unless its variant charges from the grid and there is a tariff.
+    """Refuse a battery's grid_charging under dispatch strategy *config*, unless its variant charges from the grid and there is a tariff with a cheap minute to charge in.
 
     Raises:
         ConfigurationError: The variant does not charge from the grid, or there is no tariff;
             the message names grid_charging, the strategy and what to change. The first
             message names, as the strategy to use instead, each variant that charges from
-            the grid.
+            the grid. Otherwise _require_cheap_minutes_for_grid_charging's refusal of a tariff
+            with no cheap minute.
     """
     tag = config.strategy_type
     if not config._charges_from_the_grid:
@@ -1007,24 +1012,24 @@ def _refuse_grid_charging_it_would_ignore(config: DispatchStrategyConfig, tariff
             f"grid_charging is set, but there is no tariff, so dispatch strategy {tag!r} has no cheap period "
             "to charge in; add a tariff or remove grid_charging"
         )
+    _require_cheap_minutes_for_grid_charging(tag, tariff)
 
 
-def _require_cheap_minutes_for_grid_charging(
-    tag: str, grid_charging: GridChargeConfig | None, tariff: TariffConfig | None
-) -> None:
-    """Refuse grid_charging under dispatch strategy *tag*, a variant that charges from the grid, when tariff has no cheap minute to charge in.
+def _require_cheap_minutes_for_grid_charging(tag: str, tariff: TariffConfig) -> None:
+    """Refuse grid_charging under dispatch strategy *tag* when *tariff* has no cheap minute to charge in.
 
-    _refuse_grid_charging_it_would_ignore makes the variant's other refusals first, so a
-    variant that does not grid-charge, or a home with no tariff, is told that instead.
+    _refuse_grid_charging_it_would_ignore calls it once it has established that grid_charging
+    is set, that variant *tag* charges from the grid and that there is a tariff, so a variant
+    that does not grid-charge, or a home with no tariff, is told that instead.
 
     Raises:
-        ConfigurationError: grid_charging is set and tariff's cheap_minutes_of_day is empty,
-            naming grid_charging, the tariff, the strategy and what to change.
+        ConfigurationError: tariff's cheap_minutes_of_day is empty, naming grid_charging, the
+            tariff, the strategy and what to change.
     """
-    if grid_charging is None or tariff is None or tariff.cheap_minutes_of_day:
+    if tariff.cheap_minutes_of_day:
         return
     raise ConfigurationError(
-        f"grid_charging is set, but tariff {tariff.name!r} has no cheap period, so dispatch strategy {tag!r} "
+        f"grid_charging is set, but {_tariff_label(tariff)} has no cheap period, so dispatch strategy {tag!r} "
         "never charges from the grid; remove grid_charging or use a time-of-use tariff"
     )
 

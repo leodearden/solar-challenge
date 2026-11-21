@@ -4,7 +4,8 @@
   refused, naming tou_optimized, peak_hours and the missing tariff (§9 row 8).
 - TestPeakHoursThatReachACheapMinute: peak_hours given with a tariff are refused when a window
   reaches one of the tariff's cheap minutes, in one refusal naming each such window, the clock
-  ranges it reaches and the tariff; a window's shape is refused first (§5.3, §9 row 7).
+  ranges it reaches and the tariff, by its name when it has one; a window's shape is refused
+  first (§5.3, §9 row 7).
 - TestPeakHoursThatNarrowTheExpensiveMinutes: a window wholly inside the tariff's expensive
   minutes, or given with no tariff, builds, and the battery discharges in its hours only
   (§5.3, §9 row 7).
@@ -23,8 +24,8 @@
   TOUOptimizedStrategyConfig() flows, minute by minute, as a home dispatched tou_optimized
   by its tariff, the route S3 sends that home key through the strategy by (§9 row 6).
 - TestGridChargingOnATariffWithNoCheapPeriod: the factory refuses grid_charging for
-  tou_optimized on a flat tariff, naming grid_charging, the strategy and the tariff, and
-  builds the same strategy without grid charging (§5.4, §9 row 9).
+  tou_optimized on a flat tariff, naming grid_charging, the strategy and the tariff, by its
+  name when it has one, and builds the same strategy without grid charging (§5.4, §9 row 9).
 
 The section and row numbers are those of docs/prds/tariff-coverage-classifier-presets.md.
 Every tariff, strategy and battery is built inside a test, never at import, so a refusal
@@ -157,6 +158,15 @@ class TestPeakHoursThatReachACheapMinute:
 
         for name in ("discharges", "cheap period", "remove peak_hours", "narrow"):
             assert name in str(refused.value), (name, str(refused.value))
+
+    def test_a_tariff_with_no_name_is_named_the_tariff_not_by_its_empty_name(self) -> None:
+        unnamed_economy_10 = TariffConfig(periods=TariffConfig.economy_10().periods)
+
+        with pytest.raises(ConfigurationError) as refused:
+            TOUOptimizedStrategy([(16, 21)], tariff=unnamed_economy_10)
+
+        assert "a cheap period of the tariff, but" in str(refused.value), str(refused.value)
+        assert "''" not in str(refused.value), str(refused.value)
 
     @pytest.mark.parametrize(
         "peak_hours",
@@ -424,6 +434,17 @@ class TestGridChargingOnATariffWithNoCheapPeriod:
 
         for name in ("grid_charging", "'tou_optimized'", tariff.name, "no cheap period"):
             assert name in str(refused.value), (name, str(refused.value))
+
+    def test_a_tariff_with_no_name_is_named_the_tariff_not_by_its_empty_name(self) -> None:
+        unnamed_flat_rate = TariffConfig(periods=_flat_rate().periods)
+
+        with pytest.raises(ConfigurationError) as refused:
+            build_dispatch_strategy(
+                TOUOptimizedStrategyConfig(), grid_charging=GridChargeConfig(0.9), tariff=unnamed_flat_rate
+            )
+
+        assert "but the tariff has no cheap period" in str(refused.value), str(refused.value)
+        assert "''" not in str(refused.value), str(refused.value)
 
     def test_without_grid_charging_the_factory_builds_it_and_it_discharges_at_every_shortfall(self) -> None:
         strategy = build_dispatch_strategy(TOUOptimizedStrategyConfig(), grid_charging=None, tariff=_flat_rate())
