@@ -3,10 +3,11 @@
 Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
 - The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
-  the package to them, and the member guards, which accept the writes to self that
-  REVIEWED_COMPUTED_NAME_WRITES lists.  A surface change edits the frozen tables' rows,
-  and adds its release note, docs/unreleased/domain-library-consumption/<task id>.md, in
-  the same commit.
+  the package to them, the member guards, which accept the writes to self that
+  REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned dataclass is
+  frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that freezes each.
+  A surface change edits the frozen tables' rows, and adds its release note,
+  docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
   current forms.
 - Name resolution: every exported name resolves to its typed import, the object the
@@ -20,6 +21,7 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
 
 import abc
 import ast
+import dataclasses
 import enum
 import functools
 import inspect
@@ -38,6 +40,7 @@ import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 from tests._surface_forms import (
+    is_frozen_dataclass,
     member_forms,
     signature_closure,
     surface_form,
@@ -74,7 +77,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "CostRecoverySolution": "dataclass[eq, frozen] (own_use_rate_pence_per_kwh: float, outlay: BillDistribution, representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
     "FinanceConfig": "dataclass[eq, frozen] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: float | None = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_income_per_kw_per_year_gbp: float = 0.0, grid_services_model: str = 'flat', grid_services_events: GridServicesEventsConfig | None = None) -> None",
     # --- signature-closure types ---
-    "SummaryStatistics": "dataclass[eq] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, simulation_days: int, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, window: SimulationWindow | None = None) -> None",
+    "SummaryStatistics": "dataclass[eq, frozen] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, simulation_days: int, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, window: SimulationWindow | None = None) -> None",
     "ScenarioConfig": "dataclass[eq, frozen] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
     "FleetConfig": "dataclass[eq] (homes: list[HomeConfig] = <factory>, name: str = '') -> None",
     "FleetResults": "dataclass[eq] (per_home_results: list[SimulationResults], home_configs: list[HomeConfig]) -> None",
@@ -92,7 +95,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "BatteryConfig": "dataclass[eq, frozen] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
-    "EnergyFlowResult": "dataclass[eq] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
+    "EnergyFlowResult": "dataclass[eq, frozen] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
     "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float = 1.0, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None) -> EnergyFlowResult",
     "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float = 1.0) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
@@ -218,8 +221,8 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
     "battery.SocEnvelope": "dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
-    "config.OutputConfig": "dataclass[eq] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
-    "config.SimulationPeriod": "dataclass[eq] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
+    "config.OutputConfig": "dataclass[eq, frozen] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
+    "config.SimulationPeriod": "dataclass[eq, frozen] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
     "dispatch.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9) -> None",
     "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen] (import_limit_kw: float) -> None",
     "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
@@ -591,6 +594,40 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
     assert not stale, (
         "REVIEWED_COMPUTED_NAME_WRITES names paths that are no pinned class's "
         f"(stale/misspelled?): {sorted(stale)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The pinned dataclasses not frozen yet, each with the task that freezes it
+#
+# Keys are pinned-class paths, as _pinned_classes() spells them; each value is
+# the task that freezes the class.  An entry whose class is frozen, is no
+# pinned dataclass, or is misspelled fails the guard, so drop the entry then.
+# ---------------------------------------------------------------------------
+UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {
+    "FleetConfig": "task 910",
+    "FleetResults": "task 910",
+    "CommunityResults": "task 910",
+}
+
+
+def test_every_pinned_dataclass_is_frozen() -> None:
+    """Every pinned dataclass is frozen but those UNFROZEN_PINNED_DATACLASSES names, each with the later task that freezes it: review/briefing.yaml's frozen-dataclass convention rests on this test."""
+    unfrozen = {
+        path
+        for path, cls in _pinned_classes().items()
+        if dataclasses.is_dataclass(cls) and not is_frozen_dataclass(cls)
+    }
+    unlisted = sorted(unfrozen - UNFROZEN_PINNED_DATACLASSES.keys())
+    stale = sorted(UNFROZEN_PINNED_DATACLASSES.keys() - unfrozen)
+    assert not unlisted and not stale, (
+        f"Pinned dataclasses that are not frozen: {unlisted}. Freeze each with "
+        "@dataclass(frozen=True), add frozen to its kind in FROZEN_SURFACE or "
+        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen]', and add its release note, "
+        "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit; "
+        "or list it in UNFROZEN_PINNED_DATACLASSES with the task that freezes it. "
+        "UNFROZEN_PINNED_DATACLASSES entries that name no unfrozen pinned dataclass "
+        f"(frozen, no pinned dataclass, or misspelled): {stale}. Drop each."
     )
 
 

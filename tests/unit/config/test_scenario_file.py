@@ -88,6 +88,13 @@ class TestSimulationPeriod:
         assert start.day == 1
         assert end.day == 7
 
+    def test_refuses_a_field_assignment(self) -> None:
+        """A period is a frozen value: assigning one of its fields raises FrozenInstanceError."""
+        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-07")
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            period.end_date = "2024-01-14"  # type: ignore[misc]
+
 
 class TestOutputConfig:
     """Tests for OutputConfig class."""
@@ -110,6 +117,13 @@ class TestOutputConfig:
         assert config.csv_path == "/output/results.csv"
         assert config.include_minute_data is False
         assert config.aggregation == "daily"
+
+    def test_refuses_a_field_assignment(self) -> None:
+        """An output configuration is a frozen value: assigning one of its fields raises FrozenInstanceError."""
+        config = OutputConfig()
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            config.aggregation = "daily"  # type: ignore[misc]
 
 
 class TestScenarioConfig:
