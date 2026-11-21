@@ -1378,12 +1378,11 @@ def test_a_runner_imported_through_the_package_is_reported_as_imported_from_the_
         tmp_path / "src", {"fleet_distribution.py": "from solar_challenge import simulate_community\n"}
     )
 
-    found = _grammar_layering_violations(_import_sites(src_dir))
+    [violation] = _grammar_layering_violations(_import_sites(src_dir))
 
-    assert [str(violation) for violation in found] == [
-        "src/solar_challenge/fleet_distribution.py:1: solar_challenge.fleet_distribution imports "
-        f"simulate_community from solar_challenge ({_GrammarRule.NO_RUNNER.value})"
-    ]
+    assert (violation.subject, violation.rule) == ("simulate_community", _GrammarRule.NO_RUNNER)
+    assert "from solar_challenge (" in str(violation)
+    assert "solar_challenge.simulate_community" not in str(violation)
 
 
 def test_a_module_or_package_named_as_a_runner_is_found(tmp_path: Path) -> None:
