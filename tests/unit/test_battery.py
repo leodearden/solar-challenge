@@ -313,9 +313,8 @@ class TestBatteryAnswersItsGridChargeTarget:
     def test_the_charge_limit_is_the_configured_one_and_the_one_charge_applies(self) -> None:
         battery = Battery(BatteryConfig(capacity_kwh=10.0, max_charge_kw=3.3), initial_soc_kwh=1.0)
         assert battery.max_charge_kw == 3.3
-        assert battery.charge(2 * battery.max_charge_kw, 60) == pytest.approx(
-            battery.max_charge_kw * 1.0 * battery.charge_efficiency
-        )
+        assert battery.charge(2 * battery.max_charge_kw, 60) == pytest.approx(battery.max_charge_kw * 1.0)
+        assert battery.soc_kwh - 1.0 == pytest.approx(battery.max_charge_kw * 1.0 * battery.charge_efficiency)
 
 
 class TestBatteryConfigRoundTripEfficiency:
@@ -874,7 +873,7 @@ class TestBatteryPastAnAssignedSocLimit:
         battery = Battery(BatteryConfig.default_5kwh(), initial_soc_kwh=1.0)
         battery.min_soc_fraction = 0.4
         assert battery.available_charge_capacity_kwh == pytest.approx(3.5)
-        assert battery.charge(power_kw=1.0, duration_minutes=60) == pytest.approx(0.975)
+        assert battery.charge(power_kw=1.0, duration_minutes=60) == pytest.approx(1.0)
         assert battery.soc_kwh == pytest.approx(1.975)
 
     def test_above_an_assigned_ceiling_discharge_still_outputs_energy(self) -> None:
@@ -1081,11 +1080,11 @@ class TestBatteryChargeFromExcess:
         energy = battery.charge(power_kw=10.0, duration_minutes=60)
 
         # Should only charge at 2.5 kW rate
-        # 2.5 kW * 1 hour * 0.975 efficiency = 2.4375 kWh
-        assert energy == pytest.approx(2.4375, rel=0.01)
+        # 2.5 kW * 1 hour = 2.5 kWh drawn, 2.4375 kWh of it stored at 0.975 efficiency
+        assert energy == pytest.approx(2.5)
 
     def test_charge_returns_actual_energy(self, default_battery):
-        """Charge returns actual energy stored."""
+        """Charge returns the energy it drew."""
         energy = default_battery.charge(power_kw=1.0, duration_minutes=60)
         assert isinstance(energy, float)
         assert energy >= 0

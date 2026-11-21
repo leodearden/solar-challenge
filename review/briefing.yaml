@@ -46,13 +46,22 @@ conventions:
       Energy balance must close at every timestep:
       generation + grid_import = demand + grid_export + (battery_charge - battery_discharge),
       within ~0.001 kWh tolerance — at the per-home level AND at the community level.
+      Every term is an energy at the home's bus: battery_charge is the energy the battery
+      drew, before its charge losses, and battery_discharge what it delivered, after its
+      discharge losses, so the balance carries no loss term.
     why: >
       This is the core correctness invariant of the simulator. The per-timestep flow
       logic enforces it (validate_energy_balance, on by default) and raises on violation.
       The community-sharing layer extends it as a composition theorem
       (validate_community_balance) over the per-home balances. Any change to dispatch,
       energy-flow accounting, grid-charge source-splitting, or community netting that
-      breaks closure is a real bug, not a rounding quirk.
+      breaks closure is a real bug, not a rounding quirk. The charge and discharge losses
+      are the battery's, pinned by the storage identity
+      soc_end − soc_start = charge_efficiency × Σbattery_charge − Σbattery_discharge / discharge_efficiency
+      in tests/unit/test_battery_energy_accounts.py::TestStorageIdentity
+      (docs/prds/one-dispatch-engine.md §5.2). A change that reports a stored
+      (after-efficiency) charge on the bus re-opens fk-7440003fdd59: the charge loss
+      booked as export, and a grid charge's loss left out of import.
 
   - rule: "Grid export must be valued at the export/SEG rate, never at the import tariff rate."
     why: >

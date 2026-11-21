@@ -86,6 +86,11 @@ total_self_consumption_kwh = demand − import + grid_charge_kwh  (B-style)
 own_use_kwh (basis C)       = demand − import                   (grid-immune)
 ```
 
+`grid_charge_kwh` is the energy the battery drew from the grid, before its charge
+losses, and grid import includes it (docs/prds/one-dispatch-engine.md §5.2), so
+basis C leaves out the whole grid draw and the round-trip loss falls on the CBS's
+own-use.
+
 The CBS bears the battery round-trip loss; this is absorbed into the headline
 own-use rate (the solver sets `r` against basis-C own-use, which is smaller, so
 the floor-binding rate is correspondingly higher).

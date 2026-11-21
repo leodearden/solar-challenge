@@ -132,6 +132,13 @@ class EnergyFlowResult:
     so never negative. Construction raises ValueError naming each flow below 0
     or NaN, and its value. battery_soc is the state of charge after the
     timestep, in kWh.
+
+    Every flow is an energy at the home's bus: battery_charge is what the battery
+    drew, before its charge losses, and battery_discharge what it delivered, after
+    its discharge losses. So generation + grid_import = demand + grid_export +
+    battery_charge - battery_discharge closes with no loss term, and the battery's
+    SOC changes by charge_efficiency × battery_charge - battery_discharge /
+    discharge_efficiency (docs/prds/one-dispatch-engine.md §5.2).
     """
 
     generation: float
@@ -142,7 +149,7 @@ class EnergyFlowResult:
     grid_export: float
     grid_import: float
     battery_soc: float  # SOC after this timestep
-    grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
+    grid_charge: float = 0.0  # informational: kWh the battery drew from the grid, a part of battery_charge and grid_import
 
     def __post_init__(self) -> None:
         """Refuse a flow that is negative or NaN, naming each such flow and its value."""
@@ -213,8 +220,8 @@ class _StepEnergies:
 
 @dataclass(frozen=True)
 class _BatteryExchange:
-    """The energies a battery stored from PV and from the grid (after charge losses)
-    and delivered to the home's bus in one timestep, in kWh."""
+    """The energies a battery drew from PV and from the grid (before charge losses)
+    and delivered to the home's bus (after discharge losses) in one timestep, in kWh."""
 
     pv_charge_kwh: float
     grid_charge_kwh: float
@@ -238,16 +245,15 @@ def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: flo
 
 
 def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: float) -> EnergyFlowResult:
-    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
+    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not draw or supply."""
     battery_charge_kwh = exchange.pv_charge_kwh + exchange.grid_charge_kwh
 
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
     direct_consumption_kwh = min(step.generation_kwh, step.demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + exchange.discharge_kwh, step.demand_kwh)
 
-    # Split-source grid flows, which keep validate_energy_balance closed
-    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
-    # reduces export, and grid charge adds the energy it stored to import.
+    # Export is the excess the battery did not draw; import adds what it drew from the grid
+    # (docs/prds/one-dispatch-engine.md §5.2).
     grid_export_kwh = max(0.0, step.excess_kwh - exchange.pv_charge_kwh)
     grid_import_kwh = max(0.0, step.shortfall_kwh - exchange.discharge_kwh) + exchange.grid_charge_kwh
 
@@ -443,9 +449,11 @@ def validate_energy_balance(
     """Validate energy balance for a timestep result.
 
     Balance equation:
-    generation + import = consumption + export + storage_delta
+    generation + grid_import = demand + grid_export + battery_net_draw
 
-    Where storage_delta = battery_charge - battery_discharge (net storage)
+    Where battery_net_draw = battery_charge - battery_discharge, the battery's net draw from
+    the bus. Both are bus energies, so the balance carries no loss term; the battery's SOC
+    change is the storage identity in EnergyFlowResult's docstring.
 
     Args:
         result: Energy flow result to validate
@@ -460,8 +468,8 @@ def validate_energy_balance(
     # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
     # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
-    storage_delta = result.battery_charge - result.battery_discharge
-    energy_out = result.demand + result.grid_export + storage_delta
+    battery_net_draw_kwh = result.battery_charge - result.battery_discharge
+    energy_out = result.demand + result.grid_export + battery_net_draw_kwh
 
     imbalance = abs(energy_in - energy_out)
 
