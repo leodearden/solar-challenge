@@ -93,7 +93,8 @@ def test_a_click_on_a_tab_fades_the_selected_colours_from_the_tab_that_had_them_
     previously_selected = opening_tab
     for clicked in (*other_tabs, opening_tab):
         fading = page.get_by_role("tab", name=clicked, exact=True).evaluate(_CLICK_AND_READ_THE_FADING)
-        assert ({transition["tab"] for transition in fading}, _finish_the_fading_and_read_the_tab_colours(page)) == (
+        settled_colours = _finish_the_fading_and_read_the_tab_colours(page)
+        assert ({transition["tab"] for transition in fading}, settled_colours) == (
             {previously_selected, clicked},
             {name: selected if name == clicked else unselected for name in tab_bar_page.tab_names},
         ), f"after a click on the {clicked!r} tab"
