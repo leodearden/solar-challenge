@@ -31,8 +31,8 @@ Once every point of a sweep has ended, the page posts the finished points to
 POST /scenarios/sweep/chart, labelled with the parameter the sweep ran, and
 shows the chart panels it answers in the region named "Sweep charts", or why
 it could not draw them; a sweep run after it drops that request and clears the
-region. The region is shown, and its chart containers laid out, as the panels
-the page is answered with are added to it.
+region. The region is shown, its chart containers laid out and their charts
+drawn, as the panels the page is answered with are added to it.
 
 Last, verifies that another tab loads Run History while the jobs of an
 8-point sweep run, and that each point's row then shows its results; that the
@@ -662,9 +662,14 @@ new MutationObserver(records => {
   for (const record of records) {
     const region = record.target;
     if (region instanceof Element && region.matches('section[aria-label="Sweep charts"]') && record.addedNodes.length > 0) {
-      window.__sweepChartsAsPanelsAdded.push({
+      const containers = [...region.querySelectorAll('[data-chart-figure]')];
+      const panelsAdded = {
         region_shown: region.checkVisibility(),
-        chart_containers_laid_out: [...region.querySelectorAll('[data-chart-figure]')].map(container => container.offsetWidth > 0),
+        chart_containers_laid_out: containers.map(container => container.offsetWidth > 0),
+      };
+      window.__sweepChartsAsPanelsAdded.push(panelsAdded);
+      queueMicrotask(() => {
+        panelsAdded.charts_drawn = containers.map(container => container.classList.contains('js-plotly-plot'));
       });
     }
   }
@@ -674,10 +679,10 @@ new MutationObserver(records => {
 _ONE_CHART_PANEL = """<div id="chart-sweep-generation" data-chart-figure='{"data": [], "layout": {}}'></div>"""
 
 
-def test_the_sweep_charts_region_is_shown_with_its_chart_containers_laid_out_as_its_panels_are_added(
-    page: Page, live_server: str, sweep_jobs: _SweepJobs
+def test_the_sweep_charts_region_is_shown_and_its_charts_drawn_as_its_panels_are_added(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
 ) -> None:
-    """The init script's observer is created before chart-renderer.js's, so it is notified in the same microtask as the renderer's own, and reads the region as the renderer finds it. A region that Alpine's x-show showed only at the next animation frame would read hidden there: the renderer would then wait for a frame to draw, and a browser that withholds frames would draw none of the sweep's charts."""
+    """Every mutation observer with records to deliver is notified in one microtask, and Chromium notifies them in the order they were created, so the init script's observer, created before chart-renderer.js's, reads the region as the renderer then finds it. The microtask it queues runs after the renderer's callback and before any animation frame, so it reads whether the renderer drew each chart at once. A region that Alpine's x-show showed only at the next animation frame would read hidden there: the renderer would then wait for a frame to draw, and a browser that withholds frames would draw none of the sweep's charts."""
     page.add_init_script(_RECORD_THE_SWEEP_CHARTS_REGION_AS_ITS_PANELS_ARE_ADDED)
     page.route(
         _SWEEP_CHARTS_URL,
@@ -692,8 +697,9 @@ def test_the_sweep_charts_region_is_shown_with_its_chart_containers_laid_out_as_
     expect(page.locator("#chart-sweep-generation")).to_be_attached()
 
     assert page.evaluate("window.__sweepChartsAsPanelsAdded") == [
-        {"region_shown": True, "chart_containers_laid_out": [True]}
+        {"region_shown": True, "chart_containers_laid_out": [True], "charts_drawn": [True]}
     ]
+    assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
 @pytest.mark.parametrize(
