@@ -871,15 +871,7 @@ def _age0_baseline_outlay(
         for h in homes
     ]
 
-    # Derive timezone and timestamps from the scenario
-    tz: str
-    if scenario.location is not None:
-        tz = scenario.location.timezone
-    else:
-        tz = homes[0].location.timezone
-    start_ts = scenario.period.get_start_timestamp(tz)
-    end_ts = scenario.period.get_end_timestamp(tz)
-
+    start_ts, end_ts = scenario.simulation_bounds()
     fleet_config = FleetConfig(homes=aged_homes, name="age-0-baseline")
     fleet_results = simulate(fleet_config, start_ts, end_ts)
 
