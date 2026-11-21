@@ -67,6 +67,13 @@
 </div>
 {% endmacro %}
 
+{# :hidden, not x-show, whose show/hide waits for an animation frame: tests/e2e/test_fleet_interactions.py::test_fleet_distribution_type_select_switches_its_cards_parameters_while_the_browser_renders_no_frame #}
+{% macro _type_panel(shown, classes='') %}
+<div :hidden="!({{ shown }})" x-cloak>
+    <div class="{{ classes }}">{{ caller() }}</div>
+</div>
+{% endmacro %}
+
 {% macro distribution_editor(dist, component, subject='') %}
 {% set step = component.step %}
 <div x-data="distributionEditor(() => {{ dist }}, {{ component.new_row_value }})" class="space-y-4">
@@ -83,34 +90,34 @@
         </select>
     </label>
 
-    <div x-show="!dist.type" x-cloak>
+    {% call _type_panel('!dist.type') %}
         {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.fixed_range[0], max=component.fixed_range[1]) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'normal'" x-cloak class="grid grid-cols-2 gap-4">
+    {% call _type_panel("dist.type === 'normal'", 'grid grid-cols-2 gap-4') %}
         {{ _parameter(subject, 'Mean', 'dist.mean', step) }}
         {{ _parameter(subject, 'Std Dev', 'dist.std', step, min=0) }}
         {{ _parameter(subject, 'Min (clamp)', 'dist.min', step) }}
         {{ _parameter(subject, 'Max (clamp)', 'dist.max', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'uniform'" x-cloak class="grid grid-cols-2 gap-4">
+    {% call _type_panel("dist.type === 'uniform'", 'grid grid-cols-2 gap-4') %}
         {{ _parameter(subject, 'Min', 'dist.min', step) }}
         {{ _parameter(subject, 'Max', 'dist.max', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'weighted_discrete'" x-cloak class="space-y-3">
+    {% call _type_panel("dist.type === 'weighted_discrete'", 'space-y-3') %}
         <div class="text-sm text-slate-500 dark:text-slate-400">Define value-weight pairs. Weights are auto-normalised.</div>
         {{ _row_list(subject, 'dist.values', 'weight', 'Weight', 'any', step) }}
-    </div>
+    {% endcall %}
 
-    <div x-show="dist.type === 'shuffled_pool'" x-cloak class="space-y-3">
+    {% call _type_panel("dist.type === 'shuffled_pool'", 'space-y-3') %}
         <div class="text-sm text-slate-500 dark:text-slate-400">Define exact value-count pairs. Counts should sum to the fleet size.</div>
         {% call _row_list(subject, 'dist.entries', 'count', 'Count', '1', step) %}
         <span class="text-xs text-slate-500 dark:text-slate-400">
             Total: <span x-text="dist.entries.reduce((s, e) => s + (e.count || 0), 0)"></span> homes
         </span>
         {% endcall %}
-    </div>
+    {% endcall %}
 </div>
 {% endmacro %}
