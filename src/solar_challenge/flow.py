@@ -14,7 +14,7 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     SelfConsumptionStrategy,
     StepLimits,
-    compute_grid_charge_power_kw,
+    TOUOptimizedStrategy,
     require_valid_step_powers,
 )
 from solar_challenge.tariff import TariffConfig
@@ -173,9 +173,8 @@ def _build_grid_charge_context(
 ) -> GridChargeContext:
     """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh.
 
-    Its cheap-period classification is TariffConfig.is_cheap_at's, which
-    :func:`simulate_timestep_tou` also reads, so both dispatch paths classify each
-    minute alike; a tariff with no rate spread has no cheap minute.
+    Its cheap-period classification is TariffConfig.is_cheap_at's, the clock of a
+    TOUOptimizedStrategy built with the tariff; a tariff with no rate spread has no cheap minute.
     """
     return GridChargeContext(
         current_rate=tariff.get_rate(timestamp),
@@ -190,9 +189,8 @@ def _build_grid_charge_context(
 
 @dataclass(frozen=True)
 class _StepEnergies:
-    """A timestep's duration in hours, its generation and demand as energies in kWh, and the excess and shortfall between them."""
+    """A timestep's generation and demand as energies in kWh, and the excess and shortfall between them."""
 
-    duration_hours: float
     generation_kwh: float
     demand_kwh: float
     excess_kwh: float
@@ -210,7 +208,6 @@ class _StepEnergies:
         generation_kwh = generation_kw * duration_hours
         demand_kwh = demand_kw * duration_hours
         return cls(
-            duration_hours=duration_hours,
             generation_kwh=generation_kwh,
             demand_kwh=demand_kwh,
             excess_kwh=max(0.0, generation_kwh - demand_kwh),
@@ -358,26 +355,11 @@ def simulate_timestep_tou(
     tariff: TariffConfig,
     timestep_minutes: float = 1.0,
 ) -> EnergyFlowResult:
-    """Simulate energy flow for a single timestep with TOU-optimized battery dispatch.
+    """Simulate energy flow for a single timestep, the battery dispatched by TOUOptimizedStrategy on the tariff's clock through simulate_timestep.
 
-    TOU-optimized energy flow strategy:
-    1. PV generation meets demand directly (self-consumption)
-    2. Classify the current minute as cheap or expensive with
-       TariffConfig.is_cheap_at, as the grid-charge context does.  A tariff
-       with no rate spread has no cheap minute, so every step takes the
-       expensive-period branch, which is plain self-consumption.
-    3. During cheap periods (off-peak):
-       - Excess PV charges battery aggressively
-       - Remaining excess exports to grid
-       - When ``battery.grid_charge_target_kwh`` is not None, the battery tops up
-         from the grid toward it by the power :func:`compute_grid_charge_power_kw`
-         returns for the SOC before the PV charge and that PV charge
-    4. During expensive periods (peak):
-       - Discharge battery to meet demand before importing from grid, asking it
-         for the shortfall power demand_kw - generation_kw whenever that is above
-         0, as the dispatch strategies ask
-       - Excess PV charges battery (saving for later peak use)
-       - Export only if battery is full
+    It is retired at the next release. Call what it returns instead:
+    ``simulate_timestep(generation_kw, demand_kw, battery, timestep_minutes, timestamp,
+    TOUOptimizedStrategy(tariff=tariff), tariff=tariff)``.
 
     Args:
         generation_kw: PV generation power in kW
@@ -391,55 +373,14 @@ def simulate_timestep_tou(
         EnergyFlowResult with all energy flows in kWh
 
     Raises:
-        ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
-            or demand_kw is not finite and at least 0, naming it. Each check runs before any battery
-            moves energy.
+        ValueError: As simulate_timestep raises: if timestep_minutes is not positive and finite,
+            naming it; then if generation_kw or demand_kw is not finite and at least 0, naming it;
+            then for a decision StepLimits refuses, which TOUOptimizedStrategy never makes. Each
+            check runs before any battery moves energy.
     """
-    require_valid_duration(timestep_minutes, "Timestep")
-    step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
-    is_cheap_period = tariff.is_cheap_at(timestamp)
-    if battery is None:
-        return _settle(step, _NO_EXCHANGE, 0.0)
-
-    pv_charge_kwh = 0.0
-    grid_charge_kwh = 0.0
-    discharge_kwh = 0.0
-    if is_cheap_period:
-        # Off-peak: charge from excess PV, then optionally top-up from grid
-        soc_before_pv_kwh = battery.soc_kwh
-        if step.excess_kwh > 0:
-            excess_power_kw = step.excess_kwh / step.duration_hours
-            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
-
-        target_soc_kwh = battery.grid_charge_target_kwh
-        if target_soc_kwh is not None:
-            pv_charge_power_kw = min(
-                step.excess_kwh / step.duration_hours if step.excess_kwh > 0 else 0.0,
-                battery.max_charge_kw,
-            )
-            ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
-            grid_power = compute_grid_charge_power_kw(
-                ctx,
-                battery_soc_kwh=soc_before_pv_kwh,
-                pv_charge_power_kw=pv_charge_power_kw,
-                timestep_minutes=timestep_minutes,
-            )
-            if grid_power > 0:
-                grid_charge_kwh = battery.charge(grid_power, timestep_minutes)
-    else:
-        # Peak: discharge to meet shortfall, then charge from excess PV
-        shortfall_kw = max(0.0, demand_kw - generation_kw)
-        if shortfall_kw > 0:
-            discharge_kwh = battery.discharge(shortfall_kw, timestep_minutes)
-
-        if step.excess_kwh > 0:
-            excess_power_kw = step.excess_kwh / step.duration_hours
-            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
-
-    exchange = _BatteryExchange(
-        pv_charge_kwh=pv_charge_kwh, grid_charge_kwh=grid_charge_kwh, discharge_kwh=discharge_kwh
+    return simulate_timestep(
+        generation_kw, demand_kw, battery, timestep_minutes, timestamp, TOUOptimizedStrategy(tariff=tariff), tariff=tariff
     )
-    return _settle(step, exchange, battery.soc_kwh)
 
 
 def validate_energy_balance(
@@ -465,8 +406,8 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
-    # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
+    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, so
+    # _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
     battery_net_draw_kwh = result.battery_charge - result.battery_discharge
     energy_out = result.demand + result.grid_export + battery_net_draw_kwh
