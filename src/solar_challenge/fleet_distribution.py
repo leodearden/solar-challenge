@@ -35,6 +35,7 @@ from solar_challenge.number_fields import (
     Interval,
     as_finite_float,
     as_finite_floats,
+    as_finite_real,
     as_whole_number,
     as_whole_numbers,
     read_field,
@@ -54,7 +55,6 @@ from solar_challenge.scenario_blocks import (
     child_path,
     constructed,
     dispatch_strategy_argument,
-    float_or_none,
     read_dispatch_strategy_key,
     refuse_missing_keys,
     refuse_unrecognised_keys,
@@ -705,12 +705,18 @@ def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistrib
 
 
 def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
-    """Build the fixed value a spec names, refusing it unless it gives a value."""
+    """Build the fixed value the spec at *block_path*, the parameter's path, names: null, or its value read as a finite number, as the scalar it stands for is read.
+
+    Raises:
+        ConfigurationError: If the spec gives no value, or one that is not a finite number,
+            text included, naming *block_path*.
+    """
     if "value" not in data:
         raise ConfigurationError(
             f"fixed distribution for '{block_path}' requires 'value'"
         )
-    return float_or_none(data["value"])
+    value = data["value"]
+    return None if value is None else as_finite_real(value, block_path)
 
 
 def _build_shuffled_pool_spec(
@@ -783,26 +789,22 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     """Parse a distribution specification from config data.
 
     Args:
-        data: Raw data (scalar, None, or distribution dict)
+        data: Raw data: null, a distribution mapping, or any other value, read as the number
+            every home is given
         param_name: The parameter's path in its file, named in error messages
 
     Returns:
-        DistributionSpec (distribution object, scalar, or None)
+        DistributionSpec (distribution object, a finite float, or None)
 
     Raises:
-        ConfigurationError: If distribution specification is invalid
+        ConfigurationError: If distribution specification is invalid; a value that is
+            neither null nor a mapping and is not a finite number, text included, is
+            refused naming *param_name* and the value
     """
-    # Handle None and scalars
     if data is None:
         return None
-    if isinstance(data, (int, float)):
-        return float(data)
-
-    # Must be a dict with type key
     if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"Invalid distribution spec for '{param_name}': expected number, null, or dict"
-        )
+        return as_finite_real(data, param_name)
 
     dist_type = data.get("type")
     if dist_type is None:
@@ -1082,8 +1084,8 @@ class _DistributionSampler:
         """Draw the next home's value of *setting* from *spec*.
 
         A setting drawn ahead hands out its next value. Any other is drawn afresh: None
-        gives None, a bare choice gives itself, a fixed number gives itself as a float, and
-        a weighted discrete, normal or uniform spec draws from the RNG.
+        gives None, a bare choice or number gives itself as given, for the home's type to
+        read, and a weighted discrete, normal or uniform spec draws from the RNG.
 
         Args:
             spec: The setting's distribution specification
@@ -1111,10 +1113,8 @@ class _DistributionSampler:
     def _next_value(self, spec: DistributionSpec, setting: str) -> SpecValue:
         if setting in self._drawn_ahead:
             return self._next_value_drawn_ahead(setting)
-        if spec is None or isinstance(spec, str):
+        if spec is None or isinstance(spec, (str, int, float)):
             return spec
-        if isinstance(spec, (int, float)):
-            return float(spec)
         if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
             return spec.draw(self._rng)
         raise ConfigurationError(f"{setting} cannot be drawn from {spec!r}")
