@@ -8,7 +8,6 @@ closes with no loss term, while the battery's state of charge moves by the stora
 (docs/prds/one-dispatch-engine.md §5.2, §9 rows 2-6).
 """
 
-import math
 from collections.abc import Callable
 from datetime import datetime
 
@@ -17,13 +16,13 @@ import pytest
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community, validate_community_balance
-from solar_challenge.config import load_scenarios
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategy
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.home import calculate_summary, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._balanced_sim_results import make_balanced_fleet
-from tests._repository_paths import SCENARIOS_DIR
+from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._june_minute_day import MINUTES, inline_day, strategy_day
 from tests._synthetic_weather import sunless_weather, weather_for
 
 _E7 = TariffConfig.economy_7()
@@ -57,38 +56,19 @@ def _a_cheap_hour_dispatched_inline(battery: Battery) -> EnergyFlowResult:
     return simulate_timestep_tou(0.0, 0.0, battery, pd.Timestamp("2024-01-15 02:00"), _E7, 60)
 
 
-_MINUTES = pd.date_range("2024-06-21 00:00", periods=1440, freq="min")
-
-
-def _hour(minute: pd.Timestamp) -> float:
-    """The hour of the day minute starts at, as a fraction."""
-    return minute.hour + minute.minute / 60
-
-
-def _pv_kw(minute: pd.Timestamp) -> float:
-    """The day's PV: 3·sin(π(h − 5)/16) kW from 05:00 to 21:00, and none outside."""
-    h = _hour(minute)
-    return 3 * math.sin(math.pi * (h - 5) / 16) if 5 <= h < 21 else 0.0
-
-
-def _demand_kw(minute: pd.Timestamp) -> float:
+def _demand_kw(h: float) -> float:
     """The day's demand: 0.4 kW, plus 1.5 kW from 17:00 to 20:00."""
-    h = _hour(minute)
     return 0.4 + (1.5 if 17 <= h < 20 else 0.0)
 
 
 def _strategy_day(battery: Battery) -> list[EnergyFlowResult]:
     """Each minute of the day's flows through simulate_timestep, dispatched by TOU with peak hours 16:00 to 20:00 on Economy 7."""
-    strategy = TOUOptimizedStrategy([(16, 20)])
-    return [
-        simulate_timestep(_pv_kw(minute), _demand_kw(minute), battery, 1.0, minute.to_pydatetime(), strategy, tariff=_E7)
-        for minute in _MINUTES
-    ]
+    return strategy_day(battery, _demand_kw, TOUOptimizedStrategy([(16, 20)]), _E7)
 
 
 def _inline_day(battery: Battery) -> list[EnergyFlowResult]:
     """Each minute of the day's flows through simulate_timestep_tou on Economy 7."""
-    return [simulate_timestep_tou(_pv_kw(minute), _demand_kw(minute), battery, minute, _E7, 1.0) for minute in _MINUTES]
+    return inline_day(battery, _demand_kw, _E7)
 
 
 def _soc_change_by_the_identity_kwh(battery: Battery, flow: EnergyFlowResult) -> float:
@@ -195,7 +175,7 @@ class TestStorageIdentity:
         socs_before_kwh = [_DAY_SOC_KWH] + [flow.battery_soc for flow in flows[:-1]]
         off_by_kwh = [
             (minute, flow.battery_soc - soc_before_kwh - _soc_change_by_the_identity_kwh(battery, flow))
-            for minute, flow, soc_before_kwh in zip(_MINUTES, flows, socs_before_kwh, strict=True)
+            for minute, flow, soc_before_kwh in zip(MINUTES, flows, socs_before_kwh, strict=True)
         ]
         assert [(minute, off) for minute, off in off_by_kwh if abs(off) > 1e-12] == []
 
@@ -242,8 +222,7 @@ class TestBusBalancesStillClose:
     """§9 row 6: the bus balances a home run and a community battery are checked against need no loss term."""
 
     def test_the_arbitrage_home_balances_every_minute_and_summarises_its_grid_charge(self) -> None:
-        home = load_scenarios(SCENARIOS_DIR / "bristol-arbitrage.yaml")[0].home
-        assert home is not None
+        home = bristol_arbitrage_home()
         day = pd.Timestamp("2024-01-15")
 
         results = simulate_home(
