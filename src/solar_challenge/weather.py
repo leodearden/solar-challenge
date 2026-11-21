@@ -7,6 +7,7 @@ import io
 import json
 import os
 import uuid
+import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -277,6 +278,8 @@ class WeatherCache:
         Raises:
             ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
                 zone; nothing is then written
+            OSError: If the cache directory cannot be created, as under a regular file or where the process cannot
+                write, or the entry's file cannot be written; any entry under the key is then left as it was
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
 
@@ -338,7 +341,7 @@ class WeatherProvider(Protocol):
 
 @dataclass(frozen=True)
 class PvgisTmy:
-    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there; with no cache, fetched on every get."""
+    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there when it can; with no cache, fetched on every get."""
 
     cache: WeatherCache | None
 
@@ -347,6 +350,10 @@ class PvgisTmy:
 
         Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
         the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
+
+        If its cache's put raises OSError, as where the process may not create the cache directory, get returns the
+        fetched TMY uncached, with a UserWarning attributed to its caller naming the directory and the error, so
+        the next get fetches it again.
 
         Returns:
             DataFrame with columns including:
@@ -379,8 +386,22 @@ class PvgisTmy:
         if cached is not None:
             return cached
         tmy = _fetch_scaled_tmy(location)
-        self.cache.put(tmy, "tmy", location)
+        _put_or_warn(self.cache, tmy, location)
         return tmy
+
+
+def _put_or_warn(cache: WeatherCache, tmy: pd.DataFrame, location: Location) -> None:
+    """Put tmy in cache as location's TMY; an OSError from the put becomes a UserWarning, attributed to PvgisTmy.get's caller, naming cache's directory and the error."""
+    try:
+        cache.put(tmy, "tmy", location)
+    except OSError as e:
+        warnings.warn(
+            f"Could not cache the TMY fetched for {location!r} in {cache.cache_dir}: {e}. It is returned uncached, "
+            "so the next PvgisTmy.get fetches it from PVGIS again; name a directory this process can write with "
+            f"{CACHE_DIR_VARIABLE} or WeatherCache(cache_dir=...)",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 @dataclass(frozen=True, eq=False)
