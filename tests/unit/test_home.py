@@ -1303,6 +1303,62 @@ class TestSummaryStatistics:
         with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
             home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
 
+    @pytest.mark.parametrize(
+        ("discharge_kwh", "self_consumption_kwh"),
+        [
+            pytest.param(8.0, 6.0, id="more-than-self-consumed"),
+            pytest.param(math.nextafter(60.0, math.inf), 60.0, id="by-one-ulp"),
+            pytest.param(math.inf, 60.0, id="infinite"),
+            pytest.param(float("nan"), 60.0, id="not-a-number"),
+        ],
+    )
+    def test_a_discharge_above_its_self_consumption_is_refused_naming_both_totals(
+        self, discharge_kwh: float, self_consumption_kwh: float
+    ) -> None:
+        """The error states the invariant and the totals that break it."""
+        with pytest.raises(ValueError) as refused:
+            home_summary(total_battery_discharge_kwh=discharge_kwh, total_self_consumption_kwh=self_consumption_kwh)
+
+        message = str(refused.value)
+        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
+        assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
+
+    def test_a_discharge_that_is_all_of_its_self_consumption_is_accepted_with_no_direct_use(self) -> None:
+        summary = home_summary(total_battery_discharge_kwh=60.0, total_self_consumption_kwh=60.0)
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    @pytest.mark.parametrize(
+        ("dispatch_strategy", "tariff_config", "seg_tariff"),
+        [
+            pytest.param("greedy", None, None, id="greedy"),
+            pytest.param("tou_optimized", TariffConfig.economy_7(), SEGTariff("Octopus", 4.1), id="tou-optimized"),
+        ],
+    )
+    def test_on_a_sunless_day_the_engines_summary_counts_all_its_self_consumption_as_discharge(
+        self, dispatch_strategy: str, tariff_config: TariffConfig | None, seg_tariff: SEGTariff | None
+    ) -> None:
+        """With no sun, the battery supplies every kWh the home self-consumes."""
+        home = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=5000.0, seed=11),
+            battery_config=BatteryConfig(capacity_kwh=10.0),
+            location=Location.bristol(),
+            dispatch_strategy=dispatch_strategy,
+            tariff_config=tariff_config,
+            seg_tariff=seg_tariff,
+        )
+        day = pd.Timestamp("2024-09-01")
+
+        summary = calculate_summary(
+            simulate_home(home, day, day, weather=weather_for(home, sunless_weather("2024-09-01", temp_air=12.0)))
+        )
+
+        assert summary.total_battery_discharge_kwh > 0.0
+        assert summary.total_battery_discharge_kwh == summary.total_self_consumption_kwh
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
     def test_refuses_a_field_assignment(self) -> None:
         """A summary is a frozen value, so a simulation_days construction checked against its window cannot be assigned after it."""
         summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)

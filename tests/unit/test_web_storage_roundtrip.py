@@ -9,6 +9,7 @@ Tests cover:
 - A summary's window survives home and fleet roundtrips and is stored as ISO 8601
   text; a summary saved without one loads it as None, and one whose simulation_days
   is not its window's days is refused
+- A stored summary whose battery discharge exceeds its self-consumption is refused
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
@@ -489,6 +490,32 @@ class TestSummaryWindowRoundtrip:
 
         with pytest.raises(StoredRunUnreadable, match=r"simulation_days=62 for a window of 61 days") as refused:
             storage.load_run("window-days-001")
+
+        assert refused.value.document == "summary.json"
+
+
+class TestStoredSummaryDischargeBound:
+    """SummaryStatistics refuses, as a run loads, a stored summary whose battery discharge is more than the self-consumption that counts it."""
+
+    def test_a_stored_summary_whose_discharge_exceeds_its_self_consumption_is_refused(
+        self, storage: RunStorage
+    ) -> None:
+        storage.save_home_run(
+            run_id="discharge-bound-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "discharge-bound-001") / "summary.json"
+        stored = _read_json(summary_path)
+        stored["total_battery_discharge_kwh"] = 61.0
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        with pytest.raises(
+            StoredRunUnreadable, match=r"total_battery_discharge_kwh=61\.0, total_self_consumption_kwh=60\.0"
+        ) as refused:
+            storage.load_run("discharge-bound-001")
 
         assert refused.value.document == "summary.json"
 
