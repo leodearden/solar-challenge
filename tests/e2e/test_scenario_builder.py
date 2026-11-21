@@ -342,8 +342,8 @@ def test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displaye
         "General",
         message="the test takes General's panel to be the closing one, so General's header alone should be exposed as expanded when the page loads",
     )
-    general_panel = _panel_of(page, "General")
     general_panel_id = _panel_id_of(page, "General")
+    general_panel = page.locator(f"id={general_panel_id}")
     accordion = _accordion_with_open(page, "Period")
     page.add_style_tag(content=f"#{general_panel_id} {{ transition-duration: 600s !important; }}")
     page.get_by_role("button", name="Period", exact=True, expanded=False).click()
