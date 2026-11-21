@@ -22,6 +22,7 @@ from typer.testing import CliRunner, Result
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
+    CliInvocation,
     console,
     create_fleet_progress,
     create_progress,
@@ -31,9 +32,9 @@ from solar_challenge.cli.utils import (
     print_error,
     print_info,
     print_report,
+    print_status,
     print_success,
     print_warning,
-    status_console,
 )
 from solar_challenge.config import load_config, parse_finance_config
 from solar_challenge.error_text import error_text_with_notes
@@ -554,19 +555,44 @@ class TestErrorHandling:
         assert lines == f"Invalid value: {error_text_with_notes(error)}".splitlines()
 
 
+_STATUS_PRINTERS = [
+    pytest.param(print_success, id="print_success"),
+    pytest.param(print_info, id="print_info"),
+    pytest.param(print_status, id="print_status"),
+    pytest.param(lambda cli, message: print_status(cli, (message, "bold")), id="print_status-styled-part"),
+]
+
+
+def _make_stderr_a_colour_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Rich treat the captured stderr as a standard colour terminal for the rest of the test: TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset."""
+    monkeypatch.setenv("TTY_COMPATIBLE", "1")
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+
+
 class TestPrintHelpers:
     """Tests for the print_* message helpers."""
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_status_message_is_printed_verbatim_on_stderr(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it, styled or not."""
+        print_message(CliInvocation(), _TEXT_RICH_WOULD_PARSE)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
         "print_message",
         [
-            pytest.param(print_success, id="print_success"),
             pytest.param(print_warning, id="print_warning"),
-            pytest.param(print_info, id="print_info"),
             pytest.param(print_error, id="print_error"),
         ],
     )
-    def test_a_message_is_printed_verbatim_on_stderr(
+    def test_a_warning_or_an_error_is_printed_verbatim_on_stderr(
         self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
     ) -> None:
         """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it."""
@@ -577,23 +603,63 @@ class TestPrintHelpers:
         assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
-        ("print_message", "target", "colour"),
+        ("print_message", "colour"),
         [
-            pytest.param(print_success, status_console, "green", id="print_success"),
-            pytest.param(print_warning, error_console, "yellow", id="print_warning"),
-            pytest.param(print_info, status_console, "blue", id="print_info"),
-            pytest.param(print_error, error_console, "red", id="print_error"),
+            pytest.param(print_success, "green", id="print_success"),
+            pytest.param(print_info, "blue", id="print_info"),
         ],
     )
-    def test_a_message_is_printed_in_its_colour_on_its_console(
-        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
+    def test_a_status_message_is_printed_in_its_colour_on_a_colour_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        print_message: Callable[[CliInvocation, str], None],
+        colour: str,
     ) -> None:
-        """Success prints green and info blue on the status console, and warning yellow and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
-        monkeypatch.setattr(target, "record", True)
+        """Success prints green and info blue on stderr. TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset, make Rich treat the captured stderr as a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_message(CliInvocation(), "saved")
+
+        assert capsys.readouterr().err == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize(
+        ("print_message", "colour"),
+        [
+            pytest.param(print_warning, "yellow", id="print_warning"),
+            pytest.param(print_error, "red", id="print_error"),
+        ],
+    )
+    def test_a_warning_or_an_error_is_printed_in_its_colour_on_the_error_console(
+        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], colour: str
+    ) -> None:
+        """Warning prints yellow and error red on the error console, on stderr; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(error_console, "record", True)
 
         print_message("saved")
 
-        assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+        assert error_console.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_quiet_invocations_status_message_is_not_printed(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """A status message for a quiet invocation prints on neither stream."""
+        print_message(CliInvocation(quiet=True), "Simulating 2 homes")
+
+        assert capsys.readouterr() == ("", "")
+
+    def test_print_status_prints_its_parts_side_by_side_on_stderr_each_in_its_own_style(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`web start`'s Ctrl+C hint prints as its three parts give it, the middle one bold and the others plain, on a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_status(CliInvocation(), "  Press ", ("Ctrl+C", "bold"), " to stop the server.")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "  Press " + Style.parse("bold").render("Ctrl+C") + " to stop the server.\n"
 
 
 class TestProgress:
@@ -607,10 +673,10 @@ class TestProgress:
         ],
     )
     def test_progress_is_printed_on_stderr(
-        self, capsys: pytest.CaptureFixture[str], create: Callable[[], Progress]
+        self, capsys: pytest.CaptureFixture[str], create: Callable[[CliInvocation], Progress]
     ) -> None:
         """Progress prints on stderr, so stdout carries only a command's product."""
-        with create() as progress:
+        with create(CliInvocation()) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
 
         captured = capsys.readouterr()
@@ -624,14 +690,16 @@ class TestProgress:
             pytest.param(create_fleet_progress, id="create_fleet_progress"),
         ],
     )
-    def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
-        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
+    def test_a_quiet_invocations_display_leaves_other_stderr_output_alone_on_a_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        create: Callable[[CliInvocation], Progress],
     ) -> None:
-        """Text written on stderr while a display on the quiet status console runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
+        """Text written on stderr while a quiet invocation's display runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
         monkeypatch.setenv("TTY_COMPATIBLE", "1")
-        monkeypatch.setattr(status_console, "quiet", True)
 
-        with create() as progress:
+        with create(CliInvocation(quiet=True)) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
             print("richardsonpy fell back to the Elexon profile", file=sys.stderr)
 
@@ -1303,11 +1371,6 @@ class TestFleetSweepRefusesAFileItCannotSweep:
 class TestQuietOption:
     """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
 
-    @pytest.fixture(autouse=True)
-    def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """CliRunner runs every invocation in this process, on the one status_console, so a --quiet invocation here must not silence a later test."""
-        monkeypatch.setattr(status_console, "quiet", status_console.quiet)
-
     def test_quiet_config_template_writes_its_file_and_prints_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1383,3 +1446,17 @@ class TestQuietOption:
 
         assert quiet.stderr == ""
         assert " ".join(loud.stderr.split()) == "Template written to loud.yaml"
+
+    def test_a_status_message_after_a_quiet_invocation_still_prints(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A --quiet invocation leaves nothing quiet behind it in the process: a loud invocation's status message printed after it reaches stderr."""
+        monkeypatch.chdir(tmp_path)
+        quiet = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "q.yaml"], catch_exceptions=False
+        )
+        assert quiet.exit_code == 0
+
+        print_info(CliInvocation(), "after")
+
+        assert capsys.readouterr() == ("", "after\n")
