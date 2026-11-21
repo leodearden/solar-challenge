@@ -11,6 +11,15 @@ Provides:
   - ``BillBreakdown`` — frozen dataclass of per-householder financial line items.
   - ``BillDistribution`` — frozen dataclass with fleet-level outlay statistics.
   - ``CostRecoverySolution`` — frozen dataclass result of the cost-recovery solve.
+  - ``AnnualPhysics`` — frozen dataclass of a summary's totals scaled to its
+    window's year, beside the window and how its run was priced.
+  - ``annualise`` — the one annualisation rule, a summary to its AnnualPhysics.
+  - ``basis_c_own_use_kwh`` — a summary's basis-C own-use, demand − import,
+    over its window.
+  - ``OwnUseBasis`` — enum of where a home's ledger takes its own-use from.
+  - ``HomeLedger`` — frozen dataclass of one home's year as the CBS bills it,
+    refusing a year whose balances L1-L4 break.
+  - ``home_ledger`` — the one assembly of a HomeLedger, holding every pricing rule.
   - ``bill`` — period-native billing core mapping simulation outputs to a bill.
   - ``householder_bill`` — annual-period wrapper around ``bill``.
   - ``bill_distribution`` — aggregates per-home bills into a BillDistribution.
@@ -19,6 +28,9 @@ Provides:
   - ``ProjectEconomics`` — frozen dataclass of project-level economics.
   - ``MAX_NODES`` — cap on the number of ages ``project_multi_year`` simulates.
   - ``project_multi_year`` — forward-march driver for adaptive PCHIP projection.
+  - ``annuity_payment`` — level annual payment on a loan.
+  - ``npv`` — net present value of cashflows at a discount rate.
+  - ``irr`` — internal rate of return of cashflows, nan when undefined.
   - ``project_economics`` — project-level financial appraisal of a curve.
   - ``spreadsheet_revenue_curve`` — analytic revenue curve from spreadsheet inputs.
   - ``solve_cost_recovery_rate`` — own-use rate that meets the retained-cash floor.
