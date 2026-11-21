@@ -479,6 +479,23 @@ class TestWeatherCache:
         assert list(cache.cache_dir.iterdir()) == []
         assert cache.get("tmy", bristol) is None
 
+    def test_a_put_that_cannot_replace_the_entrys_path_raises_oserror_leaving_the_path_as_it_was_and_no_staged_file(
+        self, cache, bristol, sample_weather_data
+    ):
+        """put's last step replaces what lies at the entry's path with the file it has written. When that fails, as
+        onto a non-empty directory, put raises OSError, leaving the directory as it was and no staged file beside it."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+        (entry / "kept").write_text("kept")
+
+        with pytest.raises(IsADirectoryError):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == [entry]
+        assert [(file.name, file.read_text()) for file in entry.iterdir()] == [("kept", "kept")]
+
     def test_clear_removes_all(self, cache, bristol, sample_weather_data):
         """Clear removes all cached data."""
         cache.put(sample_weather_data, "tmy", bristol)
