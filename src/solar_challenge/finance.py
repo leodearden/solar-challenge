@@ -852,9 +852,7 @@ def home_ledger(
     if override is None:
         basis = OwnUseBasis.SIMULATED
         if simulated_own_use_kwh is None:
-            basis_c_kwh = physics.demand_kwh - physics.import_kwh
-            # Not max(0.0, ...), which is 0.0 for a NaN: L1 names the NaN instead.
-            own_use_kwh = 0.0 if basis_c_kwh < 0.0 else basis_c_kwh
+            own_use_kwh, _ = _basis_c_kwh(physics.demand_kwh, physics.import_kwh)
         else:
             own_use_kwh = simulated_own_use_kwh
         import_kwh, export_kwh, own_use_capped = physics.import_kwh, physics.export_kwh, False
@@ -900,8 +898,21 @@ def _ledger_import_cost_gbp(
 
 
 # ---------------------------------------------------------------------------
-# basis_c_own_use_kwh — a summary's basis-C own-use (docs/cost-recovery-finance-model.md §2)
+# Basis C — demand − import, clamped at 0 (docs/cost-recovery-finance-model.md §2)
 # ---------------------------------------------------------------------------
+
+
+def _basis_c_kwh(demand_kwh: float, import_kwh: float) -> tuple[float, bool]:
+    """Basis-C own-use, demand − import, and whether it was clamped to 0.0 because the import is above the demand.
+
+    The one basis-C rule, which :func:`home_ledger` and
+    :func:`basis_c_own_use_kwh` both read.  A NaN difference is kept, not
+    clamped as ``max(0.0, nan)`` would, so the ledger's L1 names it.
+    """
+    delta_kwh = demand_kwh - import_kwh
+    if delta_kwh < 0.0:
+        return 0.0, True
+    return delta_kwh, False
 
 
 def basis_c_own_use_kwh(summary: "SummaryStatistics") -> float:
@@ -931,20 +942,20 @@ def basis_c_own_use_kwh(summary: "SummaryStatistics") -> float:
     Returns:
         Basis-C own-use energy in kWh (≥ 0.0).
     """
-    delta = summary.total_demand_kwh - summary.total_grid_import_kwh
-    if delta < 0.0:
+    demand_kwh, import_kwh = summary.total_demand_kwh, summary.total_grid_import_kwh
+    own_use_kwh, clamped = _basis_c_kwh(demand_kwh, import_kwh)
+    if clamped:
         warnings.warn(
             f"Basis-C own-use is negative for a home "
-            f"(demand={summary.total_demand_kwh:.3f} kWh, "
-            f"import={summary.total_grid_import_kwh:.3f} kWh, "
-            f"delta={delta:.3f} kWh); clamped to 0.0. "
+            f"(demand={demand_kwh:.3f} kWh, "
+            f"import={import_kwh:.3f} kWh, "
+            f"delta={demand_kwh - import_kwh:.3f} kWh); clamped to 0.0. "
             f"This likely indicates a dispatch/accounting bug in the simulation "
             f"(import > demand is physically impossible under normal operation).",
             UserWarning,
             stacklevel=2,
         )
-        return 0.0
-    return delta
+    return own_use_kwh
 
 
 # ---------------------------------------------------------------------------

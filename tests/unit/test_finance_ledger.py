@@ -422,6 +422,32 @@ class TestTheBillAndTheProjectionReadOneLedger:
         seg_revenue_gbp = year_0.fleet_revenue_gbp - own_use_revenue_gbp
         assert seg_revenue_gbp / year_0.fleet_export_kwh * 100 == pytest.approx(4.1)
 
+    def test_the_projection_bills_a_basis_c_clamped_at_zero_without_a_warning(self) -> None:
+        """home_ledger warns about nothing, so the projection is silent where basis_c_own_use_kwh warns a bill's caller.
+
+        Beside the 500 kWh its load draws, the home imports 400 kWh into its
+        battery that the battery never discharges, so it imports 900 kWh against
+        a 500 kWh demand.
+        """
+        to_load = make_sim_results(self_kwh=0.0, export_kwh=1000.0, import_kwh=500.0, pricing=_PRICING)
+        into_battery = make_sim_results(self_kwh=0.0, export_kwh=0.0, import_kwh=400.0, pricing=_PRICING)
+        results = dataclasses.replace(
+            to_load,
+            grid_import=to_load.grid_import + into_battery.grid_import,
+            import_cost=to_load.import_cost + into_battery.import_cost,
+        )
+        summary = calculate_summary(results)
+        assert (summary.total_demand_kwh, summary.total_grid_import_kwh) == pytest.approx((500.0, 900.0))
+        scenario, finance = make_scenario_and_finance()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(
+                scenario, finance, simulate=lambda fc, s, e: make_fleet_results_of([results], homes=fc.homes)
+            )
+
+        assert [point.fleet_billed_own_use_kwh for point in curve.points] == [0.0] * finance.asset_life_years
+
 
 class TestHouseholderBillRefusesALedgerThatBreaksL3:
     """householder_bill bills the home's ledger, so an own-use that, with the import, falls short of the demand is refused."""
