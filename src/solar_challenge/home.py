@@ -550,13 +550,8 @@ class _DispatchPath:
     timestep: _Timestep
 
 
-def _strategy_timestep(
-    strategy: Optional[DispatchStrategy], tariff: Optional[TariffConfig], step_minutes: float
-) -> _Timestep:
-    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates.
-
-    No strategy is a run with no battery, whose rows simulate_timestep only settles with the grid.
-    """
+def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig], step_minutes: float) -> _Timestep:
+    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
 
     def timestep(
         battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
@@ -574,18 +569,34 @@ def _strategy_timestep(
     return timestep
 
 
+def _settling_timestep(step_minutes: float) -> _Timestep:
+    """Each row, step_minutes long, of a run with no battery, which simulate_timestep only settles with the grid."""
+
+    def timestep(
+        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+    ) -> EnergyFlowResult:
+        return simulate_timestep(
+            generation_kw=generation_kw, demand_kw=demand_kw, battery=None, timestep_minutes=step_minutes
+        )
+
+    return timestep
+
+
 def _dispatch_path(
     config: HomeConfig, step_minutes: float, strategy: Optional[DispatchStrategy] = None
 ) -> _DispatchPath:
-    """How the home dispatches each row, step_minutes long, at its tariff: by strategy when given, else by its battery's _battery_strategy; a home with no battery runs none and is named after the dispatch it selects."""
-    if strategy is not None:
-        name = strategy.name
-    elif config.battery_config is not None:
+    """How the home dispatches each row, step_minutes long, at its tariff.
+
+    A home with a battery runs strategy when given, else its battery's _battery_strategy. A home
+    with no battery runs none: it only settles each row, and is named after strategy when given,
+    else after the dispatch it selects.
+    """
+    if config.battery_config is None:
+        name = strategy.name if strategy is not None else _dispatch_strategy_config(config).strategy_type
+        return _DispatchPath(name, _settling_timestep(step_minutes))
+    if strategy is None:
         strategy = _battery_strategy(config, config.battery_config)
-        name = strategy.name
-    else:
-        name = _dispatch_strategy_config(config).strategy_type
-    return _DispatchPath(name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
+    return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
 
 
 def _row_flows(
