@@ -534,11 +534,7 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
 def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig) -> None:
     """Refuse *config* when a normal or uniform count that _converted_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
     for path, row, spec in _component_draws(config):
-        if (
-            row.kind is FieldKind.COUNT
-            and path not in _TRUNCATED_COUNTS
-            and isinstance(spec, (NormalDistribution, UniformDistribution))
-        ):
+        if row.kind is FieldKind.COUNT and isinstance(spec, (NormalDistribution, UniformDistribution)):
             _count_bounds(spec, path)
 
 
@@ -967,36 +963,27 @@ def _nearest_whole_number(value: float) -> float:
     return float(whole + 1 if value - whole >= 0.5 else whole)
 
 
-#: The COUNT fields _converted_count truncates, as the generator did before it drew each field
-#: by its kind; every other count is rounded. Task 868 rounds these too and deletes the set
-#: (docs/prds/component-defaults-one-home.md §6 decisions 8 and 9).
-_TRUNCATED_COUNTS: frozenset[str] = frozenset({"ev.arrival_hour", "ev.departure_hour"})
-
-
 def _refuse_unless_finite(value: SpecValue, path: str) -> None:
-    """Refuse *value*, a count of the field at *path* to convert, if it is an infinity or a NaN, naming *path* and the value."""
+    """Refuse *value*, a proportional_to's computed count of the field at *path*, if it is an infinity or a NaN, to which no whole number is nearest, naming *path* and the value; a multiplier overflow makes an infinity."""
     if isinstance(value, float) and not math.isfinite(value):
         raise ConfigurationError.must_be(path, "a finite number", got=value)
 
 
 def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
-    """Return the count of the COUNT field at *path* for *value*, drawn from *spec*; this is the sampler's one count conversion.
+    """Return the count of the COUNT field at *path*, an occupant count or an EV hour alike, for *value*, drawn from *spec*; this is the sampler's one count conversion.
 
-    A count in _TRUNCATED_COUNTS is truncated to an int. For any other, a draw from a normal or
-    uniform distribution gives the whole number nearest it among those from the spec's min to
-    its max, as _nearest_count states, and a proportional_to's value the whole number nearest
-    it, a half rounding up either way. The whole number is returned as a float, so a refusal of
-    the count names it as drawn, 1e+300 rather than the 301-digit int it equals. A fixed value
-    is returned as the spec gives it, and any other value as drawn.
+    A draw from a normal or uniform distribution gives the whole number nearest it among those
+    from the spec's min to its max, as _nearest_count states, and a proportional_to's value the
+    whole number nearest it, a half rounding up either way. The whole number is returned as a
+    float, so a refusal of the count names it as drawn, 1e+300 rather than the 301-digit int it
+    equals. A fixed value is returned as the spec gives it, and a listed outcome as drawn, for
+    the component's type to read, so a fractional one is refused there.
 
     Raises:
-        ConfigurationError: If a count it truncates, or a proportional_to's value, is an
-            infinity or a NaN, naming *path* and the value; or as _nearest_count does, for a
-            normal or uniform distribution with no whole number from its min to its max.
+        ConfigurationError: If a proportional_to's value is an infinity or a NaN, naming *path*
+            and the value; or as _nearest_count does, for a normal or uniform distribution with
+            no whole number from its min to its max.
     """
-    if path in _TRUNCATED_COUNTS:
-        _refuse_unless_finite(value, path)
-        return None if value is None else int(value)
     if isinstance(spec, (int, float)):
         return spec
     if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
@@ -1300,8 +1287,8 @@ def generate_homes_from_distribution(
     Raises:
         ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
             uniform draw that is not a finite number, a count with no whole number from its
-            spec's min to its max, an EV hour or a proportional_to's count that is an
-            infinity or a NaN); if a required field draws null, naming its path and the
+            spec's min to its max, a proportional_to's count that is an infinity or a
+            NaN); if a required field draws null, naming its path and the
             home; if a presence rule refuses a draw, as battery.has_battery refuses a
             negative or non-finite battery capacity; if the fleet gives a home no PV or no
             load, which every home needs, naming the component and the home; as a
