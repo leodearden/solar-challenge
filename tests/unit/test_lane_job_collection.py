@@ -107,33 +107,28 @@ def test_a_session_collects_a_lane_job_once_however_many_test_modules_ask_for_it
 
 
 @requires_uv
-@pytest.mark.parametrize(
-    "unfrozen_module",
-    ["test_first", "test_second"],
-    ids=["asking-before-the-job-is-collected", "asking-after-the-job-is-collected"],
-)
 def test_asking_without_freezing_the_callers_uv_lock_mode_fails_naming_its_fixture_before_or_after_the_collection(
     pytester_under_root_conftest: pytest.Pytester,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
-    unfrozen_module: str,
 ) -> None:
-    """Of two modules asking for one job, the one that does not freeze the caller's uv lock mode fails, whichever asks first.
+    """Of three modules asking for one job in one session, the two that do not freeze the caller's uv lock mode fail.
 
-    So whatever order a worker runs its tests in, no test reads a collection
-    collected without the lock mode a caller's shell may freeze.
+    The first asks before the frozen module collects the job and the last asks after, so whatever order a worker
+    runs its tests in, no test reads a collection collected without the lock mode a caller's shell may freeze.
     """
     monkeypatch.delenv("UV_FROZEN", raising=False)
     lane_project = _lane_project_logging_each_collection(tmp_path_factory.mktemp("lane-project"))
+    unfrozen = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV)
     frozen = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV, FREEZES_THE_CALLERS_UV_LOCK_MODE)
-    asking_modules = {"test_first": frozen, "test_second": frozen}
-    asking_modules[unfrozen_module] = _module_asking_for_the_probe_job_of(lane_project, REQUIRES_UV)
 
-    result = _run_scenario(pytester_under_root_conftest, asking_modules)
+    result = _run_scenario(pytester_under_root_conftest, {"test_a": unfrozen, "test_b": frozen, "test_c": unfrozen})
 
-    result.assert_outcomes(passed=1, failed=1)
-    result.stdout.fnmatch_lines([f"FAILED scenario/{unfrozen_module}.py::*"])
-    result.stdout.fnmatch_lines(["E   AssertionError: *callers_uv_lock_mode_is_frozen*"])
+    result.assert_outcomes(passed=1, failed=2)
+    result.stdout.fnmatch_lines(["FAILED scenario/test_a.py::*", "FAILED scenario/test_c.py::*"])
+    result.stdout.fnmatch_lines(
+        ["E   AssertionError: *callers_uv_lock_mode_is_frozen*", "E   AssertionError: *callers_uv_lock_mode_is_frozen*"]
+    )
 
 
 def test_asking_where_uv_is_not_installed_fails_naming_requires_uv(
