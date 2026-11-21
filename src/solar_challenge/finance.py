@@ -648,6 +648,143 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
 
 
 # ---------------------------------------------------------------------------
+# HomeLedger — one home's year as the CBS bills it, and its balances L1-L4
+# ---------------------------------------------------------------------------
+
+_BALANCE_REL_TOL = 1e-12
+"""The relative tolerance of a ledger's balances L2-L4: the float rounding of one subtraction and one scaling, and nothing more."""
+
+
+def _ledger_refusal(invariant: str, rule: str, figures: Mapping[str, float]) -> ValueError:
+    """The ValueError for a broken ledger balance: the *invariant*, its *rule*, then each of *figures* as name=value."""
+    named = ", ".join(f"{name}={value!r}" for name, value in figures.items())
+    return ValueError(f"HomeLedger {invariant}: {rule}: got {named}")
+
+
+def _at_most(lower: float, upper: float) -> bool:
+    """Whether *lower* <= *upper*, to the ledger's relative tolerance."""
+    return lower <= upper or math.isclose(lower, upper, rel_tol=_BALANCE_REL_TOL)
+
+
+def _require_finite_and_not_negative(figures: Mapping[str, float]) -> None:
+    """L1: refuse every one of *figures*, by name, that is NaN, infinite or negative, in one ValueError."""
+    refused = {name: value for name, value in figures.items() if not 0.0 <= value < math.inf}
+    if refused:
+        raise _ledger_refusal("L1", "every figure is finite and >= 0", refused)
+
+
+def _require_own_use_within_demand(own_use_name: str, own_use_kwh: float, demand_kwh: float) -> None:
+    """L2: refuse an own-use, named *own_use_name*, above the demand, naming both."""
+    if not _at_most(own_use_kwh, demand_kwh):
+        raise _ledger_refusal(
+            "L2",
+            "a home cannot own-use more than it demands, so own-use <= demand_kwh",
+            {own_use_name: own_use_kwh, "demand_kwh": demand_kwh},
+        )
+
+
+def _require_own_use_and_import_cover_demand(*, demand_kwh: float, own_use_kwh: float, import_kwh: float) -> None:
+    """L3: refuse a demand above own-use + import, naming all three."""
+    if not _at_most(demand_kwh, own_use_kwh + import_kwh):
+        raise _ledger_refusal(
+            "L3",
+            "own-use and import cover demand, so demand_kwh <= own_use_kwh + import_kwh",
+            {"demand_kwh": demand_kwh, "own_use_kwh": own_use_kwh, "import_kwh": import_kwh},
+        )
+
+
+def _require_override_split_balances(
+    *, generation_kwh: float, demand_kwh: float, own_use_kwh: float, import_kwh: float, export_kwh: float
+) -> None:
+    """L4: refuse an override split whose own-use and import are not its demand, or whose own-use and export are not its generation, naming that identity's three values."""
+    if not math.isclose(own_use_kwh + import_kwh, demand_kwh, rel_tol=_BALANCE_REL_TOL):
+        raise _ledger_refusal(
+            "L4",
+            "the override splits demand into own-use and import, so own_use_kwh + import_kwh == demand_kwh",
+            {"own_use_kwh": own_use_kwh, "import_kwh": import_kwh, "demand_kwh": demand_kwh},
+        )
+    if not math.isclose(own_use_kwh + export_kwh, generation_kwh, rel_tol=_BALANCE_REL_TOL):
+        raise _ledger_refusal(
+            "L4",
+            "the override splits generation into own-use and export, so own_use_kwh + export_kwh == generation_kwh",
+            {"own_use_kwh": own_use_kwh, "export_kwh": export_kwh, "generation_kwh": generation_kwh},
+        )
+
+
+class OwnUseBasis(Enum):
+    """Where a home's ledger takes its own-use from."""
+
+    SIMULATED = auto()
+    """From the simulation: basis C, or householder_bill's caller figure; import and export are the simulated flows."""
+    OVERRIDE = auto()
+    """FinanceConfig.self_consumption_override splits the home's generation and demand."""
+
+
+@dataclass(frozen=True)
+class HomeLedger:
+    """One home's year as the CBS bills it.
+
+    Energy is in kWh a year and money in GBP (£) a year.  Construction refuses
+    a year whose balances break, checked in this order, naming the invariant
+    and every value in it; L2-L4 hold to a relative 1e-12:
+
+    - L1: every figure is finite and >= 0.
+    - L2: ``own_use_kwh <= demand_kwh``.
+    - L3: ``demand_kwh <= own_use_kwh + import_kwh``: own-use and import cover
+      demand.
+    - L4, on the OVERRIDE basis only: ``own_use_kwh + import_kwh ==
+      demand_kwh`` and ``own_use_kwh + export_kwh == generation_kwh``.
+    """
+
+    basis: OwnUseBasis
+    """Where the own-use comes from."""
+    generation_kwh: float
+    """The home's PV generation."""
+    demand_kwh: float
+    """The home's demand."""
+    own_use_kwh: float
+    """The own-use the householder pays for and the CBS earns on."""
+    import_kwh: float
+    """The grid import the householder is billed for."""
+    import_cost_gbp: float
+    """What that import costs the householder."""
+    import_at_retail: bool
+    """No tariff priced the home's run, so its import is priced at the retail baseline rate."""
+    export_kwh: float
+    """The grid export, whose SEG income is the CBS's."""
+    seg_income_gbp: float
+    """The SEG income the export earns the CBS."""
+    own_use_capped: bool
+    """OVERRIDE only: override × generation exceeded demand, so own-use was cut to demand."""
+
+    def __post_init__(self) -> None:
+        """Refuse a year that breaks L1, L2, L3 or, on the OVERRIDE basis, L4, in that order."""
+        _require_finite_and_not_negative(
+            {
+                "generation_kwh": self.generation_kwh,
+                "demand_kwh": self.demand_kwh,
+                "own_use_kwh": self.own_use_kwh,
+                "import_kwh": self.import_kwh,
+                "import_cost_gbp": self.import_cost_gbp,
+                "export_kwh": self.export_kwh,
+                "seg_income_gbp": self.seg_income_gbp,
+            }
+        )
+        _require_own_use_within_demand("own_use_kwh", self.own_use_kwh, self.demand_kwh)
+        _require_own_use_and_import_cover_demand(
+            demand_kwh=self.demand_kwh, own_use_kwh=self.own_use_kwh, import_kwh=self.import_kwh
+        )
+        if self.basis is OwnUseBasis.OVERRIDE:
+            _require_override_split_balances(
+                generation_kwh=self.generation_kwh,
+                demand_kwh=self.demand_kwh,
+                own_use_kwh=self.own_use_kwh,
+                import_kwh=self.import_kwh,
+                export_kwh=self.export_kwh,
+            )
+
+
+# ---------------------------------------------------------------------------
 # _billed_energy — one home's own-use, import and export as the CBS bills them
 # ---------------------------------------------------------------------------
 
