@@ -231,11 +231,12 @@ def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> No
     pytest_arguments = argv[argv.index("pytest") + 1 :]
 
     assert ("-n", "0") in zip(pytest_arguments, pytest_arguments[1:]), (
-        f"the {job.name!r} lane job {command!r} does not pass pytest `-n 0`, so pyproject's addopts run its suite on one "
-        "pytest-xdist worker per core: each worker repeats the module-scoped work its suite does once, which asks a "
-        "live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, each a "
-        "verify over every core; and the e2e tests, which share one live server in session order, are split across "
-        "workers; pass `-n 0` right after `pytest`"
+        f"the {job.name!r} lane job {command!r} does not pass pytest `-n 0`, so its suite runs on pytest-xdist workers, "
+        "one per core unless the command names a count: each worker repeats the module-scoped work its suite does once, "
+        "which asks a live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, "
+        "each a verify over every core; and each e2e worker starts its own live server and Chromium, whose pages, on a "
+        "loaded host, starve one another past their Page.goto and expect waits, at four workers as at one per core "
+        "(docs/orchestrator-config.md §8); pass `-n 0` right after `pytest`"
     )
 
 
