@@ -935,25 +935,6 @@ class TestGenerateHomesHouseholdOccupants:
 
         assert [home.load_config.household_occupants for home in homes] == [count, count]
 
-    def test_an_infinite_min_or_max_bounds_nothing(self) -> None:
-        """A normal with an infinite min and an infinite max gives each home the whole number nearest its draw, 3 for draws near 3.0."""
-        household_occupants = NormalDistribution(mean=3.0, std=0.1, min=-math.inf, max=math.inf)
-
-        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
-
-        assert [home.load_config.household_occupants for home in homes] == [3] * 20
-
-    def test_a_nan_bound_is_refused_as_the_nan_draw_it_clamps_to(self) -> None:
-        """A NaN min clamps every draw to NaN, so the fleet is refused as drawing a sample that is not a finite number, not as a NaN bound."""
-        household_occupants = NormalDistribution(mean=3.0, std=1.0, min=math.nan)
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
-
-        assert str(exc_info.value) == (
-            "load.household_occupants must draw samples that are finite numbers, got a sample of nan"
-        )
-
     #: Normal and uniform specs with no whole number from their min to their max, so no count can be drawn from them.
     _SPECS_WITH_NO_WHOLE_NUMBER = [
         pytest.param(UniformDistribution(min=2.3, max=2.45), id="uniform-within-one-unit"),

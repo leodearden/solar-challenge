@@ -6,6 +6,7 @@ It reads each component's keys by that component's table in solar_challenge.scen
 
 import math
 import random
+from collections.abc import Iterable, Set
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import (
@@ -29,6 +30,15 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
+from solar_challenge.number_fields import (
+    NON_NEGATIVE,
+    Interval,
+    as_finite_float,
+    as_finite_floats,
+    as_whole_number,
+    as_whole_numbers,
+    read_field,
+)
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     BATTERY_BLOCK,
@@ -58,6 +68,18 @@ from solar_challenge.tariff import TariffConfig
 SpecValue = Union[float, str, None]
 
 
+def _outcome_values(values: object) -> tuple[SpecValue, ...]:
+    """Return *values*, the outcomes a weighted_discrete or shuffled_pool lists, as a tuple of them as given; the home's type reads each, so none is read as a number here.
+
+    Raises:
+        ConfigurationError: If *values* is text, bytes, a mapping, a set, whose order is
+            arbitrary, or not iterable, naming values and *values*.
+    """
+    if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
+        raise ConfigurationError.must_be("values", "a list", got=values)
+    return tuple(values)
+
+
 @dataclass(frozen=True)
 class WeightedDiscreteDistribution:
     """Weighted discrete distribution for sampling from a list of values.
@@ -65,21 +87,19 @@ class WeightedDiscreteDistribution:
     Weights are auto-normalized (e.g., [2,4,3,1] == [20,40,30,10]).
 
     Attributes:
-        values: List of values to sample from (can include None)
-        weights: Corresponding weights (must be non-negative, sum > 0)
+        values: The values to sample from, held as given (can include None)
+        weights: Corresponding weights, read as finite floats of at least 0 (sum > 0)
     """
 
     values: tuple[SpecValue, ...]
     weights: tuple[float, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "values", _outcome_values(self.values))
+        read_field(self, "weights", as_finite_floats, NON_NEGATIVE)
         if len(self.values) != len(self.weights):
             raise ConfigurationError(
                 "WeightedDiscreteDistribution: values and weights must have same length"
-            )
-        if any(w < 0 for w in self.weights):
-            raise ConfigurationError(
-                "WeightedDiscreteDistribution: weights cannot be negative"
             )
         if sum(self.weights) == 0:
             raise ConfigurationError(
@@ -95,11 +115,13 @@ class WeightedDiscreteDistribution:
 class NormalDistribution:
     """Normal (Gaussian) distribution with optional bounds.
 
+    Each number is read as a finite float.
+
     Attributes:
         mean: Mean of the distribution
-        std: Standard deviation
-        min: Optional minimum bound (values are clamped)
-        max: Optional maximum bound (values are clamped)
+        std: Standard deviation, at least 0
+        min: Optional least value; a draw below it is clamped to it
+        max: Optional greatest value; a draw above it is clamped to it
     """
 
     mean: float
@@ -108,8 +130,10 @@ class NormalDistribution:
     max: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.std < 0:
-            raise ConfigurationError("NormalDistribution: std cannot be negative")
+        read_field(self, "mean", as_finite_float)
+        read_field(self, "std", as_finite_float, NON_NEGATIVE)
+        read_field(self, "min", as_finite_float, optional=True)
+        read_field(self, "max", as_finite_float, optional=True)
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ConfigurationError("NormalDistribution: min cannot be greater than max")
 
@@ -128,14 +152,16 @@ class UniformDistribution:
     """Uniform distribution between min and max.
 
     Attributes:
-        min: Minimum value (inclusive)
-        max: Maximum value (inclusive)
+        min: Minimum value (inclusive), read as a finite float
+        max: Maximum value (inclusive), read as a finite float
     """
 
     min: float
     max: float
 
     def __post_init__(self) -> None:
+        read_field(self, "min", as_finite_float)
+        read_field(self, "max", as_finite_float)
         if self.min > self.max:
             raise ConfigurationError("UniformDistribution: min cannot be greater than max")
 
@@ -153,23 +179,22 @@ class ShuffledPoolDistribution:
     then shuffling (like bristol-phase1).
 
     Attributes:
-        values: List of values (can include None)
-        counts: Number of each value in the pool.  In a fleet distribution they total
-            n_homes, one value per home, and FleetDistributionConfig refuses any other total;
-            a parameter only some homes draw leaves the other homes' values undrawn.
+        values: The values, held as given (can include None)
+        counts: Number of each value in the pool, read as whole numbers of at least 0.  In a
+            fleet distribution they total n_homes, one value per home, and
+            FleetDistributionConfig refuses any other total; a parameter only some homes draw
+            leaves the other homes' values undrawn.
     """
 
     values: tuple[SpecValue, ...]
     counts: tuple[int, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "values", _outcome_values(self.values))
+        read_field(self, "counts", as_whole_numbers, NON_NEGATIVE)
         if len(self.values) != len(self.counts):
             raise ConfigurationError(
                 "ShuffledPoolDistribution: values and counts must have same length"
-            )
-        if any(c < 0 for c in self.counts):
-            raise ConfigurationError(
-                "ShuffledPoolDistribution: counts cannot be negative"
             )
         if sum(self.counts) == 0:
             raise ConfigurationError(
@@ -189,9 +214,9 @@ class SweepSpec:
     """Sweep specification for parameter exploration.
 
     Attributes:
-        min: Minimum value
-        max: Maximum value
-        steps: Number of steps
+        min: Minimum value, read as a finite float
+        max: Maximum value, read as a finite float
+        steps: Number of steps, read as a whole number of at least 2
         mode: "geometric" or "linear" (default: geometric)
     """
 
@@ -201,6 +226,9 @@ class SweepSpec:
     mode: str = "geometric"
 
     def __post_init__(self) -> None:
+        read_field(self, "min", as_finite_float)
+        read_field(self, "max", as_finite_float)
+        read_field(self, "steps", as_whole_number, Interval(2, math.inf))
         if self.min <= 0 and self.mode == "geometric":
             raise ConfigurationError(
                 "SweepSpec: geometric mode requires min > 0"
@@ -208,10 +236,6 @@ class SweepSpec:
         if self.max <= self.min:
             raise ConfigurationError(
                 "SweepSpec: max must be greater than min"
-            )
-        if self.steps < 2:
-            raise ConfigurationError(
-                "SweepSpec: steps must be at least 2"
             )
         if self.mode not in ("geometric", "linear"):
             raise ConfigurationError(
@@ -237,13 +261,18 @@ class ProportionalDistribution:
 
     Attributes:
         source: Source field path (e.g., "pv.capacity_kw")
-        multiplier: Multiplication factor (float or SweepSpec)
-        offset: Additive offset (default 0.0)
+        multiplier: Multiplication factor: a SweepSpec, or a number read as a finite float
+        offset: Additive offset, read as a finite float (default 0.0)
     """
 
     source: str
     multiplier: Union[float, SweepSpec] = 1.0
     offset: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.multiplier, SweepSpec):
+            read_field(self, "multiplier", as_finite_float)
+        read_field(self, "offset", as_finite_float)
 
 
 # Type alias for distribution specifications; a bare string is one of a CHOICE field's choices.
@@ -295,14 +324,14 @@ class FleetDistributionConfig:
     as construction does.
 
     Attributes:
-        n_homes: Number of homes to generate
+        n_homes: Number of homes to generate, read as a whole number of at least 1
         pv: How each home draws its PV
         load: How each home draws its load; an empty one draws nothing, so every load takes
             LoadConfig's defaults
         battery: How each home draws its battery; None is no battery for any home
         heat_pump: How each home draws its heat pump; None is no heat pump for any home
         ev: How each home draws its EV; None is no EV for any home
-        seed: Random seed for reproducibility (optional)
+        seed: Random seed for reproducibility (optional), read as a whole number
         random_order: One of _RANDOM_ORDERS' keys, naming what is drawn ahead of the first
             home and in which order ("bristol_legacy" reproduces
             create_bristol_phase1_scenario's sequence)
@@ -322,9 +351,9 @@ class FleetDistributionConfig:
     dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Refuse a fleet no home of which could be drawn, as each check's helper states.
+        """Read n_homes and seed, then refuse a fleet no home of which could be drawn, as each check's helper states.
 
-        Past n_homes, random_order and dispatch_strategy it refuses, in this order: a component
+        Past n_homes, seed, random_order and dispatch_strategy it refuses, in this order: a component
         key outside its table's fleet rows, or held in the wrong one of its draws and settings
         (F1); a required key a component does not draw (F5); a spec its key's kind does not
         draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
@@ -333,8 +362,8 @@ class FleetDistributionConfig:
         table's presence rule refuses; and a rounded count with no whole number from its min
         to its max.
         """
-        if self.n_homes < 1:
-            raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
+        read_field(self, "n_homes", as_whole_number, Interval(1, math.inf))
+        read_field(self, "seed", as_whole_number, optional=True)
         if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be "

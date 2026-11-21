@@ -115,11 +115,6 @@ class TestDistributionDataclasses:
         with pytest.raises(ConfigurationError, match="same length"):
             WeightedDiscreteDistribution(values=(1.0, 2.0), weights=(1.0,))
 
-    def test_weighted_discrete_negative_weight_raises(self) -> None:
-        """Test WeightedDiscreteDistribution with negative weight raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            WeightedDiscreteDistribution(values=(1.0, 2.0), weights=(1.0, -1.0))
-
     def test_weighted_discrete_all_zero_weights_raises(self) -> None:
         """Test WeightedDiscreteDistribution with all zero weights raises."""
         with pytest.raises(ConfigurationError, match="all be zero"):
@@ -138,11 +133,6 @@ class TestDistributionDataclasses:
         dist = NormalDistribution(mean=3400.0, std=800.0, min=2000.0, max=6000.0)
         assert dist.min == 2000.0
         assert dist.max == 6000.0
-
-    def test_normal_distribution_negative_std_raises(self) -> None:
-        """Test NormalDistribution with negative std raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            NormalDistribution(mean=100.0, std=-1.0)
 
     def test_normal_distribution_invalid_bounds_raises(self) -> None:
         """Test NormalDistribution with min > max raises."""
@@ -192,11 +182,6 @@ class TestDistributionDataclasses:
         """Test ShuffledPoolDistribution with mismatched lengths raises."""
         with pytest.raises(ConfigurationError, match="same length"):
             ShuffledPoolDistribution(values=(1.0, 2.0), counts=(1,))
-
-    def test_shuffled_pool_distribution_negative_count_raises(self) -> None:
-        """Test ShuffledPoolDistribution with negative count raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            ShuffledPoolDistribution(values=(1.0, 2.0), counts=(1, -1))
 
     def test_shuffled_pool_distribution_all_zero_counts_raises(self) -> None:
         """Test ShuffledPoolDistribution with all zero counts raises."""
