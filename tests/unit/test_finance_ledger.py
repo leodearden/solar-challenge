@@ -7,7 +7,8 @@ record every billed figure of the home is read from.  A :class:`HomeLedger` is
 the home's year as the CBS bills it, and refuses a year whose balances break:
 L1 every figure finite and >= 0, L2 own-use within demand, L3 own-use and import
 covering demand, and L4, on the override's basis, own-use + import = demand and
-own-use + export = generation, each to a relative 1e-12.  ``home_ledger`` is the
+own-use + export = generation, each to a relative 1e-12; and a year capped but
+not the override's own-use cut to demand.  ``home_ledger`` is the
 one assembly of a ledger from a home's AnnualPhysics, holding every pricing rule
 of the PRD's table and warning about nothing.  householder_bill and
 project_multi_year read the same ledger of a home (B5).
@@ -165,7 +166,7 @@ def _named(name: str, value: float) -> str:
 
 
 class TestHomeLedgerBalances:
-    """B4: a HomeLedger refuses, naming the invariant and its values, a year whose balances L1-L4 break."""
+    """B4: a HomeLedger refuses, naming the invariant and its values, a year whose balances L1-L4 break or whose cap disagrees with them."""
 
     def test_a_balanced_year_constructs_on_either_basis(self) -> None:
         assert _ledger().own_use_kwh == 2200.0

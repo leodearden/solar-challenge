@@ -18,7 +18,7 @@ Provides:
     over its window.
   - ``OwnUseBasis`` — enum of where a home's ledger takes its own-use from.
   - ``HomeLedger`` — frozen dataclass of one home's year as the CBS bills it,
-    refusing a year whose balances L1-L4 break.
+    refusing a year whose balances L1-L4 break or whose cap disagrees with them.
   - ``home_ledger`` — the one assembly of a HomeLedger, holding every pricing rule.
   - ``bill`` — period-native billing core mapping simulation outputs to a bill.
   - ``householder_bill`` — annual-period wrapper around ``bill``.
@@ -664,7 +664,7 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
 # ---------------------------------------------------------------------------
 
 _BALANCE_REL_TOL = 1e-12
-"""The relative tolerance of a ledger's balances L2-L4: the float rounding of one subtraction and one scaling, and nothing more."""
+"""The relative tolerance of a ledger's balances L2-L4 and of its cap: the float rounding of one subtraction and one scaling, and nothing more."""
 
 
 def _ledger_refusal(invariant: str, rule: str, values: Mapping[str, object]) -> ValueError:

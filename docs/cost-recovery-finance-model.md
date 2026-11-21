@@ -104,8 +104,9 @@ per home*).  The projection's `home_ledger(annualise(s), finance)` takes basis C
 the annualised totals itself, 0.0 with no warning when the import is above the demand
 (§4;
 `tests/unit/test_finance_ledger.py::TestTheBillAndTheProjectionReadOneLedger::test_the_projection_bills_a_basis_c_clamped_at_zero_without_a_warning`).
-Both read one basis-C rule.  `home_ledger` is the one physics/override switch: it replaces basis C with the
-override's own-use when one is set.  The physics `self_consumption` series and
+Both read one basis-C rule.  `home_ledger` is the one physics/override switch: it
+replaces basis C with the override's own-use when one is set.  The physics
+`self_consumption` series and
 `self_consumption_ratio` in `flow.py` / `home.py` are **not changed** — only the
 money path moves to basis C.
 
