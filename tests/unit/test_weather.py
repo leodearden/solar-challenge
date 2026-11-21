@@ -237,19 +237,6 @@ class TestWeatherCache:
         assert len(list(cache_dir.iterdir())) == 1
         pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
 
-    def test_a_refused_put_into_an_absent_directory_leaves_it_absent(self, tmp_path, bristol):
-        """A put refused for its index's timezone creates no directory either. The index is built at UTC and
-        converted to the dateutil zone, as for test_put_refuses_an_index_in_a_timezone_get_could_not_restore."""
-        cache_dir = tmp_path / "absent"
-        cache = WeatherCache(cache_dir=cache_dir)
-        index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert("dateutil/Europe/London")
-        frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
-
-        with pytest.raises(ValueError, match=re.escape(str(index.tz))):
-            cache.put(frame, "tmy", bristol)
-
-        assert not cache_dir.exists()
-
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):
         """Data can be stored and retrieved from cache."""
         cache.put(sample_weather_data, "tmy", bristol)
@@ -403,17 +390,19 @@ class TestWeatherCache:
             pytest.param(_ZonePandasCannotLocalizeIn(), id="a zone pandas can convert to but not localize in"),
         ],
     )
-    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
+    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, tmp_path, bristol, tz):
         """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
-        ValueError names that str, and put leaves no file, so a get finds no entry. The index is built at UTC
-        and converted to tz, because pandas cannot localize wall times in some such zones."""
+        ValueError names that str, and put creates nothing, not even the cache's absent directory, so a get finds
+        no entry. The index is built at UTC and converted to tz, because pandas cannot localize wall times in some
+        such zones."""
+        cache = WeatherCache(cache_dir=tmp_path / "absent")
         index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert(tz)
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
 
         with pytest.raises(ValueError, match=re.escape(str(index.tz))):
             cache.put(frame, "tmy", bristol)
 
-        assert list(cache.cache_dir.iterdir()) == []
+        assert not cache.cache_dir.exists()
         assert cache.get("tmy", bristol) is None
 
     def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
@@ -556,12 +545,17 @@ class TestWeatherCacheDirectory:
         assert len(list((tmp_path / DEFAULT_CACHE_DIR).iterdir())) == 1
 
     def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
-        """WeatherCache(cache_dir=...) uses the directory it is given and never creates the one the variable names."""
+        """WeatherCache(cache_dir=...) uses the directory it is given: its first put creates that one, never the one
+        the variable names."""
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         cache = WeatherCache(cache_dir=tmp_path / "given")
 
         assert cache.cache_dir == tmp_path / "given"
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "given").iterdir())) == 1
         assert not (tmp_path / "named").exists()
 
 
@@ -710,12 +704,13 @@ class TestDefaultWeather:
         assert get_weather_cache() is installed_cache
 
     def test_default_weather_with_none_installed_creates_no_directory(self, no_cache_installed, tmp_path):
-        """With no cache installed, default_weather() and get_weather_cache() create no directory under the working
-        directory, so a composition root that builds the default provider writes nothing before its first put."""
+        """With no cache installed, neither default_weather() nor get_weather_cache() writes anything under the
+        working directory, so a composition root that builds the default provider writes nothing before its first
+        put."""
         default_weather()
         get_weather_cache()
 
-        assert not (tmp_path / DEFAULT_CACHE_DIR).exists()
+        assert list(tmp_path.iterdir()) == []
 
     def test_default_weather_reads_the_installed_cache(self, installed_cache, pvgis_requests):
         """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""
