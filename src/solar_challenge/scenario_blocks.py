@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Read one block of a scenario file into a value of a domain module, naming the block's path."""
+"""Read one block of a scenario file into a value of a domain module, naming the block's path.
+
+The component tables it reads blocks by also carry each key's fleet row and each nested block's
+writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
+"""
 
 import math
 from dataclasses import MISSING, asdict, dataclass, fields
