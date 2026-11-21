@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
+from solar_challenge.cli.utils import CliInvocation, handle_errors, invocation, print_info, print_report
 from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
@@ -103,12 +103,12 @@ def _flat_rate_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _resolve_sensitivity_aliases(
-    requested: Optional[tuple[str, ...]], pricing: GridServicesModel
+    cli: CliInvocation, requested: Optional[tuple[str, ...]], pricing: GridServicesModel
 ) -> tuple[str, ...]:
     """The sensitivity axes to sweep under *pricing*: *requested*, or _DEFAULT_SENSITIVITY_ALIASES when it is None.
 
     Under an events configuration the default omits each axis that sweeps
-    _FLAT_RATE_KNOB, with a note on stderr naming it.
+    _FLAT_RATE_KNOB, with a status note for *cli* on stderr naming it.
 
     Raises:
         ConfigurationError: If *pricing* is an events configuration and
@@ -120,6 +120,7 @@ def _resolve_sensitivity_aliases(
         omitted = _flat_rate_aliases(_DEFAULT_SENSITIVITY_ALIASES)
         for alias in omitted:
             print_info(
+                cli,
                 f"Sensitivity axis {alias} omitted from the default: it sweeps "
                 f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
             )
@@ -266,6 +267,8 @@ def configs(
             --retained-floor 27 --sensitivity retained_floor,grid_services \\
             --start 2024-01-01 --end 2024-01-07
     """
+    cli = invocation(ctx)
+
     # ---- Parse dim lists ----------------------------------------------------
     pv_list = _parse_float_list(pv, "pv")
     battery_list = _parse_float_list(battery, "battery")
@@ -285,7 +288,7 @@ def configs(
 
     pricing = grid_services_model_of(finance)
     finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
-    sensitivity_axes = _resolve_sensitivity_aliases(requested_sensitivity, pricing)
+    sensitivity_axes = _resolve_sensitivity_aliases(cli, requested_sensitivity, pricing)
 
     # ---- Load fleet config --------------------------------------------------
     fleet_config = load_fleet_config(scenario)
@@ -313,6 +316,7 @@ def configs(
 
     n_configs = len(pv_list) * len(battery_list) * len(inverter_list)
     print_info(
+        cli,
         f"Sweeping {len(pv_list)}×{len(battery_list)}×{len(inverter_list)} "
         f"={n_configs} configs "
         f"over {n_homes} homes for {days} days…"
@@ -321,6 +325,7 @@ def configs(
     _LARGE_SWEEP_THRESHOLD = 100_000
     if n_configs * n_homes * days > _LARGE_SWEEP_THRESHOLD:
         print_info(
+            cli,
             f"⚠  Large sweep: {n_configs} config(s) × {n_homes} home(s) × {days} day(s) "
             f"≈ {n_configs * n_homes * days:,} home-days. "
             "For exploratory runs, use --start / --end to limit the simulation window "
@@ -345,8 +350,8 @@ def configs(
     all_configs = enumerate_configs(base, pv_list, battery_list, inverter_list)
 
     # ---- Run sweep ----------------------------------------------------------
-    print_info("Solving cost-recovery rates…")
-    simulate = invocation(ctx).runner.simulate
+    print_info(cli, "Solving cost-recovery rates…")
+    simulate = cli.runner.simulate
     ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.
@@ -354,6 +359,7 @@ def configs(
     n_infeasible = len(ranked.infeasible)
     if n_feasible:
         print_info(
+            cli,
             f"Sweep complete: {n_feasible} feasible config(s), "
             f"{n_infeasible} infeasible config(s)."
         )
@@ -362,6 +368,7 @@ def configs(
         # empty rank and infeasible list.  sensitivity_panel is NOT called
         # (it requires a feasible baseline) — see the guard below.
         print_info(
+            cli,
             f"No feasible configurations found "
             f"({n_infeasible} config(s) exceeded the retail rate). "
             "Check the finance block or try lower capex / higher grid-services values."
@@ -372,7 +379,7 @@ def configs(
     if sensitivity_axes and ranked.cheapest_feasible is not None:
         knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
         axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
-        print_info(f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
+        print_info(cli, f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
         panel = sensitivity_panel(
             all_configs,
             axes_map,
@@ -383,6 +390,7 @@ def configs(
         # Explicit user message when axes were requested but there is no feasible
         # baseline — sensitivity_panel would raise immediately, so we skip it.
         print_info(
+            cli,
             "Sensitivity panel skipped: no feasible baseline config found "
             "(sensitivity requires at least one feasible config)."
         )

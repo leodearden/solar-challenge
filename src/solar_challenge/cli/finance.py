@@ -11,7 +11,7 @@ from typing import Annotated, Any, Optional
 import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
+from solar_challenge.cli.utils import CliInvocation, handle_errors, invocation, print_info, print_report
 from solar_challenge.config import (
     ScenarioConfig,
     SimulationPeriod,
@@ -129,19 +129,19 @@ def _bill_finances(
 
 
 def _project_level_economics(
-    scenario_config: ScenarioConfig, finance: FinanceConfig, simulate: FleetSimulate
+    cli: CliInvocation, scenario_config: ScenarioConfig, finance: FinanceConfig, simulate: FleetSimulate
 ) -> ProjectEconomics:
-    """The project-level economics (DSCR/IRR/payback) of *scenario_config*'s fleet under *finance*, its simulations run by *simulate*."""
-    print_info("Computing project-level economics (DSCR/IRR/payback)…")
+    """The project-level economics (DSCR/IRR/payback) of *scenario_config*'s fleet under *finance*, its simulations run by *simulate*, after printing *cli*'s status line announcing them."""
+    print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
     curve = project_multi_year(scenario_config, finance, simulate=simulate)
     return project_economics(curve, scenario_config, finance)
 
 
 def _cost_recovery_solution(
-    scenario_config: ScenarioConfig, finance: FinanceConfig, simulate: FleetSimulate
+    cli: CliInvocation, scenario_config: ScenarioConfig, finance: FinanceConfig, simulate: FleetSimulate
 ) -> CostRecoverySolution:
-    """The own-use rate at which *scenario_config*'s fleet recovers its cost under *finance*, its simulations run by *simulate*."""
-    print_info("Solving cost-recovery own-use rate…")
+    """The own-use rate at which *scenario_config*'s fleet recovers its cost under *finance*, its simulations run by *simulate*, after printing *cli*'s status line announcing it."""
+    print_info(cli, "Solving cost-recovery own-use rate…")
     return solve_cost_recovery_rate(scenario_config, finance, simulate=simulate)
 
 
@@ -238,8 +238,9 @@ def run(
     end_date = pd.Timestamp(end, tz=loc.timezone)
     days = covered_days(start_date.date(), end_date.date())
 
-    print_info(f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
-    simulate = invocation(ctx).runner.simulate
+    cli = invocation(ctx)
+    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
+    simulate = cli.runner.simulate
     fleet_results = simulate(fleet_config, start_date, end_date)
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
@@ -264,10 +265,10 @@ def run(
         seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
     )
     economics_result = (
-        _project_level_economics(scenario_config, finance, simulate) if project else None
+        _project_level_economics(cli, scenario_config, finance, simulate) if project else None
     )
     cost_recovery_result = (
-        _cost_recovery_solution(scenario_config, finance, simulate) if cost_recovery else None
+        _cost_recovery_solution(cli, scenario_config, finance, simulate) if cost_recovery else None
     )
 
     report = generate_finance_report(

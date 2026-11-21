@@ -14,6 +14,7 @@ from solar_challenge.cli.utils import (
     console,
     error_console,
     handle_errors,
+    invocation,
     print_success,
 )
 from solar_challenge.config import load_config
@@ -205,6 +206,7 @@ def show(
 @app.command()
 @handle_errors
 def template(
+    ctx: typer.Context,
     template_type: Annotated[
         str,
         typer.Argument(
@@ -247,7 +249,7 @@ def template(
 
     if output is not None:
         output.write_text(content)
-        print_success(f"Template written to {output}")
+        print_success(invocation(ctx), f"Template written to {output}")
     else:
         syntax = Syntax(content, "yaml", theme="monokai")
         console.print(syntax)

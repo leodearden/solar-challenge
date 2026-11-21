@@ -13,7 +13,7 @@ from solar_challenge.cli import home as home_app
 from solar_challenge.cli import optimize as optimize_app
 from solar_challenge.cli import validate as validate_app
 from solar_challenge.cli import web as web_app
-from solar_challenge.cli.utils import console, root_invocation, set_status_quiet
+from solar_challenge.cli.utils import console, root_invocation
 
 # Create main app
 app = typer.Typer(
@@ -79,7 +79,6 @@ def main(
     A CLI tool for simulating domestic PV and battery systems in the UK.
     """
     ctx.obj = root_invocation(ctx.obj, quiet=quiet, workers=workers, sequential=sequential)
-    set_status_quiet(ctx.obj.quiet)
 
 
 if __name__ == "__main__":
