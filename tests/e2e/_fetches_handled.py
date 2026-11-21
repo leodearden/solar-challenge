@@ -2,8 +2,9 @@
 """Record each fetch a page starts, and wait until the page has handled every one.
 
 A fetch is handled once it fails, or once the page has read its answer's body with arrayBuffer(), blob(), bytes(),
-formData(), json() or text(). fetch() and those readers give the page promises chained on the browser's own, so the recorder
-handles none of the page's promises, and a rejection the page leaves unhandled is still uncaught.
+formData(), json() or text(). fetch() and those readers give the page promises chained on the browser's own, so the
+recorder handles none of the page's promises, and a rejection the page leaves unhandled is still uncaught. fetch() still
+rejects, rather than throws, on a URL it cannot parse.
 
 The mark is set from a 0 ms timer queued from a 0 ms timer queued as the fetch fails or the body settles. The first
 timer runs after every microtask chained from the settle, which includes the page's code awaiting it and the Alpine
@@ -21,9 +22,16 @@ _RECORD_FETCHES_STARTED_AND_HANDLED = """(() => {
     window.fetchesStarted = [];
     const markHandledAfterTwoTimers = (entry) => setTimeout(() => setTimeout(() => { entry.handled = true; }, 0), 0);
     const fetchOf = new WeakMap();
+    const urlOf = (resource) => {
+        try {
+            return resource instanceof Request ? resource.url : new URL(resource, location.href).href;
+        } catch {
+            return String(resource);
+        }
+    };
     const originalFetch = window.fetch;
     window.fetch = function (resource, options) {
-        const entry = {url: resource instanceof Request ? resource.url : new URL(resource, location.href).href, handled: false};
+        const entry = {url: urlOf(resource), handled: false};
         window.fetchesStarted.push(entry);
         return originalFetch.call(this, resource, options).then(
             (response) => { fetchOf.set(response, entry); return response; },

@@ -102,6 +102,19 @@ def test_a_fetch_is_handled_once_the_page_catches_its_failure(page: Page, live_s
     wait_until_the_page_has_handled_every_fetch_it_started(page)
 
 
+def test_a_fetch_of_a_url_fetch_cannot_parse_still_rejects_and_is_handled_once_the_page_catches_it(
+    page: Page, live_server: str
+) -> None:
+    """fetch() rejects with a TypeError, rather than throwing one, when it cannot parse the URL it is given; the recorder leaves it so."""
+    record_fetches_started_and_handled(page)
+    page.goto(live_server + "/")
+
+    rejection = page.evaluate("() => fetch('http://[').then(() => 'answered', error => error.name)")
+
+    assert rejection == "TypeError"
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
+
+
 @pytest.mark.parametrize(
     ("leave_a_rejection_unhandled", "message_part"),
     [
