@@ -368,7 +368,7 @@ def _proportional_to_pv(**spec: float) -> dict[str, Any]:
 
 
 class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
-    """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count is rounded, as a normal's draw is, and an EV hour truncated, as its other specs' draws are."""
+    """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count and an EV hour alike are rounded, as a normal's draw is."""
 
     @pytest.mark.parametrize(("capacity_kw", "occupants"), [(2.4, 2), (2.5, 3), (2.6, 3)])
     def test_an_occupant_count_is_the_whole_number_nearest_its_value(self, capacity_kw: float, occupants: int) -> None:
@@ -381,8 +381,8 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
 
         assert homes[0].load_config.household_occupants == occupants
 
-    def test_an_ev_hour_is_truncated(self) -> None:
-        """An arrival hour of 4 times a 4.7 kW PV capacity is 18.8, which the EV takes as 18, not the 19 rounding gives."""
+    def test_an_ev_hour_is_the_whole_number_nearest_its_value(self) -> None:
+        """An arrival hour of 4 times a 4.7 kW PV capacity is 18.8, which the EV takes as 19, as an occupant count of 18.8 would be."""
         fleet = parse_fleet_distribution_config(
             {
                 "n_homes": 1,
@@ -393,7 +393,26 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
 
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert homes[0].ev_config.arrival_hour == 18
+        assert homes[0].ev_config.arrival_hour == 19
+
+    def test_a_normal_ev_hour_is_its_draw_rounded(self) -> None:
+        """Each home's arrival hour is the normal's draw for it, from the fleet's seed, rounded, a half rounding up: the rounding follows the same draws, so the draw sequence is unchanged.
+
+        The fleet's ev.arrival_hour is the only setting it draws from its RNG.
+        """
+        spec = NormalDistribution(mean=18.0, std=1.5, min=15.0, max=22.0)
+        fleet = FleetDistributionConfig(
+            n_homes=8,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            ev=ComponentDistribution({"charger_type": "7kW", "arrival_hour": spec}),
+            seed=17,
+        )
+
+        homes = generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert [home.ev_config.arrival_hour for home in homes if home.ev_config is not None] == [
+            math.floor(draw + 0.5) for draw in _draws(spec, seed=17, n=8) if draw is not None
+        ]
 
     @pytest.mark.parametrize(
         ("component", "key", "block"),

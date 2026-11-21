@@ -634,6 +634,19 @@ fleet_distribution:
             self._load_fleet(tmp_path, dispatch_strategy)
 
 
+class TestBristolWithEVsScenario:
+    """scenarios/bristol-with-evs.yaml's EV hours are its normals' draws rounded to the nearest hour, not truncated (C5)."""
+
+    def test_its_ev_homes_arrive_and_depart_on_their_draws_rounded(self) -> None:
+        """Truncation gave its 30 EV homes a mean arrival of 17.433 and a mean departure of 6.533; rounding gives 17.933 and 7.2."""
+        fleet = load_fleet_config(SCENARIOS_DIR / "bristol-with-evs.yaml")
+        evs = [home.ev_config for home in fleet.homes if home.ev_config is not None]
+
+        assert len(evs) == 30
+        assert sum(ev.arrival_hour for ev in evs) / len(evs) >= 17.9
+        assert sum(ev.departure_hour for ev in evs) / len(evs) >= 7.1
+
+
 class TestFleetFileOffPeakEV:
     """A fleet file's off_peak EVs need its tariff: block, which the reader gives each home as it builds it.
 
