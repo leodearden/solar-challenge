@@ -30,7 +30,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
+from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig
 from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     distribution_form_spec,
@@ -237,12 +237,13 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
     own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
-    either way.  A setting the form needs but cannot hold exactly is refused, naming it,
-    since loading it anyway would run a different fleet.  A period the page cannot run,
-    ending before it starts or longer than MAX_WINDOW_DAYS days, is refused naming
-    period.start_date and period.end_date.  A fleet size that is not a whole number from 1
-    to MAX_FLEET_HOMES, or a seed that is not a whole number from -MAX_FLEET_SEED to
-    MAX_FLEET_SEED, is refused naming fleet_distribution.n_homes or
+    either way.  An economy tariff's rate the scenario leaves out loads as its PRESET_RATES
+    rate, the rate the loaders charge it.  A setting the form needs but cannot hold exactly
+    is refused, naming it, since loading it anyway would run a different fleet.  A period
+    the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
+    refused naming period.start_date and period.end_date.  A fleet size that is not a whole
+    number from 1 to MAX_FLEET_HOMES, or a seed that is not a whole number from
+    -MAX_FLEET_SEED to MAX_FLEET_SEED, is refused naming fleet_distribution.n_homes or
     fleet_distribution.seed.  Every other setting, and a location other than the page's, is
     named in not_loaded.  A form the page could not run, as parse_fleet_form refuses it, is
     refused too.
@@ -514,6 +515,20 @@ def _required(value: Any, path: str) -> Any:
     return value
 
 
+def _or_default(default: float) -> _SettingReader:
+    """A reader of a setting the loaders default: the scenario's value as given, or *default* when the scenario leaves it out."""
+
+    def read_or_default(value: Any, path: str) -> Any:
+        return default if value is None else value
+
+    return read_or_default
+
+
+def _economy_rate_readers(rates: PresetRates) -> Mapping[str, _SettingReader]:
+    """The readers of an economy tariff's two rates, each filling a rate the scenario leaves out from *rates*, its preset's default rates."""
+    return {"peak_rate": _or_default(rates.peak_rate), "off_peak_rate": _or_default(rates.off_peak_rate)}
+
+
 def _one_peak_window(peak_hours: Any, path: str) -> list[list[Any]]:
     """*peak_hours* as the fleet form's one [start, end] peak window.
 
@@ -531,8 +546,8 @@ def _one_peak_window(peak_hours: Any, path: str) -> list[list[Any]]:
 #: Each tariff type the fleet form holds, with a reader for each setting of it the form holds.
 _FORM_TARIFF_SETTINGS: Mapping[str, Mapping[str, _SettingReader]] = MappingProxyType({
     "flat_rate": {"rate_per_kwh": _required},
-    "economy_7": {"peak_rate": _required, "off_peak_rate": _required},
-    "economy_10": {"peak_rate": _required, "off_peak_rate": _required},
+    "economy_7": _economy_rate_readers(PRESET_RATES["economy_7"]),
+    "economy_10": _economy_rate_readers(PRESET_RATES["economy_10"]),
 })
 
 #: Each dispatch strategy the fleet form holds, with a reader for each setting of it the form holds.
