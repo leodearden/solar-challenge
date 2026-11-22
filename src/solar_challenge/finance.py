@@ -417,6 +417,14 @@ class BillDistribution:
     grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
     """The forecasts that sized the homes' grid charge (dispatch.distinct_grid_charge_forecasts), () when none grid-charged."""
 
+    def __post_init__(self) -> None:
+        """Refuse an annualised_from that is not a SimulationWindow."""
+        if not isinstance(self.annualised_from, SimulationWindow):
+            raise ValueError(
+                "BillDistribution's annualised_from is the SimulationWindow its yearly figures were annualised "
+                f"from, which bill_distribution takes from the summaries: got annualised_from={self.annualised_from!r}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # CostRecoverySolution — solve_cost_recovery_rate output

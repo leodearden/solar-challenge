@@ -16,6 +16,7 @@ homes cover different windows.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 from collections.abc import Callable
@@ -37,6 +38,7 @@ from solar_challenge.fleet import FleetResults
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests._cli_fleet_simulator import invoke_finance_run
+from tests._factories import make_bill_distribution
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -245,6 +247,19 @@ class TestYearlyFiguresNameTheirWindow:
         distribution = bill_distribution([_summary(days=30)] * 2, _finance())
 
         assert distribution.annualised_from == make_window(days=30)
+
+    @pytest.mark.parametrize("annualised_from", [None, 30], ids=["none", "a-day-count"])
+    def test_a_bill_distribution_refuses_an_annualised_from_that_is_not_a_window_naming_it_and_bill_distribution(
+        self, annualised_from: object
+    ) -> None:
+        """A 0.5.x caller that leaves annualised_from at its old default, None, is refused where it builds one, not where a report reads its window."""
+        with pytest.raises(ValueError) as refused:
+            dataclasses.replace(make_bill_distribution(), annualised_from=annualised_from)
+
+        message = str(refused.value)
+        assert f"annualised_from={annualised_from!r}" in message
+        assert "SimulationWindow" in message
+        assert "bill_distribution" in message
 
     def test_a_projection_names_its_fleets_window(self) -> None:
         scenario, finance = make_scenario_and_finance()
