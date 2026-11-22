@@ -249,7 +249,8 @@ def _closure_classes() -> Mapping[str, type]:
 
     They are the signature_closure, within solar_challenge, of every object in __all__.
     The modules it reads are fixed for the run, so it is computed once and handed out
-    read-only.
+    read-only; the drift report's tests make their scratch edits through scratch_edit,
+    which computes it first.
     """
     exported = [getattr(solar_challenge, name) for name in solar_challenge.__all__]
     by_path = {
@@ -721,6 +722,13 @@ def _drifted(
     }
 
 
+@pytest.fixture
+def scratch_edit(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+    """pytest's monkeypatch, for a test's scratch edits to the package, handed over once _closure_classes() has read the unedited package, whose closure its cache keeps for the rest of the run."""
+    _closure_classes()
+    return monkeypatch
+
+
 def _lock_failure(lock: Callable[[], None]) -> str:
     """The message the lock test *lock* fails with."""
     with pytest.raises(AssertionError) as failure:
@@ -742,13 +750,13 @@ _NOTE_FILE_TRAILER = (
 
 
 def test_a_pinned_signature_that_gains_a_trailing_defaulted_parameter_prints_additive_and_the_note_to_write(
-    monkeypatch: pytest.MonkeyPatch,
+    scratch_edit: pytest.MonkeyPatch,
 ) -> None:
     def calculate_degradation_factor(
         system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
     ) -> float: ...
 
-    monkeypatch.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
 
     message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
 
@@ -762,11 +770,11 @@ def test_a_pinned_signature_that_gains_a_trailing_defaulted_parameter_prints_add
 
 
 def test_a_pinned_signature_that_loses_a_parameter_prints_breaking_and_that_it_lands_only_with_a_version_bump(
-    monkeypatch: pytest.MonkeyPatch,
+    scratch_edit: pytest.MonkeyPatch,
 ) -> None:
     def calculate_degradation_factor(system_age_years: float) -> float: ...
 
-    monkeypatch.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+    scratch_edit.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
 
     message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
 
@@ -779,11 +787,11 @@ def test_a_pinned_signature_that_loses_a_parameter_prints_breaking_and_that_it_l
     assert "A breaking one lands only with a version bump under that section" in message
 
 
-def test_a_name_new_to_all_prints_additive(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_name_new_to_all_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
     def scratch_name(a: int) -> int: ...
 
-    monkeypatch.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
-    monkeypatch.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
+    scratch_edit.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
+    scratch_edit.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
 
     message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
 
@@ -795,8 +803,8 @@ def test_a_name_new_to_all_prints_additive(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
-def test_a_name_removed_from_all_prints_breaking(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
+def test_a_name_removed_from_all_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    scratch_edit.setattr(
         solar_challenge,
         "__all__",
         [name for name in solar_challenge.__all__ if name != "calculate_degradation_factor"],
@@ -812,8 +820,8 @@ def test_a_name_removed_from_all_prints_breaking(monkeypatch: pytest.MonkeyPatch
     ]
 
 
-def test_a_removed_member_prints_breaking(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delattr(solar_challenge.Battery, "soh")
+def test_a_removed_member_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    scratch_edit.delattr(solar_challenge.Battery, "soh")
 
     message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
 
@@ -821,6 +829,74 @@ def test_a_removed_member_prints_breaking(monkeypatch: pytest.MonkeyPatch) -> No
         "solar_challenge.Battery.soh",
         "frozen:  property (self) -> float",
         "current: (removed)",
+        "change:  breaking",
+    ]
+
+
+def test_a_member_that_gains_a_keyword_only_parameter_with_a_default_prints_additive(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def charge(self, power_kw: float, duration_minutes: float, *, cap: float = 1.0) -> float: ...
+
+    scratch_edit.setattr(solar_challenge.Battery, "charge", charge)
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.charge") == [
+        "solar_challenge.Battery.charge",
+        f"frozen:  {FROZEN_MEMBERS['Battery']['charge']}",
+        "current: (self, power_kw: float, duration_minutes: float, *, cap: float = 1.0) -> float",
+        "change:  additive",
+    ]
+
+
+def test_a_member_with_a_retyped_parameter_prints_breaking(scratch_edit: pytest.MonkeyPatch) -> None:
+    def charge(self, power_kw: int, duration_minutes: float) -> float: ...
+
+    scratch_edit.setattr(solar_challenge.Battery, "charge", charge)
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.charge") == [
+        "solar_challenge.Battery.charge",
+        f"frozen:  {FROZEN_MEMBERS['Battery']['charge']}",
+        "current: (self, power_kw: int, duration_minutes: float) -> float",
+        "change:  breaking",
+    ]
+
+
+def test_a_closure_class_whose_constructor_gains_a_keyword_only_parameter_with_a_default_prints_additive(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __init__(
+        self, effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0
+    ) -> None: ...
+
+    scratch_edit.setattr(_closure_classes()["battery.SocEnvelope"], "__init__", __init__)
+
+    message = _lock_failure(test_every_class_the_frozen_surface_names_matches_frozen_closure)
+
+    assert _printed_entry(message, "battery.SocEnvelope") == [
+        "solar_challenge.battery.SocEnvelope",
+        f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
+        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
+        "change:  additive",
+    ]
+
+
+def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    def __init__(self, effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None: ...
+
+    scratch_edit.setattr(_closure_classes()["battery.SocEnvelope"], "__init__", __init__)
+
+    message = _lock_failure(test_every_class_the_frozen_surface_names_matches_frozen_closure)
+
+    assert _printed_entry(message, "battery.SocEnvelope") == [
+        "solar_challenge.battery.SocEnvelope",
+        f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
+        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
         "change:  breaking",
     ]
 
