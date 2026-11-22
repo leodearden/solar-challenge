@@ -329,7 +329,7 @@ class TestHomeBlockKeys:
             load_home_config(path)
         assert str(refusal.value) == (
             "the top level: unrecognised keys 'batteries'; recognised keys: "
-            "battery, dispatch_strategy, ev, heat_pump, load, location, name, pv, tariff"
+            "battery, ev, heat_pump, load, location, name, pv, tariff"
         )
 
     def test_flat_home_file_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
@@ -426,7 +426,6 @@ class TestHomeBlockKeys:
                 "off_peak_start": "01:00",
                 "off_peak_end": "08:00",
             },
-            "dispatch_strategy": "tou_optimized",
             "heat_pump": heat_pump,
             "ev": ev,
         }
@@ -446,7 +445,6 @@ class TestHomeBlockKeys:
             tariff_config=TariffConfig.economy_7(
                 off_peak_rate=0.10, peak_rate=0.30, off_peak_start="01:00", off_peak_end="08:00"
             ),
-            dispatch_strategy="tou_optimized",
             heat_pump_config=HeatPumpConfig(**heat_pump),
             ev_config=EVConfig(**ev),
         )
@@ -457,6 +455,26 @@ class TestHomeBlockKeys:
             "home",
             also_recognised={"home.battery": other_efficiency_keys},
         )
+
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    @pytest.mark.parametrize("block_path", ["home", "homes[1]"])
+    def test_a_home_level_dispatch_strategy_is_refused_naming_the_batterys_ahead_of_an_unrecognised_key(
+        self, dispatch_strategy: object, block_path: str
+    ) -> None:
+        """The dispatch strategy is the battery's own setting: the block parser refuses the retired home-level key, of any value, before any key it does not recognise."""
+        block = {"battery": {"capacity_kwh": 5.0}, "dispatch_strategy": dispatch_strategy, _PROBE_KEY: None}
+
+        with pytest.raises(
+            ConfigurationError, match=retired_dispatch_strategy_refusal(f"{block_path}.dispatch_strategy")
+        ):
+            parse_home_block(block, Location.bristol(), block_path=block_path)
 
 
 class TestTariffBlockKeys:

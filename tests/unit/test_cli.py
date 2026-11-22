@@ -398,9 +398,9 @@ class TestErrorHandling:
 
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
-        """scenarios/bristol-arbitrage.yaml dispatched greedy: stderr starts with the refusal, ahead of the status line a run prints."""
+        """scenarios/bristol-arbitrage.yaml whose battery dispatches self_consumption: stderr starts with the refusal, ahead of the status line a run prints."""
         document = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
-        document["home"]["dispatch_strategy"] = "greedy"
+        document["home"]["battery"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
         config_file = tmp_path / "bristol-arbitrage.yaml"
         config_file.write_text(yaml.safe_dump(document))
 

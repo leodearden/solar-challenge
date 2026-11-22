@@ -21,7 +21,12 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.dispatch import GridChargeConfig, GridChargeForecast, distinct_grid_charge_forecasts
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    GridChargeForecast,
+    TOUOptimizedStrategyConfig,
+    distinct_grid_charge_forecasts,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import (
     FinanceConfig,
@@ -115,13 +120,16 @@ def _assert_refuses_perfect_foresight(refused: pytest.ExceptionInfo[Configuratio
 
 
 def _home_grid_charging_by(forecast: GridChargeForecast) -> HomeConfig:
-    """make_home_config's home with a 5 kWh battery grid-charging to 90% on Economy 7 under tou_optimized, its fill sized by *forecast*, exporting at 4.1p."""
+    """make_home_config's home with a 5 kWh battery grid-charging to 90% on Economy 7 under tou_optimized on its clock, its fill sized by *forecast*, exporting at 4.1p."""
     return dataclasses.replace(
         make_home_config(),
-        battery_config=BatteryConfig(5.0, grid_charging=GridChargeConfig(0.9, forecast=forecast)),
+        battery_config=BatteryConfig(
+            5.0,
+            dispatch_strategy=TOUOptimizedStrategyConfig(),
+            grid_charging=GridChargeConfig(0.9, forecast=forecast),
+        ),
         tariff_config=TariffConfig.economy_7(),
         seg_tariff=SEGTariff(name="SEG", rate_pence_per_kwh=4.1),
-        dispatch_strategy="tou_optimized",
     )
 
 

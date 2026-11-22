@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -49,11 +49,19 @@ def _economy_7_home() -> HomeConfig:
     )
 
 
+def _dispatched_tou_optimized(home: HomeConfig) -> HomeConfig:
+    """home with its battery dispatched tou_optimized on its tariff's clock."""
+    assert home.battery_config is not None
+    return dataclasses.replace(
+        home, battery_config=dataclasses.replace(home.battery_config, dispatch_strategy=TOUOptimizedStrategyConfig())
+    )
+
+
 @pytest.fixture(scope="module")
 def greedy_and_tou() -> tuple[SimulationResults, SimulationResults]:
     """An Economy 7 home with a 5 kWh battery, simulated over both days with greedy, then TOU dispatch."""
     home = _economy_7_home()
-    tou_home = dataclasses.replace(home, dispatch_strategy="tou_optimized")
+    tou_home = _dispatched_tou_optimized(home)
     weather = _sunny_then_sunless_weather()
     return (
         simulate_home(home, SUNNY_DAY, SUNLESS_DAY, weather=weather_for(home, weather)),
@@ -97,7 +105,7 @@ def runs_after_15_sunny_days() -> dict[str, SimulationResults]:
     battery after its cheap window, so the forecast under-charges it.
     """
     greedy = _economy_7_home()
-    tou = dataclasses.replace(greedy, dispatch_strategy="tou_optimized")
+    tou = _dispatched_tou_optimized(greedy)
     homes = {
         "greedy": greedy,
         "tou": tou,

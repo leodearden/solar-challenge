@@ -7,7 +7,12 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig, require_valid_capacity_setting
 from solar_challenge.config import ScenarioConfig, SimulationPeriod
-from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.dispatch import (
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import HomeConfig
@@ -224,23 +229,25 @@ class TestPvInverterHomogenization:
     """Tests that PV and inverter are homogenized; load and dispatch are preserved."""
 
     def _make_diverse_base(self) -> ScenarioConfig:
-        """Fleet with 3 homes: distinct PV sizes, loads, and dispatch strategies; the tou_optimized one has the tariff it dispatches by."""
+        """Fleet with 3 homes: distinct PV sizes, loads, and battery dispatch strategies; the tou_optimized one has the tariff whose clock it dispatches by."""
         homes = [
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=3.0),
                 load_config=LoadConfig(annual_consumption_kwh=2000, household_occupants=1),
-                dispatch_strategy="greedy",
+                battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig()),
             ),
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=5.0),
                 load_config=LoadConfig(annual_consumption_kwh=3500, household_occupants=3),
+                battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
                 tariff_config=TariffConfig.economy_7(),
-                dispatch_strategy="tou_optimized",
             ),
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=6.5, inverter_capacity_kw=5.0),
                 load_config=LoadConfig(annual_consumption_kwh=4200, household_occupants=4),
-                dispatch_strategy="greedy",
+                battery_config=BatteryConfig(
+                    capacity_kwh=5.0, dispatch_strategy=PeakShavingStrategyConfig(import_limit_kw=3.0)
+                ),
             ),
         ]
         return ScenarioConfig(
@@ -275,13 +282,14 @@ class TestPvInverterHomogenization:
         for orig, updated in zip(base.homes, sc.homes):
             assert orig.load_config == updated.load_config
 
-    def test_dispatch_strategy_preserved(self) -> None:
-        """HomeConfig.dispatch_strategy is unchanged per home."""
+    def test_battery_dispatch_strategy_preserved(self) -> None:
+        """Each home's battery keeps its dispatch_strategy when its capacity is swept."""
         base = self._make_diverse_base()
-        result = enumerate_configs(base, [4.0], [0.0], [3.68])
+        result = enumerate_configs(base, [4.0], [7.0], [3.68])
         _, sc = result[0]
-        for orig, updated in zip(base.homes, sc.homes):
-            assert orig.dispatch_strategy == updated.dispatch_strategy
+        assert [home.battery_config and home.battery_config.dispatch_strategy for home in sc.homes] == [
+            home.battery_config and home.battery_config.dispatch_strategy for home in base.homes
+        ]
 
     def test_base_scenario_and_homes_not_mutated(self) -> None:
         """Base ScenarioConfig and its HomeConfig/PVConfig objects are never mutated."""
@@ -306,6 +314,7 @@ class TestBatteryHomogenization:
         battery = BatteryConfig(
             capacity_kwh=7.0,
             max_discharge_kw=3.6,          # non-default
+            dispatch_strategy=TOUOptimizedStrategyConfig(),
             grid_charging=GridChargeConfig(target_soc_fraction=0.8),
         )
         home_with_battery = HomeConfig(
@@ -313,7 +322,6 @@ class TestBatteryHomogenization:
             load_config=LoadConfig(annual_consumption_kwh=3000, household_occupants=2),
             battery_config=battery,
             tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
         )
         home_without_battery = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
@@ -346,8 +354,8 @@ class TestBatteryHomogenization:
         assert home_with.battery_config.max_discharge_kw == pytest.approx(3.6)
         assert home_with.battery_config.grid_charging is not None
         assert home_with.battery_config.grid_charging.target_soc_fraction == pytest.approx(0.8)
-        # dispatch_strategy carried over from base (None by default in fixture)
-        assert home_with.battery_config.dispatch_strategy is None
+        # dispatch_strategy carried over from base
+        assert home_with.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
 
     def test_battery_kwh_positive_fabricates_battery_for_battery_less_home(self) -> None:
         """battery_kwh>0 on the home WITHOUT a battery fabricates a BatteryConfig at defaults."""
