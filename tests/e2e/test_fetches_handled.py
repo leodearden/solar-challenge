@@ -22,8 +22,7 @@ def _open_run_history_answering_its_runs_list_only_then(
     """Open Run History once Alpine has started, holding its runs-list request until then, then answer it with answer."""
     held_requests = hold_requests(page, is_runs_list_request)
     open_once_alpine_has_started(page, live_server + "/history/runs")
-    (runs_list_request,) = held_requests
-    answer(runs_list_request)
+    held_requests.answer_each(answer)
 
 
 def test_an_error_thrown_rendering_an_answer_the_page_requested_as_alpine_started_is_in_page_errors_once_every_fetch_is_handled(
