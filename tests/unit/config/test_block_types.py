@@ -41,36 +41,51 @@ _UNKNOWN_TARIFF_TYPES = [
 _TARIFF_BLOCKS_LACKING_A_REQUIRED_KEY = [
     pytest.param(
         {"type": "flat_rate"},
-        "flat_rate tariff requires 'rate_per_kwh' field",
+        "tariff: requires 'rate_per_kwh'",
         id="flat_rate-absent-rate",
     ),
     pytest.param(
         {"type": "flat_rate", "rate_per_kwh": None},
-        "flat_rate tariff requires 'rate_per_kwh' field",
+        "tariff: requires 'rate_per_kwh'",
         id="flat_rate-null-rate",
     ),
     pytest.param(
         {"type": "custom"},
-        "custom tariff requires 'periods' field",
+        "tariff: requires 'periods'",
         id="custom-absent-periods",
     ),
     pytest.param(
         {"type": "custom", "periods": []},
-        "custom tariff must have at least one period",
+        "tariff.periods: must list at least one period",
         id="custom-empty-periods",
     ),
     pytest.param(
         {"type": "custom", "periods": None},
-        "custom tariff must have at least one period",
+        "tariff: requires 'periods'",
         id="custom-null-periods",
     ),
     *(
         pytest.param(
             _custom_block_whose_only_period_lacks(key),
-            f"Tariff period requires '{key}' field",
+            f"tariff.periods[0]: requires {key!r}",
             id=f"custom-period-lacks-{key}",
         )
         for key in _FULL_PERIOD
+    ),
+    pytest.param(
+        {"type": "custom", "periods": [{"start_time": "00:00"}]},
+        "tariff.periods[0]: requires 'end_time', 'rate_per_kwh'",
+        id="custom-period-lacks-two-keys",
+    ),
+    pytest.param(
+        {"type": "custom", "periods": 5},
+        "tariff.periods: must be a list, got int",
+        id="custom-periods-a-number",
+    ),
+    pytest.param(
+        {"type": "custom", "periods": {"a": 1}},
+        "tariff.periods: must be a list, got dict",
+        id="custom-periods-a-mapping",
     ),
 ]
 
@@ -184,7 +199,7 @@ class TestTariffTypes:
         """A block whose type is absent or null is refused for naming none."""
         with pytest.raises(ConfigurationError) as refusal:
             parse_tariff_config(block)
-        assert str(refusal.value) == "Tariff configuration requires 'type' field"
+        assert str(refusal.value) == "tariff: requires 'type'"
 
     @pytest.mark.parametrize("tariff_type", _UNKNOWN_TARIFF_TYPES)
     def test_unknown_type_is_refused_naming_every_supported_type(
@@ -194,8 +209,8 @@ class TestTariffTypes:
         with pytest.raises(ConfigurationError) as refusal:
             parse_tariff_config({"type": tariff_type})
         assert str(refusal.value) == (
-            f"Unknown tariff type '{tariff_type}'. "
-            "Supported types: flat_rate, economy_7, economy_10, custom"
+            f"tariff.type: unknown tariff type {tariff_type!r}; "
+            "supported types: flat_rate, economy_7, economy_10, custom"
         )
 
     @pytest.mark.parametrize(("block", "message"), _TARIFF_BLOCKS_LACKING_A_REQUIRED_KEY)

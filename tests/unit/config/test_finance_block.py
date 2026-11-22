@@ -543,9 +543,14 @@ class TestFinanceConfigParsing:
         assert result.grant_gbp == 0.0
 
     def test_missing_standing_charge_raises(self) -> None:
-        """Finance block without standing_charge_pence_per_day raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="standing_charge_pence_per_day"):
+        """Finance block without standing_charge_pence_per_day is refused, naming the block at its path."""
+        with pytest.raises(ConfigurationError) as refusal:
             parse_finance_config({"vat_rate": 0.05})
+        with pytest.raises(ConfigurationError) as refusal_in_a_scenario:
+            parse_finance_config({"vat_rate": 0.05}, block_path="scenarios[0].finance")
+
+        assert str(refusal.value) == "finance: requires 'standing_charge_pence_per_day'"
+        assert str(refusal_in_a_scenario.value) == "scenarios[0].finance: requires 'standing_charge_pence_per_day'"
 
     def test_int_coercion_of_year_fields(self) -> None:
         """loan_term_years/asset_life_years given as floats in the dict are coerced to int."""
@@ -1024,7 +1029,9 @@ class TestFinanceConfigParsingGridServices:
 
     def test_missing_required_event_window_key_raises(self) -> None:
         """event_window dict missing a required key raises ConfigurationError."""
-        with pytest.raises(ConfigurationError, match="requires 'hours'"):
+        with pytest.raises(
+            ConfigurationError, match=re.escape("finance.grid_services_events.event_windows[0]: requires 'hours'")
+        ):
             parse_finance_config({
                 **self._BASE,
                 "grid_services_model": "capacity_at_events",
@@ -1090,7 +1097,10 @@ class TestFinanceConfigParsingGridServices:
 
     def test_null_event_windows_is_refused_as_not_a_list(self) -> None:
         """A null event_windows is refused as not a list of windows, not read as the default schedule."""
-        with pytest.raises(ConfigurationError, match="event_windows must be a list of window dicts"):
+        with pytest.raises(
+            ConfigurationError,
+            match=re.escape("finance.grid_services_events.event_windows: must be a list, got NoneType"),
+        ):
             self._parse_events_block({**self._EVENTS_BLOCK, "event_windows": None})
 
     def test_an_unknown_delivery_baseline_is_refused_naming_both_values(self) -> None:
@@ -1155,14 +1165,17 @@ class TestFinanceConfigParsingGridServices:
         [
             pytest.param(
                 "winter",
-                "scenario.finance.grid_services_events.event_windows"
-                " must be a list of window dicts",
+                "scenario.finance.grid_services_events.event_windows: must be a list, got str",
                 id="not-a-list",
             ),
             pytest.param(
+                {"months": [12]},
+                "scenario.finance.grid_services_events.event_windows: must be a list, got dict",
+                id="a-mapping",
+            ),
+            pytest.param(
                 [{"months": [12], "weekdays": [0], "events_per_year": 1, "event_hours": 1.0}],
-                "scenario.finance.grid_services_events.event_windows[0]"
-                " requires 'hours' field",
+                "scenario.finance.grid_services_events.event_windows[0]: requires 'hours'",
                 id="missing-key",
             ),
         ],

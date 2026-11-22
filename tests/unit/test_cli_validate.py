@@ -388,7 +388,7 @@ home:
                 "home:\n"
                 "  pv: {capacity_kw: 4.0}\n"
                 "  battery: {capacity_kwh: 5.0, efficiency: 0.95, charge_efficiency: 0.99}\n",
-                "home.battery sets both forms of a battery's efficiency: efficiency and charge_efficiency;",
+                "home.battery: sets both forms of a battery's efficiency: efficiency and charge_efficiency;",
                 id="home-battery-both-efficiency-forms",
             ),
             pytest.param(
@@ -433,7 +433,7 @@ home:
             ),
             pytest.param(
                 _SWEEP_FLEET + "tariff: {type: economy_8}\n",
-                "Unknown tariff type 'economy_8'",
+                "tariff.type: unknown tariff type 'economy_8'; supported types:",
                 id="fleet-sweep-tariff",
             ),
             pytest.param(
@@ -805,7 +805,7 @@ home:
         text = table_text(result.stdout)
         assert "ERROR" in text
         error_row = text[text.index("ERROR"):]
-        assert "homes[0].battery.dispatch_strategy.strategy_type 'tou_optimised'" in error_row
+        assert "homes[0].battery.dispatch_strategy.strategy_type: invalid value 'tou_optimised';" in error_row
         for strategy in ("peak_shaving", "self_consumption", "tou_optimized"):
             assert strategy in error_row
 

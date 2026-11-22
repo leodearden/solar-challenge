@@ -736,7 +736,7 @@ class TestParseHomeConfigErrorPaths:
             pytest.param(
                 "/api/simulate/home",
                 {**VALID_HOME_PAYLOAD, "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}},
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="home-tariff-name",
             ),
             pytest.param(
@@ -750,7 +750,7 @@ class TestParseHomeConfigErrorPaths:
                         ],
                     },
                 },
-                "tariff.periods[0].name must be a string, got 7",
+                "tariff.periods[0].name: must be a string, got 7",
                 id="home-tariff-period-name",
             ),
             pytest.param(
@@ -764,7 +764,7 @@ class TestParseHomeConfigErrorPaths:
                         },
                     ]
                 },
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="fleet-later-home-tariff-name",
             ),
         ],

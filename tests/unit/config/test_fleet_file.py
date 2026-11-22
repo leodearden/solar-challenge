@@ -805,7 +805,7 @@ class TestParseSweepFleetConfigs:
                     _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
                     tariff={"type": "economy_8"},
                 ),
-                re.escape("Unknown tariff type 'economy_8'"),
+                re.escape("tariff.type: unknown tariff type 'economy_8'; supported types: "),
                 id="a-tariff-the-loader-refuses",
             ),
             pytest.param(

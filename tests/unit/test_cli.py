@@ -1351,7 +1351,7 @@ class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
         result = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
 
         assert result.exit_code == 1
-        assert "Unknown tariff type 'economy_8'" in " ".join(result.stderr.split())
+        assert "tariff.type: unknown tariff type 'economy_8'; supported types:" in " ".join(result.stderr.split())
         assert not Path("sweep", point_file).exists()
         assert not Path("sweep", "sweep_summary.csv").exists()
 

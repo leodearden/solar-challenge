@@ -129,8 +129,8 @@ class TestCommunityBlockParsing:
     def test_billing_both_scalar_and_seg_block_raises(
         self, load_community_block: LoadCommunityBlock
     ) -> None:
-        """Supplying both seg_rate_pence_per_kwh and seg block raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
+        """Supplying both seg_rate_pence_per_kwh and seg block is refused, naming the billing block."""
+        with pytest.raises(ConfigurationError) as refusal:
             load_community_block(
                 {
                     "sharing_mode": "p2p",
@@ -140,6 +140,18 @@ class TestCommunityBlockParsing:
                     },
                 }
             )
+        assert str(refusal.value) == "community.billing: sets both seg_rate_pence_per_kwh and seg; set one, not both"
+
+    @pytest.mark.parametrize(
+        "sharing_mode",
+        [pytest.param({}, id="absent"), pytest.param({"sharing_mode": None}, id="null"), pytest.param({"sharing_mode": ""}, id="empty")],
+    )
+    def test_a_block_without_a_sharing_mode_is_refused_naming_it(
+        self, load_community_block: LoadCommunityBlock, sharing_mode: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_block(sharing_mode)
+        assert str(refusal.value) == "community: requires 'sharing_mode': 'p2p' or 'community_battery'"
 
     def test_billing_seg_non_dict_raises(
         self, load_community_block: LoadCommunityBlock
@@ -210,7 +222,7 @@ class TestCommunityBatteryEfficiency:
                 }
             )
         assert str(refusal.value) == (
-            "community.community_battery sets both forms of a battery's efficiency: "
+            "community.community_battery: sets both forms of a battery's efficiency: "
             f"efficiency and {keys_named}; "
             "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
         )

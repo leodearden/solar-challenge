@@ -160,7 +160,7 @@ class TestExportFleetYAML:
         [
             pytest.param(
                 {"tariff": {"type": "flat_rate"}},
-                "flat_rate tariff requires 'rate_per_kwh' field",
+                "tariff: requires 'rate_per_kwh'",
                 id="tariff-the-loaders-refuse",
             ),
             pytest.param(
