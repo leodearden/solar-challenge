@@ -76,6 +76,20 @@ def test_a_fleet_built_drawing_both_forms_is_refused_at_construction() -> None:
     assert str(refusal.value) == _both_forms_refusal("discharge_efficiency")
 
 
+def test_a_block_drawing_both_forms_and_no_capacity_is_refused_for_both_forms_when_read_and_when_built() -> None:
+    """Both seams refuse a reader-only key beside a field it sets before a required key left out."""
+    battery = {"efficiency": 0.92, "charge_efficiency": 0.96}
+
+    with pytest.raises(ConfigurationError) as read:
+        parse_fleet_distribution_config(_fleet_block(battery))
+    with pytest.raises(ConfigurationError) as built:
+        FleetDistributionConfig(
+            n_homes=2, pv=ComponentDistribution({"capacity_kw": 4.0}), battery=ComponentDistribution(battery)
+        )
+
+    assert str(read.value) == str(built.value) == _both_forms_refusal("charge_efficiency")
+
+
 def test_homes_drawing_a_round_trip_load_back_from_their_written_fleet(tmp_path: Path) -> None:
     homes = _homes({"capacity_kwh": 5.0, "efficiency": 0.81})
     path = tmp_path / "fleet.yaml"
@@ -90,8 +104,7 @@ def test_a_drawn_round_trip_out_of_range_is_refused_at_generation_naming_the_blo
     with pytest.raises(ConfigurationError) as refusal:
         generate_homes_from_distribution(fleet, Location.bristol())
 
-    message = str(refusal.value)
-    assert message.startswith("fleet_distribution.battery: home 1: ")
-    assert "efficiency" in message.removeprefix("fleet_distribution.battery: home 1: ")
-    assert "1.5" in message
-    assert message.count("fleet_distribution") == 1
+    assert str(refusal.value) == (
+        "fleet_distribution.battery: home 1: efficiency: round-trip efficiency must be greater "
+        "than 0 and at most 1, got 1.5"
+    )
