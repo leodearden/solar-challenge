@@ -5,7 +5,7 @@ The component tables it reads blocks by also carry each key's fleet row and each
 writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
 """
 
-from dataclasses import MISSING, asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -228,7 +228,7 @@ class ComponentBlock(Generic[_Component]):
     not_in_fleet: Mapping[str, str]
     presence: Optional[str] = None
     asks_for_component: Callable[[object, str], bool] = _any_draw_asks_for_it
-    reader_only: Mapping[str, ReaderOnlyKey[_Component]] = MappingProxyType({})
+    reader_only: Mapping[str, ReaderOnlyKey[_Component]] = field(default_factory=lambda: MappingProxyType({}))
 
     def refuse_both_forms(self, keys: Collection[str], block_path: str) -> None:
         """Refuse the block at *block_path* if *keys*, the keys it sets, hold a reader-only key beside a field it sets, naming the block and each key."""
