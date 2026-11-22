@@ -411,11 +411,8 @@ class BillDistribution:
     max_gbp: float
     """Maximum total annual outlay across the fleet (£)."""
 
-    annualised_from: SimulationWindow | None = None
-    """The window the yearly figures were annualised from: the summaries' one window.
-
-    None only for a distribution built by hand, until the field is required.
-    """
+    annualised_from: SimulationWindow
+    """The window the yearly figures were annualised from: the summaries' one window."""
 
     grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
     """The forecasts that sized the homes' grid charge (dispatch.distinct_grid_charge_forecasts), () when none grid-charged."""

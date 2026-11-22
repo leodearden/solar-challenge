@@ -44,9 +44,9 @@ def _days_lasted(row_count: int, cadence: timedelta) -> float:
     return row_count * cadence / timedelta(days=1)
 
 
-def _extrapolation_notice(window: Optional[SimulationWindow]) -> str:
-    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* is None or runs from 1 January to 31 December."""
-    if window is None or not window.extrapolated:
+def _extrapolation_notice(window: SimulationWindow) -> str:
+    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* runs from 1 January to 31 December."""
+    if not window.extrapolated:
         return ""
     return (
         f"*Yearly figures are extrapolated ×{window.annualisation_scale:.3f} from a "
