@@ -168,7 +168,7 @@ class CommunityConfig:
 # CommunityResults
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class CommunityResults:
     """Output of :func:`simulate_community`.
 
@@ -202,7 +202,7 @@ class CommunityResults:
     battery_soc: pd.Series
     fleet_results: "FleetResults"
     sharing_mode: Literal["p2p", "community_battery"]
-    # Set by simulate_community when _grid_flow_prices_or_warn prices config.billing; None otherwise.
+    # Priced by simulate_community when config.billing sets every billing input; None otherwise.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
     community_savings_gbp: Optional[float] = None
@@ -275,6 +275,23 @@ def _price_grid_flows(
     export_revenue_gbp: float = calculate_seg_revenue(window.energy_kwh(export_kw), seg)
 
     return import_cost_gbp, export_revenue_gbp
+
+
+def _net_costs(
+    window: SimulationWindow,
+    fleet_import_kw: pd.Series,
+    fleet_export_kw: pd.Series,
+    community_import_kw: pd.Series,
+    community_export_kw: pd.Series,
+    prices: tuple[TariffConfig, SEGTariff] | None,
+) -> tuple[float | None, float | None, float | None]:
+    """The fleet's net cost without sharing, its net cost after sharing, and the saving between them, each import cost less export revenue at prices; all None when prices is None."""
+    if prices is None:
+        return None, None, None
+    baseline_import, baseline_export = _price_grid_flows(window, fleet_import_kw, fleet_export_kw, *prices)
+    community_import, community_export = _price_grid_flows(window, community_import_kw, community_export_kw, *prices)
+    baseline, community = baseline_import - baseline_export, community_import - community_export
+    return baseline, community, baseline - community
 
 
 # ---------------------------------------------------------------------------
@@ -365,19 +382,10 @@ def simulate_community(
     if cb_config is None:
         # Vectorised P2P netting — exact for p2p because there is no SOC state
         # to track sequentially.
-        cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
-        cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
+        grid_export: pd.Series = (surplus - deficit).clip(lower=0)
+        grid_import: pd.Series = (deficit - surplus).clip(lower=0)
         zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
-
-        result = CommunityResults(
-            grid_export=cg_exp,
-            grid_import=cg_imp,
-            battery_charge=zeros.copy(),
-            battery_discharge=zeros.copy(),
-            battery_soc=zeros.copy(),
-            fleet_results=fleet_results,
-            sharing_mode=config.sharing_mode,
-        )
+        battery_charge, battery_discharge, battery_soc = zeros.copy(), zeros.copy(), zeros.copy()
     else:
         # Community battery dispatch — sequential because SOC is stateful.
         # Like each home's battery, it starts at the midpoint of its usable SOC window.
@@ -419,28 +427,29 @@ def simulate_community(
             cb_dis_vals.append(r.battery_discharge * scale)
             soc_vals.append(r.battery_soc)
 
-        result = CommunityResults(
-            grid_export=pd.Series(cg_exp_vals, index=index, dtype=float),
-            grid_import=pd.Series(cg_imp_vals, index=index, dtype=float),
-            battery_charge=pd.Series(cb_ch_vals, index=index, dtype=float),
-            battery_discharge=pd.Series(cb_dis_vals, index=index, dtype=float),
-            battery_soc=pd.Series(soc_vals, index=index, dtype=float),
-            fleet_results=fleet_results,
-            sharing_mode=config.sharing_mode,
-        )
+        grid_export = pd.Series(cg_exp_vals, index=index, dtype=float)
+        grid_import = pd.Series(cg_imp_vals, index=index, dtype=float)
+        battery_charge = pd.Series(cb_ch_vals, index=index, dtype=float)
+        battery_discharge = pd.Series(cb_dis_vals, index=index, dtype=float)
+        battery_soc = pd.Series(soc_vals, index=index, dtype=float)
 
-    # --- Virtual-net-metering billing: baseline vs community net cost ---
-    prices = _grid_flow_prices_or_warn(config.billing)
-    if prices is not None:
-        # Baseline: what the fleet would pay/earn WITHOUT community sharing
-        base_imp, base_exp = _price_grid_flows(
-            window, fleet_results.total_grid_import, fleet_results.total_grid_export, *prices
-        )
-        # Community: what the fleet pays/earns AFTER sharing
-        comm_imp, comm_exp = _price_grid_flows(window, result.grid_import, result.grid_export, *prices)
-        result.baseline_net_cost_gbp = base_imp - base_exp
-        result.community_net_cost_gbp = comm_imp - comm_exp
-        result.community_savings_gbp = result.baseline_net_cost_gbp - result.community_net_cost_gbp
+    # Virtual net metering: the fleet's net cost without sharing (its own grid flows) and after it.
+    # _grid_flow_prices_or_warn is called from this frame, where its stacklevel names this function's caller.
+    baseline_net_cost, community_net_cost, community_savings = _net_costs(
+        window, deficit, surplus, grid_import, grid_export, _grid_flow_prices_or_warn(config.billing)
+    )
+    result = CommunityResults(
+        grid_import=grid_import,
+        grid_export=grid_export,
+        battery_charge=battery_charge,
+        battery_discharge=battery_discharge,
+        battery_soc=battery_soc,
+        fleet_results=fleet_results,
+        sharing_mode=config.sharing_mode,
+        baseline_net_cost_gbp=baseline_net_cost,
+        community_net_cost_gbp=community_net_cost,
+        community_savings_gbp=community_savings,
+    )
 
     if validate_balance:
         validate_community_balance(fleet_results, result)
