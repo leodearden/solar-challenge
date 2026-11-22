@@ -47,7 +47,7 @@ _COMMANDS_WITH_A_WINDOW = frozenset({"home run", "fleet run", "fleet sweep", "fi
 """The commands that take --start and --end, each named by its path from the CLI's root."""
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
-_ISO_DATE_WORD = re.compile(rf"\b{_ISO_DATE.pattern}\b", re.ASCII)
+_ISO_DATE_IN_TEXT = re.compile(rf"(?<!\d){_ISO_DATE.pattern}(?!\d)", re.ASCII)
 
 _PAGES_WITH_A_WINDOW = ("/simulate/home", "/simulate/fleet", "/scenarios/builder")
 """The dashboard's pages whose forms set a simulation window."""
@@ -98,13 +98,14 @@ def _dashboard_sources(web_dir: Path) -> list[Path]:
 def _iso_dates_in_text(paths: Iterable[Path], *, root: Path) -> list[tuple[str, int, str]]:
     """(path relative to root, line, date) of the first ISO date on each line of the text of paths, as "2024-06-01" in "start: '2024-06-01'", in path and line order.
 
-    A date is a word of its own: "12024-06-011" holds none.
+    A date may run into anything but more digits: "2024-06-01T00:00" and "d_2024-06-01" each hold one, and
+    "12024-06-011" holds none.
     """
     return sorted(
         (path.relative_to(root).as_posix(), number, match.group())
         for path in paths
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if (match := _ISO_DATE_WORD.search(line)) is not None
+        if (match := _ISO_DATE_IN_TEXT.search(line)) is not None
     )
 
 
@@ -213,17 +214,22 @@ def test_no_module_outside_timebase_holds_an_iso_date_string(project_root: Path)
 
 
 def test_the_date_text_scan_names_each_line_of_a_template_or_script_holding_an_iso_date(tmp_path: Path) -> None:
-    """The scan names the seeded script's and template's dates with their lines, and passes over digits a date only runs into."""
+    """The scan names the seeded script's and template's dates with their lines, a date run into a time or a word among them, and passes over digits a date only runs into."""
     script = tmp_path / "seeded.js"
-    script.write_text("const form = {\n    start: '2024-03-01',\n};\n", encoding="utf-8")
+    script.write_text(
+        "const form = {\n    start: '2024-03-01',\n    end: '2024-06-01T00:00',\n};\n", encoding="utf-8"
+    )
     template = tmp_path / "seeded.html"
     template.write_text(
-        '<input id="run-12024-03-011">\n<input type="date" value="2024-06-30">\n', encoding="utf-8"
+        '<input id="run-12024-03-011">\n<input type="date" value="2024-06-30">\n<input name="d_2024-07-01">\n',
+        encoding="utf-8",
     )
 
     assert _iso_dates_in_text([script, template], root=tmp_path) == [
         ("seeded.html", 2, "2024-06-30"),
+        ("seeded.html", 3, "2024-07-01"),
         ("seeded.js", 2, "2024-03-01"),
+        ("seeded.js", 3, "2024-06-01"),
     ]
 
 
