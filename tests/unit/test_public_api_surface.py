@@ -154,6 +154,8 @@ FROZEN_SURFACE: dict[str, str] = {
     "SEASONAL_FACTORS": "dict {1: float, 2: float, 3: float, 4: float, 5: float, 6: float, 7: float, 8: float, 9: float, 10: float, 11: float, 12: float}",
     # --- location (location.py) ---
     "Location": "dataclass[eq, frozen] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
+    # --- errors (errors.py) ---
+    "ConfigurationError": "(*args: object) -> None",
 }
 
 FROZEN_SET: frozenset[str] = frozenset(FROZEN_SURFACE)
@@ -427,6 +429,10 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "BRISTOL_ALT": "float",
         "bristol": "classmethod (cls) -> Location",
     },
+    # --- errors (errors.py) ---
+    "ConfigurationError": {
+        "must_be": "classmethod (cls, field: str, requirement: str, *, got: object) -> typing.Self",
+    },
     # --- classes outside __all__ (FROZEN_CLOSURE) ---
     "battery.SocEnvelope": {
         "target_kwh": "(self, fraction: float) -> float",
@@ -526,7 +532,7 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
-_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic)
+_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic, BaseException, Exception, ValueError)
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:

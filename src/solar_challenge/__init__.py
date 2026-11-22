@@ -102,6 +102,8 @@ __all__: list[str] = [
     "SEASONAL_FACTORS",
     # --- location (location.py) — required by pv/weather call signatures ---
     "Location",
+    # --- errors (errors.py) ---
+    "ConfigurationError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -193,6 +195,8 @@ _SYMBOL_MODULE: dict[str, str] = {
     "SEASONAL_FACTORS": "load",
     # location
     "Location": "location",
+    # errors
+    "ConfigurationError": "errors",
 }
 
 # ---------------------------------------------------------------------------
@@ -350,3 +354,5 @@ if TYPE_CHECKING:
     from solar_challenge.load import SEASONAL_FACTORS as SEASONAL_FACTORS
     # location
     from solar_challenge.location import Location as Location
+    # errors
+    from solar_challenge.errors import ConfigurationError as ConfigurationError
