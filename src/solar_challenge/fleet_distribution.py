@@ -251,14 +251,14 @@ class SweepSpec:
                 "SweepSpec: max must be greater than min"
             )
 
-    def get_values(self) -> list[float]:
-        """Generate the sweep values."""
+    def get_values(self) -> tuple[float, ...]:
+        """The steps points from min to max, as a tuple, spaced as the mode says."""
         if self.mode is SweepMode.GEOMETRIC:
             ratio = (self.max / self.min) ** (1 / (self.steps - 1))
-            return [self.min * (ratio ** i) for i in range(self.steps)]
+            return tuple(self.min * (ratio ** i) for i in range(self.steps))
         else:
             step = (self.max - self.min) / (self.steps - 1)
-            return [self.min + step * i for i in range(self.steps)]
+            return tuple(self.min + step * i for i in range(self.steps))
 
 
 @dataclass(frozen=True)
