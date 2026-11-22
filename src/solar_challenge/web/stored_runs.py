@@ -875,28 +875,31 @@ _FLEET_SEG_REVENUE_KEYS = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_g
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
     {SummaryStatistics: frozenset({_SIMULATION_DAYS}), FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS)}
 )
-"""By dataclass, each key at the root of its stored object that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, reporting each value that is not null."""
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, reporting each value that is not null."""
+
+
+def _not_read_by_a_later_step(owner: type, key: str) -> bool:
+    """Whether v2 drops *key*, a key no field of *owner* has: unless _RETIRED_KEYS_A_LATER_STEP_READS names it for *owner*."""
+    return key not in _RETIRED_KEYS_A_LATER_STEP_READS.get(owner, frozenset())
 
 
 def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
     """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
 
     Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys.
-    A key _RETIRED_KEYS_A_LATER_STEP_READS names for that dataclass is kept, unreported, for the
-    later step that reads it.
+    A key _RETIRED_KEYS_A_LATER_STEP_READS names for the dataclass whose stored object holds it is
+    kept, unreported, for the later step that reads it.
     """
     dropped: list[DroppedValue] = []
 
     def document_without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
-        content, unknown_keys = without_unknown_keys(document.content, cls)
-        kept_keys = _RETIRED_KEYS_A_LATER_STEP_READS.get(cls, frozenset())
-        kept = {key.path: key.value for key in unknown_keys if key.path in kept_keys}
+        content, unknown_keys = without_unknown_keys(document.content, cls, drops=_not_read_by_a_later_step)
         dropped.extend(
             DroppedValue(document.run_id, document.name, key.path, key.value)
             for key in unknown_keys
-            if key.value is not None and key.path not in kept
+            if key.value is not None
         )
-        return replace(document, content={**content, **kept} if kept else content)
+        return replace(document, content=content)
 
     brought_forward = _each_document(run_type, documents, document_without_unknown_keys)
     return StepResult(documents=brought_forward, dropped=tuple(dropped))
