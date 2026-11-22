@@ -728,6 +728,24 @@ class DistributionType:
         """Whether its spec is the bare number a key gives every home, which an editor offers as its own Fixed Value option."""
         return not is_dataclass(self.spec_type)
 
+    def write(self, spec: DistributionSpec) -> dict[str, Any]:
+        """The mapping build reads back as *spec*: its type, then every key in spec_keys' order, a None one as null, which build reads as absent.
+
+        A spec dataclass gives each key its field of the same name, as construction checks; the
+        scalar form's spec is its one key's value.
+        """
+        held = (spec,) if self.is_scalar_form else tuple(getattr(spec, key) for key in self.spec_keys)
+        return {"type": self.name, **{key: _written_value(value) for key, value in zip(self.spec_keys, held, strict=True)}}
+
+
+def _written_value(value: object) -> object:
+    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, anything else as it is."""
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, SweepSpec):
+        return {"type": "sweep", **{each.name: getattr(value, each.name) for each in fields(value)}}
+    return value
+
 
 _SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
 
@@ -868,6 +886,25 @@ DISTRIBUTION_TYPES: Mapping[str, DistributionType] = MappingProxyType({
         ),
     )
 })
+
+
+def write_distribution_spec(spec: DistributionSpec) -> object:
+    """Write *spec* as the value the grammar reads back as it, the inverse of its reading of a drawn key.
+
+    A null, a number or a choice, the scalar forms, is written as it is; any other spec as the
+    write of the DISTRIBUTION_TYPES record whose spec_type it is an instance of.
+
+    Raises:
+        ConfigurationError: If no record writes *spec*, naming it and the table's types.
+    """
+    if spec is None or isinstance(spec, (int, float, str)):
+        return spec
+    for distribution_type in DISTRIBUTION_TYPES.values():
+        if isinstance(spec, distribution_type.spec_type):
+            return distribution_type.write(spec)
+    raise ConfigurationError(
+        f"Cannot write {spec!r}; valid specs: null, a number, a choice, or a spec of {', '.join(DISTRIBUTION_TYPES)}"
+    )
 
 
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
