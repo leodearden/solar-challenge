@@ -40,6 +40,14 @@ _SUMMER_AT_A_TIME_OF_DAY = SimulationPeriod(
 )
 """June to August 2024, as zoned Timestamps at 06:00 on the first day and 18:00 on the last."""
 
+_SUMMER_AS_NAIVE_TIMESTAMPS = SimulationPeriod(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-08-31"))
+"""June to August 2024, as naive Timestamps at midnight."""
+
+_SUMMER_LATE_ON_UTCS_CLOCK = SimulationPeriod(
+    pd.Timestamp("2024-06-01 23:30", tz="UTC"), pd.Timestamp("2024-08-31 23:30", tz="UTC")
+)
+"""June to August 2024, as Timestamps at 23:30 on UTC's clock: on London's, 00:30 on 2 June and on 1 September."""
+
 
 def _home() -> HomeConfig:
     """A 4 kW home on the default load, carrying no SEG tariff of its own."""
@@ -501,12 +509,20 @@ class TestScenarioWindow:
         [
             pytest.param(SimulationPeriod(date(2024, 6, 1), date(2024, 8, 31)), id="dates"),
             pytest.param(_SUMMER_AT_A_TIME_OF_DAY, id="zoned-timestamps-at-a-time-of-day"),
+            pytest.param(_SUMMER_AS_NAIVE_TIMESTAMPS, id="naive-timestamps"),
         ],
     )
     def test_a_period_of_dates_or_timestamps_gives_the_window_of_the_same_days_as_iso_strings(
         self, period: SimulationPeriod
     ) -> None:
         assert _bristol_scenario(period).window() == _bristol_scenario(_SUMMER).window()
+
+    def test_a_timestamp_on_another_zones_clock_gives_its_own_date_there_not_its_date_on_the_scenarios(
+        self,
+    ) -> None:
+        assert _bristol_scenario(_SUMMER_LATE_ON_UTCS_CLOCK).window() == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
 
     def test_with_window_replaces_the_last_day(self) -> None:
         assert _bristol_scenario().with_window(last_day=date(2024, 6, 7)).window().days == 7
@@ -561,11 +577,24 @@ class TestScenarioWindow:
         )
         assert all(bound.tz is not None for bound in bounds)
 
-    def test_a_period_of_timestamps_at_a_time_of_day_bounds_at_its_dates_local_midnights(self) -> None:
-        assert _bristol_scenario(_SUMMER_AT_A_TIME_OF_DAY).simulation_bounds() == (
+    @pytest.mark.parametrize(
+        "period",
+        [
+            pytest.param(_SUMMER_AT_A_TIME_OF_DAY, id="zoned-timestamps-at-a-time-of-day"),
+            pytest.param(_SUMMER_AS_NAIVE_TIMESTAMPS, id="naive-timestamps"),
+            pytest.param(_SUMMER_LATE_ON_UTCS_CLOCK, id="timestamps-on-another-zones-clock"),
+        ],
+    )
+    def test_a_period_of_timestamps_bounds_at_its_own_dates_midnights_on_the_scenarios_clock(
+        self, period: SimulationPeriod
+    ) -> None:
+        bounds = _bristol_scenario(period).simulation_bounds()
+
+        assert bounds == (
             pd.Timestamp("2024-06-01", tz="Europe/London"),
             pd.Timestamp("2024-08-31", tz="Europe/London"),
         )
+        assert [str(bound.tz) for bound in bounds] == ["Europe/London", "Europe/London"]
 
 
 class TestLoadConfigYaml:
