@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import GRID_CHARGE_FORECASTS, GridChargeConfig
+from solar_challenge.dispatch import GRID_CHARGE_FORECASTS, GridChargeConfig, GridChargeForecast
 from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh, useful_charge_ceiling_kwh
 from solar_challenge.tariff import TariffConfig
 
@@ -188,6 +188,41 @@ class TestGridChargeCeilings:
                 forecast_windows += 1
                 assert held == pytest.approx(float(np.quantile(same_clock[-14:], 0.75)))
         assert forecast_windows >= len(set(clocks))
+
+    def test_a_window_spanning_midnight_draws_its_analogues_only_from_windows_opening_at_its_clock(self) -> None:
+        """Off-peak 23:30 to 06:30: the run opens inside a cheap window, whose 00:00 clock never recurs, so that window has no ceiling and is no 23:30 window's analogue."""
+        tariff = TariffConfig.economy_7(off_peak_start="23:30", off_peak_end="06:30")
+        generation, demand = _trace(self._DAYS)
+
+        trailing = grid_charge_ceilings_kwh("trailing_14_days", generation, demand, _BATTERY, tariff)
+        foresight = grid_charge_ceilings_kwh("perfect_foresight", generation, demand, _BATTERY, tariff)
+
+        opening, *late_evening = _windows(generation.index, tariff)
+        assert opening[0] == 0
+        assert {generation.index[start].strftime("%H:%M") for start, _, _ in late_evening} == {"23:30"}
+        assert len(late_evening) == self._DAYS
+        assert _window_values(trailing, opening[0], opening[1]) == {None}
+        for start, end, _ in late_evening[:14]:
+            assert _window_values(trailing, start, end) == {None}
+        for number, (start, end, _) in enumerate(late_evening[14:], start=14):
+            analogues = [foresight[earlier] for earlier, _, _ in late_evening[number - 14 : number]]
+            (held,) = _window_values(trailing, start, end)
+            assert held == pytest.approx(float(np.quantile(analogues, 0.75)))
+
+    def test_a_window_the_run_opens_inside_is_no_later_windows_analogue(self) -> None:
+        """Zero PV over the opening 00:00 window's horizon, the first day up to 23:30, moves its perfect_foresight ceiling, the control, and no trailing one."""
+        tariff = TariffConfig.economy_7(off_peak_start="23:30", off_peak_end="06:30")
+        generation, demand = _trace(self._DAYS)
+        opening, first_late_evening, *_ = _windows(generation.index, tariff)
+        dark_first_day = generation.copy()
+        dark_first_day.iloc[: first_late_evening[0]] = 0.0
+
+        def ceilings(forecast: GridChargeForecast, pv: pd.Series) -> tuple[Optional[float], ...]:
+            return grid_charge_ceilings_kwh(forecast, pv, demand, _BATTERY, tariff)
+
+        assert opening[2] == first_late_evening[0]
+        assert ceilings("perfect_foresight", dark_first_day)[0] != pytest.approx(ceilings("perfect_foresight", generation)[0])
+        assert ceilings("trailing_14_days", dark_first_day) == ceilings("trailing_14_days", generation)
 
     def test_a_derated_battery_is_sized_within_its_derated_envelope(self) -> None:
         """On a sunless day nothing strands the fill, so the ceiling is the top of the SoH-derated envelope, 0.9 x 5 x 0.8 = 3.6 kWh."""

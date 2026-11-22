@@ -27,29 +27,72 @@ import numpy.typing as npt
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig, SocEnvelope
-from solar_challenge.dispatch import GridChargeForecast
+from solar_challenge.dispatch import ANALYSIS_ONLY_FORECASTS, GRID_CHARGE_FORECASTS, GridChargeForecast
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow, minutes_of_day
 
-TRAILING_DAYS: Final = 14
-"""How many earlier windows of the same clock trailing_14_days reads; docs/grid-charge-forecast.md §3 says why."""
 
-CEILING_QUANTILE: Final = 0.75
-"""The quantile of their ceilings trailing_14_days fills to; docs/grid-charge-forecast.md §3 says why."""
+@dataclass(frozen=True)
+class _TrailingRule:
+    """A trailing forecast: each cheap window fills to the percentile of the ceilings the windows opening at its wall-clock minute needed on each of the days before it.
+
+    Raises:
+        ValueError: If name does not state days, naming both: a re-tune of the days is a new
+            forecast with a new name (docs/grid-charge-forecast.md §3).
+    """
+
+    name: GridChargeForecast
+    days: int
+    percentile: int
+
+    def __post_init__(self) -> None:
+        """Refuse a name that does not state the rule's days."""
+        if self.name != f"trailing_{self.days}_days":
+            raise ValueError(
+                f"a trailing forecast's name states its days, so {self.name!r} cannot read {self.days} days: "
+                "a re-tune of the days is a new forecast with a new name"
+            )
+
+    @property
+    def label(self) -> str:
+        """What sizes a cheap period's grid charge under the rule, in plain English, from its days and percentile."""
+        return (
+            f"the {_ordinal(self.percentile)} percentile of the useful charge the same cheap window needed "
+            f"on each of the {self.days} days before it"
+        )
+
+
+def _ordinal(number: int) -> str:
+    """*number* as an English ordinal: 1st, 2nd, 3rd, 4th, 11th, 12th, 13th, 21st and so on."""
+    suffix = "th" if number % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+_TRAILING_RULES: Final[Mapping[GridChargeForecast, _TrailingRule]] = MappingProxyType(
+    {rule.name: rule for rule in (_TrailingRule("trailing_14_days", days=14, percentile=75),)}
+)
+"""Each trailing forecast's rule, keyed by its name; docs/grid-charge-forecast.md §3 says why 14 days and the 75th percentile."""
+
+_SIZED_BY: Final[Mapping[GridChargeForecast, str]] = MappingProxyType(
+    {
+        "pv_blind": "each cheap period fills the battery to its grid-charge target, whatever PV the day brings",
+        **{name: rule.label for name, rule in _TRAILING_RULES.items()},
+        "perfect_foresight": "the useful charge each cheap window needed, read from the run's own future PV and demand",
+    }
+)
+"""What sizes a cheap period's grid charge under each forecast, before the caveat an analysis-only one carries."""
 
 GRID_CHARGE_FORECAST_LABELS: Final[Mapping[GridChargeForecast, str]] = MappingProxyType(
     {
-        "pv_blind": "each cheap period fills the battery to its grid-charge target, whatever PV the day brings",
-        "trailing_14_days": (
-            "the 75th percentile of the useful charge the same cheap window needed on each of the 14 days before it"
-        ),
-        "perfect_foresight": (
-            "the useful charge each cheap window needed, read from the run's own future PV and demand: "
-            "an upper bound for analysis, never a board figure"
-        ),
+        forecast: (
+            f"{_SIZED_BY[forecast]}: an upper bound for analysis, never a board figure"
+            if forecast in ANALYSIS_ONLY_FORECASTS
+            else _SIZED_BY[forecast]
+        )
+        for forecast in GRID_CHARGE_FORECASTS
     }
 )
-"""What sizes a cheap period's grid charge under each forecast, in plain English, for the reports."""
+"""What sizes a cheap period's grid charge under each forecast, in plain English, for the reports; an analysis-only forecast's says it is never a board figure."""
 
 _Floats = npt.NDArray[np.float64]
 
@@ -123,10 +166,11 @@ def grid_charge_ceilings_kwh(
 
     A row outside every cheap window has none, and so does every row under 'pv_blind'. Under
     'perfect_foresight' each window's rows hold its own horizon's ceiling, read from the run's
-    future. Under 'trailing_14_days' each window's rows hold the CEILING_QUANTILE of the ceilings
-    the TRAILING_DAYS earlier windows opening at the same wall-clock minute needed: each of those
-    horizons ended by the time this window opens, since a horizon ends where the next window
-    starts. A window with fewer such windows before it has none.
+    future. Under a trailing forecast, 'trailing_14_days', each window's rows hold a
+    percentile of the ceilings the windows opening at the same wall-clock minute needed on
+    each of a number of days before it, as the forecast's GRID_CHARGE_FORECAST_LABELS entry
+    states: each of those horizons ended by the time this window opens, since a horizon ends
+    where the next window starts. A window with fewer such windows before it has none.
 
     Args:
         forecast: The GridChargeForecast sizing the battery's grid charge.
@@ -194,7 +238,7 @@ def _window_ceilings(
         case "perfect_foresight":
             return _own_horizon_ceilings(run())
         case "trailing_14_days":
-            return _trailing_ceilings(run())
+            return _trailing_ceilings(run(), _TRAILING_RULES[forecast])
         case _:
             assert_never(forecast)
 
@@ -212,13 +256,13 @@ def _own_horizon_ceilings(run: _Run) -> tuple[float, ...]:
     )
 
 
-def _trailing_ceilings(run: _Run) -> tuple[Optional[float], ...]:
-    """Each window's CEILING_QUANTILE of its TRAILING_DAYS last same-clock windows' own ceilings, None before it has that many."""
+def _trailing_ceilings(run: _Run, rule: _TrailingRule) -> tuple[Optional[float], ...]:
+    """Each window's rule.percentile of its rule.days last same-clock windows' own ceilings, None before it has that many."""
     earlier_by_clock: defaultdict[int, list[float]] = defaultdict(list)
     ceilings: list[Optional[float]] = []
     for window, own in zip(run.windows, _own_horizon_ceilings(run)):
-        analogues = earlier_by_clock[window.clock][-TRAILING_DAYS:]
-        ceilings.append(float(np.quantile(analogues, CEILING_QUANTILE)) if len(analogues) == TRAILING_DAYS else None)
+        analogues = earlier_by_clock[window.clock][-rule.days :]
+        ceilings.append(float(np.percentile(analogues, rule.percentile)) if len(analogues) == rule.days else None)
         earlier_by_clock[window.clock].append(own)
     return tuple(ceilings)
 
