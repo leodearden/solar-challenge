@@ -793,11 +793,13 @@ def _is_a_number_spec(spec: object) -> bool:
 
 
 def _written_value(value: object) -> object:
-    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, anything else as it is."""
+    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, each of its fields as plain data, a StrEnum member as its string, anything else as it is."""
     if isinstance(value, tuple):
         return list(value)
     if isinstance(value, SweepSpec):
-        return {"type": "sweep", **{each.name: getattr(value, each.name) for each in fields(value)}}
+        return {"type": "sweep", **{each.name: _written_value(getattr(value, each.name)) for each in fields(value)}}
+    if isinstance(value, StrEnum):
+        return value.value
     return value
 
 
