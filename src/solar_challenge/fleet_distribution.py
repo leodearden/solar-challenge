@@ -551,7 +551,7 @@ class _DrawnKindRule:
     describe_values: Callable[[FleetField], str]
 
 
-#: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
+#: A number or count field's rule. A value it lists is no string; the home's type reads it as a number.
 _NUMBER_KIND_RULE = _DrawnKindRule(
     spec_types=(
         int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
@@ -572,6 +572,10 @@ _CHOICE_KIND_RULE = _DrawnKindRule(
     ),
     describe_values=lambda row: f"null or one of {list(row.choices)}",
 )
+
+#: The distribution types a CHOICE key draws, by name: those that list their outcomes, the
+#: distributions among _CHOICE_KIND_RULE's spec types.
+_CHOICE_DISTRIBUTION_TYPES: frozenset[str] = frozenset({"weighted_discrete", "shuffled_pool"})
 
 #: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
 #: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
@@ -717,7 +721,7 @@ def _build_shuffled_pool_spec(
 
 
 def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
-    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path."""
+    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path, refusing one that leaves out its min, max or steps, naming each by its path."""
     if not isinstance(data, dict):
         return data
     if data.get("type") != "sweep":
@@ -726,6 +730,7 @@ def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float
         )
     multiplier_path = child_path(block_path, "multiplier")
     refuse_unrecognised_keys(multiplier_path, data, _SWEEP_SPEC_KEYS)
+    refuse_missing_keys(multiplier_path, [key for key in ("min", "max", "steps") if key not in data])
     return constructed(multiplier_path, SweepSpec, **{key: value for key, value in data.items() if key != "type"})
 
 
@@ -810,12 +815,27 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
 def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
     """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
 
-    A CHOICE's value that is not a mapping is the spec as written; any other value is read as
-    _parse_distribution_spec reads it. A spec the row's kind does not draw is refused naming
-    *key_path* and the spec as written.
+    A CHOICE's value is the spec as written when _is_a_choice_spec_as_written says so; any other
+    value is read as _parse_distribution_spec reads it. A spec the row's kind does not draw is
+    refused naming *key_path* and the spec as written.
     """
-    spec = data if row.kind is FieldKind.CHOICE and not isinstance(data, dict) else _parse_distribution_spec(data, key_path)
+    spec = data if _is_a_choice_spec_as_written(row, data) else _parse_distribution_spec(data, key_path)
     return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
+
+
+def _is_a_choice_spec_as_written(row: FleetField, data: object) -> bool:
+    """Whether *data*, given the key whose fleet row is *row*, is a CHOICE's spec as written, never read as a distribution.
+
+    It is when it is no mapping, or a mapping naming a type of _DISTRIBUTION_SPEC_TYPES outside
+    _CHOICE_DISTRIBUTION_TYPES, which draws numbers, so the CHOICE refuses it as a spec it does
+    not draw before a number in it is read, a fixed one's value included.
+    """
+    if row.kind is not FieldKind.CHOICE:
+        return False
+    if not isinstance(data, dict):
+        return True
+    named = data.get("type")
+    return isinstance(named, str) and named in _DISTRIBUTION_SPEC_TYPES and named not in _CHOICE_DISTRIBUTION_TYPES
 
 
 def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:

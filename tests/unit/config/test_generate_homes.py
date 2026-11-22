@@ -438,7 +438,7 @@ def _ev_config_refusal(field: str, hour: float) -> str:
 
 
 class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
-    """generate_homes_from_distribution refuses an EV hour that is an infinity or a NaN, whichever spec gives it, naming its setting and the hour."""
+    """A fleet refuses an EV hour that is an infinity or a NaN, whichever spec gives it, naming its setting and the hour: a scalar or fixed one as the block is parsed, a listed one as EVConfig is built."""
 
     @pytest.mark.parametrize("hour", [math.inf, -math.inf, math.nan], ids=repr)
     @pytest.mark.parametrize(

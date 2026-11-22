@@ -584,7 +584,10 @@ class TestEVChargerTypeValuesAreChargerTypes:
             pytest.param(["7kW", "3.6kW"], id="a bare list of charger types"),
             pytest.param(7, id="a number"),
             pytest.param({"type": "fixed", "value": 22}, id="a fixed number"),
+            pytest.param({"type": "fixed", "value": "7kW"}, id="a fixed charger type"),
+            pytest.param({"type": "fixed", "value": None}, id="a fixed null"),
             pytest.param({"type": "normal", "mean": 7, "std": 1}, id="normal"),
+            pytest.param({"type": "normal", "mean": "7kW", "std": 1}, id="a normal of a charger type"),
             pytest.param({"type": "uniform", "min": 3, "max": 22}, id="uniform"),
             pytest.param({"type": "proportional_to", "source": "pv.capacity_kw"}, id="proportional_to"),
         ],
@@ -592,7 +595,12 @@ class TestEVChargerTypeValuesAreChargerTypes:
     def test_a_spec_other_than_null_weighted_discrete_or_shuffled_pool_is_refused_at_read_naming_its_key_path(
         self, charger_type: object
     ) -> None:
-        """A bare list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type, the spec as written and every charger type."""
+        """A bare list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type, the spec as written and every charger type.
+
+        A spec that draws numbers is refused before a value in it is read, so a fixed charger type
+        or null, or a normal of a charger type, is refused as no spec a charger type draws, never as
+        a value that is no number.
+        """
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
         assert str(refusal.value) == (
