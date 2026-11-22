@@ -11,6 +11,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community
 from solar_challenge.finance import BillDistribution
+from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
 from solar_challenge.optimize import RankedSweep
 from solar_challenge.output import (
@@ -462,6 +463,76 @@ def _one_config_sweep(window: SimulationWindow | None) -> RankedSweep:
     """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
     cr = make_config_result(outlay=_annualised_from(window))
     return make_ranked_sweep((cr,))
+
+
+_TRAILING_NOTICE = (
+    "*Battery grid charging in cheap periods was sized by the trailing_14_days forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
+)
+_PV_BLIND_AND_TRAILING_NOTICE = (
+    "*Battery grid charging in cheap periods was sized by the pv_blind forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['pv_blind']}; and by the trailing_14_days forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
+)
+
+
+def _sized_by(*forecasts: str) -> BillDistribution:
+    """make_bill_distribution's distribution, its homes' grid charge sized by *forecasts*."""
+    return replace(make_bill_distribution(), grid_charge_forecasts=forecasts)
+
+
+class TestGridChargeForecastNotice:
+    """Every report of results whose grid charge a forecast sized says, under its first heading, which forecast and what it is."""
+
+    def test_a_summary_report_names_its_runs_forecast_under_its_title(self, sample_results: SimulationResults) -> None:
+        report = generate_summary_report(replace(sample_results, grid_charge_forecast="trailing_14_days"))
+
+        assert report.startswith("# Simulation Report\n\n" + _TRAILING_NOTICE + "## Simulation Period")
+
+    def test_a_summary_report_of_a_run_that_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
+    ) -> None:
+        report = generate_summary_report(sample_results)
+
+        assert report.startswith("# Simulation Report\n\n## Simulation Period")
+        assert "sized by" not in report
+
+    @pytest.mark.parametrize("side_by_side", [False, True], ids=["physics-only", "side-by-side"])
+    def test_a_finance_report_names_each_forecast_under_its_title(self, side_by_side: bool) -> None:
+        dist = _sized_by("pv_blind", "trailing_14_days")
+
+        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
+
+        assert report.startswith("# Finance Report: Bristol\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Householder Bill")
+
+    def test_a_finance_report_gives_the_forecast_notice_after_the_extrapolation_notice(self) -> None:
+        dist = replace(_sized_by("trailing_14_days"), annualised_from=make_window(days=2, first_day=date(2024, 3, 31)))
+
+        report = generate_finance_report(dist, scenario_name="Bristol")
+
+        assert report.startswith(
+            "# Finance Report: Bristol\n\n"
+            "*Yearly figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01), "
+            "not whole calendar years.*\n\n" + _TRAILING_NOTICE + "## Householder Bill"
+        )
+
+    def test_a_finance_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
+        report = generate_finance_report(_sized_by(), scenario_name="Bristol")
+
+        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
+        assert "sized by" not in report
+
+    def test_a_ranking_report_names_its_outlays_forecasts_under_its_first_heading(self) -> None:
+        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by("pv_blind", "trailing_14_days")),))
+
+        assert generate_config_ranking_report(sweep).startswith(
+            "## Cost-Recovery Rank\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "| Config"
+        )
+
+    def test_a_ranking_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
+        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
+
+        assert generate_config_ranking_report(sweep).startswith("## Cost-Recovery Rank\n\n| Config")
 
 
 class TestExtrapolationNotice:

@@ -191,6 +191,29 @@ class TestFleetSummaryRows:
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestGridChargeForecastRows:
+    """Each summary table says which forecasts sized its grid charge, and has no such row when nothing grid-charged."""
+
+    def test_a_home_summary_gives_its_forecast(self) -> None:
+        rows = home_summary_rows(dataclasses.replace(_home_summary(), grid_charge_forecast="trailing_14_days"))
+
+        assert ("Grid-charge forecast", "trailing_14_days") in rows
+
+    def test_a_fleet_summary_gives_its_homes_forecasts_in_one_row(self) -> None:
+        rows = fleet_summary_rows(
+            dataclasses.replace(_fleet_summary(), grid_charge_forecasts=("pv_blind", "trailing_14_days"))
+        )
+
+        assert [row for row in rows if row[0] == "Grid-charge forecast"] == [
+            ("Grid-charge forecast", "pv_blind, trailing_14_days")
+        ]
+
+    def test_neither_table_has_the_row_when_nothing_grid_charged(self) -> None:
+        metrics = [metric for metric, _ in (*home_summary_rows(_home_summary()), *fleet_summary_rows(_fleet_summary()))]
+
+        assert "Grid-charge forecast" not in metrics
+
+
 class TestPrintedSummaryTables:
     """Tests of the metrics each simulate command's summary table prints on stdout, read row by row."""
 
