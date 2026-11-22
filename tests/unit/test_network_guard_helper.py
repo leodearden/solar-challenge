@@ -124,15 +124,16 @@ class TestRefusingNetwork:
 
         assert refused == []
 
-    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path) -> None:
+    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Its address is relative to its own directory, as an absolute one under tmp_path can outgrow what an AF_UNIX address holds."""
         directory = tmp_path / _A_DIR_NAME_LONGER_THAN_A_SOCKET_ADDRESS_HOLDS
         directory.mkdir()
-        path = str(directory / "socket")
+        monkeypatch.chdir(directory)
         with socket.socket(socket.AF_UNIX) as server, socket.socket(socket.AF_UNIX) as client:
-            server.bind(path)
+            server.bind("socket")
             server.listen()
             with refusing_network() as refused:
-                client.connect(path)
+                client.connect("socket")
 
         assert refused == []
 
