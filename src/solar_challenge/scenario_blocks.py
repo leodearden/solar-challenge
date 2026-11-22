@@ -188,7 +188,8 @@ class ReaderOnlyKey(Generic[_Component]):
     *apply* gives the component with the key's value applied, setting the fields *sets* names;
     a block may set the key or those fields, not both. *subject* and *form* name, in the
     refusal of a block setting both, what the key and the fields are two forms of and the
-    key's form of it.
+    key's form of it. tests/unit/config/test_component_blocks.py holds each one to be a key of
+    its block and no field of the dataclass (T1).
     """
 
     sets: tuple[str, ...]
@@ -201,8 +202,9 @@ class ReaderOnlyKey(Generic[_Component]):
 class ComponentBlock(Generic[_Component]):
     """A component's block in the scenario grammar, stated against the dataclass it builds.
 
-    *config_type* is the dataclass. *keys* are the block's keys, the fields it carries, in field
-    order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
+    *config_type* is the dataclass. *keys* are the block's keys: the fields it carries, in field
+    order, and its reader-only keys; *outside_grammar* maps each other field to the reason no key
+    carries it. *sub_blocks*
     holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
     reads as, for each key where that is not the dataclass's declared default.
 
@@ -216,7 +218,7 @@ class ComponentBlock(Generic[_Component]):
     of the component builds it from the other keys, then applies each reader-only key set
     non-null, and refuses a block setting one beside a field it sets; a writer writes none.
     tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields,
-    its reader-only keys among its keys (T1).
+    its reader-only keys among its keys and none of them a field (T1).
     """
 
     config_type: type[_Component]

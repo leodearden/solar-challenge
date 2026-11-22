@@ -803,7 +803,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
     - A battery, and the home already has one →
       ``dataclasses.replace(home.battery_config, capacity_kwh=point.battery_kwh)``
       preserving ``max_discharge_kw``, ``grid_charging``, ``dispatch_strategy``,
-      ``efficiency``, and all other base fields.
+      and all other base fields.
     - A battery, and the home has NO battery → a fresh
       :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
       (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).

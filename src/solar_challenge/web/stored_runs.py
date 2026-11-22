@@ -45,7 +45,10 @@ calculate_summary took it from the same results' index, and drops each summary's
 reporting only a day count other than its window's days; v2 keeps a summary's simulation_days
 for it, as _RETIRED_KEYS_A_LATER_STEP_READS names. v6 drops each fleet summary's
 total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, a second copy of its export revenue,
-reporting each value that is not null; v2 keeps the pair for it the same way.
+reporting each value that is not null; v2 keeps the pair for it the same way. v7 drops each
+stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency were
+derived from, wherever the battery is, reporting each value that is not null; v2 keeps a
+battery's efficiency for it the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and

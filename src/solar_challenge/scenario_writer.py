@@ -6,9 +6,9 @@ it: parse_location_block, parse_home_block and its block parsers,
 parse_tariff_config's custom type, and parse_seg_rate.  location: and each
 component block carry every key of scenario_blocks.py's table for that component,
 in field order, an unset value as null, which the reader reads as absent.  A field
-the grammar has no key for is refused unless it is at its default.  A battery block
-is written without efficiency, as the charge_efficiency and discharge_efficiency it
-holds.
+the grammar has no key for is refused unless it is at its default.  A reader-only
+key is never written: a battery block is written without efficiency, the round
+trip, as the charge_efficiency and discharge_efficiency it holds.
 """
 
 from collections.abc import Mapping, Sequence
