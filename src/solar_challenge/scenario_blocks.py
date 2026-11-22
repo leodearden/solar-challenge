@@ -95,7 +95,7 @@ def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
     if name is None:
         return ""
     if not isinstance(name, str):
-        raise ConfigurationError.must_be(child_path(block_path, "name"), "a string", got=name)
+        raise refusal(child_path(block_path, "name"), f"must be a string, got {name!r}")
     return name
 
 
@@ -261,7 +261,7 @@ def _built_component(
     from the set values, as written, over the table's when-omitted values.
 
     Raises:
-        ConfigurationError: naming by its path each key the block leaves out that has neither a
+        ConfigurationError: naming the block and each key it leaves out that has neither a
             declared default nor a when-omitted value; or as its dataclass refuses the values,
             prefixed by the block's path.
     """
@@ -356,10 +356,11 @@ def _refuse_both_efficiency_forms(block_path: str, set_keys: Mapping[str, Any]) 
     """Refuse the battery: block at *block_path* if *set_keys*, the keys it sets, hold a per-direction efficiency beside efficiency, naming the block and each key."""
     per_direction = [key for key in _PER_DIRECTION_EFFICIENCY_KEYS if key in set_keys]
     if per_direction:
-        raise ConfigurationError(
-            f"{block_label(block_path)} sets both forms of a battery's efficiency: efficiency and "
+        raise refusal(
+            block_path,
+            "sets both forms of a battery's efficiency: efficiency and "
             f"{' and '.join(per_direction)}; set efficiency, the round trip, or charge_efficiency "
-            "and discharge_efficiency, not both"
+            "and discharge_efficiency, not both",
         )
 
 
@@ -417,15 +418,17 @@ def _strategy_variant(block: Mapping[str, Any], block_path: str) -> type[Dispatc
     """The variant of DispatchStrategyConfig the strategy_type of the dispatch_strategy: block at *block_path* names.
 
     Raises:
-        ConfigurationError: for a strategy_type that is missing or names no variant, naming its
-            path, its value and the variants' tags.
+        ConfigurationError: for a strategy_type that is missing or null, naming the block; for
+            one that names no variant, naming its path, its value and the variants' tags.
     """
     tag = block.get("strategy_type")
+    if tag is None:
+        refuse_missing_keys(block_path, ["strategy_type"])
     variant = STRATEGY_CONFIG_BY_TYPE.get(tag) if isinstance(tag, str) else None
     if variant is None:
-        raise ConfigurationError(
-            f"Invalid {child_path(block_path, 'strategy_type')} {tag!r}; "
-            f"valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}"
+        raise refusal(
+            child_path(block_path, "strategy_type"),
+            f"invalid value {tag!r}; valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}",
         )
     return variant
 
@@ -440,10 +443,10 @@ def parse_dispatch_strategy_config(
     variants, every key present and those its strategy does not read null, reads as its variant.
 
     Raises:
-        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
-            or names no variant, naming its path, its value and the variants' tags; a key the
+        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing,
+            naming the block, or names no variant, naming its path, its value and the variants' tags; a key the
             variant does not read, unless it is null and another strategy reads it; a key the
-            variant needs, left out or null, naming its path; and a value the variant refuses,
+            variant needs, left out or null, naming the block and the key; and a value the variant refuses,
             as it refuses it, prefixed by the block's path.
     """
     if data is None:
@@ -618,7 +621,7 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
     """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
     rate = data.get("rate_per_kwh")
     if rate is None:
-        raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
+        refuse_missing_keys(block_path, ["rate_per_kwh"])
     return constructed(
         block_path, TariffConfig.flat_rate, rate_per_kwh=rate, name=_read_name(data, block_path=block_path)
     )
@@ -657,9 +660,7 @@ def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffCon
 def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
     """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate, and as TariffPeriod refuses it, prefixed by its path."""
     period = refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
-    for key in ("start_time", "end_time", "rate_per_kwh"):
-        if key not in period:
-            raise ConfigurationError(f"Tariff period requires '{key}' field")
+    refuse_missing_keys(block_path, [key for key in ("start_time", "end_time", "rate_per_kwh") if key not in period])
     return constructed(
         block_path,
         TariffPeriod,
@@ -671,13 +672,14 @@ def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
 
 
 def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the custom tariff a block names from its periods, refusing it unless it gives some, and as TariffConfig refuses its periods, prefixed by the block's path."""
-    if "periods" not in data:
-        raise ConfigurationError("custom tariff requires 'periods' field")
+    """Build the custom tariff a block names from its periods, refusing it unless it gives a list of some, and as TariffConfig refuses its periods, prefixed by the block's path."""
+    if data.get("periods") is None:
+        refuse_missing_keys(block_path, ["periods"])
 
-    periods_data = data["periods"]
+    periods_path = child_path(block_path, "periods")
+    periods_data = require_list(periods_path, data["periods"])
     if not periods_data:
-        raise ConfigurationError("custom tariff must have at least one period")
+        raise refusal(periods_path, "must list at least one period")
 
     periods = tuple(
         _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
@@ -737,12 +739,12 @@ def parse_tariff_config(
 
     tariff_type = data.get("type")
     if tariff_type is None:
-        raise ConfigurationError("Tariff configuration requires 'type' field")
+        refuse_missing_keys(block_path, ["type"])
     block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
     if block_type is None:
-        raise ConfigurationError(
-            f"Unknown tariff type '{tariff_type}'. "
-            f"Supported types: {', '.join(_TARIFF_TYPES)}"
+        raise refusal(
+            child_path(block_path, "type"),
+            f"unknown tariff type {tariff_type!r}; supported types: {', '.join(_TARIFF_TYPES)}",
         )
     refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
     return block_type.build(data, block_path)
@@ -841,21 +843,20 @@ def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
         return None
     data = refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
     if ("preset" in data) == ("rate_pence_per_kwh" in data):
-        raise ConfigurationError(
-            f"'{block_path}' must specify exactly one of 'preset' or "
-            f"'rate_pence_per_kwh', got {data!r}"
+        raise refusal(
+            block_path, f"must specify exactly one of 'preset' or 'rate_pence_per_kwh', got {data!r}"
         )
     if "rate_pence_per_kwh" in data:
-        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], path=block_path)
+        return _parse_seg_rate_scalar(data["rate_pence_per_kwh"], block_path=block_path)
     try:
         return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
     except (ValueError, TypeError) as exc:
-        raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
+        raise refusal(child_path(block_path, "preset"), str(exc)) from exc
 
 
-def _parse_seg_rate_scalar(value: Any, *, path: str) -> float:
-    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *path*, the rate's place in its file."""
-    return constructed(path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
+def _parse_seg_rate_scalar(value: Any, *, block_path: str) -> float:
+    """Read a SEG export rate in pence/kWh as :class:`SEGTariff` reads it, a refusal prefixed by *block_path*, the rate's place in its file."""
+    return constructed(block_path, SEGTariff, name="", rate_pence_per_kwh=value).rate_pence_per_kwh
 
 
 _FINANCE_BLOCK_KEYS: frozenset[str] = frozenset(each.name for each in fields(FinanceConfig) if each.init)
@@ -870,15 +871,11 @@ _EVENT_WINDOW_KEYS: frozenset[str] = frozenset(each.name for each in fields(Even
 
 def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
     """Parse the event_windows list at *block_path* into EventWindows, each refused as EventWindow refuses it, prefixed by its path."""
-    if not isinstance(data, list):
-        raise ConfigurationError(f"{block_path} must be a list of window dicts")
     parsed_windows: list[EventWindow] = []
-    for i, ew_dict in enumerate(data):
+    for i, ew_dict in enumerate(require_list(block_path, data)):
         window_path = f"{block_path}[{i}]"
         window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
-        for req_key in _required_keys(EventWindow):
-            if req_key not in window:
-                raise ConfigurationError(f"{window_path} requires '{req_key}' field")
+        refuse_missing_keys(window_path, [key for key in _required_keys(EventWindow) if key not in window])
         parsed_windows.append(constructed(window_path, EventWindow, **window))
     return tuple(parsed_windows)
 
@@ -933,9 +930,7 @@ def parse_finance_config(
         return None
     refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
     if "standing_charge_pence_per_day" not in data:
-        raise ConfigurationError(
-            "finance.standing_charge_pence_per_day is required"
-        )
+        refuse_missing_keys(block_path, ["standing_charge_pence_per_day"])
 
     grid_services_events = _parse_grid_services_events_config(
         data.get("grid_services_events"),
@@ -993,16 +988,13 @@ def _parse_community_billing_config(
     if "seg_rate_pence_per_kwh" in data:
         direct_rate = _parse_seg_rate_scalar(
             data["seg_rate_pence_per_kwh"],
-            path=child_path(block_path, "seg_rate_pence_per_kwh"),
+            block_path=child_path(block_path, "seg_rate_pence_per_kwh"),
         )
 
     seg_block = data.get("seg")
 
     if direct_rate is not None and seg_block is not None:
-        raise ConfigurationError(
-            "community billing: specify either 'seg_rate_pence_per_kwh' (scalar) "
-            "or 'seg' block — not both."
-        )
+        raise refusal(block_path, "sets both seg_rate_pence_per_kwh and seg; set one, not both")
 
     seg_rate = (
         direct_rate
@@ -1048,10 +1040,7 @@ def parse_community_config(
 
     sharing_mode = data.get("sharing_mode")
     if not sharing_mode:
-        raise ConfigurationError(
-            "community: block requires a 'sharing_mode' field "
-            "('p2p' or 'community_battery')"
-        )
+        raise refusal(block_path, "requires 'sharing_mode': 'p2p' or 'community_battery'")
 
     community_battery = _parse_battery_config(
         data.get("community_battery"), block_path=child_path(block_path, "community_battery")
