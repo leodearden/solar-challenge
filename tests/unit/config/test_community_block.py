@@ -272,15 +272,14 @@ period:
         result = load_community_config(path)
         assert result is None
 
-    def test_load_non_dict_yaml_returns_none(self, tmp_path: Path) -> None:
-        """A YAML file whose top-level value is a list (not a dict) returns None
-        instead of raising AttributeError on .get('community').
-        """
+    def test_a_yaml_file_that_is_a_list_is_refused_naming_the_top_level(self, tmp_path: Path) -> None:
+        """A document is a mapping of blocks, so a list is refused, where it was read as a file with no community block."""
         path = tmp_path / "community.yaml"
-        path.write_text("- item1\n- item2\n")  # top-level list, no community key
+        path.write_text("- item1\n- item2\n")
 
-        result = load_community_config(path)
-        assert result is None
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_config(path)
+        assert str(refusal.value) == "the top level: must be a mapping, got list"
 
 
 class TestCommunityConfigFrozenPicklable:
