@@ -622,10 +622,15 @@ class TestFleetFormFromScenario:
         )
 
     def test_a_fleet_size_above_max_fleet_homes_is_refused_by_the_dashboards_bound_naming_it(self) -> None:
-        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written.
+
+        The battery's pool, sized to the scenario's 3 homes, becomes a fixed capacity, since the
+        loaders' F6 would refuse it first.
+        """
         n_homes = MAX_FLEET_HOMES + 1
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "capacity_kwh": 5.0}
         with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes))
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes, battery=battery))
         assert str(exc_info.value) == (
             f"fleet_distribution.n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
         )

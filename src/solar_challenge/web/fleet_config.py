@@ -18,7 +18,9 @@ from types import MappingProxyType
 from typing import Any, TypeGuard
 
 
+from solar_challenge.fleet_distribution import FleetDistributionConfig
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.scenario_blocks import child_path
 
 #: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, and the
 #: preview a shuffled pool that holds values for more homes or a draw of more values.
@@ -48,6 +50,21 @@ def read_fleet_seed(value: Any, field: str) -> int:
             naming *field* and the value sent.
     """
     return as_whole_number(value, field, within=Interval(-MAX_FLEET_SEED, MAX_FLEET_SEED))
+
+
+def refuse_a_fleet_the_dashboard_cannot_run(fleet: FleetDistributionConfig, path: str) -> None:
+    """Refuse *fleet*, a fleet fleet_distribution.py's grammar has read from the block at *path*, when the dashboard cannot run it: more than :data:`MAX_FLEET_HOMES` homes, or a seed beyond :data:`MAX_FLEET_SEED`.
+
+    A shuffled pool needs no bound of its own: the grammar's F6 holds every pool's counts
+    to the fleet's n_homes, so a fleet within MAX_FLEET_HOMES holds no larger pool.
+
+    Raises:
+        ConfigurationError: From :func:`read_fleet_size` or :func:`read_fleet_seed`, naming
+            n_homes or seed under *path* and the value read.
+    """
+    read_fleet_size(fleet.n_homes, child_path(path, "n_homes"))
+    if fleet.seed is not None:
+        read_fleet_seed(fleet.seed, child_path(path, "seed"))
 
 
 def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list[int]:
@@ -204,23 +221,23 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
     Returns:
         Fleet distribution config dict.
 
-    Each block's distributions, fixed values and other settings pass on as
-    :func:`_parse_component_distribution` writes them: their numbers and types as sent, for
-    fleet_distribution.py's grammar to read or refuse naming them.
+    Its n_homes and seed, 100 and 42 when the form leaves them out, and each block's
+    distributions, fixed values and other settings pass on as sent, the blocks' as
+    :func:`_parse_component_distribution` writes them, for fleet_distribution.py's grammar
+    to read or refuse naming them; the dashboard's bounds apply to the fleet it reads (see
+    :func:`refuse_a_fleet_the_dashboard_cannot_run`).
 
     Raises:
-        ValueError: If n_homes is not a whole number from 1 to MAX_FLEET_HOMES (see
-            :func:`read_fleet_size`), seed is not a whole number from -MAX_FLEET_SEED to
-            MAX_FLEET_SEED (see :func:`read_fleet_seed`), a pv/battery/load block is
-            neither null nor a dict (see :func:`_component_block`),
+        ValueError: If a pv/battery/load block is neither null nor a dict (see
+            :func:`_component_block`),
             a battery block sets a dispatch strategy (see
             :func:`_refuse_battery_dispatch_strategy`), or
             :func:`_parse_component_distribution` refuses a block's shape; each refusal
             names its field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
-        "seed": read_fleet_seed(form_data.get("seed", 42), "seed"),
+        "n_homes": form_data.get("n_homes", 100),
+        "seed": form_data.get("seed", 42),
     }
 
     # Process PV distribution

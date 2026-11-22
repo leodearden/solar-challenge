@@ -38,8 +38,7 @@ from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     distribution_form_spec,
     form_to_fleet_distribution_config,
-    read_fleet_seed,
-    read_fleet_size,
+    refuse_a_fleet_the_dashboard_cannot_run,
 )
 from solar_challenge.web.request_boundary import (
     read_location,
@@ -118,7 +117,10 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
         ValueError: For a name sent as text holding a lone surrogate, require_encodable_text's
             refusal naming name.
         ValueError, TypeError, ConfigurationError: From the readers of the form's
-            distributions, location, tariff, dispatch strategy, SEG and window, read in that
+            distributions, fleet_distribution.py's grammar reading its n_homes and seed among
+            them, the dashboard's bounds on the fleet it reads (see
+            refuse_a_fleet_the_dashboard_cannot_run, naming n_homes or seed), and the
+            readers of its location, tariff, dispatch strategy, SEG and window, read in that
             order, a date that does not parse included.
         ConfigurationError: For homes the loaders cannot generate from the distributions.
     """
@@ -128,6 +130,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
     name = sent_name if is_run_name(sent_name) else None
     distribution = form_to_fleet_distribution_config(dict(form))
     fleet = parse_fleet_distribution_config(distribution)
+    refuse_a_fleet_the_dashboard_cannot_run(fleet, "")
     location = _fleet_form_location(form)
     overlay = _read_fleet_overlay(form)
     start, end = parse_date_range(form)
@@ -244,10 +247,11 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     rate, the rate the loaders charge it.  A setting the form needs but cannot hold exactly
     is refused, naming it, since loading it anyway would run a different fleet.  A period
     the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
-    refused naming period.start_date and period.end_date.  A fleet size that is not a whole
-    number from 1 to MAX_FLEET_HOMES, or a seed that is not a whole number from
-    -MAX_FLEET_SEED to MAX_FLEET_SEED, is refused naming fleet_distribution.n_homes or
-    fleet_distribution.seed.  Every other setting, and a location other than the page's, is
+    refused naming period.start_date and period.end_date.  The loaders' reader refuses a
+    fleet size or seed that is not a whole number; the dashboard's bounds then refuse a
+    fleet size above MAX_FLEET_HOMES, or a seed beyond -MAX_FLEET_SEED to MAX_FLEET_SEED,
+    naming fleet_distribution.n_homes or fleet_distribution.seed, and the form holds the
+    size and seed the loaders read.  Every other setting, and a location other than the page's, is
     named in not_loaded.  A form the page could not run, as parse_fleet_form refuses it, is
     refused too.
 
@@ -258,9 +262,8 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
             refuse, or from parse_fleet_form, for a form the page could not run.
     """
     scenario = _fleet_scenario(document)
-    fleet = scenario["fleet_distribution"]
-    fleet_size_and_seed = _read_fleet_size_and_seed(fleet)
-    _refuse_what_the_loaders_refuse(scenario)
+    parsed = _fleet_the_loaders_read(scenario)
+    refuse_a_fleet_the_dashboard_cannot_run(parsed, "fleet_distribution")
     form, not_loaded = _read_blocks(
         scenario,
         "",
@@ -268,7 +271,7 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
             "name": _read_name(scenario.get("name")),
             "period": _read_period(scenario.get("period")),
             "location": _read_location_block(scenario.get("location")),
-            "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
+            "fleet_distribution": _read_fleet_distribution(scenario["fleet_distribution"], parsed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
         },
@@ -318,12 +321,13 @@ def _fleet_scenario(document: object) -> dict[str, Any]:
     return document
 
 
-def _refuse_what_the_loaders_refuse(scenario: Mapping[str, Any]) -> None:
-    """Refuse *scenario* where the loaders refuse it, with their message; the readers below read only what they accept."""
+def _fleet_the_loaders_read(scenario: Mapping[str, Any]) -> FleetDistributionConfig:
+    """The fleet the loaders read from *scenario*, refusing it where they refuse its location, fleet, tariff or SEG, in that order, with their message; the readers below read only what they accept."""
     parse_location_block(scenario.get("location"))
-    parse_fleet_distribution_config(scenario["fleet_distribution"])
+    fleet = parse_fleet_distribution_config(scenario["fleet_distribution"])
     parse_tariff_config(scenario.get("tariff"))
     parse_seg_rate(scenario.get("seg"))
+    return fleet
 
 
 def _not_loaded(
@@ -410,25 +414,8 @@ def _read_location_block(location: Any) -> _BlockRead:
     return {}, ("location",)
 
 
-def _read_fleet_size_and_seed(fleet: Mapping[str, Any]) -> Mapping[str, _BlockRead]:
-    """The fleet form's fleet size and seed: the reads of the scenario's fleet_distribution block *fleet*'s n_homes and seed, by key, made ahead of the loaders, whose int() would refuse n_homes first, naming no setting.
-
-    Raises:
-        ValueError: From read_fleet_size or read_fleet_seed, naming
-            fleet_distribution.n_homes or fleet_distribution.seed.
-    """
-    path = "fleet_distribution"
-    n_homes = read_fleet_size(fleet.get("n_homes"), child_path(path, "n_homes"))
-    return {
-        "n_homes": ({"n_homes": n_homes}, ()),
-        "seed": _read_seed(fleet.get("seed"), child_path(path, "seed")),
-    }
-
-
-def _read_fleet_distribution(
-    fleet: Mapping[str, Any], fleet_size_and_seed: Mapping[str, _BlockRead]
-) -> _BlockRead:
-    """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, whose n_homes and seed read as *fleet_size_and_seed*.
+def _read_fleet_distribution(fleet: Mapping[str, Any], parsed: FleetDistributionConfig) -> _BlockRead:
+    """The fleet form's fleet size, seed, distributions and dispatch strategy: the scenario's fleet_distribution block *fleet*, whose n_homes and seed are those the loaders read, *parsed*'s, a seed it leaves out none.
 
     Raises:
         ValueError: From the readers of its distributions and dispatch strategy.
@@ -438,24 +425,13 @@ def _read_fleet_distribution(
         fleet,
         path,
         {
-            **fleet_size_and_seed,
+            "n_homes": ({"n_homes": parsed.n_homes}, ()),
+            "seed": ({} if parsed.seed is None else {"seed": parsed.seed}, ()),
             "pv": _read_component(fleet, path, "pv", "capacity_kw"),
             "battery": _read_battery(fleet.get("battery"), child_path(path, "battery")),
             "load": _read_component(fleet, path, "load", "annual_consumption_kwh"),
         },
     )
-
-
-def _read_seed(seed: Any, path: str) -> _BlockRead:
-    """The fleet form's seed: the *path* seed as the whole number it is, none when it is absent or null.
-
-    Raises:
-        ValueError: From read_fleet_seed, for a seed that is not a whole number from
-            -MAX_FLEET_SEED to MAX_FLEET_SEED, naming *path*.
-    """
-    if seed is None:
-        return {}, ()
-    return {"seed": read_fleet_seed(seed, path)}, ()
 
 
 def _read_component(
