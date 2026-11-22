@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -536,6 +536,21 @@ class TestScenarioWindow:
     def test_with_window_refuses_a_first_day_after_the_last_naming_both_fields(self) -> None:
         with pytest.raises(ConfigurationError, match=_naming("period.start_date", "period.end_date")):
             _bristol_scenario().with_window(first_day=date(2024, 9, 1))
+
+    @pytest.mark.parametrize(
+        ("parameter", "day"),
+        [
+            pytest.param("first_day", datetime(2024, 7, 1), id="first-day-a-datetime"),
+            pytest.param("first_day", pd.Timestamp("2024-07-01"), id="first-day-a-timestamp"),
+            pytest.param("last_day", datetime(2024, 7, 31), id="last-day-a-datetime"),
+            pytest.param("last_day", pd.Timestamp("2024-07-31"), id="last-day-a-timestamp"),
+        ],
+    )
+    def test_with_window_refuses_a_day_that_is_not_exactly_a_date_naming_its_parameter_and_value(
+        self, parameter: str, day: date
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("'x'", f"with_window's {parameter}", repr(day))):
+            _bristol_scenario().with_window(**{parameter: day})
 
     def test_the_simulation_bounds_are_the_first_and_last_days_local_midnights(self) -> None:
         bounds = _bristol_scenario().simulation_bounds()

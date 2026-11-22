@@ -212,12 +212,12 @@ class ScenarioConfig:
         return SimulationWindow(first_day, last_day, ONE_MINUTE, self._timezone())
 
     def with_window(self, *, first_day: Optional[date] = None, last_day: Optional[date] = None) -> "ScenarioConfig":
-        """A copy whose period keeps each day not given, checked as construction checks."""
+        """A copy whose period keeps each day not given, checked as construction checks; each day given is exactly a date."""
         changes: dict[str, str] = {}
         if first_day is not None:
-            changes["start_date"] = first_day.isoformat()
+            changes["start_date"] = self._iso_day("first_day", first_day)
         if last_day is not None:
-            changes["end_date"] = last_day.isoformat()
+            changes["end_date"] = self._iso_day("last_day", last_day)
         return replace(self, period=replace(self.period, **changes))
 
     def simulation_bounds(self) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -242,6 +242,20 @@ class ScenarioConfig:
             )
         except ConfigurationError as exc:
             raise ConfigurationError(f"Scenario '{self.name}': {exc}") from exc
+
+    def _iso_day(self, parameter: str, day: date) -> str:
+        """The 'YYYY-MM-DD' string of day, the day with_window is given as *parameter*.
+
+        Raises:
+            ConfigurationError: If day is not exactly a date, such as a datetime or a Timestamp,
+                naming the scenario, parameter and day.
+        """
+        if type(day) is not date:
+            raise ConfigurationError(
+                f"Scenario '{self.name}': with_window's {parameter} is exactly the standard library's date, "
+                f"never a datetime, a Timestamp or any other type: got {parameter}={day!r}"
+            )
+        return day.isoformat()
 
     def _refuse_a_period_that_is_not_a_run_of_days(self) -> None:
         """Raise ConfigurationError for a period day that is not a day, as _period_days does; then, naming the scenario and both fields and days, for a last day before the first, through covered_days, the one home of that rule."""
