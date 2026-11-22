@@ -32,10 +32,10 @@ from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow, minutes_of_day
 
 TRAILING_DAYS: Final = 14
-"""How many earlier windows of the same clock trailing_14_days reads; docs/grid-charge-forecast.md says why."""
+"""How many earlier windows of the same clock trailing_14_days reads; docs/grid-charge-forecast.md §3 says why."""
 
 CEILING_QUANTILE: Final = 0.75
-"""The quantile of their ceilings trailing_14_days fills to; docs/grid-charge-forecast.md says why."""
+"""The quantile of their ceilings trailing_14_days fills to; docs/grid-charge-forecast.md §3 says why."""
 
 GRID_CHARGE_FORECAST_LABELS: Final[Mapping[GridChargeForecast, str]] = MappingProxyType(
     {
