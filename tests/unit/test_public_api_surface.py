@@ -61,7 +61,8 @@ from tests._surface_forms import (
 #
 # The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
-# dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
+# class's following its kind where it has one, e.g.
+# 'dataclass[eq, frozen, match_args] (...)'; an Enum's
 # members, aliases included; or a constant's type, then a mapping's entries or a
 # list's or tuple's items, e.g. 'dict {1: float}'.  Any add/remove to __all__
 # must be reflected in the keys, and any change to a name's form in its value;
@@ -648,7 +649,7 @@ def test_every_pinned_dataclass_is_frozen() -> None:
     assert not unlisted and not stale, (
         f"Pinned dataclasses that are not frozen: {unlisted}. Freeze each with "
         "@dataclass(frozen=True), add frozen to its kind in FROZEN_SURFACE or "
-        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen]', and add its release note, "
+        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen, match_args]', and add its release note, "
         "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit; "
         "or list it in UNFROZEN_PINNED_DATACLASSES with the task that freezes it. "
         "UNFROZEN_PINNED_DATACLASSES entries that name no unfrozen pinned dataclass "
