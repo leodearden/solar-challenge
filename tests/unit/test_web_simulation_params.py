@@ -5,6 +5,7 @@ import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from operator import attrgetter
+from typing import NamedTuple
 
 import pytest
 pytest.importorskip("flask")
@@ -590,12 +591,22 @@ class TestParseHomeConfigHeatPumpBlock:
         )
 
 
-# Each nested block's key, and the HomeConfig field its parsed value fills.
-NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
-    "heat_pump": attrgetter("heat_pump_config"),
-    "seg": attrgetter("seg_tariff"),
-    "tariff": attrgetter("tariff_config"),
-    "dispatch_strategy": attrgetter("battery_config.dispatch_strategy"),
+class NestedBlock(NamedTuple):
+    """The HomeConfig field a nested block's parsed value fills, and the value it holds when the block is null or left out."""
+
+    field: Callable[[HomeConfig], object]
+    when_none: object
+
+
+# Each nested block, by its key: no heat pump, SEG or tariff when it is null or left out, and a
+# battery naming no strategy, which dispatches BatteryConfig's self-consumption.
+NESTED_BLOCKS: dict[str, NestedBlock] = {
+    "heat_pump": NestedBlock(attrgetter("heat_pump_config"), None),
+    "seg": NestedBlock(attrgetter("seg_tariff"), None),
+    "tariff": NestedBlock(attrgetter("tariff_config"), None),
+    "dispatch_strategy": NestedBlock(
+        attrgetter("battery_config.dispatch_strategy"), SelfConsumptionStrategyConfig()
+    ),
 }
 
 
@@ -606,20 +617,18 @@ class TestParseHomeConfigNestedBlockPresence:
     """
 
     @pytest.mark.parametrize(
-        ("key", "parsed_block"),
-        [pytest.param(key, field, id=key) for key, field in NESTED_BLOCK_FIELDS.items()],
+        ("key", "block"),
+        [pytest.param(key, block, id=key) for key, block in NESTED_BLOCKS.items()],
     )
-    def test_null_block_means_none_as_an_absent_one_does(
-        self, key: str, parsed_block: Callable[[HomeConfig], object]
-    ) -> None:
-        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy."""
+    def test_null_block_means_none_as_an_absent_one_does(self, key: str, block: NestedBlock) -> None:
+        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
         assert key not in VALID_HOME_PAYLOAD, "premise: the payload leaves the block out"
         with_null, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
         without, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
-        assert parsed_block(with_null) == parsed_block(without)
+        assert (block.field(with_null), block.field(without)) == (block.when_none, block.when_none)
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
-    @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
+    @pytest.mark.parametrize("key", list(NESTED_BLOCKS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
     ) -> None:
