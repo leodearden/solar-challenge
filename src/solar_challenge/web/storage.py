@@ -437,8 +437,15 @@ def migrate_stored_run_files(
     format.json naming *to_version* last, and the run is recorded as brought forward. A run
     whose format.json or documents cannot be read or brought forward, or whose row has no type,
     is left as it was and reported as unmigrated. A
-    run's time series are not read: they have no format version, so a run whose time series is
-    damaged is brought forward as any other is, and refused naming it when it is loaded. A
+    run's time series have no format version and are read only by a step that needs one: v5
+    reads the series of each summary saved without a window, data.parquet for a home run and
+    homes/home_{i}.parquet for a fleet's home i. That includes the in-memory readability check
+    bring_run_documents_forward runs at every earlier schema step, so it holds whichever step
+    the migration is at. So a run whose summaries all hold a window is brought forward even
+    when its series is damaged, and refused naming it when it is loaded. A run saved before
+    summaries carried a window whose series is missing or not a run's is left as it was and
+    reported as unmigrated, naming the series. Its files then get none of the earlier steps'
+    fixes, and its runs row is left the same way, as migrate_runs_table_documents says. A
     migration stopped part way through runs again from the start: the files it brought forward
     name *to_version* and are left as they are, and the steps change nothing in a document they
     already brought forward in a run stopped part way through, whose format.json is as it was.

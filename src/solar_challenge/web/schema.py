@@ -27,8 +27,8 @@ past the schema version (D-S19-2), and a store at SCHEMA_VERSION holds only runs
 are in the current format or runs a migration reported it could not migrate. Such a store has no
 step to apply, but migrate_store still catches up each run still in an older format, such as one
 an earlier migration left once its documents are fixed, and reports again each it still cannot.
-A run's time series have no format version, and migration reads none of them, as
-migrate_stored_run_files says.
+A run's time series have no format version, and migration reads one only where a step needs it,
+as migrate_stored_run_files says.
 """
 
 import sqlite3
