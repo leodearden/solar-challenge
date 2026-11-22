@@ -84,9 +84,9 @@ class HomeStart:
 class MarkingHomeSimulator:
     """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, refuses each home named in *failing*, and marks the home finished once its call ends, whether it returns or raises.
 
-    A home's start marker records its process, its weather's locations and the marks its process holds
-    (HomeStart). It, at start_marker(marker_dir, <home name>), and the home's finish marker, at
-    finish_marker(marker_dir, <home name>), each appear at that path only once whole: each is written
+    A home's start marker, at start_marker(marker_dir, <home name>), records what a HomeStart holds: the
+    home's process, its weather's locations and the marks its process holds. It and the home's finish
+    marker, at finish_marker(marker_dir, <home name>), each appear at that path only once whole: each is written
     under a temporary name that carries the writer's process id and thread id, since two pool workers,
     or two threads of one process, can mark homes of one name at once, and then renamed. The finish
     marker is written before the home's results or exception leave the call, so before a pool worker
