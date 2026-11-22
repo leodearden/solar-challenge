@@ -5,8 +5,9 @@ The module a string annotation is evaluated in, and the errors raised where it c
 evaluated there, have their rules in
 tests/unit/surface_forms_helper/test_surface_form_module_lookup.py.
 
-Wrapper, and the classes whose __match_args__ is refused, are defined at module level,
-where their qualified names carry no '<locals>' and a parametrize decorator can reach them.
+Wrapper, the classes whose __match_args__ is refused, and the classes whose instances do
+or do not hold a __dict__, are defined at module level, where their qualified names carry
+no '<locals>' and a parametrize decorator can reach them.
 """
 
 import collections
@@ -90,6 +91,47 @@ class HandOrdered:
     rate: float
 
     def __init__(self, rate: float, site: str) -> None: ...
+
+
+class Sited:
+    """A class whose constructor takes site, and whose instances hold a __dict__."""
+
+    def __init__(self, site: str) -> None: ...
+
+
+class SlottedSite:
+    __slots__ = ("site",)
+
+    def __init__(self, site: str) -> None: ...
+
+
+class WeakSlottedSite:
+    __slots__ = ("site", "__weakref__")
+
+    def __init__(self, site: str) -> None: ...
+
+
+class EmptySlotsBesideADict(Sited):
+    __slots__ = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SlottedReading:
+    kwh: float
+
+
+@dataclass(frozen=True, slots=True, weakref_slot=True)
+class WeakSlottedReading:
+    kwh: float
+
+
+@dataclass(slots=True, match_args=False, kw_only=True)
+class QuietSlottedReading:
+    kwh: float
+
+
+class UndecoratedUnderASlottedReading(SlottedReading):
+    pass
 
 
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
@@ -480,6 +522,62 @@ def test_a_dataclass_kind_lists_neither_init_repr_nor_kw_only() -> None:
 
     assert surface_form(Quiet) == "dataclass[eq] (*, kwh: float) -> None"
     assert surface_form(Meter) == "dataclass[eq, match_args] (site: str) -> None"
+
+
+@pytest.mark.parametrize(
+    ("cls", "form"),
+    [
+        pytest.param(SlottedSite, "class[slots] (site: str) -> None", id="slots"),
+        pytest.param(
+            WeakSlottedSite, "class[slots, weakref_slot] (site: str) -> None", id="slots-and-weakref"
+        ),
+        pytest.param(
+            SlottedReading,
+            "dataclass[eq, frozen, match_args, slots] (kwh: float) -> None",
+            id="slots-dataclass",
+        ),
+        pytest.param(
+            WeakSlottedReading,
+            "dataclass[eq, frozen, match_args, slots, weakref_slot] (kwh: float) -> None",
+            id="weakref-slot-dataclass",
+        ),
+        pytest.param(
+            QuietSlottedReading,
+            "dataclass[eq, slots] (*, kwh: float) -> None",
+            id="slots-dataclass-without-match-args",
+        ),
+    ],
+)
+def test_a_class_whose_instances_hold_no_dict_lists_slots_then_weakref_slot_if_they_take_a_weakref(
+    cls: type, form: str
+) -> None:
+    assert surface_form(cls) == form
+
+
+@pytest.mark.parametrize(
+    ("cls", "form"),
+    [
+        pytest.param(EmptySlotsBesideADict, "(site: str) -> None", id="empty-slots-beside-a-bases-dict"),
+        pytest.param(
+            UndecoratedUnderASlottedReading,
+            "dataclass[eq, frozen, match_args] (kwh: float) -> None",
+            id="undecorated-subclass-of-a-slots-dataclass",
+        ),
+    ],
+)
+def test_a_class_whose_instances_hold_a_dict_lists_no_slots_whatever_slots_its_own_body_or_its_decorator_sets(
+    cls: type, form: str
+) -> None:
+    assert surface_form(cls) == form
+
+
+def test_a_class_whose_instances_hold_a_dict_but_take_no_weakref_raises_a_type_error_naming_it() -> None:
+    class Band(tuple):
+        def __new__(cls, low: float, high: float):
+            return super().__new__(cls, (low, high))
+
+    with pytest.raises(TypeError, match=r"<locals>\.Band\b"):
+        surface_form(Band)
 
 
 def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inherits() -> None:

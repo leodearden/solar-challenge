@@ -645,9 +645,9 @@ def test_a_named_tuple_field_is_not_a_member_since_its_class_form_pins_it_but_a_
 
     Plain = collections.namedtuple("Plain", ["kwh", "site"])
 
-    assert surface_form(Reading) == "class[match_args] (kwh: float, site: str | None = None)"
+    assert surface_form(Reading) == "class[match_args, slots] (kwh: float, site: str | None = None)"
     assert member_forms(Reading) == {"UNITS": "str", "doubled": "(self) -> float"}
-    assert surface_form(Plain) == "class[match_args] (kwh, site)"
+    assert surface_form(Plain) == "class[match_args, slots] (kwh, site)"
     assert member_forms(Plain) == {}
 
 
