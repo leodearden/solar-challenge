@@ -149,6 +149,17 @@ conventions:
       day count in _require_summary_days and the one window in _one_window, at every use (D27
       invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8).
 
+  - rule: "The dashboard's and the CLI's defaults are the engine's (INV-11): both simulate pages start each economy tariff type at tariff.PRESET_RATES' rates (tests/unit/test_web_tariff_presets.py); every CLI --start/--end option defaults to timebase.DEFAULT_FIRST_DAY's or DEFAULT_LAST_DAY's ISO string or to None, `config template home` and `config template scenario` write that pair as their period, and no module of src/solar_challenge outside timebase.py holds an ISO-date string literal (tests/unit/test_window_defaults.py); `home quick` starts at timebase.SHORT_WINDOW_START (tests/unit/test_cli_home_quick.py::test_home_quick_saves_the_minutes_from_midnight_on_the_short_window_start)"
+    why: >
+      The 2024 default window and the 2024-06-01 n-day start were restated as literals in the
+      CLI's option defaults, its optimize fallback, its config templates, home quick and
+      web/simulation_params, and each form restated the economy rates, so a change to either
+      took many independent edits that no test tied together (fk-94cab00e114e; D27 invariant 11;
+      docs/prds/dashboard-limits-and-distribution-table.md §4.2;
+      docs/prds/tariff-coverage-classifier-presets.md). β's text scan of web/static/js and
+      web/templates, W2's other half, and its page test, W3, extend the window half when they
+      land.
+
   - rule: "Every dataclass the public-API contract pins, in FROZEN_SURFACE or FROZEN_CLOSURE, is frozen, unless UNFROZEN_PINNED_DATACLASSES names it with the task that freezes it (tests/unit/test_public_api_surface.py::test_every_pinned_dataclass_is_frozen). Config and domain objects check their domain constraints in __post_init__, at construction, and must stay picklable."
     why: >
       Immutability + picklability are load-bearing, not stylistic: HomeConfig and friends are
