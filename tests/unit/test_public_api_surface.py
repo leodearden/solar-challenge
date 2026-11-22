@@ -30,7 +30,7 @@ import subprocess
 import sys
 import types
 import typing
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib import import_module
 from pathlib import Path
 
@@ -678,6 +678,110 @@ def _drifted(
         for path in [*current, *missing]
         if current.get(path) != frozen.get(path)
     }
+
+
+def _lock_failure(lock: Callable[[], None]) -> str:
+    """The message the lock test *lock* fails with."""
+    with pytest.raises(AssertionError) as failure:
+        lock()
+    return str(failure.value)
+
+
+def _printed_entry(message: str, path: str) -> list[str]:
+    """The lines *message* prints for *path*: its path line, then its frozen, current and change lines, each stripped of its indentation, which pytest's assertion rewriting deepens; none if no line names the path."""
+    lines = [line.strip() for line in message.splitlines()]
+    heading = f"solar_challenge.{path}"
+    return lines[lines.index(heading) :][:4] if heading in lines else []
+
+
+_NOTE_FILE_TRAILER = (
+    "docs/unreleased/domain-library-consumption/<task id>.md ('Changes merged since the last "
+    "tag', in the 'Tag / release convention' section of docs/domain-library-consumption.md)"
+)
+
+
+def test_a_pinned_signature_that_gains_a_trailing_defaulted_parameter_prints_additive_and_the_note_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(
+        system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0
+    ) -> float: ...
+
+    monkeypatch.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (system_age_years: float, degradation_rate_per_year: float = 0.005, floor: float = 0.0) -> float",
+        "change:  additive",
+    ]
+    assert _NOTE_FILE_TRAILER in message
+
+
+def test_a_pinned_signature_that_loses_a_parameter_prints_breaking_and_that_it_lands_only_with_a_version_bump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def calculate_degradation_factor(system_age_years: float) -> float: ...
+
+    monkeypatch.setattr(solar_challenge, "calculate_degradation_factor", calculate_degradation_factor)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (system_age_years: float) -> float",
+        "change:  breaking",
+    ]
+    assert "A breaking one lands only with a version bump under that section" in message
+
+
+def test_a_name_new_to_all_prints_additive(monkeypatch: pytest.MonkeyPatch) -> None:
+    def scratch_name(a: int) -> int: ...
+
+    monkeypatch.setattr(solar_challenge, "__all__", [*solar_challenge.__all__, "scratch_name"])
+    monkeypatch.setattr(solar_challenge, "scratch_name", scratch_name, raising=False)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "scratch_name") == [
+        "solar_challenge.scratch_name",
+        "frozen:  (absent from FROZEN_SURFACE)",
+        "current: (a: int) -> int",
+        "change:  additive",
+    ]
+
+
+def test_a_name_removed_from_all_prints_breaking(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        solar_challenge,
+        "__all__",
+        [name for name in solar_challenge.__all__ if name != "calculate_degradation_factor"],
+    )
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "calculate_degradation_factor") == [
+        "solar_challenge.calculate_degradation_factor",
+        f"frozen:  {FROZEN_SURFACE['calculate_degradation_factor']}",
+        "current: (not in __all__)",
+        "change:  breaking",
+    ]
+
+
+def test_a_removed_member_prints_breaking(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(solar_challenge.Battery, "soh")
+
+    message = _lock_failure(test_every_pinned_class_member_matches_frozen_members)
+
+    assert _printed_entry(message, "Battery.soh") == [
+        "solar_challenge.Battery.soh",
+        "frozen:  property (self) -> float",
+        "current: (removed)",
+        "change:  breaking",
+    ]
 
 
 # ===========================================================================
