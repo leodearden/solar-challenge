@@ -217,7 +217,7 @@ def generate_summary_report(
 |--------|-------|
 | Grid Import Cost | {summary.total_import_cost_gbp:.2f} |
 | Grid Export Revenue | {summary.total_export_revenue_gbp:.2f} |
-{_seg_rate_row(results.pricing)}| Net Cost | {summary.net_cost_gbp:.2f} |
+{_seg_rate_row(summary.pricing)}| Net Cost | {summary.net_cost_gbp:.2f} |
 """
 
     return report
