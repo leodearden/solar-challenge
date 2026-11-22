@@ -324,6 +324,27 @@ class TestScenarioAPI:
         assert data["valid"] is False
         assert any(error_text in error for error in data["errors"]), data["errors"]
 
+    def test_validate_reports_a_drawn_value_outside_its_components_range(
+        self, client: FlaskClient
+    ) -> None:
+        """P15: the default form with its PV a normal around 50 kW, which every home draws above the pv component's range, is invalid, naming pv.capacity_kw and the range."""
+        form = {
+            **TestBuilderScenarioYaml._DEFAULT_FORM,
+            "pv_distribution_type": "normal",
+            "pv_mean": 50,
+            "pv_std": 1,
+        }
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert any(
+            error.startswith("pv.capacity_kw must be between 0.5 and 20 for every home, got ")
+            for error in data["errors"]
+        ), data["errors"]
+
     def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
         self, client: FlaskClient
     ) -> None:

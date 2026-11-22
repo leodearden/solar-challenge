@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.builder_form, called directly with form values."""
 
 import math
+import re
 from collections.abc import Callable
 
 import pytest
@@ -294,12 +295,36 @@ class TestBuilderFormErrors:
     def test_a_fixed_value_beyond_its_components_value_range_is_refused_naming_the_range_and_the_value(
         self, component: ComponentLimits, beyond: str
     ) -> None:
-        """The range's refusal is one of the form's reasons: a scenario reader may refuse the value as well."""
-        low, high = component.value_range.low, component.value_range.high
-        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        """The one reason is the homes check's, for home 1, whose value is the float the loader holds.
+
+        A battery below 0 never becomes a home: the loader's presence rule refuses a negative
+        capacity first, naming the same path.
+        """
+        value_range = component.value_range
+        value = (
+            math.nextafter(value_range.low, -math.inf)
+            if beyond == "below"
+            else math.nextafter(value_range.high, math.inf)
+        )
+        path = f"{component.key}.{component.grammar_key}"
+        reason = (
+            f"fleet_distribution: {path} must be at least 0, got {value!r}"
+            if component.key == "battery" and beyond == "below"
+            else f"{path} must be {value_range} for every home, got {value!r} for home 1"
+        )
         assert builder_form_errors(_ACCEPTED_FORM) == [], "premise: the unchanged form is accepted"
-        errors = builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value})
-        assert f"{component.heading} must be between {low:g} and {high:g}, got {value!r}." in errors, errors
+        assert builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value}) == [reason]
+
+    def test_a_drawn_value_beyond_its_components_value_range_is_refused_naming_the_home(self) -> None:
+        """P15: a normal around 50 kW draws PV no home may hold, refused as a fixed 50 kW is."""
+        errors = builder_form_errors(
+            {**_ACCEPTED_FORM, "pv_distribution_type": "normal", "pv_mean": 50, "pv_std": 1}
+        )
+        assert len(errors) == 1, errors
+        assert re.fullmatch(
+            r"pv\.capacity_kw must be between 0\.5 and 20 for every home, got \d+\.\d+ for home 1",
+            errors[0],
+        ), errors
 
     @pytest.mark.parametrize("end", ["low", "high"])
     @pytest.mark.parametrize(
