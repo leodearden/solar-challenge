@@ -909,8 +909,8 @@ class TestExportAPI:
 
         The strict reader refuses a key no field has, null or not, so the run's row is migrated
         first, as `solar-challenge web migrate` migrates a store at schema version 1, which drops
-        those keys. Its summary holds a window, as the run has no directory whose time series v5
-        could derive one from.
+        those keys. home_summary holds a window, so v5 needs no time series for the run, which has
+        no directory.
         """
         store = tmp_path / "store"
         database = write_database_at_schema_version(database_path_in(store), 1)
@@ -918,14 +918,7 @@ class TestExportAPI:
         with Database(database).transaction() as conn:
             conn.execute(
                 "INSERT INTO runs (id, name, type, config_json, summary_json, status) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    "pre-union",
-                    "Pre-union Run",
-                    "home",
-                    json.dumps(stored),
-                    summary_json(home_summary(window=JUNE_WEEK_WINDOW)),
-                    "completed",
-                ),
+                ("pre-union", "Pre-union Run", "home", json.dumps(stored), summary_json(home_summary()), "completed"),
             )
         migrate_store(database, store)
 
