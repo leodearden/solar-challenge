@@ -30,15 +30,6 @@ from tests._unusable_numbers import UNUSABLE_NUMBERS
 _E7 = PRESET_RATES["economy_7"]
 _E10 = PRESET_RATES["economy_10"]
 
-REPEATED_OFF_PEAK_TARIFF = TariffConfig(
-    periods=(
-        TariffPeriod("00:00", "07:00", 0.10, "Night"),
-        TariffPeriod("07:00", "16:00", 0.40, "Day"),
-        TariffPeriod("16:00", "00:00", 0.10, "Evening"),
-    ),
-    name="Two cheap windows",
-)
-
 
 def _derived_values(tariff: TariffConfig) -> tuple[float, frozenset[int]]:
     return tariff.peak_rate, tariff.cheap_minutes_of_day
@@ -754,7 +745,17 @@ class TestTariffConfigPeakRate:
                 0.1,
                 id="six_periods_one_rate",
             ),
-            pytest.param(REPEATED_OFF_PEAK_TARIFF, 0.40, id="repeated_off_peak"),
+            pytest.param(
+                TariffConfig(
+                    periods=(
+                        TariffPeriod("00:00", "07:00", 0.10, "Night"),
+                        TariffPeriod("07:00", "16:00", 0.40, "Day"),
+                        TariffPeriod("16:00", "00:00", 0.10, "Evening"),
+                    )
+                ),
+                0.40,
+                id="repeated_off_peak",
+            ),
         ],
     )
     def test_peak_rate_is_the_highest_period_rate_exactly(
