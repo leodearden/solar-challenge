@@ -3,6 +3,8 @@
 
 import abc
 
+import pytest
+
 from tests._surface_forms import is_additive_member_change
 
 
@@ -74,3 +76,18 @@ def test_a_method_made_abstract_is_breaking() -> None:
         def read(self) -> float: ...
 
     assert not is_additive_member_change("(self) -> float", Meter, "read")
+
+
+def test_a_name_that_is_no_public_member_raises_key_error() -> None:
+    class Base:
+        def read(self) -> float: ...
+
+    class Meter(Base):
+        def _calibrate(self) -> None: ...
+
+    with pytest.raises(KeyError):
+        is_additive_member_change("(self) -> None", Meter, "_calibrate")
+    with pytest.raises(KeyError):
+        is_additive_member_change("(self) -> float", Meter, "read")
+    with pytest.raises(KeyError):
+        is_additive_member_change("(self) -> None", Meter, "absent")
