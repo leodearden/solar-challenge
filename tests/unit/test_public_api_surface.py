@@ -98,8 +98,8 @@ FROZEN_SURFACE: dict[str, str] = {
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
     "EnergyFlowResult": "dataclass[eq, frozen] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
-    "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float = 1.0, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
-    "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float = 1.0) -> EnergyFlowResult",
+    "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
+    "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
     "calculate_self_consumption": "(generation: Series, demand: Series) -> Series",
     "calculate_excess_pv": "(generation: Series, demand: Series) -> Series",
@@ -326,19 +326,19 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
         "name": "abstract property (self) -> str",
-        "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "decide_action": "abstract (self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "SelfConsumptionStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "TOUOptimizedStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     "PeakShavingStrategy": {
         "name": "property (self) -> str",
-        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float = 1.0, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
+        "decide_action": "(self, timestamp: datetime, generation_kw: float, demand_kw: float, battery_soc_kwh: float, battery_capacity_kwh: float, timestep_minutes: float, *, grid_charge_ctx: GridChargeContext | None = None) -> DispatchDecision",
     },
     # --- battery (battery.py) ---
     "Battery": {
