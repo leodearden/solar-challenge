@@ -35,7 +35,7 @@ from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
 from tests._dashboard_databases import write_pre_548_database
-from tests._web_app import BuildApp, build_test_app, database_path_in, jobs_in_this_process, run_storage_of
+from tests._web_app import BuildApp, build_test_app, database_path_in, jobs_in_this_process, run_storage_of, store_lock_is_free
 from tests._web_job_runner import jobs_running
 from tests.unit.web_jobs._app_client import A_HOME_JOB_DAYS, A_HOME_JOB_REQUEST
 from tests.unit.web_jobs._fakes import BlockingSimulation
@@ -307,15 +307,6 @@ def _seed_a_running_run(directory: Path, run_id: str) -> RunStorage:
     return storage
 
 
-def _store_lock_is_free(directory: Path) -> bool:
-    """Whether this process can take the lock on the store in *directory*, which it then releases at once."""
-    try:
-        acquire_store_lock(directory).release()
-    except StoreLocked:
-        return False
-    return True
-
-
 def _json_once(client: FlaskClient, url: str, reached: Callable[[dict[str, Any]], bool]) -> dict[str, Any]:
     """The JSON GET *url* answers as soon as *reached* holds for it; the test fails after 30 s without it."""
     deadline = time.monotonic() + 30
@@ -367,7 +358,7 @@ def test_the_jobs_factory_runs_once_the_store_is_locked_and_open_and_before_the_
 
     def jobs(storage: RunStorage) -> JobManager:
         record = storage.run_record("r-1")
-        seen_at_the_call.append((_store_lock_is_free(tmp_path), None if record is None else record.status))
+        seen_at_the_call.append((store_lock_is_free(tmp_path), None if record is None else record.status))
         return jobs_in_this_process(storage)
 
     app = build_app(tmp_path, jobs=jobs)
@@ -393,7 +384,7 @@ def test_a_jobs_factory_that_raises_fails_the_build_with_its_error_and_the_store
     with pytest.raises(_FactoryFailed, match="no job manager"):
         build_test_app(tmp_path, jobs=jobs)
 
-    assert _store_lock_is_free(tmp_path)
+    assert store_lock_is_free(tmp_path)
     record = seeded.run_record("r-1")
     assert record is not None
     assert record.status == "running"

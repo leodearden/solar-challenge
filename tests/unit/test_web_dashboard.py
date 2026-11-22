@@ -20,8 +20,9 @@ from solar_challenge.web.dashboard import Dashboard, attach_dashboard, dashboard
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager, JobState
 from solar_challenge.web.storage import RunQuery, RunStorage
-from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
+from solar_challenge.web.store_lock import acquire_store_lock
 from tests._run_stores import empty_run_storage
+from tests._web_app import store_lock_is_free
 from tests._web_job_runner import jobs_running
 from tests.unit.web_jobs._fakes import BlockingSimulation, RecordingSimulation
 
@@ -51,15 +52,6 @@ def _wait_for_state(manager: JobManager, job_id: str, reached: Callable[[JobStat
             pytest.fail(f"job {job_id} did not reach the state awaited within 30 s; its last state was {state}")
         time.sleep(0.01)
     return state
-
-
-def _store_lock_is_free(directory: Path) -> bool:
-    """Whether this process can take the lock on the store in *directory*, which it then releases at once."""
-    try:
-        acquire_store_lock(directory).release()
-    except StoreLocked:
-        return False
-    return True
 
 
 class TestDashboardOf:
@@ -124,7 +116,7 @@ class TestDashboardClose:
         with pytest.raises(RuntimeError, match="shutdown"):
             dashboard.jobs.submit_home_job(_A_HOME, _JUNE_1, _JUNE_2)
         assert dashboard.storage.page_runs(RunQuery()).total == 0
-        assert _store_lock_is_free(tmp_path)
+        assert store_lock_is_free(tmp_path)
 
     def test_closing_a_closed_dashboard_is_harmless(self, tmp_path: Path, closes_at_teardown: ExitStack) -> None:
         dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
@@ -132,7 +124,7 @@ class TestDashboardClose:
 
         dashboard.close()
 
-        assert _store_lock_is_free(tmp_path)
+        assert store_lock_is_free(tmp_path)
 
     def test_close_releases_the_store_only_once_the_running_job_has_finished(
         self, tmp_path: Path, closes_at_teardown: ExitStack
@@ -150,11 +142,11 @@ class TestDashboardClose:
         still_running = dashboard.storage.run_record(running_run)
 
         assert closing.is_alive()
-        assert not _store_lock_is_free(tmp_path)
+        assert not store_lock_is_free(tmp_path)
         assert still_running is not None and still_running.status == "running"
         blocking_simulation.release()
         closing.join(timeout=30)
         assert not closing.is_alive()
         finished = dashboard.jobs.job_state(running)
         assert finished is not None and finished.status == "completed"
-        assert _store_lock_is_free(tmp_path)
+        assert store_lock_is_free(tmp_path)

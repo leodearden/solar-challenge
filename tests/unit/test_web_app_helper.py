@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app over the job manager a factory builds, names the database file it gives that app, and finds the Database it keeps its tables in and the RunStorage it keeps its runs in; for tests/unit/conftest.py's build_app fixture, app_builder(closes_at_teardown), which builds an app the test's teardown closes; and for the app, client and storage fixtures that conftest builds with it."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app over the job manager a factory builds, names the database file it gives that app, finds the Database it keeps its tables in and the RunStorage it keeps its runs in, and says whether a store's lock is free; for tests/unit/conftest.py's build_app fixture, app_builder(closes_at_teardown), which builds an app the test's teardown closes; and for the app, client and storage fixtures that conftest builds with it."""
 
 from contextlib import ExitStack
 from pathlib import Path
@@ -15,10 +15,10 @@ from flask.testing import FlaskClient
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
-from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
+from solar_challenge.web.store_lock import acquire_store_lock
 from tests._blocked_imports import extra_modules, import_with_modules_blocked
 from tests._finance_builders import make_home_config, make_sim_results
-from tests._web_app import BuildApp, database_of, database_path_in, jobs_in_this_process, point_store_config_at_a_missing_directory, run_storage_of
+from tests._web_app import BuildApp, database_of, database_path_in, jobs_in_this_process, point_store_config_at_a_missing_directory, run_storage_of, store_lock_is_free
 from tests._web_runs import store_home_run
 
 
@@ -99,16 +99,20 @@ def test_a_test_may_close_the_app_fixtures_app_itself(app: Flask, build_app: Bui
     build_app(tmp_path)
 
 
-_A_DAY = (pd.Timestamp("2024-06-01", tz="UTC"), pd.Timestamp("2024-06-02", tz="UTC"))
-
-
-def _store_lock_is_free(store: Path) -> bool:
-    """Whether this process can take the lock on *store*, which it then releases at once."""
+def test_store_lock_is_free_is_false_while_the_stores_lock_is_held_and_true_once_released_leaving_it_free(
+    tmp_path: Path,
+) -> None:
+    held = acquire_store_lock(tmp_path)
     try:
-        acquire_store_lock(store).release()
-    except StoreLocked:
-        return False
-    return True
+        assert not store_lock_is_free(tmp_path)
+    finally:
+        held.release()
+
+    assert store_lock_is_free(tmp_path)
+    acquire_store_lock(tmp_path).release()
+
+
+_A_DAY = (pd.Timestamp("2024-06-01", tz="UTC"), pd.Timestamp("2024-06-02", tz="UTC"))
 
 
 def _closed(app: Flask, store: Path) -> bool:
@@ -116,7 +120,7 @@ def _closed(app: Flask, store: Path) -> bool:
     try:
         dashboard_of(app).jobs.submit_home_job(make_home_config(), *_A_DAY)
     except RuntimeError:
-        return _store_lock_is_free(store)
+        return store_lock_is_free(store)
     pytest.fail("the app's jobs accepted a job, so it is not closed")
 
 
@@ -139,7 +143,7 @@ def test_an_app_build_app_built_is_closed_when_the_tests_closing_stack_closes(
 ) -> None:
     """tests/conftest.py's closes_at_teardown closes its stack at the test's teardown, after every other fixture of the test is torn down."""
     app = build_app(tmp_path)
-    assert not _store_lock_is_free(tmp_path)
+    assert not store_lock_is_free(tmp_path)
 
     closes_at_teardown.close()
 

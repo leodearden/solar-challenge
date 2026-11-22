@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The web dashboard's Flask app for tests, the job manager its jobs run on unless a test gives it another, its database and run files under one directory, the path of the database file it is given there, the Database it keeps its tables in and the RunStorage it keeps its runs in.
+"""The web dashboard's Flask app for tests, the job manager its jobs run on unless a test gives it another, its database and run files under one directory, the path of the database file it is given there, the Database it keeps its tables in, the RunStorage it keeps its runs in, and whether its store's lock is free.
 
-build_test_app, jobs_in_this_process, database_of and run_storage_of import the web package
-when they are called, not when this module loads. So importing this module needs no web
-extra, and a call made after a test drops solar_challenge.web.app from sys.modules imports
-the factory anew.
+build_test_app, jobs_in_this_process, database_of, run_storage_of and store_lock_is_free import
+the web package when they are called, not when this module loads. So importing this module
+needs no web extra, and a call made after a test drops solar_challenge.web.app from
+sys.modules imports the factory anew.
 
 An app holds its store's lock until dashboard_of(app).close(), which drops its queued jobs and
 waits for its running ones first. A test that builds an app with build_test_app closes it
@@ -16,7 +16,7 @@ tests/_declared_dependencies.py refuses them any import of the web package, at a
 Usage::
 
     from solar_challenge.web.dashboard import dashboard_of
-    from tests._web_app import build_test_app, database_of, database_path_in, point_store_config_at_a_missing_directory, run_storage_of
+    from tests._web_app import build_test_app, database_of, database_path_in, point_store_config_at_a_missing_directory, run_storage_of, store_lock_is_free
     from tests._web_job_runner import jobs_running
 
     app = build_test_app(tmp_path)
@@ -24,8 +24,10 @@ Usage::
     assert database.path == database_path_in(tmp_path)
     storage = run_storage_of(app)
     point_store_config_at_a_missing_directory(app, tmp_path / "missing")
+    assert not store_lock_is_free(tmp_path)
 
     dashboard_of(app).close()
+    assert store_lock_is_free(tmp_path)
     rebuilt = build_test_app(tmp_path, jobs=jobs_running(simulation))
 
     closed_at_teardown = app_builder(closes_at_teardown)(tmp_path / "other")
@@ -129,6 +131,17 @@ def run_storage_of(app: Flask) -> RunStorage:
 
     with app.app_context():
         return get_storage()
+
+
+def store_lock_is_free(data_dir: Path) -> bool:
+    """Whether this process can take the lock on the store in *data_dir*, which it then releases at once: False while an app or a Dashboard holds it."""
+    from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
+
+    try:
+        acquire_store_lock(data_dir).release()
+    except StoreLocked:
+        return False
+    return True
 
 
 def point_store_config_at_a_missing_directory(app: Flask, directory: Path) -> None:
