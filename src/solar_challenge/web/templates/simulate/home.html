@@ -191,11 +191,11 @@ document.addEventListener('alpine:init', () => {
             }
             return payload;
         },
+        // The server refuses a form it cannot run; a refused Run leaves the earlier run's progress and results.
         async submitSimulation() {
             if (!this.validate()) return;
             this.submitting = true;
             this.errorMsg = '';
-            this.submittedJob = null;
             try {
                 const resp = await fetch('/api/simulate/home', {
                     method: 'POST',
