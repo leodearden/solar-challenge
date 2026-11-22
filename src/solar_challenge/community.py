@@ -434,9 +434,13 @@ def simulate_community(
         battery_soc = pd.Series(soc_vals, index=index, dtype=float)
 
     # Virtual net metering: the fleet's net cost without sharing (its own grid flows) and after it.
-    # _grid_flow_prices_or_warn is called from this frame, where its stacklevel names this function's caller.
     baseline_net_cost, community_net_cost, community_savings = _net_costs(
-        window, deficit, surplus, grid_import, grid_export, _grid_flow_prices_or_warn(config.billing)
+        window,
+        fleet_import_kw=deficit,
+        fleet_export_kw=surplus,
+        community_import_kw=grid_import,
+        community_export_kw=grid_export,
+        prices=_grid_flow_prices_or_warn(config.billing),
     )
     result = CommunityResults(
         grid_import=grid_import,
