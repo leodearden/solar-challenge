@@ -10,13 +10,15 @@
 {% block head %}
 <script>
 document.addEventListener('alpine:init', () => {
+    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
+    const limits = JSON.parse(document.getElementById('page-limits').textContent);
     Alpine.data('homeSimulator', (tariffPresetRates) => ({
         activeTab: {{ configuration_tabs[0].key | tojson }},
         submitting: false,
         submittedJob: null,
         errorMsg: '',
         presets: [],
-        consumptionRange: {{ [page_limits.components.load.value_range.low, page_limits.components.load.value_range.high] | tojson }},
+        consumptionRange: [limits.components.load.value_range.low, limits.components.load.value_range.high],
         formData: {
             pv_kw: 4.0,
             azimuth: 180,
@@ -37,9 +39,9 @@ document.addEventListener('alpine:init', () => {
             custom_lat: 51.45,
             custom_lon: -2.58,
             period_mode: 'preset',
-            period_days: 30,
-            start_date: '2024-06-01',
-            end_date: '2024-06-30',
+            period_days: limits.default_days,
+            start_date: limits.custom_range_default[0],
+            end_date: limits.custom_range_default[1],
             name: '',
             preset: '',
             heat_pump_enabled: false,
@@ -69,10 +71,16 @@ document.addEventListener('alpine:init', () => {
             const errors = {};
             const f = this.formData;
             const pv = parseFloat(f.pv_kw);
-            if (isNaN(pv) || pv < 0.5 || pv > 20) errors.pv_kw = 'PV capacity must be 0.5–20 kW';
+            const pvRange = limits.components.pv.value_range;
+            if (isNaN(pv) || pv < pvRange.low || pv > pvRange.high) {
+                errors.pv_kw = 'PV capacity must be ' + pvRange.low + '–' + pvRange.high + ' kW';
+            }
             if (f.battery_enabled) {
                 const batt = parseFloat(f.battery_kwh);
-                if (isNaN(batt) || batt < 0) errors.battery_kwh = 'Battery capacity cannot be negative';
+                const batteryRange = limits.components.battery.value_range;
+                if (isNaN(batt) || batt < batteryRange.low || batt > batteryRange.high) {
+                    errors.battery_kwh = 'Battery capacity must be between ' + batteryRange.low + ' and ' + batteryRange.high + ' kWh';
+                }
                 const eff = parseFloat(f.efficiency_pct);
                 if (isNaN(eff) || eff <= 0 || eff > 100) errors.efficiency_pct = 'Efficiency must be 1–100%';
             }
