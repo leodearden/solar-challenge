@@ -16,6 +16,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
@@ -23,9 +24,6 @@ from solar_challenge.web.request_boundary import (
     require_encodable_text,
 )
 from solar_challenge.web.simulation_params import (
-    DAYS_WINDOW_START,
-    FULL_YEAR_END,
-    FULL_YEAR_START,
     MAX_DAYS,
     MAX_WINDOW_DAYS,
     parse_date_range,
@@ -114,10 +112,10 @@ class TestParseDateRange:
         assert end == "2024-12-31"
 
     def test_days_max_days_runs_the_full_year(self) -> None:
-        """days=MAX_DAYS, the most days a body may send, is the full-year sentinel, so it runs FULL_YEAR_START to FULL_YEAR_END."""
+        """days=MAX_DAYS, the most days a body may send, is the full-year sentinel, so it runs DEFAULT_FIRST_DAY to DEFAULT_LAST_DAY."""
         assert parse_date_range({"days": MAX_DAYS}) == (
-            FULL_YEAR_START.isoformat(),
-            FULL_YEAR_END.isoformat(),
+            DEFAULT_FIRST_DAY.isoformat(),
+            DEFAULT_LAST_DAY.isoformat(),
         )
 
     @pytest.mark.parametrize(
@@ -132,7 +130,7 @@ class TestParseDateRange:
     def test_days_longer_than_the_rest_of_the_year_run_past_full_year_end(
         self, days: int, window: tuple[str, str]
     ) -> None:
-        """A days other than the sentinel runs that many days from DAYS_WINDOW_START, on past FULL_YEAR_END when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
+        """A days other than the sentinel runs that many days from SHORT_WINDOW_START, on past DEFAULT_LAST_DAY when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
         assert parse_date_range({"days": days}) == window
 
     def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
@@ -154,21 +152,21 @@ class TestParseDateRange:
         [
             pytest.param(
                 {"days": 30},
-                (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
+                (SHORT_WINDOW_START, SHORT_WINDOW_START + timedelta(days=29)),
                 id="days",
             ),
             pytest.param(
-                {"end": "2024-03-01"}, (FULL_YEAR_START, date(2024, 3, 1)), id="end-only"
+                {"end": "2024-03-01"}, (DEFAULT_FIRST_DAY, date(2024, 3, 1)), id="end-only"
             ),
             pytest.param(
-                {"start": "2024-03-01"}, (date(2024, 3, 1), FULL_YEAR_END), id="start-only"
+                {"start": "2024-03-01"}, (date(2024, 3, 1), DEFAULT_LAST_DAY), id="start-only"
             ),
         ],
     )
     def test_published_anchors_match_the_windows_parse_date_range_returns(
         self, data: dict, window: tuple[date, date]
     ) -> None:
-        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from DAYS_WINDOW_START, a lone end starts at FULL_YEAR_START and a lone start ends at FULL_YEAR_END."""
+        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from SHORT_WINDOW_START, a lone end starts at DEFAULT_FIRST_DAY and a lone start ends at DEFAULT_LAST_DAY."""
         assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
 
     @pytest.mark.parametrize(

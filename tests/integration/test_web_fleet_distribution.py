@@ -4,7 +4,7 @@
 Uses a real JobManager (no mocks) to run a tiny 3-home, 1-day Bristol fleet
 through the endpoint, polls the job to completion, and asserts the run lands
 in history with n_homes == 3.  The test's weather cache serves a clear June day
-on DAYS_WINDOW_START, where a ``days`` window starts, as Bristol's TMY, so the
+on SHORT_WINDOW_START, where a ``days`` window starts, as Bristol's TMY, so the
 job runs offline.
 """
 import time

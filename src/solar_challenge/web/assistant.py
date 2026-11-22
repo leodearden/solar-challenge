@@ -31,6 +31,7 @@ from flask.typing import ResponseReturnValue
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -44,10 +45,7 @@ from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
 from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import (
-    DAYS_WINDOW_START,
     FULL_YEAR_DAYS_SENTINEL,
-    FULL_YEAR_END,
-    FULL_YEAR_START,
     MAX_DAYS,
     MAX_WINDOW_DAYS,
     parse_home_config,
@@ -375,10 +373,10 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
     "days": {
         "type": "integer",
         "description": (
-            f"Simulation duration in days (1–{MAX_DAYS}), counted from {DAYS_WINDOW_START} "
-            f"and running on past {FULL_YEAR_END} when longer than the rest of that year, "
-            f"except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year {FULL_YEAR_START} to "
-            f"{FULL_YEAR_END}. Must not be sent with start or end; with none of the three "
+            f"Simulation duration in days (1–{MAX_DAYS}), counted from {SHORT_WINDOW_START} "
+            f"and running on past {DEFAULT_LAST_DAY} when longer than the rest of that year, "
+            f"except that {FULL_YEAR_DAYS_SENTINEL} runs the whole year {DEFAULT_FIRST_DAY} to "
+            f"{DEFAULT_LAST_DAY}. Must not be sent with start or end; with none of the three "
             f"sent, the run spans {_TRIGGER_TOOL_DEFAULT_DAYS} days."
         ),
     },
@@ -386,7 +384,7 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
         "type": "string",
         "format": "date",
         "description": (
-            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_START} when only "
+            f"First simulated day, an ISO 8601 date (YYYY-MM-DD); {DEFAULT_FIRST_DAY} when only "
             "end is sent. Must not be sent with days."
         ),
     },
@@ -394,7 +392,7 @@ _TRIGGER_TOOL_WINDOW_PROPERTIES: Mapping[str, Mapping[str, str]] = {
         "type": "string",
         "format": "date",
         "description": (
-            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {FULL_YEAR_END} "
+            f"Last simulated day, inclusive, an ISO 8601 date (YYYY-MM-DD); {DEFAULT_LAST_DAY} "
             "when only start is sent. Must not be sent with days. The window from start to "
             f"end spans at most {MAX_WINDOW_DAYS} days."
         ),
