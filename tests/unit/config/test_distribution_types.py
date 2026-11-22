@@ -2,8 +2,10 @@
 """The per-type table of the distribution grammar, DISTRIBUTION_TYPES, and what derives from it.
 
 Each type a distribution spec names in its ``type:`` key is one record: its title, the keys an
-editor holds for it, the keys it holds none for, and its builder. The parser reads each type's
-keys and builder, and the types an unknown one is refused naming, from the table.
+editor holds for it, the keys it holds none for, its builder and its writer. The parser reads
+each type's keys and builder, and the types an unknown one is refused naming, from the table;
+the writer is the parser's inverse; and editor_types offers a field's kind the editable types
+its kind rule draws.
 """
 
 import json
@@ -296,6 +298,23 @@ class TestTheWriterIsTheParsersInverse:
         assert written["type"] == distribution_type.name
         assert set(written) == distribution_type.recognised_keys
         assert json.loads(json.dumps(written)) == written
+
+    @pytest.mark.parametrize(
+        ("name", "spec"),
+        [
+            pytest.param("uniform", NormalDistribution(mean=5.0, std=1.0, min=2.0, max=8.0), id="uniform-given-a-normal"),
+            pytest.param("normal", UniformDistribution(min=2.0, max=8.0), id="normal-given-a-uniform"),
+            pytest.param("fixed", "GSHP", id="fixed-given-a-choice"),
+            pytest.param("fixed", UniformDistribution(min=2.0, max=8.0), id="fixed-given-a-uniform"),
+        ],
+    )
+    def test_a_type_refuses_to_write_a_spec_of_another_type_naming_both(self, name: str, spec: Any) -> None:
+        """A type writes only its own spec, the scalar form's a null or a number, else none build reads back as it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            DISTRIBUTION_TYPES[name].write(spec)
+
+        assert repr(name) in str(refusal.value)
+        assert repr(spec) in str(refusal.value)
 
     def test_a_value_that_is_no_spec_is_refused_naming_it(self) -> None:
         not_a_spec: Any = SweepSpec(min=0.5, max=2.0, steps=3)

@@ -734,7 +734,18 @@ class DistributionType:
 
         A spec dataclass gives each key its field of the same name, as construction checks; the
         scalar form's spec is its one key's value.
+
+        Raises:
+            ConfigurationError: If *spec* is not of the type, naming the type and *spec*: a
+                dataclass type's spec is an instance of its spec_type, the scalar form's a null
+                or a number.
         """
+        if self.is_scalar_form:
+            of_the_type = spec is None or isinstance(spec, (int, float))
+        else:
+            of_the_type = isinstance(spec, self.spec_type)
+        if not of_the_type:
+            raise ConfigurationError(f"DistributionType {self.name!r} cannot write {spec!r}, which is no spec of its type")
         held = (spec,) if self.is_scalar_form else tuple(getattr(spec, key) for key in self.spec_keys)
         return {"type": self.name, **{key: _written_value(value) for key, value in zip(self.spec_keys, held, strict=True)}}
 
