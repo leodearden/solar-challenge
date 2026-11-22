@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Seeded home jobs run together on the dashboard's job manager store the demand a serial run of each gives."""
 
-import functools
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,7 @@ import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.fleet import default_runner
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
@@ -20,7 +22,7 @@ from tests._synthetic_weather import synthetic_june_weather
 
 
 def test_two_seeded_home_jobs_run_together_store_the_demand_a_serial_run_gives(
-    weather_cache: WeatherCache, tmp_path: Path
+    weather_cache: WeatherCache, tmp_path: Path, closes_at_teardown: ExitStack
 ) -> None:
     weather_cache.put(synthetic_june_weather("2024-06-01", (1.0,) * 7), "tmy", Location.bristol())
     homes = {
@@ -40,9 +42,8 @@ def test_two_seeded_home_jobs_run_together_store_the_demand_a_serial_run_gives(
     )
 
     storage = empty_run_storage(tmp_path)
-    manager = JobManager(
-        storage, max_workers=2, simulate_home=functools.partial(simulate_home, weather=default_weather())
-    )
+    manager = JobManager(storage, max_workers=2, runner=replace(default_runner(), parallel=False))
+    closes_at_teardown.callback(manager.shutdown, wait=True)
     differing = []
     for trial in range(2):
         jobs = {seed: manager.submit_home_job(home, start, end) for seed, home in homes.items()}

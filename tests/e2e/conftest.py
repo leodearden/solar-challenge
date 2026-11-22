@@ -60,7 +60,7 @@ from werkzeug.serving import make_server
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.location import LOCATION_PRESETS
-from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache
+from solar_challenge.weather import CACHE_DIR_VARIABLE, WeatherCache, WeatherProvider
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.shared import get_job_manager, get_job_stream_policy
 from solar_challenge.web.storage import RunStorage
@@ -70,6 +70,7 @@ from tests._finance_builders import make_fleet_results, make_home_config, make_s
 from tests._server_drawn_badges import dashboard_macros_of
 from tests._synthetic_weather import synthetic_tmy
 from tests._web_app import build_test_app, database_of, run_storage_of
+from tests._web_job_runner import runner_of
 from tests._web_runs import store_fleet_run, store_home_run
 from tests.e2e._run_history_requests import hold_requests, is_runs_list_request
 
@@ -182,12 +183,14 @@ def release_held_simulations(_e2e_app: Flask, _e2e_storage: RunStorage) -> Itera
     """
     released = threading.Event()
 
-    def held_simulation(config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
+    def held_simulation(
+        config: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp, *, weather: WeatherProvider
+    ) -> SimulationResults:
         released.wait()
         return make_sim_results(self_kwh=24.0, export_kwh=48.0, import_kwh=12.0, days=1)
 
     session_job_manager = _e2e_app.extensions["job_manager"]
-    held_job_manager = JobManager(_e2e_storage, simulate_home=held_simulation)
+    held_job_manager = JobManager(_e2e_storage, runner=runner_of(held_simulation))
     _e2e_app.extensions["job_manager"] = held_job_manager
     yield released.set
     released.set()

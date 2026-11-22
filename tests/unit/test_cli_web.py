@@ -34,15 +34,22 @@ started_dir, port = Path(sys.argv[1]), sys.argv[2]
 command_returned = threading.Event()
 
 
-def blocking_simulation(config, start_date, end_date):
-    (started_dir / str(config.pv_config.capacity_kw)).touch()
-    command_returned.wait()
-    raise RuntimeError("stub simulation")
+class BlockingRunner:
+    def simulate(self, fleet, start_date, end_date, *, progress=None):
+        raise NotImplementedError("the server's jobs here are home jobs")
+
+    def simulate_each(self, fleets, start_date, end_date, *, progress=None):
+        raise NotImplementedError("the server's jobs here are home jobs")
+
+    def simulate_home(self, home, start_date, end_date):
+        (started_dir / str(home.pv_config.capacity_kw)).touch()
+        command_returned.wait()
+        raise RuntimeError("stub simulation")
 
 
 @functools.cache
 def blocking_jobs_of(dashboard):
-    return JobManager(dashboard.extensions["storage"], max_workers=2, simulate_home=blocking_simulation)
+    return JobManager(dashboard.extensions["storage"], max_workers=2, runner=BlockingRunner())
 
 
 def submit_to_blocking_jobs(dashboard, **extra):

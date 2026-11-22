@@ -21,8 +21,9 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.fleet import HomeSimulator
 from solar_challenge.weather import WeatherCache
-from solar_challenge.web.jobs import HomeSimulator, JobManager, JobState
+from solar_challenge.web.jobs import JobManager, JobState
 from solar_challenge.web.sse import HEARTBEAT, JobStreamPolicy, job_progress_frames
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
@@ -30,6 +31,7 @@ from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._sse import SseFrame, parse_sse_events
 from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
+from tests._web_job_runner import runner_of
 from tests._web_runs import store_home_run
 from tests.unit.web_jobs._app_client import (
     A_HOME_JOB_DAYS,
@@ -50,7 +52,7 @@ from tests.unit.web_jobs._fakes import (
 
 def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
     """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    return client_using(app, JobManager(run_storage_of(app), simulate_home=simulation))
+    return client_using(app, JobManager(run_storage_of(app), runner=runner_of(simulation)))
 
 
 @pytest.fixture
@@ -118,7 +120,7 @@ def _a_finished_job(
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(run_storage_of(app), simulate_home=simulation, new_id=CountingIds())
+    manager = JobManager(run_storage_of(app), runner=runner_of(simulation), new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post(endpoint, json=request_body).status_code == 201
     assert manager.wait_until_idle(timeout=30)
@@ -139,7 +141,7 @@ def _a_held_job(app: Flask, blocking_simulation: BlockingSimulation) -> tuple[Jo
 
     The job's id is "id-1" and its run's id is "id-2". A job submitted after it waits in the queue.
     """
-    manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds())
+    manager = JobManager(run_storage_of(app), max_workers=1, runner=runner_of(blocking_simulation), new_id=CountingIds())
     client = client_using(app, manager)
     assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
     blocking_simulation.wait_until_started()
@@ -270,7 +272,7 @@ def _status_and_name_while_running_and_once_completed(
     app: Flask, blocking_simulation: BlockingSimulation, endpoint: str, request_body: dict[str, Any]
 ) -> list[tuple[str, str]]:
     """The status and name Run History reads for the run *request_body*'s POST to *endpoint* submits, while its job is held in *blocking_simulation*, then once it completes."""
-    manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
+    manager = JobManager(run_storage_of(app), runner=runner_of(blocking_simulation))
     client = client_using(app, manager)
 
     response = client.post(endpoint, json=request_body)
@@ -339,7 +341,7 @@ class TestASubmittedJobsRunInRunHistory:
         self, app: Flask, name_sent: dict[str, str]
     ) -> None:
         """The run lists under the fleet kind's default name (RunKind.default_name)."""
-        manager = JobManager(run_storage_of(app), simulate_home=RecordingSimulation())
+        manager = JobManager(run_storage_of(app), runner=runner_of(RecordingSimulation()))
         client = client_using(app, manager)
 
         response = client.post(
@@ -362,7 +364,7 @@ class TestASubmittedJobsRunInRunHistory:
         self, app: Flask
     ) -> None:
         storage = RunStorageRefusingCompletion(database_of(app), run_storage_of(app).data_dir)
-        manager = JobManager(storage, simulate_home=RecordingSimulation(), new_id=CountingIds())
+        manager = JobManager(storage, runner=runner_of(RecordingSimulation()), new_id=CountingIds())
         client = client_using(app, manager)
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         assert manager.wait_until_idle(timeout=30)
@@ -381,7 +383,7 @@ class TestASubmittedJobsRunInRunHistory:
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
         manager = JobManager(
-            run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds()
+            run_storage_of(app), max_workers=1, runner=runner_of(blocking_simulation), new_id=CountingIds()
         )
         client = client_using(app, manager)
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
@@ -433,7 +435,7 @@ class TestDeletingARunCancelsItsJob:
     def test_a_run_deleted_while_its_home_job_simulates_stays_deleted_and_its_job_reports_cancelled(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, new_id=CountingIds())
+        manager = JobManager(run_storage_of(app), runner=runner_of(blocking_simulation), new_id=CountingIds())
         client = client_using(app, manager)
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
@@ -463,7 +465,7 @@ class TestDeletingARunCancelsItsJob:
     def test_a_run_deleted_while_its_job_waits_in_the_queue_is_never_simulated(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation)
+        manager = JobManager(run_storage_of(app), max_workers=1, runner=runner_of(blocking_simulation))
         client = client_using(app, manager)
         ahead = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         blocking_simulation.wait_until_started()
@@ -486,7 +488,7 @@ class TestDeletingARunCancelsItsJob:
     def test_a_fleet_run_deleted_while_its_first_home_simulates_never_simulates_the_others_and_saves_nothing(
         self, app: Flask, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
+        manager = JobManager(run_storage_of(app), runner=runner_of(blocking_simulation))
         client = client_using(app, manager)
         submitted = client.post(
             "/api/simulate/fleet",
@@ -510,7 +512,7 @@ class TestDeletingARunCancelsItsJob:
         job = client.get(f"/api/jobs/{submitted['job_id']}").get_json()
         assert (job["status"], job["current_step"], job["message"]) == (
             "cancelled",
-            "Home 1/3",
+            "Homes 0/3",
             "Cancelled: its run was deleted",
         )
 
@@ -518,7 +520,7 @@ class TestDeletingARunCancelsItsJob:
         self, app: Flask, save_gate: SaveGate
     ) -> None:
         storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
-        manager = JobManager(storage, simulate_home=RecordingSimulation())
+        manager = JobManager(storage, runner=runner_of(RecordingSimulation()))
         client = client_using(app, manager)
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         save_gate.wait_until_a_save_waits()
@@ -610,7 +612,7 @@ class TestJobProgressEndpoint:
         self, app: Flask, blocking_simulation: BlockingSimulation, save_gate: SaveGate
     ) -> None:
         storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
-        manager = JobManager(storage, simulate_home=blocking_simulation, new_id=CountingIds())
+        manager = JobManager(storage, runner=runner_of(blocking_simulation), new_id=CountingIds())
         assert client_using(app, manager).post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
         first, second = _LiveStream(manager, "id-1"), _LiveStream(manager, "id-1")

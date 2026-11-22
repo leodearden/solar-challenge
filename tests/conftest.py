@@ -7,7 +7,7 @@ import sys
 import tempfile
 import weakref
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -293,6 +293,18 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
             pytrace=False,
         )
     return window.weather_cache
+
+
+@pytest.fixture(autouse=True)
+def closes_at_teardown() -> Iterator[ExitStack]:
+    """The test's closing stack: each close a builder fixture registers on it runs at the test's teardown, the last registered first.
+
+    Autouse fixtures are set up before, and torn down after, the other fixtures of their own
+    scope, so every gate the test's fixtures hold, such as blocking_simulation, is released
+    before a close waits for the jobs it held.
+    """
+    with ExitStack() as closes:
+        yield closes
 
 
 def _live_job_managers() -> frozenset[Any]:

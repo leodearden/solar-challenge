@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The dashboard's Flask test app, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app.
+"""The dashboard's Flask test app, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app; and new_job_manager, which builds a JobManager the test's teardown shuts down.
 
 The client's requests reach the JobManager that create_app built. A test module or
 package conftest whose tests need another job manager defines its own client, and one
@@ -13,6 +13,7 @@ tests/unit/test_conftests_need_no_web_extra.py says why.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,7 +26,10 @@ if TYPE_CHECKING:
     from flask import Flask
     from flask.testing import FlaskClient
 
+    from solar_challenge.fleet import HomeSimulator
+    from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.storage import RunStorage
+    from tests._web_job_runner import NewJobManager
 
 
 @pytest.fixture
@@ -46,6 +50,23 @@ def client(app: Flask) -> FlaskClient:
 def storage(app: Flask) -> RunStorage:
     """The RunStorage the app fixture's app keeps its runs in, which its pages read."""
     return run_storage_of(app)
+
+
+@pytest.fixture
+def new_job_manager(closes_at_teardown: ExitStack) -> NewJobManager:
+    """Build a JobManager over a RunStorage whose jobs run through tests/_web_job_runner.py's runner_of(home_simulator), shut down at the test's teardown once its running jobs finish.
+
+    Called as new_job_manager(storage, home_simulator, **options), each option going to JobManager.
+    """
+    from solar_challenge.web.jobs import JobManager
+    from tests._web_job_runner import runner_of
+
+    def new(storage: RunStorage, home_simulator: HomeSimulator, /, **options: Any) -> JobManager:
+        manager = JobManager(storage, runner=runner_of(home_simulator), **options)
+        closes_at_teardown.callback(manager.shutdown, wait=True)
+        return manager
+
+    return new
 
 
 @pytest.fixture
