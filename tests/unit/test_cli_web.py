@@ -21,6 +21,7 @@ pytest.importorskip("flask")
 import tests._fleet_runner as marked_homes
 from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunRecord
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._run_stores import run_storage_over
 
 SERVER_WITH_A_BLOCKING_RUNNER = """
@@ -112,8 +113,6 @@ import sys
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 os.execv(sys.executable, [sys.executable, "-c", *sys.argv[1:]])
 """
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -379,7 +378,7 @@ def test_ctrl_c_in_a_terminal_lets_the_homes_of_a_running_parallel_fleet_job_fin
     release_file = tmp_path / "release"
 
     with _server(
-        tmp_path, SERVER_WITH_A_PARALLEL_FLEET_RUNNER, str(_REPO_ROOT), str(marker_dir), "0", str(release_file)
+        tmp_path, SERVER_WITH_A_PARALLEL_FLEET_RUNNER, str(REPOSITORY_ROOT), str(marker_dir), "0", str(release_file)
     ) as server:
         port = _serving_port(server)
         run_id = _submit_fleet_job(port, ["A", "B"])
