@@ -58,10 +58,9 @@ from flask import Flask
 from werkzeug.serving import make_server
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.home import HomeConfig, SimulationResults
-from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.fleet import FleetRunner
-from solar_challenge.home import simulate_home
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.weather import PvgisTmy, WeatherCache, WeatherProvider
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.jobs import JobManager
