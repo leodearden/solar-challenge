@@ -422,7 +422,7 @@ class TestTheBillAndTheProjectionReadOneLedger:
         )
 
         for s, ledger in zip(summaries, ledgers):
-            bill = householder_bill(s, basis_c_own_use_kwh(s), finance, s.simulation_days)
+            bill = householder_bill(s, basis_c_own_use_kwh(s), finance)
             assert bill.own_use_payment_gbp / rate * 100 == pytest.approx(ledger.own_use_kwh, rel=1e-12)
         assert curve.points[0].fleet_billed_own_use_kwh == pytest.approx(
             sum(ledger.own_use_kwh for ledger in ledgers), rel=1e-12
@@ -483,7 +483,7 @@ class TestHouseholderBillRefusesALedgerThatBreaksL3:
         _, finance = make_scenario_and_finance()
 
         with pytest.raises(ValueError, match="L3") as refusal:
-            householder_bill(summary, 100.0, finance, summary.simulation_days)
+            householder_bill(summary, 100.0, finance)
 
         assert _named("demand_kwh", physics.demand_kwh) in str(refusal.value)
         assert _named("own_use_kwh", 100.0 * physics.scale) in str(refusal.value)

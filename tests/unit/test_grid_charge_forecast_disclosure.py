@@ -43,7 +43,6 @@ from tests._finance_builders import make_home_config, make_scenario_and_finance,
 from tests._synthetic_weather import synthetic_june_weather
 
 _PRICING = RunPricing(0.245, 4.1)
-_YEAR_DAYS = 365
 
 
 def _summary(forecast: GridChargeForecast | None) -> SummaryStatistics:
@@ -57,7 +56,7 @@ def _finance() -> FinanceConfig:
 
 def _bill(summary: SummaryStatistics) -> object:
     """householder_bill of *summary*'s year at its physics own-use, as bill_distribution bills it."""
-    return householder_bill(summary, basis_c_own_use_kwh(summary), _finance(), _YEAR_DAYS)
+    return householder_bill(summary, basis_c_own_use_kwh(summary), _finance())
 
 
 _MIXED_FLEET: tuple[GridChargeForecast | None, ...] = ("trailing_14_days", None, "pv_blind", "trailing_14_days")
@@ -91,13 +90,13 @@ class TestBillDistributionGridChargeForecasts:
     """bill_distribution says which forecasts sized the bills it distributes, beside the window it annualised them from."""
 
     def test_a_distribution_names_its_homes_forecasts_beside_its_window(self) -> None:
-        distribution = bill_distribution([_summary(each) for each in _MIXED_FLEET], _finance(), _YEAR_DAYS)
+        distribution = bill_distribution([_summary(each) for each in _MIXED_FLEET], _finance())
 
         assert distribution.grid_charge_forecasts == ("pv_blind", "trailing_14_days")
         assert distribution.annualised_from == make_window()
 
     def test_a_distribution_of_homes_that_did_not_grid_charge_names_none(self) -> None:
-        distribution = bill_distribution([_summary(None), _summary(None)], _finance(), _YEAR_DAYS)
+        distribution = bill_distribution([_summary(None), _summary(None)], _finance())
 
         assert distribution.grid_charge_forecasts == ()
 
@@ -148,7 +147,7 @@ class TestFinanceRefusesPerfectForesight:
 
     def test_bill_distribution_refuses_a_fleet_with_one_such_home(self) -> None:
         with pytest.raises(ConfigurationError) as refused:
-            bill_distribution([_summary("pv_blind"), _summary("perfect_foresight")], _finance(), _YEAR_DAYS)
+            bill_distribution([_summary("pv_blind"), _summary("perfect_foresight")], _finance())
 
         _assert_refuses_perfect_foresight(refused, _SUMMARY_FORECAST)
 
@@ -163,7 +162,7 @@ class TestFinanceRefusesPerfectForesight:
         summaries = [calculate_summary(each) for each in results.per_home_results]
 
         with pytest.raises(ConfigurationError) as refused:
-            bill_distribution(summaries, _finance(), summaries[0].simulation_days)
+            bill_distribution(summaries, _finance())
 
         _assert_refuses_perfect_foresight(refused, _SUMMARY_FORECAST)
 

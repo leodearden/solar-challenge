@@ -516,7 +516,7 @@ class TestGridChargeEnergyPaidOnce:
     ) -> float:
         basis_c_own_use_kwh = summary.total_demand_kwh - summary.total_grid_import_kwh
         return householder_bill(
-            summary, basis_c_own_use_kwh, finance, summary.simulation_days
+            summary, basis_c_own_use_kwh, finance
         ).import_cost_gbp
 
     @staticmethod

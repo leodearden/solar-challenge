@@ -529,22 +529,6 @@ DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 # ---------------------------------------------------------------------------
 
 
-def _require_summary_days(simulation_days: int, summary: "SummaryStatistics") -> None:
-    """Refuse a *simulation_days* other than the days *summary*'s window covers, the days its bill scales by (INV-8).
-
-    Raises:
-        ValueError: Naming both day counts and the first and last day of the
-            summary's window.
-    """
-    window = summary.window
-    if simulation_days != window.days:
-        raise ValueError(
-            "a bill is computed over its summary's own days (INV-8): "
-            f"got simulation_days={simulation_days!r} for a summary whose window covers {window.days} days, "
-            f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
-        )
-
-
 def _one_window(summaries: Sequence["SummaryStatistics"]) -> SimulationWindow:
     """The one window all of *summaries*, at least one, cover.
 
@@ -1149,23 +1133,22 @@ def bill(
 
 def householder_bill(
     summary: "SummaryStatistics",
-    annual_self_consumption_kwh: float,
+    window_self_consumption_kwh: float,
     finance: "FinanceConfig",
-    simulation_days: int,
 ) -> BillBreakdown:
     """Annual cost-recovery bill wrapper for simulator outputs.
 
     This is the **annual wrapper** over :func:`bill` that bills a summary's
-    window, whatever its length, as the window's year.  All bill arithmetic
-    (identities, VAT, savings) lives in :func:`bill` — the single source of
-    truth.
+    window, whatever its length, as the window's year: the window carries the
+    days it covers (INV-8).  All bill arithmetic (identities, VAT, savings)
+    lives in :func:`bill` — the single source of truth.
 
     Responsibilities of this wrapper (not in bill()):
-      * Refuse an *annual_self_consumption_kwh* outside 0 to the summary's
+      * Refuse a *window_self_consumption_kwh* outside 0 to the summary's
         ``total_demand_kwh``, on either basis, with the ledger's L1 and L2
         checks, before it is scaled, so the refusal names the caller's figure.
       * Build the home's ledger, ``home_ledger(annualise(summary), finance,
-        simulated_own_use_kwh=annual_self_consumption_kwh × scale)``: the
+        simulated_own_use_kwh=window_self_consumption_kwh × scale)``: the
         window's totals × its annualisation_scale, year_days / days, own-use
         and import on the physics or override basis, and the import priced as
         the summary's run was priced (docs/cost-recovery-finance-model.md §3,
@@ -1187,39 +1170,34 @@ def householder_bill(
     Args:
         summary: Per-home simulation output (read-only), carrying the window
             its totals cover.
-        annual_self_consumption_kwh: The home's own-use over the summary's
+        window_self_consumption_kwh: The home's own-use over the summary's
             window (kWh), from 0 to its ``total_demand_kwh``, billed scaled by
             the window's annualisation_scale when
             ``finance.self_consumption_override`` is None.  Ignored when an
             override is set, though still checked: own-use then comes from the
             override, generation and demand.
         finance: FinanceConfig with tariff + assumption parameters.
-        simulation_days: The summary's own day count, its window's days;
-            any other is refused (INV-8).
 
     Returns:
         A fully computed, frozen BillBreakdown (delegated to :func:`bill`).
 
     Raises:
-        ValueError: If *simulation_days* is not the summary's own day count
-            (INV-8), naming both; if *annual_self_consumption_kwh* is negative
-            or not finite (L1), or above the summary's ``total_demand_kwh``
-            (L2), on either basis,
-            naming the invariant and the figures as passed; if the summary has
-            no pricing, naming calculate_summary (:func:`_summary_pricing`); or
-            if the home's ledger refuses its year, naming the invariant and its
-            values, such as an own-use that with the import does not cover the
-            demand (L3) (:class:`HomeLedger`).
+        ValueError: If *window_self_consumption_kwh* is negative or not
+            finite (L1), or above the summary's ``total_demand_kwh`` (L2), on
+            either basis, naming the invariant and the figures as passed; if
+            the summary has no pricing, naming calculate_summary
+            (:func:`_summary_pricing`); or if the home's ledger refuses its
+            year, naming the invariant and its values, such as an own-use that
+            with the import does not cover the demand (L3) (:class:`HomeLedger`).
         ConfigurationError: If the perfect_foresight forecast sized the
             summary's grid charge, as :func:`annualise` refuses it.
     """
-    _require_summary_days(simulation_days, summary)
-    _require_finite_and_not_negative({"annual_self_consumption_kwh": annual_self_consumption_kwh})
+    _require_finite_and_not_negative({"window_self_consumption_kwh": window_self_consumption_kwh})
     _require_own_use_within_demand(
-        "annual_self_consumption_kwh", annual_self_consumption_kwh, "total_demand_kwh", summary.total_demand_kwh
+        "window_self_consumption_kwh", window_self_consumption_kwh, "total_demand_kwh", summary.total_demand_kwh
     )
     physics = annualise(summary)
-    ledger = home_ledger(physics, finance, simulated_own_use_kwh=annual_self_consumption_kwh * physics.scale)
+    ledger = home_ledger(physics, finance, simulated_own_use_kwh=window_self_consumption_kwh * physics.scale)
     retail_rate_pence = finance.retail_baseline_rate_pence_per_kwh
     if ledger.import_at_retail:
         warnings.warn(
@@ -1527,13 +1505,14 @@ def _interpolate_per_year(
 def bill_distribution(
     summaries: Sequence["SummaryStatistics"],
     finance: "FinanceConfig",
-    simulation_days: int,
 ) -> BillDistribution:
     """Aggregate per-home bills into a fleet-level BillDistribution.
 
-    Maps ``householder_bill`` over each home's SummaryStatistics, selects the
-    median-**total-outlay** home as representative, and computes min / mean /
-    median / max via ``pd.Series`` (mirroring ``calculate_fleet_summary``).
+    Maps ``householder_bill`` over each home's SummaryStatistics, each billed
+    over the summaries' one window, which carries the days it covers (INV-8),
+    selects the median-**total-outlay** home as representative, and computes
+    min / mean / median / max via ``pd.Series`` (mirroring
+    ``calculate_fleet_summary``).
 
     Note: ``BillDistribution.per_home_net_bill_gbp`` holds per-home
     ``total_outlay_gbp`` values, not net bills.
@@ -1543,7 +1522,6 @@ def bill_distribution(
             Must contain at least one entry; an empty sequence raises
             ``ValueError``.
         finance: Common FinanceConfig for all homes.
-        simulation_days: The summaries' own day count, their window's days.
 
     Returns:
         A BillDistribution with representative and per-home statistics, the
@@ -1553,16 +1531,14 @@ def bill_distribution(
     Raises:
         ValueError: If ``summaries`` is empty; if the summaries cover
             different windows, naming the first position whose window differs
-            and both windows; if *simulation_days* is not the summaries' own
-            day count (INV-8), naming both; or if a summary has no pricing,
-            naming calculate_summary.
+            and both windows; or if a summary has no pricing, naming
+            calculate_summary.
         ConfigurationError: If the perfect_foresight forecast sized a
             summary's grid charge, as :func:`annualise` refuses it.
     """
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
     window = _one_window(summaries)
-    _require_summary_days(simulation_days, summaries[0])
 
     bills = [
         householder_bill(
@@ -1570,9 +1546,8 @@ def bill_distribution(
             # Basis C (docs/cost-recovery-finance-model.md §2), the physics own-use
             # project_multi_year bills too; home_ledger replaces it with the
             # override's own-use when one is set.
-            annual_self_consumption_kwh=basis_c_own_use_kwh(s),
+            window_self_consumption_kwh=basis_c_own_use_kwh(s),
             finance=finance,
-            simulation_days=simulation_days,
         )
         for s in summaries
     ]
@@ -2588,9 +2563,8 @@ def solve_cost_recovery_rate(
     fr_age0 = simulate(fleet_cfg, start_ts, end_ts)
 
     summaries = [calculate_summary(r) for r in fr_age0.per_home_results]
-    sim_days = summaries[0].simulation_days
     finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
-    outlay = bill_distribution(summaries, finance_solved, sim_days)
+    outlay = bill_distribution(summaries, finance_solved)
 
     # ---- (7) Assemble result -------------------------------------------------
     rep = outlay.representative

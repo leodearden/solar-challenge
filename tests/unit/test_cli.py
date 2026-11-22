@@ -1167,7 +1167,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert result.exit_code == 0
         window = summaries[0].window
         assert window is not None and len(window.rows()) == (23 + 24) * 60
-        assert generate_finance_report(bill_distribution(summaries, finance, 2), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
         assert f"×183.000 from a 2-day window ({_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST})" in result.stdout
         assert summaries[0].simulation_days == 2
         assert f"Simulating fleet of 1 homes for {summaries[0].simulation_days} days…" in " ".join(
@@ -1179,7 +1179,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result, summaries, finance = _finance_run_over(date(2023, 1, 1), 365)
 
         assert result.exit_code == 0
-        assert generate_finance_report(bill_distribution(summaries, finance, 365), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
         assert "extrapolated" not in result.stdout
         assert "Simulating fleet of 1 homes for 365 days…" in " ".join(result.stderr.split())
 

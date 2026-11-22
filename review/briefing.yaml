@@ -139,15 +139,16 @@ conventions:
       times, the nominal capacity_kwh among them; reading only the Battery's answers keeps one
       definition of each limit and basis (docs/prds/dispatch-configuration-below-config.md §4).
 
-  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution refuse a simulation_days other than their summaries' (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn), and bill_distribution summaries over different windows, naming both (tests/unit/test_finance_window.py::TestOneWindowPerDistribution)"
+  - rule: "The day count a bill is computed over is the summaries' own (INV-8): householder_bill and bill_distribution take no day count and bill each summary over its own window (tests/unit/test_finance_window.py::TestDayCountIsTheSummariesOwn::test_the_summaries_own_day_count_bills), and bill_distribution refuses summaries over different windows, naming both (tests/unit/test_finance_window.py::TestOneWindowPerDistribution)"
     why: >
       householder_bill and bill_distribution used to take the day count as an argument nobody
       checked against the summaries, and cli/finance.run computed it from tz-aware midnights,
       which undercounted across the spring-forward, so a bill could annualise its summaries by a
       day count they did not cover (fk-1cd332300623). Each summary now carries the window its
-      totals cover (SummaryStatistics.window, set by calculate_summary), and finance.py checks the
-      day count in _require_summary_days and the one window in _one_window, at every use (D27
-      invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8).
+      totals cover (SummaryStatistics.window, set by calculate_summary), so the bill functions
+      read the days from it and take none, and finance.py checks the one window in _one_window
+      (D27 invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8
+      and the lead's ruling D31).
 
   - rule: "The dashboard's and the CLI's defaults are the engine's (INV-11): both simulate pages start each economy tariff type at tariff.PRESET_RATES' rates (tests/unit/test_web_tariff_presets.py); every CLI --start/--end option defaults to timebase.DEFAULT_FIRST_DAY's or DEFAULT_LAST_DAY's ISO string or to None, `config template home` and `config template scenario` write that pair as their period, and no module of src/solar_challenge outside timebase.py holds an ISO-date string literal (tests/unit/test_window_defaults.py); `home quick` starts at timebase.SHORT_WINDOW_START (tests/unit/test_cli_home_quick.py::test_home_quick_saves_the_minutes_from_midnight_on_the_short_window_start)"
     why: >

@@ -126,7 +126,7 @@ def net_cost_by_season_gbp(results: SimulationResults) -> dict[str, float]:
 def householder_bill(summaries: Sequence[SummaryStatistics], finance: FinanceConfig) -> Union[float, Refused]:
     """The mean of the per-home bills a year finance.bill_distribution gives summaries under finance, or finance's refusal to bill them."""
     try:
-        return bill_distribution(summaries, finance, summaries[0].simulation_days).mean_gbp
+        return bill_distribution(summaries, finance).mean_gbp
     except ConfigurationError as refusal:
         return Refused(str(refusal))
 

@@ -162,12 +162,8 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     # ---- Householder bill A/B (suppress <360-day annualisation warning) ------
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        bill_on = householder_bill(
-            summary_on, summary_on.total_self_consumption_kwh, finance, simulation_days=1
-        )
-        bill_off = householder_bill(
-            summary_off, summary_off.total_self_consumption_kwh, finance, simulation_days=1
-        )
+        bill_on = householder_bill(summary_on, summary_on.total_self_consumption_kwh, finance)
+        bill_off = householder_bill(summary_off, summary_off.total_self_consumption_kwh, finance)
 
     # ---- G6 gate: import_cost_gbp(ON) < import_cost_gbp(OFF) ----------------
     assert bill_on.import_cost_gbp < bill_off.import_cost_gbp, (
@@ -220,7 +216,7 @@ def test_finance_report_renders_flex_value_block() -> None:
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    dist = bill_distribution([summary], finance, 365)
+    dist = bill_distribution([summary], finance)
 
     # ---- Baseline: no flex_band → bit-identical output -----------------------
     baseline = generate_finance_report(dist, scenario_name="Flex")

@@ -583,7 +583,7 @@ def _synthetic_bill_distribution() -> BillDistribution:
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    return bill_distribution([summary], finance, 365)
+    return bill_distribution([summary], finance)
 
 
 def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:

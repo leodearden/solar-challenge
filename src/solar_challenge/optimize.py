@@ -848,7 +848,7 @@ def _age0_baseline_outlay(
     :meth:`~solar_challenge.config.ScenarioConfig.simulated_homes`, with all PV
     configs aged to 0.0, using the injected *simulate*, computes per-home
     :class:`~solar_challenge.home.SummaryStatistics`, and returns
-    ``bill_distribution(..., finance, sim_days).representative.total_outlay_gbp``.
+    ``bill_distribution(summaries, finance).representative.total_outlay_gbp``.
 
     This is the 'second pure post-sim evaluation' of
     docs/prds/discrete-install-config-sweep.md §3.3: the baseline outlay at the
@@ -879,8 +879,7 @@ def _age0_baseline_outlay(
         calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
         for r in fleet_results.per_home_results
     ]
-    sim_days = summaries[0].simulation_days
-    dist = bill_distribution(summaries, finance, sim_days)
+    dist = bill_distribution(summaries, finance)
     return dist.representative.total_outlay_gbp
 
 
