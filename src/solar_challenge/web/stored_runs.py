@@ -1189,18 +1189,18 @@ def _home_with_its_dispatch_in_its_battery(home: Any) -> tuple[Any, list[_FieldC
     v3 left a home asking for tou_optimized beside a battery naming its own strategy, which its run
     dispatched by; beside a battery naming none on a tariff, which ran tou_optimized on the
     tariff's clock; or with no battery, which dispatched none. Every other home asked for greedy,
-    whose battery naming none ran self-consumption. So a battery naming no strategy whose home
-    asked for tou_optimized takes tou_optimized on its tariff's clock, the one field reported; any
-    other battery naming none names self_consumption, unreported; and every home loses the key.
-    A home that is not an object, or that holds no key, is left as it is.
+    whose battery naming none ran self-consumption. So every home loses the key, if it holds one;
+    and, whether or not it held one, a battery naming no strategy whose home asked for tou_optimized
+    takes tou_optimized on its tariff's clock, the one field reported, while any other battery
+    naming none names self_consumption, unreported. A home that is not an object is left as it is.
     """
-    if not isinstance(home, dict) or _HOME_DISPATCH not in home:
+    if not isinstance(home, dict):
         return home, []
     without_the_key = {key: value for key, value in home.items() if key != _HOME_DISPATCH}
     battery = home.get("battery_config")
     if not isinstance(battery, dict) or battery.get("dispatch_strategy") is not None:
         return without_the_key, []
-    if home[_HOME_DISPATCH] == "tou_optimized":
+    if home.get(_HOME_DISPATCH) == "tou_optimized":
         strategy = _tou_optimized_on_the_tariffs_clock()
         changes = [("battery_config.dispatch_strategy", None, _tou_optimized_on_the_tariffs_clock())]
     else:

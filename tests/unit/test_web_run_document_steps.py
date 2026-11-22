@@ -52,7 +52,8 @@ Last it pins v8, the step that moves each stored home's dispatch_strategy into i
 battery's own setting, then drops the home's key, which no HomeConfig has: that a battery naming no
 strategy, whose home asked for tou_optimized, takes tou_optimized on its tariff's clock, reported by
 its path, in a fleet's files and its runs row alike; that every other battery naming no strategy
-names self_consumption, the dispatch it ran, reporting nothing; that every other home only loses its
+names self_consumption, the dispatch it ran, reporting nothing, whether or not its home holds the
+key; that every other home only loses its
 key, reporting nothing, a home run's at its root, a battery naming its own strategy keeping it and a
 home with no battery having none to take; that v2 keeps each home's dispatch_strategy for v3 and v8; that
 it leaves a config, or a fleet's home, that is not an object as it is; and that it changes none of
@@ -1434,6 +1435,21 @@ def test_v8_gives_each_battery_naming_no_strategy_whose_home_asked_for_greedy_se
 
     assert result.documents == _with_each_battery_naming_no_strategy_self_consumption(
         _without_home_dispatch(documents, run_type), run_type
+    )
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v8_gives_a_battery_naming_no_strategy_self_consumption_whose_home_holds_no_dispatch_strategy_reporting_nothing() -> None:
+    """Filling a battery that names no strategy does not wait on its home's key: a home holding none asked for no tou_optimized, so its battery names self_consumption."""
+    v8 = _step(8)
+    documents = _without(
+        _home_run_before(v8, (("battery_config", "dispatch_strategy"), None)), "config.json", _HOME_DISPATCH
+    )
+
+    result = v8.apply("home", documents)
+
+    assert result.documents == _with_value(
+        documents, "config.json", ("battery_config", "dispatch_strategy"), _SELF_CONSUMPTION
     )
     assert (result.dropped, result.rewritten) == ((), ())
 
