@@ -28,7 +28,7 @@ from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_home_block, parse_location_block, parse_seg_rate
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START, covered_days
 
 app = typer.Typer(help="Single home simulation commands")
 
@@ -81,14 +81,14 @@ def run(
             "--start",
             help="Start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="End date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -258,7 +258,7 @@ def quick(
         name="Quick Simulation",
     )
 
-    start_date = pd.Timestamp("2024-06-01", tz=loc.timezone)
+    start_date = pd.Timestamp(SHORT_WINDOW_START, tz=loc.timezone)
     end_date = start_date + pd.Timedelta(days=days - 1)
 
     cli = invocation(ctx)

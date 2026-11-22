@@ -19,12 +19,13 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.config import load_config
 from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Configuration management commands")
 
 
 # Template configurations
-HOME_TEMPLATE = """\
+HOME_TEMPLATE = f"""\
 # Single home simulation configuration
 # Any block may be deleted entirely, or any key left out of it, to take its
 # default, except that a location: block that sets any key must set both
@@ -41,8 +42,8 @@ location:
 
 # Simulation period
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Home configuration
 home:
@@ -107,7 +108,7 @@ homes:
       annual_consumption_kwh: 4200.0
 """
 
-SCENARIO_TEMPLATE = """\
+SCENARIO_TEMPLATE = f"""\
 # Scenario configuration
 # Can define single home or fleet with simulation period
 
@@ -120,8 +121,8 @@ location:
   timezone: Europe/London
 
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Single home scenario (use 'homes' instead for fleet)
 home:

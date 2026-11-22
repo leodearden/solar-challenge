@@ -47,7 +47,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
 )
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 
 app = typer.Typer(help="Financial analysis commands")
 
@@ -173,14 +173,14 @@ def run(
             "--start",
             help="Simulation start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="Simulation end date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     project: Annotated[
         bool,
         typer.Option(

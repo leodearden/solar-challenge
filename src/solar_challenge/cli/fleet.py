@@ -44,7 +44,7 @@ from solar_challenge.fleet import (
 )
 from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -136,14 +136,14 @@ def run(
             "--start",
             help="Start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="End date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -221,14 +221,14 @@ def sweep(
             "--start",
             help="Start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="End date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     param: Annotated[
         Optional[str],
         typer.Option(
