@@ -217,6 +217,23 @@ class TestConfigCLI:
             content = output_path.read_text()
             assert "location" in content or "pv" in content
 
+    @pytest.mark.parametrize("template_type", ["home", "scenario"])
+    def test_a_written_home_or_scenario_template_sets_no_output_block_and_validates(
+        self, tmp_path: Path, template_type: str
+    ) -> None:
+        """The file `config template home` or `config template scenario` writes holds no output: block, which no command reads, and `validate config` finds it valid."""
+        template_file = tmp_path / f"{template_type}.yaml"
+
+        written = runner.invoke(
+            app, ["config", "template", template_type, "-o", str(template_file)], catch_exceptions=False
+        )
+        assert written.exit_code == 0
+        assert "output" not in yaml.safe_load(template_file.read_text())
+
+        validated = runner.invoke(app, ["validate", "config", str(template_file)], catch_exceptions=False)
+        assert validated.exit_code == 0
+        assert "OK Configuration is valid" in table_text(validated.stdout)
+
     def test_config_template_reports_its_output_path_verbatim(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
