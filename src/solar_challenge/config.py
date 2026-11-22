@@ -44,6 +44,7 @@ from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.scenario_blocks import (
     HOME_BLOCK_KEYS,
+    RETIRED_DISPATCH_STRATEGY_KEY,
     block_label,
     child_path,
     parse_community_config,
@@ -53,7 +54,9 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
     parse_tariff_config,
     refusal,
+    refuse_retired_keys,
     refuse_unrecognised_keys,
+    require_held_keys,
     require_keys,
     require_list,
     require_mapping,
@@ -313,10 +316,7 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
 
     A retired key is refused first, naming its path and what replaces it.
     """
-    scenario = require_mapping(block_path, data)
-    for key, why in _RETIRED_SCENARIO_KEYS.items():
-        if key in scenario:
-            raise refusal(child_path(block_path, key), why)
+    scenario = refuse_retired_keys(block_path, data, _RETIRED_SCENARIO_KEYS)
     return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
 
 
@@ -645,7 +645,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 
     if "home" in config:
         return parse_home_block(config["home"], location)
-    refuse_unrecognised_keys("", config, _FLAT_HOME_FILE_KEYS)
+    refuse_unrecognised_keys("", refuse_retired_keys("", config, RETIRED_DISPATCH_STRATEGY_KEY), _FLAT_HOME_FILE_KEYS)
     flat_home = {key: value for key, value in config.items() if key != "location"}
     return parse_home_block(flat_home, location, block_path="")
 
@@ -769,12 +769,12 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
         (sweep value, FleetConfig named after it) for each sweep point, in sweep order
 
     Raises:
-        ConfigurationError: If the document is not a mapping or has no fleet_distribution:
-            block, naming the top level; if the block holds no sweep; or if configuration is
-            invalid
+        ConfigurationError: If the document is not a mapping or holds no fleet_distribution:
+            block, naming the top level; if the block is not a mapping or holds no sweep,
+            naming the block; or if configuration is invalid
     """
     document = require_mapping("", document)
-    require_keys("", document, ["fleet_distribution"])
+    require_held_keys("", document, ["fleet_distribution"])
     distribution, settings = _read_fleet_distribution_file(document)
     return [
         (value, FleetConfig(homes=tuple(settings.generate_homes(point)), name=f"multiplier={value:.4f}"))

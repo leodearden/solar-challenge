@@ -39,7 +39,7 @@ null; that the dropped total is the export revenue the summary keeps; that v2 ke
 it; that it leaves a home run's documents, every home summary and every config as they are; and
 that it changes none of its input.
 
-Last it pins v7, the step that drops each stored BatteryConfig's efficiency, the round trip its
+Then it pins v7, the step that drops each stored BatteryConfig's efficiency, the round trip its
 charge_efficiency and discharge_efficiency were derived from: that it drops it from a home run's
 battery, in its files and its runs row alike, reporting a value that is not null by its path, a
 fleet home's under its homes, and keeps the pair; that it drops each legacy fixture's null
@@ -47,6 +47,17 @@ efficiency, reporting nothing; that v2 keeps a battery's efficiency for it, at w
 battery is; that it leaves a config that is not an object as it is; that it changes none of its
 input; and that a run saved with a round trip reads, once every step has brought it forward, as
 the home whose battery holds the pair.
+
+Last it pins v8, the step that moves each stored home's dispatch_strategy into its battery, the
+battery's own setting, then drops the home's key, which no HomeConfig has: that a battery naming no
+strategy, whose home asked for tou_optimized, takes tou_optimized on its tariff's clock, reported by
+its path, in a fleet's files and its runs row alike; that every other battery naming no strategy
+names self_consumption, the dispatch it ran, reporting nothing, whether or not its home holds the
+key; that every other home only loses its
+key, reporting nothing, a home run's at its root, a battery naming its own strategy keeping it and a
+home with no battery having none to take; that v2 keeps each home's dispatch_strategy for v3 and v8; that
+it leaves a config, or a fleet's home, that is not an object as it is; and that it changes none of
+its input.
 """
 
 import copy
@@ -708,9 +719,8 @@ def test_v4_drops_the_grid_charging_each_home_of_the_pre_839_fleet_ignored_on_it
         ),
         _fleet_fixture_home(
             "Flat Row 3",
-            BatteryConfig(capacity_kwh=5.0),
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
             tariff_config=TariffConfig.flat_rate(0.25),
-            dispatch_strategy="tou_optimized",
         ),
     )
 
@@ -1296,3 +1306,226 @@ def test_a_run_saved_with_a_round_trip_reads_once_brought_forward_as_its_home_wh
     home = _current_documents(_PRE_867).config.read(HomeConfig)
 
     assert home.battery_config == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.9)
+
+
+_HOME_DISPATCH = "dispatch_strategy"
+"""The key of the dispatch a HomeConfig stored before format 8 asked for by name, which v8 moves into its battery and drops."""
+
+_TOU_OPTIMIZED_ON_THE_TARIFFS_CLOCK = {"strategy_type": "tou_optimized", "peak_hours": None}
+"""tou_optimized on its tariff's clock, as format 8 stores a battery's dispatch_strategy: v8 gives it a battery naming no strategy whose home asked for tou_optimized."""
+
+_PRE_839 = "pre_839_flat_grid_charging_fleet"
+"""The fixture whose homes[2] asks for tou_optimized beside a battery naming no strategy, once v3 has read it as it ran."""
+
+
+def _stored_homes(config: Any, run_type: RunType) -> list[Any]:
+    """Each home object of *config*, a stored config of a run of *run_type*: a home run's own, each of a fleet run's homes in order."""
+    return config["homes"] if run_type == "fleet" else [config]
+
+
+def _without_home_dispatch(documents: StoredRunDocuments, run_type: RunType) -> StoredRunDocuments:
+    """*documents*, of a run of *run_type*, with a copy of the config lacking each stored home's dispatch_strategy."""
+    config = copy.deepcopy(documents.config.content)
+    for home in _stored_homes(config, run_type):
+        del home[_HOME_DISPATCH]
+    return dataclasses.replace(documents, config=dataclasses.replace(documents.config, content=config))
+
+
+@pytest.mark.parametrize(
+    ("stored_documents", "document"),
+    [
+        pytest.param(_fixture_documents, "config.json", id="run-files"),
+        pytest.param(_runs_row_documents, "runs.config_json", id="runs-row"),
+    ],
+)
+def test_v8_moves_pre_839_s_tou_optimized_home_into_its_battery_reporting_it_and_drops_every_home_s_key(
+    stored_documents: Callable[[str], StoredRunDocuments], document: str
+) -> None:
+    """homes[2] ran tou_optimized on its flat tariff's clock, which its battery now names; homes[0] and homes[1] ran their batteries' own strategies, which they keep."""
+    v8 = _step(8)
+    documents = _brought_forward_before(v8, "fleet", stored_documents(_PRE_839))
+    assert [home[_HOME_DISPATCH] for home in documents.config.content["homes"]] == ["greedy", "greedy", "tou_optimized"]
+
+    result = v8.apply("fleet", documents)
+
+    battery_strategy = ("homes", 2, "battery_config", "dispatch_strategy")
+    assert result.documents == _with_value(
+        _without_home_dispatch(documents, "fleet"), document, battery_strategy, _TOU_OPTIMIZED_ON_THE_TARIFFS_CLOCK
+    )
+    assert result.dropped == ()
+    assert result.rewritten == (
+        RewrittenValue(_PRE_839, document, "homes[2].battery_config.dispatch_strategy", None, _TOU_OPTIMIZED_ON_THE_TARIFFS_CLOCK),
+    )
+    assert [home.battery_config and home.battery_config.dispatch_strategy for home in result.documents.config.read(FleetRunConfig).homes] == [
+        TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
+        PeakShavingStrategyConfig(import_limit_kw=3.0),
+        TOUOptimizedStrategyConfig(),
+    ]
+
+
+def test_v8_gives_a_home_run_s_battery_naming_no_strategy_tou_optimized_on_its_tariffs_clock_when_its_home_asked_for_it() -> None:
+    v8 = _step(8)
+    documents = _home_run_before(v8, ((_HOME_DISPATCH,), "tou_optimized"), (("battery_config", "dispatch_strategy"), None))
+
+    result = v8.apply("home", documents)
+
+    with_its_battery_s = _with_value(
+        documents, "config.json", ("battery_config", "dispatch_strategy"), _TOU_OPTIMIZED_ON_THE_TARIFFS_CLOCK
+    )
+    assert result.documents == _without(with_its_battery_s, "config.json", _HOME_DISPATCH)
+    assert result.dropped == ()
+    assert result.rewritten == (
+        RewrittenValue(
+            "pre_786_dispatch_home", "config.json", "battery_config.dispatch_strategy", None, _TOU_OPTIMIZED_ON_THE_TARIFFS_CLOCK
+        ),
+    )
+    battery = result.documents.config.read(HomeConfig).battery_config
+    assert battery is not None
+    assert (battery.dispatch_strategy, battery.grid_charging) == (
+        TOUOptimizedStrategyConfig(),
+        GridChargeConfig(target_soc_fraction=0.8),
+    )
+
+
+def test_v8_drops_a_home_run_s_dispatch_strategy_at_its_root_reporting_nothing() -> None:
+    """pre_786_dispatch_home's battery names its own strategy, so the home's key is all v8 changes."""
+    v8 = _step(8)
+    documents = _documents_before(v8, "pre_786_dispatch_home")
+    assert documents.config.content[_HOME_DISPATCH] == "greedy"
+
+    result = v8.apply("home", documents)
+
+    assert result.documents == _without_home_dispatch(documents, "home")
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+_SELF_CONSUMPTION = {"strategy_type": "self_consumption"}
+"""self_consumption, as format 8 stores a battery's dispatch_strategy: v8 gives it each battery naming no strategy whose home did not ask for tou_optimized."""
+
+
+def _with_each_battery_naming_no_strategy_self_consumption(
+    documents: StoredRunDocuments, run_type: RunType
+) -> StoredRunDocuments:
+    """*documents*, of a run of *run_type*, with a copy of the config whose every battery naming no strategy names self_consumption."""
+    config = copy.deepcopy(documents.config.content)
+    for home in _stored_homes(config, run_type):
+        battery = home["battery_config"]
+        if battery is not None and battery["dispatch_strategy"] is None:
+            battery["dispatch_strategy"] = dict(_SELF_CONSUMPTION)
+    return dataclasses.replace(documents, config=dataclasses.replace(documents.config, content=config))
+
+
+@pytest.mark.parametrize(
+    "name", ["legacy_fleet", "pre_469_home", "pre_867_round_trip_home", "pre_975_seg_fleet", "pre_787_dispatch_fleet"]
+)
+def test_v8_gives_each_battery_naming_no_strategy_whose_home_asked_for_greedy_self_consumption_reporting_nothing(
+    name: str,
+) -> None:
+    """A greedy home's battery that named no strategy ran self-consumption, which it now names; the home loses its key."""
+    run_type = fixture_run_type(name)
+    v8 = _step(8)
+    documents = _documents_before(v8, name)
+    homes = _stored_homes(documents.config.content, run_type)
+    assert {home[_HOME_DISPATCH] for home in homes} == {"greedy"}, "premise: every home asked for greedy"
+    assert None in [home["battery_config"]["dispatch_strategy"] for home in homes if home["battery_config"]], (
+        "premise: a battery names no strategy"
+    )
+
+    result = v8.apply(run_type, documents)
+
+    assert result.documents == _with_each_battery_naming_no_strategy_self_consumption(
+        _without_home_dispatch(documents, run_type), run_type
+    )
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v8_gives_a_battery_naming_no_strategy_self_consumption_whose_home_holds_no_dispatch_strategy_reporting_nothing() -> None:
+    """Filling a battery that names no strategy does not wait on its home's key: a home holding none asked for no tou_optimized, so its battery names self_consumption."""
+    v8 = _step(8)
+    documents = _without(
+        _home_run_before(v8, (("battery_config", "dispatch_strategy"), None)), "config.json", _HOME_DISPATCH
+    )
+
+    result = v8.apply("home", documents)
+
+    assert result.documents == _with_value(
+        documents, "config.json", ("battery_config", "dispatch_strategy"), _SELF_CONSUMPTION
+    )
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+_TOU_OPTIMIZED_HOMES_WHOSE_BATTERY_TAKES_NONE = [
+    pytest.param([((_HOME_DISPATCH,), "tou_optimized")], id="a-battery-naming-tou_optimized-in-its-own-peak-hours"),
+    pytest.param(
+        [((_HOME_DISPATCH,), "tou_optimized"), (("battery_config", "dispatch_strategy"), _PEAK_SHAVING)],
+        id="a-battery-naming-peak_shaving",
+    ),
+    pytest.param(
+        [((_HOME_DISPATCH,), "tou_optimized"), (("battery_config", "dispatch_strategy"), {"strategy_type": "self_consumption"})],
+        id="a-battery-naming-self_consumption",
+    ),
+    pytest.param([((_HOME_DISPATCH,), "tou_optimized"), (("battery_config",), None)], id="no-battery"),
+    pytest.param([((_HOME_DISPATCH,), "tou_optimized"), (("battery_config",), "not a battery")], id="a-battery-not-an-object"),
+]
+"""Edits to pre_786_dispatch_home's config before v8, each a home asking for tou_optimized whose battery names its own strategy or that has no battery to name one."""
+
+
+@pytest.mark.parametrize("edits", _TOU_OPTIMIZED_HOMES_WHOSE_BATTERY_TAKES_NONE)
+def test_v8_only_drops_the_key_of_a_tou_optimized_home_whose_battery_names_its_own_strategy_or_that_has_none(
+    edits: list[tuple[Keys, Any]],
+) -> None:
+    v8 = _step(8)
+    documents = _home_run_before(v8, *edits)
+
+    result = v8.apply("home", documents)
+
+    assert result.documents == _without(documents, "config.json", _HOME_DISPATCH)
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize(
+    ("run_type", "name", "content"),
+    [
+        pytest.param("home", "pre_786_dispatch_home", "not a config", id="home-text"),
+        pytest.param("home", "pre_786_dispatch_home", ["not", "a", "config"], id="home-array"),
+        pytest.param("home", "pre_786_dispatch_home", None, id="home-null"),
+        pytest.param("fleet", _PRE_839, ["not", "a", "config"], id="fleet-array"),
+        pytest.param("fleet", _PRE_839, {"homes": "not a list", "n_homes": 3}, id="fleet-homes-not-a-list"),
+        pytest.param("fleet", _PRE_839, {"homes": ["not a home", None, 3], "n_homes": 3}, id="fleet-homes-not-objects"),
+    ],
+)
+def test_v8_leaves_a_config_or_a_fleet_s_home_that_is_not_an_object_as_it_is(
+    run_type: RunType, name: str, content: Any
+) -> None:
+    v8 = _step(8)
+    documents = dataclasses.replace(_documents_before(v8, name), config=StoredDocument(name, "config.json", content))
+
+    result = v8.apply(run_type, documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v8_changes_none_of_its_input_documents() -> None:
+    v8 = _step(8)
+    documents = _documents_before(v8, _PRE_839)
+    before = copy.deepcopy(documents)
+
+    v8.apply("fleet", documents)
+
+    assert documents == before
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_v2_keeps_each_stored_home_s_dispatch_strategy_for_v3_and_v8_reporting_none(name: str) -> None:
+    """v3 reads a home's dispatch_strategy as it ran, and v8 moves it into its battery, so v2, which drops each key a dataclass lacks, keeps it, at a home run's root and at each of a fleet run's homes."""
+    run_type = fixture_run_type(name)
+    documents = _fixture_documents(name)
+
+    result = _V2.apply(run_type, documents)
+
+    def home_dispatch(stored: StoredRunDocuments) -> list[Any]:
+        return [home[_HOME_DISPATCH] for home in _stored_homes(stored.config.content, run_type)]
+
+    assert home_dispatch(result.documents) == home_dispatch(documents)
+    assert [each for each in result.dropped if each.field.split(".")[-1] == _HOME_DISPATCH] == []

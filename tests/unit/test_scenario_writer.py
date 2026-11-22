@@ -134,7 +134,6 @@ def _every_grammar_field_home() -> HomeConfig:
         ),
         name="Nine kW home",
         tariff_config=TariffConfig.economy_7(),
-        dispatch_strategy="tou_optimized",
         seg_tariff=SEGTariff(name="Octopus Outgoing", rate_pence_per_kwh=15.0),
     )
 
@@ -240,6 +239,24 @@ def test_a_block_is_written_with_every_key_of_its_table_in_order(
     assert list(written_block(document)) == list(block.keys)
 
 
+@pytest.mark.parametrize(
+    "written_homes",
+    [
+        pytest.param(lambda home: [home_scenario(home, name="One home")["home"]], id="home_scenario"),
+        pytest.param(lambda home: fleet_scenario([home, home], name="Two homes")["homes"], id="fleet_scenario"),
+    ],
+)
+def test_a_written_home_block_holds_no_dispatch_strategy_its_battery_holds_its_own(
+    written_homes: Callable[[HomeConfig], list[dict[str, Any]]],
+) -> None:
+    """The dispatch strategy is the battery's own setting, so a home block carries none, and its battery's carries the battery's."""
+    homes = written_homes(_every_grammar_field_home())
+
+    assert [("dispatch_strategy" in home, home["battery"]["dispatch_strategy"]) for home in homes] == [
+        (False, {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]})
+    ] * len(homes)
+
+
 def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_order() -> None:
     """R2's one stated exception: a battery block holds the per-direction pair, never efficiency, the round trip."""
     home = _home(
@@ -265,6 +282,16 @@ def test_a_battery_given_a_round_trip_efficiency_is_written_as_the_pair_it_deriv
     assert "efficiency" not in battery
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.9, 0.9)
     assert _load_through_home_run(document, tmp_path).battery_config == battery_config
+
+
+def test_a_default_battery_is_written_dispatching_self_consumption_and_reads_back_equal(tmp_path: Path) -> None:
+    """A battery that names no strategy dispatches self_consumption, so its block names that strategy."""
+    home = _home(4.0, battery_config=BatteryConfig(capacity_kwh=5.0))
+
+    document = home_scenario(home, name="Default battery")
+
+    assert document["home"]["battery"]["dispatch_strategy"] == {"strategy_type": "self_consumption"}
+    assert _load_through_home_run(document, tmp_path) == home
 
 
 def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -> None:
@@ -377,9 +404,8 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
             5.0,
             location=_EDINBURGH,
             name="Home 2",
-            battery_config=BatteryConfig(capacity_kwh=5.0),
+            battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
             tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
         ),
         _home(
             4.0,

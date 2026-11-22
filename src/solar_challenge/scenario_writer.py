@@ -105,7 +105,6 @@ def _home_block(home: HomeConfig) -> dict[str, Any]:
         "battery": None if battery is None else _component_block(BATTERY_BLOCK, battery),
         "load": _component_block(LOAD_BLOCK, home.load_config),
         "tariff": None if home.tariff_config is None else _tariff_block(home.tariff_config),
-        "dispatch_strategy": home.dispatch_strategy,
         "heat_pump": (
             None
             if home.heat_pump_config is None

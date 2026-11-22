@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""docs/prds/one-dispatch-engine.md §9 rows 13-14: a home that asks for tou_optimized is dispatched by one engine.
+"""docs/prds/one-dispatch-engine.md §9 rows 13-14: a battery that dispatches tou_optimized on its tariff's clock is dispatched by one engine.
 
-Row 13: a home that asks for tou_optimized runs TOUOptimizedStrategy on the tariff's clock through simulate_timestep,
+Row 13: a battery that dispatches tou_optimized on its tariff's clock runs TOUOptimizedStrategy on the tariff's clock through simulate_timestep,
 and simulate_timestep_tou delegates to that route (§5.5). So simulate_timestep_tou on §2.2's morning-drain Economy 10
 day, and the bristol-arbitrage home on its sunless 2024-01-15, equal the route exactly in every minute, which is within
 the row's 1e-9 kWh. Row 14: a home's dispatch is refused by build_dispatch_strategy's refusals.
 """
 
+import dataclasses
 from collections.abc import Callable
 
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategy
+from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategy, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
@@ -66,13 +67,12 @@ class TestTheBristolArbitrageHome:
 
 
 def _tou_optimized_home(battery: BatteryConfig, tariff: TariffConfig | None) -> HomeConfig:
-    """A home with 4 kW of PV and a deterministic 3400 kWh a year that asks for tou_optimized, on tariff."""
+    """A home with 4 kW of PV and a deterministic 3400 kWh a year, on tariff, whose *battery* dispatches tou_optimized on the tariff's clock."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
-        battery_config=battery,
+        battery_config=dataclasses.replace(battery, dispatch_strategy=TOUOptimizedStrategyConfig()),
         tariff_config=tariff,
-        dispatch_strategy="tou_optimized",
     )
 
 
@@ -81,7 +81,7 @@ def _tou_optimized_home(battery: BatteryConfig, tariff: TariffConfig | None) -> 
     [pytest.param(TariffConfig.economy_10, id="economy_10"), pytest.param(TariffConfig.economy_7, id="economy_7")],
 )
 class TestTheHomesRouteIsTheStrategyRoute:
-    """A 5 kWh battery, naming no strategy, grid-charging to 0.6 on the synthetic 2024-06-21 in a home that asks for tou_optimized."""
+    """A 5 kWh battery dispatching tou_optimized on its tariff's clock, grid-charging to 0.6 on the synthetic 2024-06-21."""
 
     def test_its_run_is_tou_optimized_on_its_tariff_s_clock_given_to_simulate_home(
         self, build_tariff: Callable[[], TariffConfig]
@@ -99,7 +99,7 @@ class TestTheHomesRouteIsTheStrategyRoute:
 
 
 class TestRefusalsArriveThroughTheFactory:
-    """A home that asks for tou_optimized, its battery naming no strategy, is refused as build_dispatch_strategy refuses TOUOptimizedStrategyConfig() on the home's tariff."""
+    """A battery that dispatches tou_optimized on its tariff's clock is refused as build_dispatch_strategy refuses TOUOptimizedStrategyConfig() on the home's tariff."""
 
     def test_with_no_tariff_it_is_refused_the_tariff_s_clock(self) -> None:
         with pytest.raises(ConfigurationError) as refused:

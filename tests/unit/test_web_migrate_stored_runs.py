@@ -372,13 +372,28 @@ _PRE_839_FLEET_FIELDS_V4_CHANGES = tuple(
 )
 """Each field of pre_839_flat_grid_charging_fleet's config that v4 drops, as its run ignored it on a flat tariff, the value it held and the one it holds now."""
 
+_PRE_839_FLEET_FIELDS_V8_CHANGES = (
+    ("homes[2].battery_config.dispatch_strategy", None, {"strategy_type": "tou_optimized", "peak_hours": None}),
+)
+"""The field of pre_839_flat_grid_charging_fleet's config that v8 sets, the battery strategy of the home that asked for tou_optimized, the value it held and the one it holds now."""
 
-def _values_v4_changes_in_the_pre_839_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
-    """The values migrate_store reports v4 rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*: its config.json's, then its runs row's."""
+
+def _values_a_step_changes_in_the_pre_839_fleet(
+    run_id: str, fields: tuple[tuple[str, object, object], ...]
+) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports a step rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*, each of *fields*: its config.json's, then its runs row's."""
     return tuple(
         RewrittenValue(run_id, document, field, was, now)
         for document in ("config.json", "runs.config_json")
-        for field, was, now in _PRE_839_FLEET_FIELDS_V4_CHANGES
+        for field, was, now in fields
+    )
+
+
+def _values_v4_and_v8_change_in_the_pre_839_fleet(run_id: str) -> tuple[RewrittenValue, ...]:
+    """The values migrate_store reports v4, then v8, rewrote in pre_839_flat_grid_charging_fleet, installed as run *run_id*: each step's in its config.json, then in its runs row."""
+    return (
+        *_values_a_step_changes_in_the_pre_839_fleet(run_id, _PRE_839_FLEET_FIELDS_V4_CHANGES),
+        *_values_a_step_changes_in_the_pre_839_fleet(run_id, _PRE_839_FLEET_FIELDS_V8_CHANGES),
     )
 
 
@@ -418,10 +433,10 @@ def _values_the_steps_drop(run_ids: Mapping[str, str]) -> tuple[DroppedValue, ..
 
 
 def _values_the_steps_after_version_1_rewrite(run_ids: Mapping[str, str]) -> tuple[RewrittenValue, ...]:
-    """The values migrate_store reports the steps after schema version 1 rewrote in the legacy runs installed as *run_ids*, by fixture name: v3's in the pre-787 fleet, then v4's in the pre-839 fleet."""
+    """The values migrate_store reports the steps after schema version 1 rewrote in the legacy runs installed as *run_ids*, by fixture name: v3's in the pre-787 fleet, then v4's and v8's in the pre-839 fleet, each step's in every run before the next step's."""
     return (
         *_values_v3_changes_in_the_pre_787_fleet(run_ids["pre_787_dispatch_fleet"]),
-        *_values_v4_changes_in_the_pre_839_fleet(run_ids["pre_839_flat_grid_charging_fleet"]),
+        *_values_v4_and_v8_change_in_the_pre_839_fleet(run_ids["pre_839_flat_grid_charging_fleet"]),
     )
 
 
@@ -435,12 +450,15 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
     one at version 4 no pre-839 fleet either, as v4 rewrites it. v5 reports no window it sets. v6
     drops the pre-975 fleet's SEG revenue pair, reporting each value, from every store below
     version 6. v7 drops each battery's efficiency, reporting the pre-867 home's 0.81, from every
-    store holding it.
+    store holding it. v8 drops each home's dispatch_strategy, reporting the battery strategy it gives
+    the pre-839 fleet's tou_optimized home.
     """
     pre_787_fleet = older_store.run_ids.get("pre_787_dispatch_fleet")
     rewritten_by_v3 = _values_v3_changes_in_the_pre_787_fleet(pre_787_fleet) if pre_787_fleet is not None else ()
     pre_839_fleet = older_store.run_ids.get("pre_839_flat_grid_charging_fleet")
-    rewritten_by_v4 = _values_v4_changes_in_the_pre_839_fleet(pre_839_fleet) if pre_839_fleet is not None else ()
+    rewritten_by_v4_and_v8 = (
+        _values_v4_and_v8_change_in_the_pre_839_fleet(pre_839_fleet) if pre_839_fleet is not None else ()
+    )
 
     report = migrate_store(older_store.path, older_store.path.parent)
 
@@ -450,7 +468,7 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[older_store.version :],
         dropped_values=_values_the_steps_drop(older_store.run_ids),
-        rewritten_values=(*rewritten_by_v3, *rewritten_by_v4),
+        rewritten_values=(*rewritten_by_v3, *rewritten_by_v4_and_v8),
     )
     assert user_version_of(older_store.path) == SCHEMA_VERSION
 
@@ -561,11 +579,11 @@ def test_after_migrate_store_a_run_stored_before_786_reads_its_battery_dispatch_
         assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
-def _dispatch_settings(home: HomeConfig) -> tuple[str, str, DispatchStrategyConfig | None, GridChargeConfig | None]:
-    """*home*'s name and dispatch_strategy, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
+def _dispatch_settings(home: HomeConfig) -> tuple[str, DispatchStrategyConfig, GridChargeConfig | None]:
+    """*home*'s name, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
     battery = home.battery_config
     assert battery is not None, f"{home.name} has no battery"
-    return (home.name, home.dispatch_strategy, battery.dispatch_strategy, battery.grid_charging)
+    return (home.name, battery.dispatch_strategy, battery.grid_charging)
 
 
 @_NEEDS_PYARROW
@@ -589,9 +607,9 @@ def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_eac
     for homes in (tuple(loaded.fleet_results.home_configs), record.home_configs()):
         assert homes is not None
         assert [_dispatch_settings(home) for home in homes] == [
-            ("Elm Row 1", "greedy", SelfConsumptionStrategyConfig(), None),
-            ("Elm Row 2", "greedy", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
-            ("Elm Row 3", "greedy", None, None),
+            ("Elm Row 1", SelfConsumptionStrategyConfig(), None),
+            ("Elm Row 2", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
+            ("Elm Row 3", SelfConsumptionStrategyConfig(), None),
         ]
 
 
@@ -1116,7 +1134,7 @@ def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_
     assert tuple(each for each in report.rewritten_values if each.run_id == copy) == tuple(
         RewrittenValue(copy, "runs.config_json", field, was, now) for field, was, now in _PRE_787_FLEET_FIELDS_V3_CHANGES
     )
-    assert json.loads(runs_rows_of(store_at_version_1)[copy]["config_json"])["homes"][2]["dispatch_strategy"] == "greedy"
+    assert "dispatch_strategy" not in json.loads(runs_rows_of(store_at_version_1)[copy]["config_json"])["homes"][2]
 
 
 @_NEEDS_PYARROW
@@ -1206,7 +1224,8 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     No later step of the migration, nor its catch-up, is given the files, so they are reported
     once. legacy_fleet's runs row, its config and its FleetSummary, is brought forward on its own:
     v6 drops its FleetSummary's null SEG revenue pair, v7 its first home's battery's null
-    efficiency, and no step changes the rest of it.
+    efficiency, v8 each home's dispatch_strategy, its first home's battery naming no strategy
+    taking self_consumption, and no step changes the rest of it.
     """
     run_id = install_stored_run_fixture(
         "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
@@ -1227,9 +1246,12 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
         "config_json": None,
         "summary_json": None,
     }
-    config_without_the_round_trip = json.loads(row_before["config_json"])
-    del config_without_the_round_trip["homes"][0]["battery_config"]["efficiency"]
-    assert json.loads(row_after["config_json"]) == config_without_the_round_trip
+    config_brought_forward = json.loads(row_before["config_json"])
+    del config_brought_forward["homes"][0]["battery_config"]["efficiency"]
+    config_brought_forward["homes"][0]["battery_config"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
+    for home in config_brought_forward["homes"]:
+        del home["dispatch_strategy"]
+    assert json.loads(row_after["config_json"]) == config_brought_forward
     assert json.loads(row_after["summary_json"]) == {
         key: value
         for key, value in json.loads(row_before["summary_json"]).items()
@@ -1582,7 +1604,7 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
                 for each in _values_v3_changes_in_the_pre_787_fleet(legacy_run_ids["pre_787_dispatch_fleet"])
                 if each.document == "runs.config_json"
             ),
-            *_values_v4_changes_in_the_pre_839_fleet(legacy_run_ids["pre_839_flat_grid_charging_fleet"]),
+            *_values_v4_and_v8_change_in_the_pre_839_fleet(legacy_run_ids["pre_839_flat_grid_charging_fleet"]),
         ),
     )
 

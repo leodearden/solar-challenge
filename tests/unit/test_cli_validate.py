@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests of the `validate` command group: its help, `validate results` on a results CSV, and `validate config` on a config file."""
 
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +27,7 @@ from tests._construction_refusals import prefixed_construction_refusal
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 runner = CliRunner()
 
@@ -210,10 +212,9 @@ def _bristol_arbitrage_with_its_home(edit_home: Callable[[dict[str, Any]], objec
 
 
 def _dispatched_by_its_battery(dispatch_strategy: dict[str, Any]) -> Callable[[dict[str, Any]], None]:
-    """An edit of a home: block that drops its dispatch_strategy key and gives its battery the dispatch_strategy: block *dispatch_strategy*."""
+    """An edit of a home: block that gives its battery the dispatch_strategy: block *dispatch_strategy*."""
 
     def edit(home: dict[str, Any]) -> None:
-        home.pop("dispatch_strategy")
         home["battery"]["dispatch_strategy"] = dispatch_strategy
 
     return edit
@@ -420,6 +421,16 @@ home:
                 "fleet_distribution:\n  n_homes: 2.7\n  pv: {capacity_kw: 4.0}\n",
                 "fleet_distribution: n_homes must be a whole number, got 2.7",
                 id="fleet-distribution-fractional-n-homes",
+            ),
+            pytest.param(
+                "fleet_distribution:\n",
+                "fleet_distribution: must be a mapping, got NoneType",
+                id="fleet-distribution-null",
+            ),
+            pytest.param(
+                "fleet_distribution: 5\n",
+                "fleet_distribution: must be a mapping, got int",
+                id="fleet-distribution-a-number",
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: true}\n",
@@ -821,9 +832,9 @@ home:
         ("edit_home", "named"),
         [
             pytest.param(
-                lambda home: home.update(dispatch_strategy="greedy"),
+                _dispatched_by_its_battery({"strategy_type": "self_consumption"}),
                 ["grid_charging", "self_consumption"],
-                id="dispatched-greedy",
+                id="dispatched-self_consumption",
             ),
             pytest.param(lambda home: home.pop("tariff"), ["tou_optimized", "tariff"], id="without-its-tariff"),
         ],
@@ -831,7 +842,7 @@ home:
     def test_a_grid_charging_home_whose_dispatch_would_ignore_it_is_an_error_row(
         self, tmp_path: Path, edit_home: Callable[[dict[str, Any]], object], named: list[str]
     ) -> None:
-        """scenarios/bristol-arbitrage.yaml, whose battery grid-charges as its home dispatches tou_optimized by its tariff."""
+        """scenarios/bristol-arbitrage.yaml, whose battery grid-charges as it dispatches tou_optimized on its tariff's clock."""
         result = self._validate_config(
             tmp_path, _bristol_arbitrage_with_its_home(edit_home), file_name="bristol-arbitrage.yaml"
         )
@@ -843,21 +854,11 @@ home:
         for name in named:
             assert name in error_row
 
-    @pytest.mark.parametrize(
-        "dispatch_by",
-        [
-            pytest.param(lambda home: None, id="its-home-as-committed"),
-            pytest.param(_dispatched_by_its_battery({"strategy_type": "tou_optimized"}), id="its-battery"),
-        ],
-    )
-    def test_a_grid_charging_home_on_a_flat_tariff_is_an_error_row_naming_the_tariff(
-        self, tmp_path: Path, dispatch_by: Callable[[dict[str, Any]], object]
-    ) -> None:
-        """scenarios/bristol-arbitrage.yaml on a flat 0.25 £/kWh tariff, which has no cheap period, its tou_optimized on its home or moved to its battery without peak_hours."""
+    def test_a_grid_charging_home_on_a_flat_tariff_is_an_error_row_naming_the_tariff(self, tmp_path: Path) -> None:
+        """scenarios/bristol-arbitrage.yaml on a flat 0.25 £/kWh tariff, which has no cheap period, its battery's tou_optimized on the tariff's clock."""
         flat_rate = {"type": "flat_rate", "rate_per_kwh": 0.25}
 
         def edit(home: dict[str, Any]) -> None:
-            dispatch_by(home)
             home["tariff"] = flat_rate
 
         result = self._validate_config(
@@ -872,7 +873,7 @@ home:
             assert name in error_row, (name, error_row)
 
     def test_a_grid_charging_battery_dispatched_on_its_tariffs_clock_is_valid(self, tmp_path: Path) -> None:
-        """scenarios/bristol-arbitrage.yaml, its tou_optimized moved from the home to its battery without peak_hours: it dispatches on Economy 7's clock."""
+        """scenarios/bristol-arbitrage.yaml, its battery's tou_optimized written without peak_hours: it dispatches on Economy 7's clock."""
         document = _bristol_arbitrage_with_its_home(_dispatched_by_its_battery({"strategy_type": "tou_optimized"}))
 
         result = self._validate_config(tmp_path, document, file_name="bristol-arbitrage.yaml")
@@ -1118,14 +1119,15 @@ home:
                 "fleet_distribution:\n"
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0}\n"
-                "  battery: {capacity_kwh: 5.0}\n"
-                "  dispatch_strategy: tou_optimized\n",
+                "  battery: {capacity_kwh: 5.0, dispatch_strategy: {strategy_type: tou_optimized}}\n",
                 id="fleet-distribution",
             ),
-            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+            pytest.param(
+                _SWEEP_FLEET + "    dispatch_strategy: {strategy_type: tou_optimized}\n", id="fleet-sweep"
+            ),
         ],
     )
-    def test_a_tou_optimized_fleet_with_batteries_and_no_tariff_is_an_error_row(
+    def test_a_fleet_of_tou_optimized_batteries_and_no_tariff_is_an_error_row(
         self, tmp_path: Path, document: str
     ) -> None:
         result = self._validate_config(tmp_path, document)
@@ -1138,17 +1140,47 @@ home:
         assert "tariff" in error_row
         assert "WARNING" not in text
 
-    def test_a_tou_optimized_fleet_without_batteries_needs_no_tariff(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: 5.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-distribution",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-without-batteries",
+            ),
+            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+        ],
+    )
+    def test_a_fleet_level_dispatch_strategy_is_an_error_row_naming_the_batterys(
+        self, tmp_path: Path, document: str
     ) -> None:
+        """The dispatch strategy is the battery's own setting, so `validate config` reports the retired fleet-level key, with or without batteries, naming where it goes."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert re.search(retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy"), error_row), error_row
+
+    def test_a_flat_home_files_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
+        """A flat home file is itself a home block, so `validate config` reports its retired dispatch_strategy key naming where it goes."""
         result = self._validate_config(
-            tmp_path,
-            "fleet_distribution:\n"
-            "  n_homes: 2\n"
-            "  pv: {capacity_kw: 4.0}\n"
-            "  dispatch_strategy: tou_optimized\n",
+            tmp_path, "pv: {capacity_kw: 4.0}\nbattery: {capacity_kwh: 5.0}\ndispatch_strategy: tou_optimized\n"
         )
 
-        assert result.exit_code == 0
-        assert "OK Configuration is valid" in table_text(result.stdout)
-        assert "WARNING" not in table_text(result.stdout)
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert re.search(retired_dispatch_strategy_refusal("dispatch_strategy"), error_row), error_row

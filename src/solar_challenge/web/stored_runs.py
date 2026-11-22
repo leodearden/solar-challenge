@@ -48,7 +48,12 @@ total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, a second copy of its ex
 reporting each value that is not null; v2 keeps the pair for it the same way. v7 drops each
 stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency were
 derived from, wherever the battery is, reporting each value that is not null; v2 keeps a
-battery's efficiency for it the same way.
+battery's efficiency for it the same way. v8 moves each stored home's dispatch_strategy into its
+battery, whose own setting it is: a battery naming no strategy whose home asked for tou_optimized
+takes tou_optimized on its tariff's clock, as the home ran, reported with the value it holds now,
+and every other battery that names no strategy names self_consumption, the dispatch it ran,
+unreported; then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for
+v3 and v8 the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -885,14 +890,18 @@ _FLEET_SEG_REVENUE_KEYS = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_g
 _BATTERY_ROUND_TRIP = "efficiency"
 """The key of the round-trip efficiency a BatteryConfig stored before format 7 holds, from which its charge_efficiency and discharge_efficiency were derived; v7 drops it."""
 
+_HOME_DISPATCH = "dispatch_strategy"
+"""The key of the dispatch a HomeConfig stored before format 8 asked for by name, 'greedy' or 'tou_optimized'; v3 reads it as its run ran, and v8 moves it into the home's battery, then drops it."""
+
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
     {
         SummaryStatistics: frozenset({_SIMULATION_DAYS}),
         FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS),
         BatteryConfig: frozenset({_BATTERY_ROUND_TRIP}),
+        HomeConfig: frozenset({_HOME_DISPATCH}),
     }
 )
-"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair and v7 a battery's efficiency, each reporting each value that is not null."""
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair and v7 a battery's efficiency, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery."""
 
 
 def _not_read_by_a_later_step(owner: type, key: str) -> bool:
@@ -978,14 +987,15 @@ def _fleet_homes_brought_forward(config: Any, rule: _HomeRule) -> tuple[Any, lis
     if not isinstance(config, dict) or not isinstance(config.get("homes"), list):
         return config, []
     brought_forward = [rule(home) for home in config["homes"]]
+    homes = [home for home, _ in brought_forward]
     changes = [
         (f"homes[{index}].{field}", was, now)
         for index, (_, home_changes) in enumerate(brought_forward)
         for field, was, now in home_changes
     ]
-    if not changes:
+    if homes == config["homes"]:
         return config, []
-    return {**config, "homes": [home for home, _ in brought_forward]}, changes
+    return {**config, "homes": homes}, changes
 
 
 def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
@@ -1168,6 +1178,41 @@ def _battery_round_trips_dropped(run_type: RunType, documents: StoredRunDocument
     return _unknown_keys_dropped(run_type, documents, _is_a_battery_round_trip)
 
 
+def _home_dispatch_moved_to_its_battery(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v8's step: *documents* with each home's config rid of its dispatch_strategy, moved into its battery as _home_with_its_dispatch_in_its_battery moves it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_with_its_dispatch_in_its_battery)
+
+
+def _home_with_its_dispatch_in_its_battery(home: Any) -> tuple[Any, list[_FieldChange]]:
+    """*home*, a stored HomeConfig object, rid of its dispatch_strategy, and each field it changed.
+
+    v3 left a home asking for tou_optimized beside a battery naming its own strategy, which its run
+    dispatched by; beside a battery naming none on a tariff, which ran tou_optimized on the
+    tariff's clock; or with no battery, which dispatched none. Every other home asked for greedy,
+    whose battery naming none ran self-consumption. So every home loses the key, if it holds one;
+    and, whether or not it held one, a battery naming no strategy whose home asked for tou_optimized
+    takes tou_optimized on its tariff's clock, the one field reported, while any other battery
+    naming none names self_consumption, unreported. A home that is not an object is left as it is.
+    """
+    if not isinstance(home, dict):
+        return home, []
+    without_the_key = {key: value for key, value in home.items() if key != _HOME_DISPATCH}
+    battery = home.get("battery_config")
+    if not isinstance(battery, dict) or battery.get("dispatch_strategy") is not None:
+        return without_the_key, []
+    if home.get(_HOME_DISPATCH) == "tou_optimized":
+        strategy = _tou_optimized_on_the_tariffs_clock()
+        changes = [("battery_config.dispatch_strategy", None, _tou_optimized_on_the_tariffs_clock())]
+    else:
+        strategy, changes = {"strategy_type": "self_consumption"}, []
+    return {**without_the_key, "battery_config": {**battery, "dispatch_strategy": strategy}}, changes
+
+
+def _tou_optimized_on_the_tariffs_clock() -> dict[str, Any]:
+    """A battery's dispatch_strategy of tou_optimized on its tariff's clock, as format 8 stores it: a new object each call."""
+    return {"strategy_type": "tou_optimized", "peak_hours": None}
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -1205,6 +1250,13 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "Drop each stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency "
         "were derived from, which BatteryConfig no longer has",
         _battery_round_trips_dropped,
+    ),
+    RunDocumentStep(
+        8,
+        "Move each stored home's dispatch_strategy into its battery, where a battery that names no strategy "
+        "takes tou_optimized on its tariff's clock when its home asked for it, and every other battery that "
+        "names no strategy names self_consumption, then drop the home's key, which no HomeConfig has",
+        _home_dispatch_moved_to_its_battery,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

@@ -5,11 +5,13 @@ import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from operator import attrgetter
+from typing import NamedTuple
 
 import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
@@ -539,6 +541,12 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy is not None
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
+    def test_a_null_dispatch_strategy_builds_a_battery_that_dispatches_self_consumption(self) -> None:
+        """A null dispatch_strategy names no strategy, so the battery takes BatteryConfig's, with no refusal."""
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "dispatch_strategy": None})
+        assert home_config.battery_config is not None
+        assert home_config.battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
+
     def test_valid_dispatch_strategy_without_battery_makes_no_battery(self) -> None:
         """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
@@ -583,12 +591,22 @@ class TestParseHomeConfigHeatPumpBlock:
         )
 
 
-# Each nested block's key, and the HomeConfig field its parsed value fills.
-NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
-    "heat_pump": attrgetter("heat_pump_config"),
-    "seg": attrgetter("seg_tariff"),
-    "tariff": attrgetter("tariff_config"),
-    "dispatch_strategy": attrgetter("battery_config.dispatch_strategy"),
+class NestedBlock(NamedTuple):
+    """The HomeConfig field a nested block's parsed value fills, and the value it holds when the block is null or left out."""
+
+    field: Callable[[HomeConfig], object]
+    when_none: object
+
+
+# Each nested block, by its key: no heat pump, SEG or tariff when it is null or left out, and a
+# battery naming no strategy, which dispatches BatteryConfig's self-consumption.
+NESTED_BLOCKS: dict[str, NestedBlock] = {
+    "heat_pump": NestedBlock(attrgetter("heat_pump_config"), None),
+    "seg": NestedBlock(attrgetter("seg_tariff"), None),
+    "tariff": NestedBlock(attrgetter("tariff_config"), None),
+    "dispatch_strategy": NestedBlock(
+        attrgetter("battery_config.dispatch_strategy"), SelfConsumptionStrategyConfig()
+    ),
 }
 
 
@@ -599,18 +617,18 @@ class TestParseHomeConfigNestedBlockPresence:
     """
 
     @pytest.mark.parametrize(
-        ("key", "parsed_block"),
-        [pytest.param(key, field, id=key) for key, field in NESTED_BLOCK_FIELDS.items()],
+        ("key", "block"),
+        [pytest.param(key, block, id=key) for key, block in NESTED_BLOCKS.items()],
     )
-    def test_null_block_means_none(
-        self, key: str, parsed_block: Callable[[HomeConfig], object]
-    ) -> None:
-        """A null block, like an absent one, means none."""
-        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
-        assert parsed_block(home_config) is None
+    def test_null_block_means_none_as_an_absent_one_does(self, key: str, block: NestedBlock) -> None:
+        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
+        assert key not in VALID_HOME_PAYLOAD, "premise: the payload leaves the block out"
+        with_null, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
+        without, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
+        assert (block.field(with_null), block.field(without)) == (block.when_none, block.when_none)
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
-    @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
+    @pytest.mark.parametrize("key", list(NESTED_BLOCKS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
     ) -> None:

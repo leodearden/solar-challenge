@@ -10,6 +10,7 @@ import yaml
 
 pytest.importorskip("flask")
 
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
@@ -199,11 +200,13 @@ class TestParseFleetForm:
     ) -> None:
         """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value.
 
-        A home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
+        A form without a dispatch strategy leaves every battery BatteryConfig's self-consumption. A
+        home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
         """
         tariff = parse_tariff_config(form.get("tariff"))
         seg = parse_seg_tariff(form.get("seg"))
-        dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        form_dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        dispatch = SelfConsumptionStrategyConfig() if form_dispatch is None else form_dispatch
         battery_pool = form["battery"]["capacity_kwh"]["entries"]
         homes_with_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] > 0)
         homes_without_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] == 0)
@@ -731,6 +734,24 @@ class TestFleetFormFromScenario:
 
         assert fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": tariff}) == ImportedFleetForm(
             form=_FLEET_FORM, not_loaded=("tariff.off_peak_start",)
+        )
+
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, id="peak-hours-absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="peak-hours-null"),
+        ],
+    )
+    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_is_not_loaded(
+        self, dispatch_strategy: dict[str, Any]
+    ) -> None:
+        """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
+
+        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedFleetForm(
+            form=_without(_FLEET_FORM, "dispatch_strategy"),
+            not_loaded=("fleet_distribution.battery.dispatch_strategy",),
         )
 
     def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:

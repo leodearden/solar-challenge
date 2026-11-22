@@ -6,7 +6,13 @@ import math
 from dataclasses import dataclass
 from typing import Final, Literal, Optional
 
-from solar_challenge.dispatch import TARGET_SOC_FRACTION, DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    TARGET_SOC_FRACTION,
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    SelfConsumptionStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import (
     FRACTION,
@@ -33,6 +39,15 @@ def _read_soc_limits_and_efficiencies(instance: object) -> None:
     read_field(instance, "max_soc_fraction", as_finite_float, UNIT_INTERVAL)
     read_field(instance, "charge_efficiency", as_finite_float, FRACTION)
     read_field(instance, "discharge_efficiency", as_finite_float, FRACTION)
+
+
+def _require_dispatch_strategy_variant(strategy: object) -> None:
+    """Refuse a dispatch strategy that is not one of DispatchStrategyConfig's variants, None included, naming dispatch_strategy, the value and each variant's tag."""
+    if not isinstance(strategy, tuple(STRATEGY_CONFIG_BY_TYPE.values())):
+        tags = ", ".join(STRATEGY_CONFIG_BY_TYPE)
+        raise ConfigurationError(
+            f"dispatch_strategy must be the configuration of one dispatch strategy ({tags}), got {strategy!r}"
+        )
 
 
 def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: float) -> None:
@@ -199,17 +214,19 @@ def _derated_soc_envelope(
 class BatteryConfig:
     """Configuration for a battery storage system.
 
-    Construction reads every number setting as a finite number inside its range and
-    holds it as a float, then refuses SOC limits whose minimum is not below their
-    maximum, each with a ConfigurationError.
+    Construction refuses a dispatch_strategy that is not one of DispatchStrategyConfig's
+    variants, None included; reads every number setting as a finite number inside its
+    range and holds it as a float; then refuses SOC limits whose minimum is not below
+    their maximum, each with a ConfigurationError.
 
     Attributes:
         capacity_kwh: Total energy capacity in kilowatt-hours
         max_charge_kw: Maximum charging power in kilowatts
         max_discharge_kw: Maximum discharging power in kilowatts
         name: Optional identifier for the battery
-        dispatch_strategy: Optional dispatch strategy configuration, one of
-            dispatch.DispatchStrategyConfig's variants
+        dispatch_strategy: The battery's dispatch strategy configuration, one of
+            dispatch.DispatchStrategyConfig's variants; SelfConsumptionStrategyConfig()
+            when the battery names none
         grid_charging: Optional grid-charge (arbitrage) configuration; None means disabled
         min_soc_fraction: Minimum state of charge as fraction of capacity (default 0.1)
         max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
@@ -236,7 +253,7 @@ class BatteryConfig:
     max_charge_kw: float = 2.5
     max_discharge_kw: float = 2.5
     name: str = ""
-    dispatch_strategy: Optional[DispatchStrategyConfig] = None
+    dispatch_strategy: DispatchStrategyConfig = SelfConsumptionStrategyConfig()
     grid_charging: Optional[GridChargeConfig] = None
     min_soc_fraction: float = 0.1
     max_soc_fraction: float = 0.9
@@ -249,7 +266,8 @@ class BatteryConfig:
     soh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse SOC limits out of order."""
+        """Refuse a dispatch strategy that is no variant, read each number setting, then refuse SOC limits out of order."""
+        _require_dispatch_strategy_variant(self.dispatch_strategy)
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
         read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
         read_field(self, "max_discharge_kw", as_finite_float, _POWER_LIMIT_KW)

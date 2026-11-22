@@ -781,9 +781,9 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
       state-of-charge and dispatch characteristics, while only capacity is
       swept; two homes at one :class:`ConfigPoint` can thus have different
       usable windows.
-    - Household load profile (``load_config``) and home-level dispatch strategy
-      (``HomeConfig.dispatch_strategy``) — occupancy diversity and the board
-      dispatch are preserved (docs/prds/discrete-install-config-sweep.md §3.2).
+    - Household load profile (``load_config``) — occupancy diversity is
+      preserved, and with each battery's ``dispatch_strategy`` the board
+      dispatch (docs/prds/discrete-install-config-sweep.md §3.2).
 
     .. note::
         Because battery power limits, state-of-charge limits and
@@ -806,7 +806,7 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
       and all other base fields.
     - A battery, and the home has NO battery → a fresh
       :class:`~solar_challenge.battery.BatteryConfig` is FABRICATED at defaults
-      (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=None``).
+      (``max_discharge_kw=2.5``, ``grid_charging=None``, ``dispatch_strategy=SelfConsumptionStrategyConfig()``).
 
     Args:
         home: Original (frozen) home configuration.

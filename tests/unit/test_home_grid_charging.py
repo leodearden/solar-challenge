@@ -12,6 +12,7 @@ from solar_challenge.dispatch import (
     GRID_CHARGE_FORECASTS,
     GridChargeConfig,
     GridChargeForecast,
+    SelfConsumptionStrategyConfig,
     TOUOptimizedStrategy,
     TOUOptimizedStrategyConfig,
 )
@@ -539,15 +540,16 @@ class TestSimulateHomeGridCharge:
         """A run without a tariff cannot grid charge, and has no grid_charge series, as it has no grid_charge_cost.
 
         Its home is the arbitrage home without the settings a tariff is needed for: its tariff,
-        its battery's grid_charging and its tou_optimized dispatch.
+        and its battery's grid_charging and tou_optimized dispatch on the tariff's clock.
         """
         arbitrage = bristol_arbitrage_home()
         assert arbitrage.battery_config is not None
         home = dataclasses.replace(
             arbitrage,
-            battery_config=dataclasses.replace(arbitrage.battery_config, grid_charging=None),
+            battery_config=dataclasses.replace(
+                arbitrage.battery_config, grid_charging=None, dispatch_strategy=SelfConsumptionStrategyConfig()
+            ),
             tariff_config=None,
-            dispatch_strategy="greedy",
         )
         results = simulate_home(
             home,
@@ -603,9 +605,8 @@ def _forecast_home(grid_charging: Optional[GridChargeConfig]) -> HomeConfig:
     return HomeConfig(
         pv_config=PVConfig.default_4kw(),
         load_config=LoadConfig(3400.0, seed=42, use_stochastic=False),
-        battery_config=BatteryConfig(5.0, grid_charging=grid_charging),
+        battery_config=BatteryConfig(5.0, dispatch_strategy=TOUOptimizedStrategyConfig(), grid_charging=grid_charging),
         tariff_config=TariffConfig.economy_7(),
-        dispatch_strategy="tou_optimized",
     )
 
 

@@ -398,9 +398,9 @@ class TestErrorHandling:
 
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
-        """scenarios/bristol-arbitrage.yaml dispatched greedy: stderr starts with the refusal, ahead of the status line a run prints."""
+        """scenarios/bristol-arbitrage.yaml whose battery dispatches self_consumption: stderr starts with the refusal, ahead of the status line a run prints."""
         document = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
-        document["home"]["dispatch_strategy"] = "greedy"
+        document["home"]["battery"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
         config_file = tmp_path / "bristol-arbitrage.yaml"
         config_file.write_text(yaml.safe_dump(document))
 
@@ -1291,7 +1291,7 @@ _SWEEP_PATHS = (
 
 
 def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
-    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that dispatches tou_optimized on the tariff's clock, charges and discharges at 2.5 kW and grid-charges to 90%."""
     Path(file_name).write_text(
         yaml.safe_dump(
             {
@@ -1301,8 +1301,8 @@ def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, ob
                     "seed": 42,
                     "pv": {"capacity_kw": 4.0},
                     "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    "dispatch_strategy": "tou_optimized",
                     "battery": {
+                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
                         "max_charge_kw": 2.5,
                         "max_discharge_kw": 2.5,
                         "grid_charging": {"target_soc_fraction": 0.9},

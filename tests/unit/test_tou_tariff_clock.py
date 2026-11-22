@@ -20,9 +20,6 @@
 - TestTheHomeFace: HomeConfig refuses a battery whose peak_hours reach a cheap minute of the
   home's tariff, and a battery on the tariff's clock in a home with no tariff; the committed
   dispatch-comparison.yaml fleet still loads its tou_optimized homes (§9 rows 7 and 8).
-- TestTheTariffClockFlowsAsTheHomesTariffRoute: a battery dispatched by
-  TOUOptimizedStrategyConfig() flows, minute by minute, as a home dispatched tou_optimized
-  by its tariff, the route S3 sends that home key through the strategy by (§9 row 6).
 - TestGridChargingOnATariffWithNoCheapPeriod: the factory refuses grid_charging for
   tou_optimized on a flat tariff, naming grid_charging, the strategy and the tariff, by its
   name when it has one, and builds the same strategy without grid charging (§5.4, §9 row 9).
@@ -36,7 +33,6 @@ import re
 from collections.abc import Callable
 from datetime import datetime, time
 
-import pandas as pd
 import pytest
 
 from solar_challenge.battery import Battery, BatteryConfig
@@ -50,13 +46,12 @@ from solar_challenge.dispatch import (
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep
-from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from tests._minutes_of_a_winter_day import MINUTES_OF_A_WINTER_DAY
 from tests._repository_paths import SCENARIOS_DIR
-from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 # Each builds its tariff when called: Economy 7 is cheap 00:30-07:30, Economy 10 00:00-05:00,
 # 13:00-16:00 and 20:00-22:00, and the flat rate never.
@@ -295,16 +290,13 @@ class TestTheFactoryArm:
             )
 
 
-def _bristol_arbitrage_shaped_home(
-    battery: BatteryConfig, *, tariff: TariffConfig | None, dispatch_strategy: str = "greedy"
-) -> HomeConfig:
+def _bristol_arbitrage_shaped_home(battery: BatteryConfig, *, tariff: TariffConfig | None) -> HomeConfig:
     """scenarios/bristol-arbitrage.yaml's home: 4 kW of south-facing PV at 35° and a deterministic 3400 kWh a year, with *battery*, on *tariff*."""
     return HomeConfig(
         pv_config=PVConfig(capacity_kw=4.0, azimuth=180, tilt=35),
         load_config=LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False),
         battery_config=battery,
         tariff_config=tariff,
-        dispatch_strategy=dispatch_strategy,
     )
 
 
@@ -363,68 +355,6 @@ class TestTheHomeFace:
 
         strategies = [home.battery_config.dispatch_strategy for home in fleet.homes if home.battery_config is not None]
         assert TOUOptimizedStrategyConfig(peak_hours=((16, 19),)) in strategies
-
-
-# The flows of a home's results the two dispatch routes must agree on.
-_ROUTED_FLOWS = ("grid_import", "grid_export", "battery_charge", "battery_discharge", "grid_charge")
-
-
-def _simulate_two_june_days(home: HomeConfig) -> SimulationResults:
-    """home simulated over 2024-06-15, a clear June day, and 2024-06-16, at 0.4 of its sun."""
-    first, last = pd.Timestamp("2024-06-15"), pd.Timestamp("2024-06-16")
-    frame = synthetic_june_weather(first, irradiance_scale_per_day=(1.0, 0.4))
-    return simulate_home(home, first, last, weather=weather_for(home, frame))
-
-
-class TestTheTariffClockFlowsAsTheHomesTariffRoute:
-    @pytest.mark.parametrize(
-        "build_tariff",
-        [
-            pytest.param(_ECONOMY_7, id="economy_7"),
-            pytest.param(_ECONOMY_10, id="economy_10-cheap-in-the-sunny-afternoon"),
-        ],
-    )
-    @pytest.mark.parametrize(
-        "target_soc_fraction",
-        [
-            pytest.param(None, id="no-grid-charging"),
-            pytest.param(0.9, id="grid-charging-to-0.9"),
-            pytest.param(0.6, id="grid-charging-to-0.6-below-max_soc_fraction"),
-        ],
-    )
-    def test_each_minute_flows_alike_on_both_routes(
-        self, build_tariff: Callable[[], TariffConfig], target_soc_fraction: float | None
-    ) -> None:
-        tariff = build_tariff()
-        grid_charging = None if target_soc_fraction is None else GridChargeConfig(target_soc_fraction)
-
-        def battery(strategy: TOUOptimizedStrategyConfig | None) -> BatteryConfig:
-            return BatteryConfig(
-                capacity_kwh=5.0,
-                max_charge_kw=2.5,
-                max_discharge_kw=2.5,
-                dispatch_strategy=strategy,
-                grid_charging=grid_charging,
-            )
-
-        on_the_battery = _simulate_two_june_days(
-            _bristol_arbitrage_shaped_home(battery(TOUOptimizedStrategyConfig()), tariff=tariff)
-        )
-        on_the_home = _simulate_two_june_days(
-            _bristol_arbitrage_shaped_home(battery(None), tariff=tariff, dispatch_strategy="tou_optimized")
-        )
-
-        assert (on_the_battery.strategy_name, on_the_home.strategy_name) == ("tou_optimized", "tou_optimized")
-        for flow in _ROUTED_FLOWS:
-            pd.testing.assert_series_equal(
-                getattr(on_the_battery, flow),
-                getattr(on_the_home, flow),
-                check_exact=False,
-                rtol=0,
-                atol=1e-9,
-                check_names=False,
-            )
-        assert (calculate_summary(on_the_battery).total_grid_charge_kwh > 0) == (grid_charging is not None)
 
 
 class TestGridChargingOnATariffWithNoCheapPeriod:

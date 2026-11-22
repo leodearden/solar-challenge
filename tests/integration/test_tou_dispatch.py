@@ -5,10 +5,13 @@ The home has no seg_tariff, so simulate_home's warning that export revenue is 0.
 tests/integration/test_tou_dispatch_synthetic_weather.py compares TOU-optimized with greedy dispatch.
 """
 
+import dataclasses
+
 import pytest
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.home import (
     HomeConfig,
     SimulationResults,
@@ -35,11 +38,12 @@ class TestTOUOptimizedDispatch:
         return HomeConfig(
             pv_config=PVConfig.default_4kw(),
             load_config=LoadConfig(annual_consumption_kwh=3400.0, seed=42),
-            battery_config=BatteryConfig.default_5kwh(),
+            battery_config=dataclasses.replace(
+                BatteryConfig.default_5kwh(), dispatch_strategy=TOUOptimizedStrategyConfig()
+            ),
             location=Location.bristol(),
             tariff_config=TariffConfig.economy_7(),
             name="TOU-optimized home",
-            dispatch_strategy="tou_optimized",
         )
 
     def test_tou_dispatch_completes(self, tou_home):

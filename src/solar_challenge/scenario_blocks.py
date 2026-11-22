@@ -30,7 +30,7 @@ from solar_challenge.ev import CHARGER_TYPES, EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -88,6 +88,25 @@ def refuse_unrecognised_keys(
             f"recognised keys: {', '.join(sorted(recognised))}",
         )
     return mapping
+
+
+def refuse_retired_keys(block_path: str, data: object, retired: Mapping[str, str]) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping holding no key of *retired*, null or not, naming the first such key's path and why it is refused."""
+    block = require_mapping(block_path, data)
+    for key, why in retired.items():
+        if key in block:
+            raise refusal(child_path(block_path, key), why)
+    return block
+
+
+RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
+    "dispatch_strategy": (
+        "the dispatch strategy is the battery's own setting; write it in the battery block, "
+        "as battery.dispatch_strategy: {strategy_type: tou_optimized}; a battery that sets none "
+        "dispatches self_consumption, as greedy did"
+    ),
+})
+"""The home's and the fleet's retired dispatch_strategy key, with why it is refused and what replaces it."""
 
 
 def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
@@ -820,21 +839,8 @@ def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Opti
 _HOME_SCALAR_KEYS: tuple[str, ...] = ("name",)
 
 HOME_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_HOME_SCALAR_KEYS, "dispatch_strategy", "pv", "battery", "load", "tariff", "heat_pump", "ev",
+    *_HOME_SCALAR_KEYS, "pv", "battery", "load", "tariff", "heat_pump", "ev",
 })
-
-
-def read_dispatch_strategy_key(block: Mapping[str, Any], *, block_path: str) -> Optional[str]:
-    """The dispatch_strategy the block at *block_path* sets: None when it is absent or null, else one of HOME_DISPATCH_STRATEGIES.
-
-    Raises:
-        ConfigurationError: It is set to another value, as refuse_unknown_home_dispatch_strategy
-            refuses it, naming its key's path.
-    """
-    value = block.get("dispatch_strategy")
-    if value is None:
-        return None
-    return refuse_unknown_home_dispatch_strategy(value, field=child_path(block_path, "dispatch_strategy"))
 
 
 def parse_home_block(
@@ -846,10 +852,14 @@ def parse_home_block(
     omitted pv or load block reads as an empty one.
 
     Raises:
-        ConfigurationError: as each of its blocks' readers refuses that block; or as
-            HomeConfig refuses the home its blocks describe, prefixed by the block's path.
+        ConfigurationError: the block is not a mapping; it holds the retired dispatch_strategy
+            key, the battery's own setting, null or not, naming the battery's key in its place
+            (RETIRED_DISPATCH_STRATEGY_KEY); as each of its blocks' readers refuses that block;
+            or as HomeConfig refuses the home its blocks describe, prefixed by the block's path.
     """
-    home = refuse_unrecognised_keys(block_path, data, HOME_BLOCK_KEYS)
+    home = refuse_unrecognised_keys(
+        block_path, refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY), HOME_BLOCK_KEYS
+    )
     return constructed(
         block_path,
         HomeConfig,
@@ -869,13 +879,7 @@ def parse_home_block(
         ),
         ev_config=_parse_ev_config(home.get("ev"), block_path=child_path(block_path, "ev")),
         **{key: home[key] for key in _HOME_SCALAR_KEYS if home.get(key) is not None},
-        **dispatch_strategy_argument(read_dispatch_strategy_key(home, block_path=block_path)),
     )
-
-
-def dispatch_strategy_argument(dispatch_strategy: Optional[str]) -> dict[str, Any]:
-    """HomeConfig's dispatch_strategy argument for *dispatch_strategy*: none when it is None, so the field takes its default."""
-    return {} if dispatch_strategy is None else {"dispatch_strategy": dispatch_strategy}
 
 
 _SEG_BLOCK_KEYS: frozenset[str] = frozenset({"preset", "rate_pence_per_kwh"})

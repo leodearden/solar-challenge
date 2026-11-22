@@ -35,6 +35,7 @@ from solar_challenge.scenario_blocks import (
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._non_booleans import NON_BOOLEANS
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 
 def _parsed_home(**blocks: Any) -> HomeConfig:
@@ -89,7 +90,7 @@ class TestBatteryGridChargeParsing:
             )
 
     def test_yaml_round_trip_grid_charging(self, tmp_path: Path) -> None:
-        """YAML with battery.grid_charging, on a home that dispatches tou_optimized by its tariff, round-trips into home.battery_config.grid_charging."""
+        """YAML with battery.grid_charging, on a battery that dispatches tou_optimized on its tariff's clock, round-trips into home.battery_config.grid_charging."""
         yaml_content = """
 home:
   pv:
@@ -98,11 +99,12 @@ home:
     annual_consumption_kwh: 3400
   battery:
     capacity_kwh: 5.0
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.8
   tariff:
     type: economy_7
-  dispatch_strategy: tou_optimized
 """
         path = tmp_path / "home.yaml"
         path.write_text(yaml_content)
@@ -329,13 +331,14 @@ class TestOmittedAndNullKeys:
         assert _parsed_home(load={}).load_config == LoadConfig()
 
     def test_omitted_grid_charging_keys_take_the_declared_defaults(self) -> None:
-        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default, on a home that dispatches tou_optimized by its tariff."""
+        """A grid_charging block omitting target_soc_fraction is GridChargeConfig's default, on a battery that dispatches tou_optimized on its tariff's clock."""
         battery = _parsed_home(
-            battery={"capacity_kwh": 5.0, "grid_charging": {}},
+            battery={"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "tou_optimized"}, "grid_charging": {}},
             tariff={"type": "economy_7"},
-            dispatch_strategy="tou_optimized",
         ).battery_config
-        assert battery == BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig())
+        assert battery == BatteryConfig(
+            capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(), grid_charging=GridChargeConfig()
+        )
 
     @pytest.mark.parametrize(
         ("blocks", "attribute", "expected"),
@@ -369,20 +372,22 @@ class TestOmittedAndNullKeys:
         """A null home name takes HomeConfig's declared empty name."""
         assert _parsed_home(name=None).name == ""
 
-    def test_a_null_home_dispatch_strategy_reads_as_absent(self) -> None:
-        assert _parsed_home(dispatch_strategy=None).dispatch_strategy == "greedy"
+    @pytest.mark.parametrize(
+        "dispatch_strategy", ["tou_optimized", "greedy", None, "tou_optimised"], ids=["tou_optimized", "greedy", "null", "misspelt"]
+    )
+    def test_a_home_dispatch_strategy_is_refused_naming_the_batterys(self, dispatch_strategy: object) -> None:
+        """The dispatch strategy is the battery's own setting, so a home block that sets one, of any value, is refused naming where it goes."""
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("home.dispatch_strategy")):
+            _parsed_home(battery={"capacity_kwh": 5.0}, dispatch_strategy=dispatch_strategy)
 
-    def test_a_home_dispatch_strategy_no_home_dispatches_by_is_refused_naming_the_block(self) -> None:
-        with pytest.raises(ConfigurationError) as refused:
-            _parsed_home(dispatch_strategy="tou_optimised")
-
-        assert str(refused.value).startswith("Invalid home.dispatch_strategy 'tou_optimised';"), str(refused.value)
-        for named in ["'greedy'", "'tou_optimized'"]:
-            assert named in str(refused.value), (named, str(refused.value))
-
-    def test_a_homes_entry_s_dispatch_strategy_no_home_dispatches_by_is_refused_naming_the_entry(self) -> None:
-        with pytest.raises(ConfigurationError, match=re.escape("Invalid homes[0].dispatch_strategy 'tou_optimised';")):
-            parse_home_block({"dispatch_strategy": "tou_optimised"}, Location.bristol(), block_path="homes[0]")
+    @pytest.mark.parametrize(
+        "dispatch_strategy", ["tou_optimized", "greedy", None], ids=["tou_optimized", "greedy", "null"]
+    )
+    def test_a_homes_entry_s_dispatch_strategy_is_refused_naming_the_entry_and_the_batterys(
+        self, dispatch_strategy: object
+    ) -> None:
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("homes[0].dispatch_strategy")):
+            parse_home_block({"dispatch_strategy": dispatch_strategy}, Location.bristol(), block_path="homes[0]")
 
     def test_a_null_grid_charging_target_is_refused_as_constructing_it_refuses_it(self) -> None:
         grid_charging = {"target_soc_fraction": None}
@@ -430,6 +435,19 @@ class TestDispatchStrategyParsing:
     def test_parse_none(self) -> None:
         """A null block is no strategy."""
         assert parse_dispatch_strategy_config(None) is None
+
+    @pytest.mark.parametrize(
+        "battery",
+        [
+            pytest.param({"capacity_kwh": 5.0}, id="absent"),
+            pytest.param({"capacity_kwh": 5.0, "dispatch_strategy": None}, id="null"),
+        ],
+    )
+    def test_a_battery_that_names_no_strategy_dispatches_self_consumption(self, battery: dict[str, Any]) -> None:
+        battery_config = _parsed_home(battery=battery).battery_config
+
+        assert battery_config is not None
+        assert battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
 
     @pytest.mark.parametrize(
         ("block", "expected"),

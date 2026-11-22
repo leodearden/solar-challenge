@@ -26,7 +26,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet import fleet_home_seed
 from solar_challenge.heat_pump import HeatPumpConfig
-from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
+from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import (
@@ -47,15 +47,15 @@ from solar_challenge.scenario_blocks import (
     HEAT_PUMP_BLOCK,
     LOAD_BLOCK,
     PV_BLOCK,
+    RETIRED_DISPATCH_STRATEGY_KEY,
     ComponentBlock,
     FieldKind,
     FleetField,
     SettingValue,
     child_path,
     constructed,
-    dispatch_strategy_argument,
-    read_dispatch_strategy_key,
     refusal,
+    refuse_retired_keys,
     refuse_unrecognised_keys,
     require_held_keys,
     require_keys,
@@ -360,9 +360,6 @@ class FleetDistributionConfig:
         random_order: One of _RANDOM_ORDERS' keys, naming what is drawn ahead of the first
             home and in which order ("bristol_legacy" reproduces
             create_bristol_phase1_scenario's sequence)
-        dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
-            None means greedy.  A battery given a dispatch_strategy setting dispatches with
-            that instead.
     """
 
     n_homes: int
@@ -373,12 +370,11 @@ class FleetDistributionConfig:
     ev: Optional[ComponentDistribution] = None
     seed: Optional[int] = None
     random_order: str = "default"
-    dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
         """Read n_homes and seed, then refuse a fleet no home of which could be drawn, as each check's helper states.
 
-        Past n_homes, seed, random_order and dispatch_strategy it refuses, in this order: a component
+        Past n_homes, seed and random_order it refuses, in this order: a component
         key outside its table's fleet rows, or held in the wrong one of its draws and settings
         (F1); a reader-only key a component draws or sets beside a field it sets; a required key
         a component does not draw (F5); a spec its key's kind does not
@@ -394,10 +390,6 @@ class FleetDistributionConfig:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be "
                 f"{' or '.join(repr(order) for order in _RANDOM_ORDERS)}, got '{self.random_order}'"
-            )
-        if self.dispatch_strategy is not None:
-            refuse_unknown_home_dispatch_strategy(
-                self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
         _refuse_keys_held_where_no_row_puts_them(self)
         _refuse_both_forms_of_a_reader_only_key(self)
@@ -1083,46 +1075,50 @@ def _parse_optional_component_distribution(
 
 _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
     "n_homes", "pv", "load", "battery", "heat_pump", "ev", "seed", "random_order",
-    "dispatch_strategy",
 })
 
 
 def parse_fleet_distribution_config(
-    data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
+    data: object, *, block_path: str = _FLEET_DISTRIBUTION_PATH
 ) -> FleetDistributionConfig:
     """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
 
-    The refusals of a key outside its component's rows, a required key left out, a spec its
-    key's kind does not draw and a proportional_to source not drawn earlier for every home that
-    draws the dependent name the key under *block_path*.
+    The block is refused first unless it is a mapping, then if it holds the retired
+    dispatch_strategy key, naming the battery's in its place. The refusals of a key outside its
+    component's rows, a required key left out, a spec its key's kind does not draw and a
+    proportional_to source not drawn earlier for every home that draws the dependent name the
+    key under *block_path*.
     """
-    refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
-    require_keys(block_path, data, ["n_homes", "pv"])
+    block = refuse_unrecognised_keys(
+        block_path,
+        refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY),
+        _FLEET_DISTRIBUTION_BLOCK_KEYS,
+    )
+    require_keys(block_path, block, ["n_homes", "pv"])
 
-    pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=child_path(block_path, "pv"))
-    load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=child_path(block_path, "load"))
+    pv = _parse_component_distribution(PV_BLOCK, block["pv"], block_path=child_path(block_path, "pv"))
+    load = _parse_component_distribution(LOAD_BLOCK, block.get("load", {}), block_path=child_path(block_path, "load"))
     battery = _parse_optional_component_distribution(
-        BATTERY_BLOCK, data.get("battery"), block_path=child_path(block_path, "battery")
+        BATTERY_BLOCK, block.get("battery"), block_path=child_path(block_path, "battery")
     )
     heat_pump = _parse_optional_component_distribution(
-        HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
+        HEAT_PUMP_BLOCK, block.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
     )
-    ev = _parse_optional_component_distribution(EV_BLOCK, data.get("ev"), block_path=child_path(block_path, "ev"))
+    ev = _parse_optional_component_distribution(EV_BLOCK, block.get("ev"), block_path=child_path(block_path, "ev"))
     _refuse_proportional_sources_not_drawn_earlier(
         _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
     )
     return constructed(
         block_path,
         FleetDistributionConfig,
-        n_homes=data["n_homes"],
+        n_homes=block["n_homes"],
         pv=pv,
         load=load,
         battery=battery,
         heat_pump=heat_pump,
         ev=ev,
-        seed=data.get("seed"),
-        random_order=data.get("random_order", "default"),
-        dispatch_strategy=read_dispatch_strategy_key(data, block_path=block_path),
+        seed=block.get("seed"),
+        random_order=block.get("random_order", "default"),
     )
 
 
@@ -1472,7 +1468,6 @@ def _generated_home(
         location=location,
         name=f"Home {home_number}",
         tariff_config=fleet_tariff,
-        **dispatch_strategy_argument(config.dispatch_strategy),
     )
 
 

@@ -855,7 +855,6 @@ class TestExportAPI:
                 grid_charging=grid_charging,
             ),
             tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
         )
         _store_home_run(storage, "tou-battery-home", config)
 

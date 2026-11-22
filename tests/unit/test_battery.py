@@ -17,7 +17,12 @@ from solar_challenge.battery import (
     require_valid_capacity_setting,
     require_valid_power_limit,
 )
-from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.dispatch import (
+    STRATEGY_CONFIG_BY_TYPE,
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.timebase import HOURS_PER_MINUTE
@@ -80,6 +85,39 @@ class TestBatteryConfigDefaults:
         assert config.max_charge_kw == 2.5
         assert config.max_discharge_kw == 2.5
         assert config.name  # Has a name
+
+    def test_a_battery_that_names_no_strategy_dispatches_self_consumption(self) -> None:
+        assert BatteryConfig(capacity_kwh=5.0).dispatch_strategy == SelfConsumptionStrategyConfig()
+
+
+class TestBatteryConfigDispatchStrategy:
+    """A battery's dispatch strategy is one of DispatchStrategyConfig's variants, never None."""
+
+    @pytest.mark.parametrize(
+        "strategy",
+        [
+            pytest.param(None, id="none"),
+            pytest.param("tou_optimized", id="tag"),
+            pytest.param({"strategy_type": "self_consumption"}, id="block"),
+            pytest.param(GridChargeConfig(target_soc_fraction=0.8), id="other-config"),
+        ],
+    )
+    def test_a_value_that_is_not_a_strategy_variant_is_refused_naming_the_field_the_value_and_each_tag(
+        self, strategy: object
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy)
+
+        message = str(exc_info.value)
+        assert message.startswith("dispatch_strategy ")
+        assert message.endswith(f", got {strategy!r}")
+        assert all(tag in message for tag in STRATEGY_CONFIG_BY_TYPE)
+
+    @pytest.mark.parametrize("variant", list(STRATEGY_CONFIG_BY_TYPE.values()))
+    def test_each_variant_is_held_as_given(self, variant: type) -> None:
+        strategy = variant(import_limit_kw=3.0) if variant is PeakShavingStrategyConfig else variant()
+
+        assert BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy).dispatch_strategy is strategy
 
 
 class TestBatteryConfigValidation:

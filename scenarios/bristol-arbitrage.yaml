@@ -4,10 +4,9 @@
 # - Grid-charges overnight at Economy 7's off-peak rate
 # - Discharges into its evening peak, reducing net cost
 #
-# Home-level dispatch_strategy: tou_optimized dispatches the battery with
-# TOUOptimizedStrategy on Economy 7's clock through simulate_timestep, as a
-# battery-level dispatch_strategy block with strategy_type: tou_optimized would;
-# the home key moves to the battery block in S2 ε (task 790).
+# The battery's dispatch_strategy block, strategy_type: tou_optimized with no
+# peak_hours, dispatches it with TOUOptimizedStrategy on Economy 7's clock: it
+# grid-charges in the tariff's cheap minutes and discharges in its dear ones.
 #
 # use_stochastic: false gives the deterministic Elexon Profile Class 1 load
 # with a real evening peak at 18:00, ensuring the battery cycles fully on
@@ -17,7 +16,7 @@ name: Bristol Arbitrage Demo
 description: >
   Single-home Economy 7 grid-charging arbitrage demonstration.
   Charges battery overnight at Economy 7's off-peak rate, discharges into its evening peak.
-  Run with dispatch_strategy: tou_optimized to activate the arbitrage controller.
+  Its battery's dispatch_strategy, tou_optimized on Economy 7's clock, runs the arbitrage controller.
 
 location:
   latitude: 51.45
@@ -41,9 +40,11 @@ home:
     capacity_kwh: 5.0
     max_charge_kw: 2.5
     max_discharge_kw: 2.5
+    # tou_optimized with no peak_hours dispatches on Economy 7's clock
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.9
-    # No dispatch_strategy block here: the home-level dispatch_strategy key selects the dispatch
 
   load:
     annual_consumption_kwh: 3400
@@ -53,8 +54,6 @@ home:
   # off_peak_rate, peak_rate, off_peak_start or off_peak_end to override.
   tariff:
     type: economy_7
-
-  dispatch_strategy: tou_optimized
 
 # SEG export pricing for real (non-zero PV) runs.
 # The CLI home/fleet run paths thread this into HomeConfig.seg_tariff automatically.

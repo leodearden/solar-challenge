@@ -20,6 +20,7 @@ import warnings
 import pandas as pd
 
 from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
@@ -37,12 +38,12 @@ from tests.integration._helpers import SCENARIO
 
 def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
     """All battery homes in the flex scenario inherit Economy-7 tariff, grid_charging
-    sized by the trailing_14_days forecast, and tou_optimized dispatch_strategy.
+    sized by the trailing_14_days forecast, and a tou_optimized battery dispatch_strategy.
 
     Verifies the β/β′ seam threading (load_fleet_config at config.py:2030):
     scenario-level `tariff:` → every generated home; `fleet_distribution.battery.
-    grid_charging:` → every battery home; `fleet_distribution.dispatch_strategy:` →
-    every home. The forecast leaves this file's single-day runs PV-blind: they end
+    grid_charging:` and `fleet_distribution.battery.dispatch_strategy:` → every
+    battery home. The forecast leaves this file's single-day runs PV-blind: they end
     before its 14-day warm-up (docs/grid-charge-forecast.md).
     """
     fleet = load_fleet_config(SCENARIO)
@@ -87,10 +88,10 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
             f"got {home.battery_config.grid_charging.forecast!r}"
         )
 
-        # ---- Dispatch strategy must be tou_optimized --------------------------
-        assert home.dispatch_strategy == "tou_optimized", (
-            f"Home {home.name!r}: expected dispatch_strategy='tou_optimized', "
-            f"got {home.dispatch_strategy!r}"
+        # ---- Battery dispatch must be tou_optimized on the tariff's clock -----
+        assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(), (
+            f"Home {home.name!r}: expected its battery to dispatch tou_optimized on the tariff's clock, "
+            f"got {home.battery_config.dispatch_strategy!r}"
         )
 
 
