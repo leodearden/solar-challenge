@@ -133,9 +133,9 @@ document.addEventListener('alpine:init', () => {
         presets: [],
         debounceTimer: null,
 
-        // Quick period presets: each button's title names its window in limits.period_presets
+        // Quick period presets: each button's title names its preset in limits.period_presets
         setPeriod(title) {
-            [this.start_date, this.end_date] = limits.period_presets[title];
+            [this.start_date, this.end_date] = limits.period_presets.find((preset) => preset.title === title).window;
         },
 
         // Debounced YAML preview update

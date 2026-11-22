@@ -259,7 +259,7 @@ class TestThePagesWindowDefaultsAreTheServers:
         self, client: "FlaskClient", path: str
     ) -> None:
         limits = _page_limits_on(client, path)
-        presets = limits["period_presets"]
+        presets = {preset["title"]: preset["window"] for preset in limits["period_presets"]}
         assert presets["Full Year"] == limits["default_window"]
         assert presets["1 Month"] == _window_the_server_runs(30)
         assert presets["1 Week"] == _window_the_server_runs(7)

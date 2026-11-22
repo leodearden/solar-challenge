@@ -236,7 +236,10 @@ class TestPageLimits:
         assert list(components) == list(FLEET_COMPONENTS)
         assert all(components[key] is component for key, component in FLEET_COMPONENTS.items())
 
-    def test_as_json_writes_dates_as_iso_text_intervals_as_their_bounds_and_tuples_as_lists(self) -> None:
+    def test_as_json_writes_dates_as_iso_text_intervals_as_their_bounds_and_tuples_and_ordered_mappings_as_lists(
+        self,
+    ) -> None:
+        """The period presets and the components are lists in their order, which the page's JSON, whose objects tojson writes with sorted keys, would not keep as objects."""
         limits = page_limits()
 
         def window(days: tuple[date, date]) -> list[str]:
@@ -255,11 +258,11 @@ class TestPageLimits:
             "day_choices": [7, 14, 30, 90, FULL_YEAR_DAYS_SENTINEL],
             "default_days": 30,
             "custom_range_default": window(days_window(30)),
-            "period_presets": {
-                title: window(period) for title, period in limits.period_presets.items()
-            },
-            "components": {
-                key: {
+            "period_presets": [
+                {"title": title, "window": window(period)} for title, period in limits.period_presets.items()
+            ],
+            "components": [
+                {
                     "key": component.key,
                     "grammar_key": component.grammar_key,
                     "subject": component.subject,
@@ -272,10 +275,9 @@ class TestPageLimits:
                     "new_row_value": component.new_row_value,
                     "start": component.start.editor_state(),
                 }
-                for key, component in FLEET_COMPONENTS.items()
-            },
+                for component in FLEET_COMPONENTS.values()
+            ],
         }
-        assert list(limits.as_json()["period_presets"]) == list(limits.period_presets)
 
     def test_days_window_runs_the_full_year_for_the_sentinel_and_any_other_days_from_short_window_start(
         self,

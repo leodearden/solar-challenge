@@ -333,7 +333,12 @@ class PageLimits:
         )
 
     def as_json(self) -> dict[str, Any]:
-        """This value as #page-limits writes it, holding only dicts, lists, text and numbers: each date as ISO 8601 text, each Interval as its low and high, each tuple as a list, and each component as its as_json()."""
+        """This value as #page-limits writes it, holding only dicts, lists, text and numbers: each date as ISO 8601 text, each Interval as its low and high, and each tuple as a list.
+
+        period_presets, as each title with its window, and components, as each one's as_json(),
+        are lists in their order: tojson writes an object's keys sorted, so an object would
+        not keep it.
+        """
         return {
             "fleet_size": _interval_json(self.fleet_size),
             "fleet_size_default": self.fleet_size_default,
@@ -347,10 +352,10 @@ class PageLimits:
             "day_choices": list(self.day_choices),
             "default_days": self.default_days,
             "custom_range_default": _window_json(self.custom_range_default),
-            "period_presets": {
-                title: _window_json(window) for title, window in self.period_presets.items()
-            },
-            "components": {key: component.as_json() for key, component in self.components.items()},
+            "period_presets": [
+                {"title": title, "window": _window_json(window)} for title, window in self.period_presets.items()
+            ],
+            "components": [component.as_json() for component in self.components.values()],
         }
 
 

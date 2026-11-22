@@ -12,13 +12,15 @@
 document.addEventListener('alpine:init', () => {
     // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
     const limits = JSON.parse(document.getElementById('page-limits').textContent);
+    // Each fleet component of limits, by its key
+    const components = Object.fromEntries(limits.components.map((component) => [component.key, component]));
     Alpine.data('homeSimulator', (tariffPresetRates) => ({
         activeTab: {{ configuration_tabs[0].key | tojson }},
         submitting: false,
         submittedJob: null,
         errorMsg: '',
         presets: [],
-        consumptionRange: [limits.components.load.value_range.low, limits.components.load.value_range.high],
+        consumptionRange: [components.load.value_range.low, components.load.value_range.high],
         formData: {
             pv_kw: 4.0,
             azimuth: 180,
@@ -71,13 +73,13 @@ document.addEventListener('alpine:init', () => {
             const errors = {};
             const f = this.formData;
             const pv = parseFloat(f.pv_kw);
-            const pvRange = limits.components.pv.value_range;
+            const pvRange = components.pv.value_range;
             if (isNaN(pv) || pv < pvRange.low || pv > pvRange.high) {
                 errors.pv_kw = 'PV capacity must be ' + pvRange.low + '–' + pvRange.high + ' kW';
             }
             if (f.battery_enabled) {
                 const batt = parseFloat(f.battery_kwh);
-                const batteryRange = limits.components.battery.value_range;
+                const batteryRange = components.battery.value_range;
                 if (isNaN(batt) || batt < batteryRange.low || batt > batteryRange.high) {
                     errors.battery_kwh = 'Battery capacity must be between ' + batteryRange.low + ' and ' + batteryRange.high + ' kWh';
                 }
