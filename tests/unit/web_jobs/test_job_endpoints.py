@@ -916,10 +916,10 @@ class TestSimulateFleetEndpoint:
         assert "job_id" in data
         assert "run_id" in data
 
-    def test_a_fleet_jobs_stream_reports_how_many_of_its_homes_have_finished_as_each_finishes(
+    def test_a_fleet_jobs_progress_stream_reports_how_many_of_its_homes_have_finished_as_each_finishes(
         self, build_app: BuildApp, tmp_path: Path
     ) -> None:
-        """B11: the per-home progress a fleet job's stream reports through the endpoint."""
+        """B11: the frame a fleet job's progress stream sends first, opened through the endpoint while each home simulates."""
         simulation = SteppedSimulation()
         app = build_app(tmp_path, jobs=jobs_running(simulation))
         client = app.test_client()
@@ -933,14 +933,15 @@ class TestSimulateFleetEndpoint:
                 ]
             },
         ).get_json()
-        steps: list[str] = []
+        reported: list[tuple[str, str]] = []
 
         for finished in range(3):
             simulation.wait_until_entered(finished + 1)
-            steps.append(client.get(f"/api/jobs/{submitted['job_id']}").get_json()["current_step"])
+            [frame] = parse_sse_events(_first_chunk(client, submitted["job_id"]))
+            reported.append((frame.event, frame.data["current_step"]))
             simulation.allow_one()
 
-        assert steps == ["Homes 0/3", "Homes 1/3", "Homes 2/3"]
+        assert reported == [("progress", "Homes 0/3"), ("progress", "Homes 1/3"), ("progress", "Homes 2/3")]
         assert dashboard_of(app).jobs.wait_until_idle(timeout=30)
         assert client.get(f"/api/jobs/{submitted['job_id']}").get_json()["status"] == "completed"
         assert len(simulation.calls) == 3

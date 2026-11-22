@@ -441,10 +441,10 @@ def test_closing_an_app_drops_its_queued_job_and_keeps_its_store_until_its_runni
     build_app(tmp_path)
 
 
-def test_an_app_on_default_jobs_runs_a_fleet_job_to_completed_through_the_parallel_default_runner(
+def test_an_app_on_default_jobs_runs_a_fleet_job_to_completed_on_the_weather_default_runner_bound_at_build(
     build_app: BuildApp, tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
-    """Its homes run in a pool of worker processes on the weather default_runner() bound as the app was built: the test's own cache, where Bristol's TMY is a clear day on the first day of the job's window."""
+    """That weather is the test's own cache, where Bristol's TMY is a clear day on the first day of the job's window."""
     A_HOME_JOB_DAYS.seed_as_bristol_tmy(weather_cache)
     app = build_app(tmp_path, jobs=default_jobs)
     client = app.test_client()
