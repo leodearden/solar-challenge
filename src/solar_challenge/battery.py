@@ -45,7 +45,7 @@ def _require_soc_limits_in_order(min_soc_fraction: float, max_soc_fraction: floa
 
 
 _ROUND_TRIP_EFFICIENCY: Final = FRACTION
-"""The round-trip efficiencies that BatteryConfig.efficiency and _one_way_efficiency admit."""
+"""The round-trip efficiencies that _one_way_efficiency admits."""
 
 _DEFAULT_ONE_WAY_EFFICIENCY: Final = 0.975
 """The declared default of BatteryConfig.charge_efficiency and discharge_efficiency."""
@@ -59,27 +59,6 @@ def _one_way_efficiency(round_trip_efficiency: float) -> float:
             most 1, naming round-trip efficiency and the value.
     """
     return math.sqrt(as_finite_float(round_trip_efficiency, "round-trip efficiency", _ROUND_TRIP_EFFICIENCY))
-
-
-def _refuse_a_pair_contradicting_its_round_trip(
-    efficiency: float, one_way: float, charge_efficiency: float, discharge_efficiency: float
-) -> None:
-    """Refuse a per-direction efficiency that is neither *one_way*, the square root of *efficiency*, nor its default, naming each such field."""
-    contradictions = [
-        f"{field}={value!r}"
-        for field, value in (
-            ("charge_efficiency", charge_efficiency),
-            ("discharge_efficiency", discharge_efficiency),
-        )
-        if value not in (one_way, _DEFAULT_ONE_WAY_EFFICIENCY)
-    ]
-    if contradictions:
-        raise ConfigurationError(
-            f"efficiency={efficiency!r} makes charge_efficiency and discharge_efficiency each its "
-            f"square root, {one_way!r}, but got {' and '.join(contradictions)}; use "
-            f"BatteryConfig.with_round_trip({efficiency!r}), or pass charge_efficiency and "
-            "discharge_efficiency without efficiency"
-        )
 
 
 _POWER_LIMIT_KW = POSITIVE
@@ -222,8 +201,7 @@ class BatteryConfig:
 
     Construction reads every number setting as a finite number inside its range and
     holds it as a float, then refuses SOC limits whose minimum is not below their
-    maximum and a round-trip efficiency that a per-direction efficiency contradicts,
-    each with a ConfigurationError.
+    maximum, each with a ConfigurationError.
 
     Attributes:
         capacity_kwh: Total energy capacity in kilowatt-hours
@@ -237,9 +215,6 @@ class BatteryConfig:
         max_soc_fraction: Maximum state of charge as fraction of capacity (default 0.9)
         charge_efficiency: Charging efficiency, fraction of energy stored (default 0.975)
         discharge_efficiency: Discharging efficiency, fraction of stored energy output (default 0.975)
-        efficiency: Transitional round-trip efficiency, retired at the surface bump; when set,
-            charge_efficiency and discharge_efficiency are its square root, and one set to
-            neither that nor its default is refused. Use with_round_trip instead.
         system_age_years: Age of the battery system in years (≥ 0); used to
             compute calendar fade when no ``soh`` override is provided.
         calendar_fade_rate_per_year: Linear calendar SOH fade rate per year
@@ -267,7 +242,6 @@ class BatteryConfig:
     max_soc_fraction: float = 0.9
     charge_efficiency: float = _DEFAULT_ONE_WAY_EFFICIENCY
     discharge_efficiency: float = _DEFAULT_ONE_WAY_EFFICIENCY
-    efficiency: Optional[float] = None
     system_age_years: float = 0.0
     calendar_fade_rate_per_year: float = 0.02
     cycle_fade_per_equivalent_full_cycle: float = 5e-5
@@ -275,25 +249,17 @@ class BatteryConfig:
     soh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse SOC limits out of order, and derive the per-direction efficiencies from a set round-trip one, refusing one that contradicts it."""
+        """Read each number setting, then refuse SOC limits out of order."""
         read_field(self, "capacity_kwh", as_finite_float, POSITIVE)
         read_field(self, "max_charge_kw", as_finite_float, _POWER_LIMIT_KW)
         read_field(self, "max_discharge_kw", as_finite_float, _POWER_LIMIT_KW)
         _read_soc_limits_and_efficiencies(self)
-        read_field(self, "efficiency", as_finite_float, _ROUND_TRIP_EFFICIENCY, optional=True)
         read_field(self, "system_age_years", as_finite_float, NON_NEGATIVE)
         read_field(self, "calendar_fade_rate_per_year", as_finite_float, NON_NEGATIVE)
         read_field(self, "cycle_fade_per_equivalent_full_cycle", as_finite_float, NON_NEGATIVE)
         read_field(self, "soh_floor", as_finite_float, FRACTION)
         read_field(self, "soh", as_finite_float, FRACTION, optional=True)
         _require_soc_limits_in_order(self.min_soc_fraction, self.max_soc_fraction)
-        if self.efficiency is not None:
-            one_way = _one_way_efficiency(self.efficiency)
-            _refuse_a_pair_contradicting_its_round_trip(
-                self.efficiency, one_way, self.charge_efficiency, self.discharge_efficiency
-            )
-            object.__setattr__(self, "charge_efficiency", one_way)
-            object.__setattr__(self, "discharge_efficiency", one_way)
 
     @property
     def nominal_usable_capacity_kwh(self) -> float:
@@ -328,9 +294,7 @@ class BatteryConfig:
                 and at most 1, naming round-trip efficiency and the value.
         """
         one_way = _one_way_efficiency(round_trip_efficiency)
-        return dataclasses.replace(
-            self, efficiency=None, charge_efficiency=one_way, discharge_efficiency=one_way
-        )
+        return dataclasses.replace(self, charge_efficiency=one_way, discharge_efficiency=one_way)
 
     @classmethod
     def default_5kwh(cls) -> "BatteryConfig":

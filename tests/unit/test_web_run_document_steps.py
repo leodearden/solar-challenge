@@ -327,9 +327,10 @@ def test_every_step_changes_nothing_in_the_documents_a_save_in_the_current_forma
 
 
 def test_v2_drops_the_null_keys_of_the_other_dispatch_variants_and_reports_nothing() -> None:
+    """Once every later step has brought its result forward, the config reads as the variant its dispatch strategy names."""
     result = _V2.apply("home", _fixture_documents("pre_786_dispatch_home"))
 
-    battery = result.documents.config.read(HomeConfig).battery_config
+    battery = documents_in_current_format("home", result.documents).config.read(HomeConfig).battery_config
 
     assert result.dropped == ()
     assert result.documents.config.content["battery_config"]["dispatch_strategy"] == {
@@ -558,6 +559,7 @@ def _fleet_fixture_home(name: str, battery: BatteryConfig, **home: Any) -> HomeC
 
 
 def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_it_changes() -> None:
+    """Once every later step has brought its result forward, the config reads as the homes that ran."""
     name = "pre_787_dispatch_fleet"
 
     result = _V3.apply("fleet", _documents_before(_V3, name))
@@ -569,7 +571,7 @@ def test_v3_reads_each_home_of_the_pre_787_fleet_as_it_ran_reporting_each_value_
         RewrittenValue(name, "config.json", "homes[2].dispatch_strategy", "tou_optimized", "greedy"),
         RewrittenValue(name, "config.json", "homes[2].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None),
     )
-    assert result.documents.config.read(FleetRunConfig).homes == (
+    assert documents_in_current_format("fleet", result.documents).config.read(FleetRunConfig).homes == (
         _fleet_fixture_home(
             "Elm Row 1",
             BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig()),
@@ -682,6 +684,7 @@ def test_v3_changes_none_of_its_input_documents() -> None:
 
 
 def test_v4_drops_the_grid_charging_each_home_of_the_pre_839_fleet_ignored_on_its_flat_tariff() -> None:
+    """Once every later step has brought its result forward, the config reads as the homes that ran."""
     name = "pre_839_flat_grid_charging_fleet"
     v4 = _step(4)
 
@@ -692,7 +695,7 @@ def test_v4_drops_the_grid_charging_each_home_of_the_pre_839_fleet_ignored_on_it
         RewrittenValue(name, "config.json", f"homes[{index}].battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None)
         for index in range(3)
     )
-    assert result.documents.config.read(FleetRunConfig).homes == (
+    assert documents_in_current_format("fleet", result.documents).config.read(FleetRunConfig).homes == (
         _fleet_fixture_home(
             "Flat Row 1",
             BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),))),
@@ -751,7 +754,7 @@ def test_v4_drops_the_grid_charging_a_home_run_ignored_on_a_tariff_with_no_cheap
             "pre_786_dispatch_home", "config.json", "battery_config.grid_charging", _GRID_CHARGING_TO_80_PERCENT, None
         ),
     )
-    battery = result.documents.config.read(HomeConfig).battery_config
+    battery = documents_in_current_format("home", result.documents).config.read(HomeConfig).battery_config
     assert battery is not None and battery.grid_charging is None
 
 
