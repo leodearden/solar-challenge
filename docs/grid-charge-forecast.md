@@ -103,8 +103,8 @@ which 0.303 kWh displaced peak import, so at most about 1.45 kWh a week could be
 released, worth about 8.9 p a kWh: some £0.13 a home a week at June's peak and under £4 a
 home a year, an order below the ceiling's saving. Releasing it would put a
 forecast-driven discharge in TOU's cheap branch, break the exact zero off-peak discharge
-`test_tou_holds_the_battery_through_the_off_peak_window` pins, and make the peak-rate
-guarantee depend on forecast error. With the hold kept, a run's peak-rate import rises
+`tests/integration/test_tou_dispatch_synthetic_weather.py::test_tou_holds_the_battery_through_the_off_peak_window`
+pins, and make the peak-rate guarantee depend on forecast error. With the hold kept, a run's peak-rate import rises
 from pv_blind to trailing_14_days to no grid charging to greedy, by SOC monotonicity, as
 `tests/integration/test_tou_dispatch_synthetic_weather.py` pins on a sunless day after
 15 sunny ones, the forecast's worst case.
