@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests._exemption_reasons import Permanent
+from tests._module_sources import module_source
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._scenario_grammar import CONFIG, FLEET_DISTRIBUTION, GRAMMAR_MODULES, SCENARIO_BLOCKS
 
@@ -81,14 +82,9 @@ class _RefusalViolation:
         return f"{self.path.as_posix()}:{self.line}: {self.function} {breach} ({self.rule.value})"
 
 
-def _module_source(src_dir: Path, module: str) -> Path:
-    """Return the file under *src_dir* that holds *module*, a module of the package that is no package itself."""
-    return src_dir.joinpath(*module.split(".")).with_suffix(".py")
-
-
 def _parsed(src_dir: Path, module: str) -> tuple[Path, ast.Module]:
     """Return *module*'s file under *src_dir*, relative to *src_dir*'s parent, and its parsed source."""
-    source = _module_source(src_dir, module)
+    source = module_source(src_dir, module)
     return source.relative_to(src_dir.parent), ast.parse(source.read_text(encoding="utf-8"))
 
 
@@ -179,7 +175,7 @@ _SEED_REFUSAL = (
 def _seeded_tree(src_dir: Path, modules: Mapping[str, str]) -> Path:
     """Write each grammar module of *modules*, keyed by its dotted name, under *src_dir*, an empty one for every grammar module left out, and return *src_dir*."""
     for module in GRAMMAR_MODULES:
-        source = _module_source(src_dir, module)
+        source = module_source(src_dir, module)
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(modules.get(module, ""), encoding="utf-8")
     return src_dir

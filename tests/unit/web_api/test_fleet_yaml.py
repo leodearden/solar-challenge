@@ -19,7 +19,8 @@ from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES, non_mapping_block_refusal
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
 from tests._repository_paths import SCENARIOS_DIR

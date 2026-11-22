@@ -24,7 +24,8 @@ from solar_challenge.web.fleet_config import (
     sample_distribution,
 )
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES, non_mapping_block_refusal
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS

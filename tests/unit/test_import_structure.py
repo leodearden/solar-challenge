@@ -52,6 +52,7 @@ import pytest
 
 from tests._declared_dependencies import WEB_SUBPACKAGE
 from tests._exemption_reasons import Permanent, Transitional
+from tests._module_sources import module_source
 from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._scenario_grammar import GRAMMAR_MODULES, GRAMMAR_STRATA
@@ -398,11 +399,6 @@ def _is_dataclass_decorator(decorator: ast.expr) -> bool:
     )
 
 
-def _module_source(src_dir: Path, module: str) -> Path:
-    """Return the file under *src_dir* that holds *module*, a module of the package that is no package itself."""
-    return src_dir.joinpath(*module.split(".")).with_suffix(".py")
-
-
 def _top_level_classes(source: Path) -> list[ast.ClassDef]:
     """Return the classes the module in *source* defines at top level, in source order."""
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
@@ -413,7 +409,7 @@ def _dispatch_dataclass_names(src_dir: Path) -> frozenset[str]:
     """Return the names of the top-level classes dispatch.py, under *src_dir*, decorates as dataclasses."""
     return frozenset(
         cls.name
-        for cls in _top_level_classes(_module_source(src_dir, _DISPATCH))
+        for cls in _top_level_classes(module_source(src_dir, _DISPATCH))
         if any(_is_dataclass_decorator(decorator) for decorator in cls.decorator_list)
     )
 
@@ -430,7 +426,7 @@ def _dispatch_types_defined_in_the_grammar(src_dir: Path) -> list[_GrammarViolat
             f"{module} defines {cls.name}, a dataclass {_DISPATCH} defines",
         )
         for module in GRAMMAR_MODULES
-        for source in [_module_source(src_dir, module)]
+        for source in [module_source(src_dir, module)]
         for cls in _top_level_classes(source)
         if cls.name in dispatch_dataclasses
     ]
