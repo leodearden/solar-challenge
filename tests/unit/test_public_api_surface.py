@@ -128,7 +128,7 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- community (community.py) ---
     "CommunityConfig": "dataclass[eq, frozen] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
     "CommunityBillingConfig": "dataclass[eq, frozen] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
-    "CommunityResults": "dataclass[eq] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
+    "CommunityResults": "dataclass[eq, frozen] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
     "simulate_community": "(fleet_results: FleetResults, config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
     "validate_community_balance": "(fleet_results: FleetResults, community_results: CommunityResults, tolerance: float = 0.001) -> bool",
     # --- pv (pv.py) ---
@@ -633,9 +633,7 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
 # the task that freezes the class.  An entry whose class is frozen, is no
 # pinned dataclass, or is misspelled fails the guard, so drop the entry then.
 # ---------------------------------------------------------------------------
-UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {
-    "CommunityResults": "task 910",
-}
+UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {}
 
 
 def test_every_pinned_dataclass_is_frozen() -> None:
