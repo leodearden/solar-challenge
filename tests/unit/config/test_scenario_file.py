@@ -31,7 +31,6 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 _SUMMER = SimulationPeriod("2024-06-01", "2024-08-31")
@@ -230,18 +229,11 @@ class TestScenarioConfig:
         loc = scenario.get_location()
         assert loc.latitude == pytest.approx(51.45, abs=0.01)
 
-    @pytest.mark.parametrize(
-        ("field", "value"),
-        [
-            pytest.param("output", None, id="output"),
-            pytest.param("tariff_config", None, id="tariff_config-none"),
-            pytest.param("tariff_config", TariffConfig.economy_7(), id="tariff_config-economy-7"),
-        ],
-    )
-    def test_takes_no_output_or_tariff_config(self, field: str, value: TariffConfig | None) -> None:
+    @pytest.mark.parametrize("field", ["output", "tariff_config"])
+    def test_takes_no_output_or_tariff_config(self, field: str) -> None:
         with pytest.raises(TypeError, match=f"unexpected keyword argument '{field}'"):
             ScenarioConfig(
-                name="x", period=SimulationPeriod("2024-01-01", "2024-01-07"), home=_home(), **{field: value}
+                name="x", period=SimulationPeriod("2024-01-01", "2024-01-07"), home=_home(), **{field: None}
             )
 
 
