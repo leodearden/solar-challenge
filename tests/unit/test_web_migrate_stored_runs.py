@@ -881,6 +881,39 @@ def test_migrate_store_leaves_a_run_whose_tou_peak_hours_reach_a_cheap_minute_un
     assert [storage.load_run(run_id).run_id for run_id in format_3_run_ids.values()] == list(format_3_run_ids.values())
 
 
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_a_run_saved_before_summaries_carried_a_window_whose_time_series_is_missing_unmigrated_naming_it_with_none_of_the_earlier_steps_fixes(
+    store_at_version_1: Path, legacy_run_ids: dict[str, str]
+) -> None:
+    """v5 reads the window of a summary saved without one from its run's time series, so a run that lost its series cannot be brought forward.
+
+    The run stands for a pre-786 home run whose data.parquet is gone. Its files and its runs row
+    are each refused by the series, which the report names, and keep the other dispatch variants'
+    null keys v2 would have dropped, as the readability check runs every later step before any is
+    applied.
+    """
+    run_id = install_stored_run_fixture(
+        "pre_786_dispatch_home", Database(store_at_version_1), store_at_version_1.parent, run_id="series-lost"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    (run_dir / "data.parquet").unlink()
+    files_before, row_before = _files_of(run_dir), runs_rows_of(store_at_version_1)[run_id]
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    left = [each for each in report.unmigrated_runs if each.run_id == run_id]
+    assert {(each.run_id, each.document, each.field) for each in left} == {(run_id, "data.parquet", None)}
+    for each in left:
+        assert "is missing" in each.reason, each.reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    row_after = runs_rows_of(store_at_version_1)[run_id]
+    assert (row_after["config_json"], row_after["summary_json"]) == (row_before["config_json"], row_before["summary_json"])
+    storage = _storage_of(store_at_version_1)
+    assert [storage.load_run(each).run_id for each in legacy_run_ids.values()] == list(legacy_run_ids.values())
+
+
 def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
     store_at_version_1: Path,
 ) -> None:
