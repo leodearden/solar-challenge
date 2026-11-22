@@ -43,7 +43,9 @@ all charge the same rate, and reports each value it rewrites the same way. v5 se
 saved before summaries carried a window to the window of its run's stored time series, as
 calculate_summary took it from the same results' index, and drops each summary's simulation_days,
 reporting only a day count other than its window's days; v2 keeps a summary's simulation_days
-for it, as _RETIRED_KEYS_A_LATER_STEP_READS names.
+for it, as _RETIRED_KEYS_A_LATER_STEP_READS names. v6 drops each fleet summary's
+total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, a second copy of its export revenue,
+reporting each value that is not null; v2 keeps the pair for it the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -867,10 +869,13 @@ def _each_document(
 _SIMULATION_DAYS = "simulation_days"
 """The key of the day count a SummaryStatistics stored before format 5 holds, the days of its window; v5 drops it."""
 
+_FLEET_SEG_REVENUE_KEYS = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue total and per-home mean a FleetSummary stored before format 6 holds, a second copy of its total_export_revenue_gbp; v6 drops them."""
+
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
-    {SummaryStatistics: frozenset({_SIMULATION_DAYS})}
+    {SummaryStatistics: frozenset({_SIMULATION_DAYS}), FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS)}
 )
-"""By dataclass, each key at the root of its stored object that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it."""
+"""By dataclass, each key at the root of its stored object that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, reporting each value that is not null."""
 
 
 def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
@@ -1099,6 +1104,25 @@ def _with_a_window(summary: StoredDocument, time_series: StoredTimeSeries, name:
     return replace(summary, content={**content, "window": field_tree(time_series.window(name))})
 
 
+def _fleet_seg_revenue_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v6's step: *documents* with a fleet run's summary rid of each key of _FLEET_SEG_REVENUE_KEYS, and each dropped value that is not null.
+
+    A home run's documents, a fleet run's config and home summaries, and a fleet summary that is
+    not an object are left as they are.
+    """
+    summary = documents.summary
+    content = summary.content
+    if run_type != "fleet" or not isinstance(content, dict):
+        return StepResult(documents)
+    dropped = tuple(
+        DroppedValue(summary.run_id, summary.name, key, content[key])
+        for key in _FLEET_SEG_REVENUE_KEYS
+        if content.get(key) is not None
+    )
+    without_the_pair = {key: value for key, value in content.items() if key not in _FLEET_SEG_REVENUE_KEYS}
+    return StepResult(replace(documents, summary=replace(summary, content=without_the_pair)), dropped=dropped)
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -1124,6 +1148,12 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "Set each stored summary saved before summaries carried a window to the window of its run's stored time "
         "series, and drop each summary's simulation_days, its window's days",
         _summaries_at_format_5,
+    ),
+    RunDocumentStep(
+        6,
+        "Drop each stored fleet summary's total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, "
+        "a second copy of its total_export_revenue_gbp",
+        _fleet_seg_revenue_dropped,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

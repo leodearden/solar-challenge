@@ -283,10 +283,6 @@ class FleetSummary:
 
     simulation_days: int
 
-    # SEG revenue aggregates (populated when seg_tariff_pence_per_kwh is provided)
-    total_seg_revenue_gbp: Optional[float] = None
-    per_home_seg_revenue_mean_gbp: Optional[float] = None
-
     # Financial aggregates (always populated on computed path, None on direct construction)
     total_net_cost_gbp: Optional[float] = None
     total_import_cost_gbp: Optional[float] = None
@@ -626,8 +622,6 @@ def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
 def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> FleetSummary:
     """Aggregate the summary statistics of a fleet's homes into the fleet's.
 
-    The fleet's SEG revenue total and per-home mean are taken over the homes whose
-    summary has a seg_revenue_gbp, and both are None when no home's summary has one.
     Its grid_charge_forecasts are the forecasts that sized the homes' grid charge.
 
     Args:
@@ -657,16 +651,6 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
     sc_ratios = [s.self_consumption_ratio for s in home_summaries]
     sc_series = pd.Series(sc_ratios)
 
-    # Aggregate SEG revenue over the homes whose summary has one
-    total_seg_revenue_gbp: Optional[float] = None
-    per_home_seg_revenue_mean_gbp: Optional[float] = None
-    seg_revenues = [
-        s.seg_revenue_gbp for s in home_summaries if s.seg_revenue_gbp is not None
-    ]
-    if seg_revenues:
-        total_seg_revenue_gbp = sum(seg_revenues)
-        per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
-
     # Fleet financial aggregates
     total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
     total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
@@ -689,8 +673,6 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
         simulation_days=home_summaries[0].simulation_days,
-        total_seg_revenue_gbp=total_seg_revenue_gbp,
-        per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
         total_net_cost_gbp=total_net_cost,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
