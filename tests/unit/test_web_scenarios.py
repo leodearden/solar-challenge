@@ -899,8 +899,8 @@ class TestBuilderScenarioYaml:
         """A custom location the form sends without its latitude or its longitude is reported by the key it leaves out, not loaded as Bristol's.
 
         The form sends the *omitted* coordinate as ''.  The preview writes the coordinates
-        given as the document's location: block, which the loader refuses by the missing
-        key's path.
+        given as the document's location: block, which the loader refuses naming the key it
+        leaves out.
         """
         coordinates = {"latitude": 53.4, "longitude": -2.2, "altitude": 38.0}
         given = {key: value for key, value in coordinates.items() if key != omitted}
@@ -911,7 +911,7 @@ class TestBuilderScenarioYaml:
 
         assert document["location"] == given
         assert validation["valid"] is False
-        assert any(f"location.{omitted}" in error for error in validation["errors"]), validation
+        assert validation["errors"] == [f"location: requires {omitted!r}"], validation
 
     def test_a_form_key_the_builder_does_not_read_is_refused(self, client: FlaskClient) -> None:
         """A key the builder does not read gets 400 naming it, instead of being dropped from the YAML."""

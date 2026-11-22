@@ -2,7 +2,6 @@
 """Each of scenario_blocks.py's component block tables held to its dataclass."""
 
 import dataclasses
-import re
 from typing import Any, Callable, Optional
 
 import pytest
@@ -393,13 +392,13 @@ _PUBLIC_READINGS: tuple[
 )
 """Each table, the public reader of its blocks, and a block of it that reader accepts, setting each key the block may not leave out."""
 
-_REQUIRED_KEY_PATHS: dict[tuple[type, str], str] = {
-    (HeatPumpConfig, "heat_pump_type"): "home.heat_pump.heat_pump_type",
-    (EVConfig, "charger_type"): "home.ev.charger_type",
-    (Location, "latitude"): "location.latitude",
-    (Location, "longitude"): "location.longitude",
+_REQUIRED_KEY_REFUSALS: dict[tuple[type, str], str] = {
+    (HeatPumpConfig, "heat_pump_type"): "home.heat_pump: requires 'heat_pump_type'",
+    (EVConfig, "charger_type"): "home.ev: requires 'charger_type'",
+    (Location, "latitude"): "location: requires 'latitude'",
+    (Location, "longitude"): "location: requires 'longitude'",
 }
-"""The keys a block may not leave out, each by the path its public reader gives it in its file."""
+"""The keys a block may not leave out, each with the refusal its public reader gives the block without it, naming the block by its path in its file."""
 
 _EVERY_TABLE_KEY = [
     (block, read, base, key) for block, read, base in _PUBLIC_READINGS for key in block.keys
@@ -411,7 +410,7 @@ _EVERY_TABLE_KEY = [
     [
         pytest.param(read, base, key, id=f"{block.config_type.__name__}-{key}")
         for block, read, base, key in _EVERY_TABLE_KEY
-        if (block.config_type, key) not in _REQUIRED_KEY_PATHS
+        if (block.config_type, key) not in _REQUIRED_KEY_REFUSALS
     ],
 )
 def test_a_null_key_reads_as_absent(
@@ -424,24 +423,25 @@ def test_a_null_key_reads_as_absent(
 
 
 @pytest.mark.parametrize(
-    ("read", "data", "path"),
+    ("read", "data", "expected"),
     [
         pytest.param(
             read,
             {**base, key: None},
-            _REQUIRED_KEY_PATHS[block.config_type, key],
+            _REQUIRED_KEY_REFUSALS[block.config_type, key],
             id=f"{block.config_type.__name__}-{key}",
         )
         for block, read, base, key in _EVERY_TABLE_KEY
-        if (block.config_type, key) in _REQUIRED_KEY_PATHS
+        if (block.config_type, key) in _REQUIRED_KEY_REFUSALS
     ],
 )
-def test_a_null_required_key_is_refused_naming_its_path(
-    read: Callable[[dict[str, Any]], object], data: dict[str, Any], path: str
+def test_a_null_required_key_is_refused_naming_its_block_and_the_key(
+    read: Callable[[dict[str, Any]], object], data: dict[str, Any], expected: str
 ) -> None:
-    """R1: a null required key reads as absent, so its block is refused, naming the key by its path."""
-    with pytest.raises(ConfigurationError, match=re.escape(path)):
+    """R1: a null required key reads as absent, so its block is refused, naming the block by its path and the key it requires."""
+    with pytest.raises(ConfigurationError) as refusal:
         read(data)
+    assert str(refusal.value) == expected
 
 
 _WORDS_FOR_NUMBERS: dict[type, dict[str, str]] = {

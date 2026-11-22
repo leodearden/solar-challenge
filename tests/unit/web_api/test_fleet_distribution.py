@@ -24,7 +24,7 @@ from solar_challenge.web.fleet_config import (
     sample_distribution,
 )
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES, non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -641,7 +641,7 @@ class TestFleetFromDistribution:
             json={**self._VALID_BODY, key: value},
         )
         assert resp.status_code == 400
-        assert resp.get_json() == {"error": f"{key} must be a mapping, got {type_name}"}
+        assert resp.get_json() == {"error": non_mapping_block_refusal(key, type_name)}
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(

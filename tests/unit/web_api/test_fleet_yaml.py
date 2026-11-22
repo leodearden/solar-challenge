@@ -19,7 +19,7 @@ from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
-from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._falsy_json_values import FALSY_NON_NULL_VALUES, non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
 from tests._repository_paths import SCENARIOS_DIR
@@ -185,7 +185,7 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
-                "Unrecognised keys in fleet_distribution.battery: 'enabled'",
+                "fleet_distribution.battery: unrecognised keys 'enabled'",
                 id="battery-enabled-false",
             ),
             pytest.param(
@@ -237,7 +237,7 @@ class TestExportFleetYAML:
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        refusal = (400, {"error": f"{key} must be a mapping, got {type_name}"})
+        refusal = (400, {"error": non_mapping_block_refusal(key, type_name)})
         assert (export.status_code, export.get_json()) == refusal
         assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()

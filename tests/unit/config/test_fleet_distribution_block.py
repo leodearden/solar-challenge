@@ -692,20 +692,21 @@ class TestAComponentBlockGivesItsRequiredKeys:
     """A pv block gives capacity_kw, a battery block capacity_kwh and an ev block charger_type, null or not."""
 
     @pytest.mark.parametrize(
-        ("sections", "path"),
+        ("sections", "expected"),
         [
-            pytest.param({"pv": {"tilt": 30.0}}, "fleet_distribution.pv.capacity_kw", id="pv"),
-            pytest.param({"battery": {"max_charge_kw": 3.0}}, "fleet_distribution.battery.capacity_kwh", id="battery"),
-            pytest.param({"ev": {"arrival_hour": 18}}, "fleet_distribution.ev.charger_type", id="ev"),
+            pytest.param({"pv": {"tilt": 30.0}}, "fleet_distribution.pv: requires 'capacity_kw'", id="pv"),
+            pytest.param(
+                {"battery": {"max_charge_kw": 3.0}}, "fleet_distribution.battery: requires 'capacity_kwh'", id="battery"
+            ),
+            pytest.param({"ev": {"arrival_hour": 18}}, "fleet_distribution.ev: requires 'charger_type'", id="ev"),
         ],
     )
-    def test_a_block_leaving_out_its_required_key_is_refused_naming_its_path(
-        self, sections: dict[str, Any], path: str
+    def test_a_block_leaving_out_its_required_key_is_refused_naming_its_path_and_the_key(
+        self, sections: dict[str, Any], expected: str
     ) -> None:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(**{"pv": {"capacity_kw": 4.0}, **sections})
-        block_path = path.rsplit(".", 1)[0]
-        assert str(refusal.value) == f"Missing required keys in {block_path}: {path}"
+        assert str(refusal.value) == expected
 
     def test_a_null_battery_capacity_is_drawn_as_null_and_gives_no_battery(self) -> None:
         config = _parsed_fleet_distribution(2, pv={"capacity_kw": 4.0}, battery={"capacity_kwh": None})
@@ -755,7 +756,7 @@ class TestAComponentDistributionHoldsOnlyItsRowsKeysEachInItsPlace:
                 n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), component: distribution}
             )
 
-        assert str(parser_refusal.value).startswith(f"Unrecognised keys in fleet_distribution.{component}: {key!r};")
+        assert str(parser_refusal.value).startswith(f"fleet_distribution.{component}: unrecognised keys {key!r};")
         assert str(construction_refusal.value) == str(parser_refusal.value)
 
     @pytest.mark.parametrize(
@@ -801,17 +802,17 @@ class TestAComponentDistributionDrawsItsRequiredKeys:
     """A ComponentDistribution built in code draws its component's required key, null or not, as a component block gives it."""
 
     @pytest.mark.parametrize(
-        ("component", "draws", "path"),
+        ("component", "draws", "required_key"),
         [
-            pytest.param("pv", {"tilt": 30.0}, "fleet_distribution.pv.capacity_kw", id="pv"),
-            pytest.param("battery", {"max_charge_kw": 3.0}, "fleet_distribution.battery.capacity_kwh", id="battery"),
-            pytest.param("ev", {"arrival_hour": 18.0}, "fleet_distribution.ev.charger_type", id="ev"),
+            pytest.param("pv", {"tilt": 30.0}, "capacity_kw", id="pv"),
+            pytest.param("battery", {"max_charge_kw": 3.0}, "capacity_kwh", id="battery"),
+            pytest.param("ev", {"arrival_hour": 18.0}, "charger_type", id="ev"),
         ],
     )
     def test_a_required_key_left_out_of_a_code_built_component_is_refused_as_the_parser_refuses_it(
-        self, component: str, draws: dict[str, float], path: str
+        self, component: str, draws: dict[str, float], required_key: str
     ) -> None:
-        """The fleet is refused as it is built, naming the key's path, where a battery or EV that drew no presence key was no such component for any home."""
+        """The fleet is refused as it is built, naming the component's path and the key, where a battery or EV that drew no presence key was no such component for any home."""
         with pytest.raises(ConfigurationError) as parser_refusal:
             _parsed_fleet_distribution(**{"pv": {"capacity_kw": 4.0}, component: draws})
         with pytest.raises(ConfigurationError) as construction_refusal:
@@ -819,7 +820,7 @@ class TestAComponentDistributionDrawsItsRequiredKeys:
                 n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), component: ComponentDistribution(draws)}
             )
 
-        assert str(parser_refusal.value) == f"Missing required keys in fleet_distribution.{component}: {path}"
+        assert str(parser_refusal.value) == f"fleet_distribution.{component}: requires {required_key!r}"
         assert str(construction_refusal.value) == str(parser_refusal.value)
 
 
@@ -1137,7 +1138,7 @@ class TestAFleetReadAtABlockPathNamesEachKeyItRefusesUnderIt:
         [
             pytest.param(
                 {"pv": {"tilt": 30.0}},
-                f"Missing required keys in {_SCENARIO_FLEET_PATH}.pv: {_SCENARIO_FLEET_PATH}.pv.capacity_kw",
+                f"{_SCENARIO_FLEET_PATH}.pv: requires 'capacity_kw'",
                 id="a required key left out",
             ),
             pytest.param(

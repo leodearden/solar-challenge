@@ -91,7 +91,7 @@ def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
 def _refusal(block_path: str, *keys: str) -> str:
     """Match the refusal of *keys* by the block at *block_path*."""
     return re.escape(
-        f"Unrecognised keys in {block_path}: " + ", ".join(repr(key) for key in sorted(keys)) + ";"
+        f"{block_path}: unrecognised keys " + ", ".join(repr(key) for key in sorted(keys)) + ";"
     )
 
 
@@ -134,7 +134,7 @@ def _assert_blocks_recognise_exactly_their_keys(
             read(probed)
         recognised = set(nested) | set(also_recognised.get(path, ()))
         assert str(refusal.value) == (
-            f"Unrecognised keys in {path}: {_PROBE_KEY!r}; "
+            f"{path}: unrecognised keys {_PROBE_KEY!r}; "
             f"recognised keys: {', '.join(sorted(recognised))}"
         )
 
@@ -230,7 +230,7 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_home(load={"annual_kwh": 3000, "people": 2})
         assert str(refusal.value) == (
-            "Unrecognised keys in home.load: 'annual_kwh', 'people'; recognised keys: "
+            "home.load: unrecognised keys 'annual_kwh', 'people'; recognised keys: "
             "annual_consumption_kwh, household_occupants, name, seed, use_stochastic"
         )
 
@@ -255,7 +255,7 @@ class TestHomeBlockKeys:
     ) -> None:
         """A block that is not a mapping is refused, naming the block's path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             _parsed_home(**blocks)
 
@@ -327,7 +327,7 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError) as refusal:
             load_home_config(path)
         assert str(refusal.value) == (
-            "Unrecognised keys in the top level: 'batteries'; recognised keys: "
+            "the top level: unrecognised keys 'batteries'; recognised keys: "
             "battery, dispatch_strategy, ev, heat_pump, load, location, name, pv, tariff"
         )
 
@@ -530,7 +530,7 @@ class TestTariffBlockKeys:
     ) -> None:
         """A tariff or custom period that is not a mapping is refused, naming it; only None means no tariff."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             parse_tariff_config(block)
 
@@ -915,7 +915,7 @@ class TestFleetDistributionBlockKeys:
     ) -> None:
         """A component block that is not a mapping is refused, naming its path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             _parsed_fleet_distribution(**sections)
 
@@ -1209,7 +1209,7 @@ class TestScenarioFileBlockKeys:
     ) -> None:
         """A block that is not a mapping is refused, naming the block's path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             read(data)
 

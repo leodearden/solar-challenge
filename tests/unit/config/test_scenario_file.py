@@ -807,17 +807,14 @@ class TestLocationBlockParsing:
     def test_a_block_that_leaves_out_a_coordinate_is_refused_naming_each_missing_one(
         self, block: dict[str, object], missing: set[str]
     ) -> None:
-        """A block that sets any key sets both coordinates: each it leaves out or nulls is named by its path, and one it sets is not."""
+        """A block that sets any key sets both coordinates: each it leaves out or nulls is named, and one it sets is not."""
         with pytest.raises(ConfigurationError) as refused:
             parse_location_block(block)
 
-        assert {
-            coordinate
-            for coordinate in ("latitude", "longitude")
-            if f"location.{coordinate}" in str(refused.value)
-        } == missing
+        required = ", ".join(repr(coordinate) for coordinate in ("latitude", "longitude") if coordinate in missing)
+        assert str(refused.value) == f"location: requires {required}"
 
     def test_a_coordinate_left_out_is_named_by_the_blocks_path_in_its_file(self) -> None:
-        """The refusal names the missing coordinate under *block_path*, the block's path in its file."""
-        with pytest.raises(ConfigurationError, match=re.escape("scenarios[1].location.longitude")):
+        """The refusal names the block by *block_path*, its path in its file, and the coordinate it leaves out."""
+        with pytest.raises(ConfigurationError, match=re.escape("scenarios[1].location: requires 'longitude'")):
             parse_location_block({"latitude": 50}, block_path="scenarios[1].location")

@@ -95,7 +95,7 @@ fleet_distribution:
         path = tmp_path / "fleet.yaml"
         path.write_text(yaml_content)
 
-        with pytest.raises(ConfigurationError, match=re.escape("location.longitude")):
+        with pytest.raises(ConfigurationError, match=re.escape("location: requires 'longitude'")):
             load_fleet_config(path)
 
 
@@ -875,7 +875,7 @@ class TestFleetDistributionFileReaders:
         document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in location: 'latitud'"):
+        with pytest.raises(ConfigurationError, match="location: unrecognised keys 'latitud'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
@@ -885,7 +885,7 @@ class TestFleetDistributionFileReaders:
         document = _fleet_file(capacity_kwh, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in fleet_distribution: 'n_homez'"):
+        with pytest.raises(ConfigurationError, match="fleet_distribution: unrecognised keys 'n_homez'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
@@ -893,3 +893,14 @@ class TestFleetDistributionFileReaders:
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         _assert_refused_naming_tou_optimized_and_the_tariff(lambda: read(_fleet_file(capacity_kwh)))
+
+
+class TestParseFleetConfigNamesTheBlockItRefuses:
+    """Each refusal parse_fleet_config writes reads '<block label>: <problem>'."""
+
+    def test_a_home_whose_heat_pump_leaves_out_its_type_is_refused_naming_its_place(self) -> None:
+        """R1: a heat_pump block without heat_pump_type in the second home names homes[1].heat_pump and the key."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": [{}, {"heat_pump": {"thermal_capacity_kw": 8}}]})
+
+        assert str(refusal.value) == "homes[1].heat_pump: requires 'heat_pump_type'"

@@ -271,16 +271,14 @@ class TestDistributionSpecTypes:
         )
 
     @pytest.mark.parametrize("key", ["min", "max", "steps"])
-    def test_a_sweep_multiplier_lacking_a_required_key_is_refused_naming_the_key_by_its_path(self, key: str) -> None:
-        """A sweep lacking its min, max or steps is refused naming the key under the multiplier's path, as a block lacking a key it requires is."""
+    def test_a_sweep_multiplier_lacking_a_required_key_is_refused_naming_the_multiplier_and_the_key(self, key: str) -> None:
+        """A sweep lacking its min, max or steps is refused naming the multiplier's path and the key, as a block lacking a key it requires is."""
         sweep = _spec_lacking({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}, key)
 
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec({"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep})
 
-        assert str(refusal.value) == (
-            f"Missing required keys in {_SPEC_PATH}.multiplier: {_SPEC_PATH}.multiplier.{key}"
-        )
+        assert str(refusal.value) == f"{_SPEC_PATH}.multiplier: requires {key!r}"
 
     @pytest.mark.parametrize(("value", "expected"), _FIXED_SPEC_VALUES)
     def test_fixed_spec_is_its_value_as_a_float(

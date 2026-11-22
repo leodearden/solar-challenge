@@ -1376,7 +1376,7 @@ class TestAComponentsRefusalNamesItsHome:
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({}))
 
-        assert str(refusal.value) == "Missing required keys in fleet_distribution.pv: fleet_distribution.pv.capacity_kw"
+        assert str(refusal.value) == "fleet_distribution.pv: requires 'capacity_kw'"
 
 
 class TestEveryHomeHasAPVAndALoad:

@@ -381,7 +381,7 @@ home:
             ),
             pytest.param(
                 "home:\n  load: {occupants: 3}\n",
-                "Unrecognised keys in home.load: 'occupants';",
+                "home.load: unrecognised keys 'occupants';",
                 id="home-unrecognised-key",
             ),
             pytest.param(
@@ -398,8 +398,18 @@ home:
             ),
             pytest.param(
                 "homes:\n  - {}\n  - load: {occupants: 3}\n",
-                "Unrecognised keys in homes[1].load: 'occupants';",
+                "homes[1].load: unrecognised keys 'occupants';",
                 id="homes-list",
+            ),
+            pytest.param(
+                "homes:\n  - {}\n  - heat_pump: {thermal_capacity_kw: 8}\n",
+                "homes[1].heat_pump: requires 'heat_pump_type'",
+                id="homes-heat-pump-without-its-type",
+            ),
+            pytest.param(
+                "homes:\n  - {}\n  - pv: {azimuth: 400}\n",
+                "homes[1].pv: azimuth must be between 0 and 360, got 400",
+                id="homes-pv-azimuth-out-of-range",
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
@@ -1027,7 +1037,7 @@ home:
         result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
 
         assert result.exit_code == 1
-        assert "ERROR Unrecognised keys in home.load: '[bold]x';" in table_text(
+        assert "ERROR home.load: unrecognised keys '[bold]x';" in table_text(
             result.stdout
         )
 
