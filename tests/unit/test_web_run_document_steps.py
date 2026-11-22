@@ -969,40 +969,63 @@ def test_v2_keeps_each_summary_s_simulation_days_for_v5_reporting_none(name: str
     assert [each for each in result.dropped if each.field == "simulation_days"] == []
 
 
-def _no_series(run_dir: Path) -> None:
-    """Delete *run_dir*'s data.parquet."""
-    (run_dir / "data.parquet").unlink()
+def test_v5_sets_a_summary_whose_window_is_null_to_the_window_of_its_time_series() -> None:
+    """A summary whose window key is null holds no window, as one lacking the key does."""
+    v5 = _step(5)
+    lacking_the_key = _documents_before(v5, "pre_469_home")
+
+    result = v5.apply("home", _with_value(lacking_the_key, "summary.json", ("window",), None))
+
+    assert result.documents == v5.apply("home", lacking_the_key).documents
+    assert (result.dropped, result.rewritten) == ((), ())
 
 
-def _a_series_of_no_dates(run_dir: Path) -> None:
-    """Write over *run_dir*'s data.parquet a frame whose index is not a DatetimeIndex."""
-    pd.DataFrame({"generation_kw": [0.0]}).to_parquet(run_dir / "data.parquet", engine="pyarrow")
+def _no_series(series: Path) -> None:
+    """Delete the time series *series*."""
+    series.unlink()
+
+
+def _a_series_of_no_dates(series: Path) -> None:
+    """Write over the time series *series* a frame whose index is not a DatetimeIndex."""
+    pd.DataFrame({"generation_kw": [0.0]}).to_parquet(series, engine="pyarrow")
+
+
+_NOT_A_RUN_S_TIME_SERIES = (
+    "is not the time series of a run: SimulationWindow.of_index reads a DatetimeIndex: got RangeIndex of dtype int64"
+)
 
 
 @pytest.mark.parametrize(
-    ("damage", "reason"),
+    ("name", "series", "damage", "reason"),
     [
-        pytest.param(_no_series, "is missing", id="missing"),
+        pytest.param("pre_469_home", "data.parquet", _no_series, "is missing", id="home-missing"),
         pytest.param(
+            "pre_469_home", "data.parquet", _a_series_of_no_dates, _NOT_A_RUN_S_TIME_SERIES, id="home-not-a-run-s"
+        ),
+        pytest.param("legacy_fleet", "homes/home_1.parquet", _no_series, "is missing", id="fleet-home-missing"),
+        pytest.param(
+            "legacy_fleet",
+            "homes/home_1.parquet",
             _a_series_of_no_dates,
-            "is not the time series of a run: SimulationWindow.of_index reads a DatetimeIndex: got RangeIndex of dtype int64",
-            id="not-a-run-s-time-series",
+            _NOT_A_RUN_S_TIME_SERIES,
+            id="fleet-home-not-a-run-s",
         ),
     ],
 )
 def test_v5_refuses_a_summary_without_a_window_whose_time_series_it_cannot_read_naming_the_series(
-    damage: Callable[[Path], None], reason: str, tmp_path: Path
+    name: str, series: str, damage: Callable[[Path], None], reason: str, tmp_path: Path
 ) -> None:
-    run_dir = _copy_of_the_fixture_run("pre_469_home", tmp_path)
-    damage(run_dir)
-    documents = _documents_before_v5_read_from(run_dir, "pre_469_home")
+    """A home run's summary is refused by its data.parquet, and a fleet's i-th home summary by its homes/home_i.parquet."""
+    run_dir = _copy_of_the_fixture_run(name, tmp_path)
+    damage(run_dir / series)
+    documents = _documents_before_v5_read_from(run_dir, name)
 
     with pytest.raises(StoredRunUnreadable) as refused:
-        _step(5).apply("home", documents)
+        _step(5).apply(fixture_run_type(name), documents)
 
     assert (refused.value.run_id, refused.value.document, refused.value.field, refused.value.reason) == (
-        "pre_469_home",
-        "data.parquet",
+        name,
+        series,
         None,
         reason,
     )

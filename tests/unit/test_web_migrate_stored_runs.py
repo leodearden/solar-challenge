@@ -914,6 +914,39 @@ def test_migrate_store_leaves_a_run_saved_before_summaries_carried_a_window_whos
     assert [storage.load_run(each).run_id for each in legacy_run_ids.values()] == list(legacy_run_ids.values())
 
 
+@_NEEDS_PYARROW
+def test_migrate_store_leaves_the_files_of_a_fleet_saved_before_summaries_carried_a_window_whose_home_s_time_series_is_missing_unmigrated_and_brings_its_runs_row_forward(
+    store_at_version_1: Path,
+) -> None:
+    """A fleet run's runs row holds its config and its FleetSummary, no home summary, so v5 reads none of its series for it.
+
+    The run stands for a legacy fleet whose second home's series is gone. Its summary.json and its
+    runs.summary_json hold 12.5 as retired_figure, which v2 drops: the files keep it, while the
+    row loses it and the report names that value once, as the row's.
+    """
+    run_id = install_stored_run_fixture(
+        "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="fleet-series-lost"
+    )
+    run_dir = _run_dir(store_at_version_1, run_id)
+    _edit_stored_document(run_dir / "summary.json", _setting("retired_figure", 12.5))
+    _edit_runs_document(store_at_version_1, run_id, "summary_json", _setting("retired_figure", 12.5))
+    (run_dir / "homes" / "home_1.parquet").unlink()
+    files_before = _files_of(run_dir)
+
+    report = migrate_store(store_at_version_1, store_at_version_1.parent)
+
+    assert user_version_of(store_at_version_1) == SCHEMA_VERSION
+    left = [each for each in report.unmigrated_runs if each.run_id == run_id]
+    assert [(each.run_id, each.document, each.field) for each in left] == [(run_id, "homes/home_1.parquet", None)]
+    assert "is missing" in left[0].reason, left[0].reason
+    assert _files_of(run_dir) == files_before
+    assert not (run_dir / "format.json").exists()
+    assert tuple(each for each in report.dropped_values if each.run_id == run_id) == (
+        DroppedValue(run_id, "runs.summary_json", "retired_figure", 12.5),
+    )
+    assert "retired_figure" not in json.loads(runs_rows_of(store_at_version_1)[run_id]["summary_json"])
+
+
 def test_migrate_store_still_brings_forward_the_runs_row_of_a_run_whose_files_a_step_left_unmigrated(
     store_at_version_1: Path,
 ) -> None:

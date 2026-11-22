@@ -445,8 +445,9 @@ def migrate_stored_run_files(
     when its series is damaged, and refused naming it when it is loaded. A run saved before
     summaries carried a window whose series is missing or not a run's is left as it was and
     reported as unmigrated, naming the series. Its files then get none of the earlier steps'
-    fixes, and its runs row is left the same way, as migrate_runs_table_documents says. A
-    migration stopped part way through runs again from the start: the files it brought forward
+    fixes. A home run's runs row, which holds its summary, is left the same way, as
+    migrate_runs_table_documents says; a fleet run's, which holds no home summary, is brought
+    forward as any other is. A migration stopped part way through runs again from the start: the files it brought forward
     name *to_version* and are left as they are, and the steps change nothing in a document they
     already brought forward in a run stopped part way through, whose format.json is as it was.
     So the migration run again reports none of the values the steps dropped or rewrote in those
@@ -546,8 +547,10 @@ def migrate_runs_table_documents(
     earlier run-document steps of the same migration did. Each run's runs.config_json and
     runs.summary_json are brought forward from *from_version* to *to_version* by
     bring_run_documents_forward, with the time series of the run's directory under *data_dir*,
-    or none when it has no directory there, and only a column the steps changed is
-    rewritten, as the JSON text a save writes. A run whose row had a column rewritten is
+    or none when it has no directory there, and only a column the steps changed is rewritten,
+    as the JSON text a save writes. v5 reads a series only for a home run's summary saved
+    without a window, so a fleet run's row, which holds no home summary, is brought forward
+    whatever its series. A run whose row had a column rewritten is
     recorded as brought forward, as migrate_stored_run_files records a run whose files it
     wrote; a row the steps left as it was is not. A runs row records no format of its own, and
     an earlier migration may have left one in the first: so a row that cannot be brought

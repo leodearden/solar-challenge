@@ -1027,7 +1027,7 @@ def _periods_charge_one_rate(tariff: Any) -> bool:
     return all(is_number) and all(rate == rates[0] for rate in rates)
 
 
-def _summary_windows_from_their_time_series(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+def _summaries_at_format_5(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
     """v5's step: *documents* with each SummaryStatistics document given a window and rid of its simulation_days, as _summary_at_format_5 brings it forward, and each day count it dropped that differs from its window's days.
 
     A home run's summary summarises its data.parquet, and a fleet run's home_summaries[i] its
@@ -1123,7 +1123,7 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         5,
         "Set each stored summary saved before summaries carried a window to the window of its run's stored time "
         "series, and drop each summary's simulation_days, its window's days",
-        _summary_windows_from_their_time_series,
+        _summaries_at_format_5,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""
