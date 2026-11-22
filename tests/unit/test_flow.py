@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pytest
 import pandas as pd
@@ -693,6 +694,8 @@ class TestSimulateTimestepGridCharge:
     context stays None.
     Test (g) pins the order in which simulate_timestep runs a decision's
     charges: PV first, then the grid.
+    Test (h) pins the clock the context reads a zoned timestamp on: its own
+    wall clock, not UTC's.
     """
 
     def test_accepts_tariff_kwarg(
@@ -892,6 +895,46 @@ class TestSimulateTimestepGridCharge:
         assert result.grid_import == 0.0
         assert result.battery_soc == pytest.approx(battery.max_soc_kwh)
         assert result.grid_export < 1.0
+
+    @pytest.mark.parametrize(
+        ("timestamp", "rate", "is_cheap"),
+        [
+            pytest.param(
+                datetime(2024, 6, 21, 0, 45, tzinfo=ZoneInfo("Europe/London")),
+                PRESET_RATES["economy_7"].off_peak_rate,
+                True,
+                id="00:45_BST_off_peak-is-23:45_UTC_peak",
+            ),
+            pytest.param(
+                datetime(2024, 6, 21, 7, 45, tzinfo=ZoneInfo("Europe/London")),
+                PRESET_RATES["economy_7"].peak_rate,
+                False,
+                id="07:45_BST_peak-is-06:45_UTC_off_peak",
+            ),
+        ],
+    )
+    def test_the_context_reads_a_zoned_timestamp_at_its_own_wall_clock_minute(
+        self,
+        economy7_tariff: TariffConfig,
+        grid_charge_battery: Battery,
+        timestamp: datetime,
+        rate: float,
+        is_cheap: bool,
+    ) -> None:
+        """(h) The context prices and classifies a zoned timestamp at its own wall-clock minute, which falls in the other Economy 7 period than its UTC instant's."""
+        stub = _RecordingStrategy()
+        simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery=grid_charge_battery,
+            timestep_minutes=1.0,
+            timestamp=timestamp,
+            strategy=stub,
+            tariff=economy7_tariff,
+        )
+        ctx = stub.received_ctx
+        assert ctx is not None
+        assert (ctx.current_rate, ctx.is_cheap_period) == (rate, is_cheap)
 
 
 # ---------------------------------------------------------------------------

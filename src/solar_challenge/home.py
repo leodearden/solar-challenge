@@ -579,7 +579,7 @@ def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow)
     return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
 
 
-_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float, Optional[float]], EnergyFlowResult]
+_Timestep = Callable[[Optional[Battery], datetime.datetime, float, float, Optional[float]], EnergyFlowResult]
 """One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
 From that battery and the row's timestamp, generation in kW, demand in kW and useful-charge
@@ -600,7 +600,7 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
 
     def timestep(
         battery: Optional[Battery],
-        timestamp: pd.Timestamp,
+        timestamp: datetime.datetime,
         generation_kw: float,
         demand_kw: float,
         ceiling_kwh: Optional[float],
@@ -610,7 +610,7 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
             demand_kw=demand_kw,
             battery=battery,
             timestep_minutes=step_minutes,
-            timestamp=timestamp.to_pydatetime(),
+            timestamp=timestamp,
             strategy=strategy,
             tariff=tariff,
             useful_charge_ceiling_kwh=ceiling_kwh,
@@ -624,7 +624,7 @@ def _settling_timestep(step_minutes: float) -> _Timestep:
 
     def timestep(
         battery: Optional[Battery],
-        timestamp: pd.Timestamp,
+        timestamp: datetime.datetime,
         generation_kw: float,
         demand_kw: float,
         ceiling_kwh: Optional[float],
@@ -689,7 +689,7 @@ def _row_flows(
     battery = None if battery_config is None else Battery(battery_config)
     flows: list[EnergyFlowResult] = []
     for timestamp, generation, demand, ceiling in zip(
-        demand_kw.index, generation_kw, demand_kw, ceilings_kwh, strict=True
+        demand_kw.index.to_pydatetime(), generation_kw, demand_kw, ceilings_kwh, strict=True
     ):
         flow = timestep(battery, timestamp, float(generation), float(demand), ceiling)
         if validate_balance:

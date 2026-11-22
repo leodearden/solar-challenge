@@ -167,7 +167,7 @@ _FLOWS = tuple(field.name for field in fields(EnergyFlowResult) if field.name !=
 def _build_grid_charge_context(
     battery: "Battery",
     tariff: TariffConfig,
-    timestamp: pd.Timestamp,
+    timestamp: datetime,
     *,
     target_soc_kwh: float,
     useful_charge_ceiling_kwh: Optional[float],
@@ -337,7 +337,7 @@ def simulate_timestep(
         _build_grid_charge_context(
             battery,
             tariff,
-            pd.Timestamp(timestamp),
+            timestamp,
             target_soc_kwh=target_soc_kwh,
             useful_charge_ceiling_kwh=useful_charge_ceiling_kwh,
         )

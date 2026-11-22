@@ -4,7 +4,7 @@
 A home's battery is dispatched by its own strategy when it names one, else by tou_optimized on the
 tariff's clock when the home asks for it, else by self-consumption. A home with no battery runs no
 strategy, and its results name the one it configures. A strategy given to simulate_home runs in place
-of the configured one.
+of the configured one, and is handed each row's instant on the location's clock, as a python datetime.
 """
 
 import dataclasses
@@ -13,7 +13,14 @@ import datetime
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import PeakShavingStrategyConfig, SelfConsumptionStrategy, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import (
+    DispatchDecision,
+    DispatchStrategy,
+    GridChargeContext,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategy,
+    TOUOptimizedStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import (
     HOME_DISPATCH_STRATEGIES,
@@ -112,6 +119,57 @@ def test_a_strategy_given_to_simulate_home_dispatches_the_run_in_place_of_the_co
         given.to_dataframe(),
         _simulate_june_21(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy")).to_dataframe(),
     )
+
+
+class _TimestampRecordingStrategy(DispatchStrategy):
+    """Decides as the strategy it wraps, under its name, and records the timestamp of each decision, in order."""
+
+    def __init__(self, wrapped: DispatchStrategy) -> None:
+        self._wrapped = wrapped
+        self.timestamps: list[datetime.datetime] = []
+
+    @property
+    def name(self) -> str:
+        return self._wrapped.name
+
+    def decide_action(
+        self,
+        timestamp: datetime.datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+        *,
+        grid_charge_ctx: GridChargeContext | None = None,
+    ) -> DispatchDecision:
+        self.timestamps.append(timestamp)
+        return self._wrapped.decide_action(
+            timestamp,
+            generation_kw,
+            demand_kw,
+            battery_soc_kwh,
+            battery_capacity_kwh,
+            timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
+
+
+def test_a_strategy_given_to_simulate_home_is_handed_each_rows_own_instant_on_the_locations_clock_in_row_order():
+    """On a BST day, where UTC's wall clock reads an hour behind the location's, the strategy decides once per row, in row order, at the row's own wall-clock minute and UTC offset, each handed as a python datetime, not a pd.Timestamp."""
+    day = pd.Timestamp("2024-06-21")
+    recording = _TimestampRecordingStrategy(SelfConsumptionStrategy())
+
+    results = simulate_home(
+        _TOU_HOME, day, day, weather=weather_for(_TOU_HOME, synthetic_june_weather(day)), strategy=recording
+    )
+
+    rows = results.demand.index
+    assert {row.utcoffset() for row in rows} == {datetime.timedelta(hours=1)}
+    assert [(t.date(), t.hour, t.minute, t.utcoffset()) for t in recording.timestamps] == [
+        (row.date(), row.hour, row.minute, row.utcoffset()) for row in rows
+    ]
+    assert {type(t) for t in recording.timestamps} == {datetime.datetime}
 
 
 def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_does_not():
