@@ -836,7 +836,7 @@ class TestParseSweepFleetConfigs:
         sweep_spec = detect_fleet_sweep_spec(document)
 
         assert sweep_spec == SweepSpec(min=0.5, max=2.0, steps=3)
-        assert [value for value, _ in parse_sweep_fleet_configs(document)] == sweep_spec.get_values()
+        assert tuple(value for value, _ in parse_sweep_fleet_configs(document)) == sweep_spec.get_values()
 
     @pytest.mark.parametrize(
         "document",

@@ -98,6 +98,16 @@ class TestTheYamlReader:
         assert _words_not_named(str(refusal.value), _MULTIPLIER_PATH, "mode", "'log'") == []
 
 
+class TestThePoints:
+    """A spec's points run from min to max in steps points, as a tuple: a list is never equal to the tuple literal each is compared with."""
+
+    def test_a_geometric_sweeps_points_grow_by_a_constant_ratio(self) -> None:
+        assert SweepSpec(1, 4, 3).get_values() == (1.0, 2.0, 4.0)
+
+    def test_a_linear_sweeps_points_grow_by_a_constant_step(self) -> None:
+        assert SweepSpec(1, 4, 3, "linear").get_values() == (1.0, 2.5, 4.0)
+
+
 class TestTheKeptChecks:
     """A geometric sweep starts above zero, and every sweep ends above where it starts."""
 
