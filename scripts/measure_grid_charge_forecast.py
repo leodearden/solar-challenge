@@ -117,7 +117,7 @@ def with_forecast(home: HomeConfig, forecast: GridChargeForecast) -> HomeConfig:
 
 def net_cost_by_season_gbp(results: SimulationResults) -> dict[str, float]:
     """results' net cost in £, import cost less export revenue, in each season its rows fall in on their own clock, in SEASONS order."""
-    amounts = results.per_minute_amounts()
+    amounts = results.per_step_amounts()
     net_cost = amounts["import_cost_gbp"] - amounts["export_revenue_gbp"]
     by_season = net_cost.groupby(net_cost.index.month.map(_SEASON_OF_MONTH)).sum()
     return {season: float(by_season[season]) for season in SEASONS if season in by_season.index}

@@ -589,7 +589,7 @@ class TestSimulationResultsRefusesAnAmountMissingANumber:
         "read",
         [
             pytest.param(SimulationResults.total_amounts, id="total_amounts"),
-            pytest.param(lambda results: results.per_step_amounts(), id="per_step_amounts"),
+            pytest.param(SimulationResults.per_step_amounts, id="per_step_amounts"),
             pytest.param(SimulationResults.to_dataframe, id="to_dataframe"),
             pytest.param(calculate_summary, id="calculate_summary"),
         ],

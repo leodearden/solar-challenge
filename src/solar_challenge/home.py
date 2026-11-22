@@ -240,7 +240,7 @@ class SimulationResults:
 
     Each amount series, every series but the battery_soc and tariff_rate levels,
     holds a number in every row, as the run's totals sum every row's amount.
-    Construction, after its dtype refusal, and per_minute_amounts, total_amounts
+    Construction, after its dtype refusal, and per_step_amounts, total_amounts
     and to_dataframe, since a series can still be written in place, refuse the
     first amount series holding a NaN, or an NA in a nullable series, with
     SeriesRefused, naming its column, how many of its rows hold no number and
@@ -346,7 +346,7 @@ class SimulationResults:
         for _, series, amount in self._series_with_amounts():
             yield amount.column, amount.row_amounts(series, window)
 
-    def per_minute_amounts(self) -> pd.DataFrame:
+    def per_step_amounts(self) -> pd.DataFrame:
         """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
 
         The battery state of charge and the tariff rate have no column, as neither adds up over
@@ -360,7 +360,7 @@ class SimulationResults:
         return pd.concat(dict(self._amount_series()), axis=1)
 
     def total_amounts(self) -> dict[str, float]:
-        """The run's total of each amount: per_minute_amounts' column sums, keyed by column.
+        """The run's total of each amount: per_step_amounts' column sums, keyed by column.
 
         Raises:
             ValueError: As window does, for an index no window describes.
