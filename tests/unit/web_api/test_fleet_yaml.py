@@ -205,6 +205,16 @@ class TestExportFleetYAML:
                 "'min' and 'max'",
                 id="battery-uniform-without-its-range",
             ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mena": 4.0, "std": 1.0}}},
+                "Unrecognised keys in fleet_distribution.pv.capacity_kw: 'mena'",
+                id="pv-normal-with-a-misspelt-mean",
+            ),
+            pytest.param(
+                {"pv": {"capacity_kw": {"type": "normal", "mean": True, "std": 1.0}}},
+                "fleet_distribution.pv.capacity_kw",
+                id="pv-normal-boolean-mean",
+            ),
         ],
     )
     def test_export_refuses_what_simulate_refuses_with_the_same_answer(

@@ -15,6 +15,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.config import load_fleet_config
+from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     NormalDistribution,
     ShuffledPoolDistribution,
@@ -29,6 +30,7 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
+from solar_challenge.web.builder_form import scenario_from_builder_form
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
@@ -394,7 +396,7 @@ class TestScenarioAPI:
     def test_validate_refuses_only_a_shuffled_pool_too_large_for_a_dashboard_fleet(
         self, client: FlaskClient
     ) -> None:
-        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more, naming the count.
+        """The builder accepts a PV pool of exactly the dashboard's fleet limit's values, and refuses one value more with the fleet loader's refusal, which holds a pool to the fleet's homes, naming pv.capacity_kw.
 
         The form's fleet has that many homes, since a pool holds one value per home.  The pool
         sent is at most one value over the limit, never a count such as finding
@@ -403,6 +405,16 @@ class TestScenarioAPI:
         """
         at_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES}]
         above_limit = [{"value": 4.0, "count": MAX_FLEET_HOMES + 1}]
+        fleet_block = scenario_from_builder_form(
+            {
+                **TestBuilderScenarioYaml._DEFAULT_FORM,
+                "n_homes": MAX_FLEET_HOMES,
+                "pv_distribution_type": "shuffled_pool",
+                "pv_sp_entries": above_limit,
+            }
+        )["fleet_distribution"]
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet_block)
 
         assert _validation_with_pv_pool(client, at_limit, n_homes=MAX_FLEET_HOMES) == {
             "valid": True,
@@ -410,11 +422,9 @@ class TestScenarioAPI:
         }
         assert _validation_with_pv_pool(client, above_limit, n_homes=MAX_FLEET_HOMES) == {
             "valid": False,
-            "errors": [
-                f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}"
-            ],
+            "errors": [str(loader_refusal.value)],
         }
+        assert "pv.capacity_kw" in str(loader_refusal.value)
 
     def test_validate_accepts_each_fixed_value_the_builder_page_allows_and_refuses_one_beyond_it(
         self, client: FlaskClient

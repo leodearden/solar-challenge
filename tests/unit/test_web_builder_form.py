@@ -3,11 +3,15 @@
 
 import math
 from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.config import load_fleet_config
+from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
 from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, form_to_fleet_distribution_config
@@ -37,6 +41,15 @@ def _form_with_pv_pool(rows: list[dict[str, object]]) -> dict[str, object]:
     return {**_ACCEPTED_FORM, "pv_distribution_type": "shuffled_pool", "pv_sp_entries": rows}
 
 
+def _loader_refusal(form: dict[str, object], directory: Path) -> str:
+    """The str() of load_fleet_config's refusal of the scenario the builder writes for *form*, read from the YAML text the builder previews, as builder_form_errors reads it."""
+    path = directory / "scenario.yaml"
+    path.write_text(scenario_yaml(scenario_from_builder_form(form)), encoding="utf-8")
+    with pytest.raises(ValueError) as refusal:
+        load_fleet_config(path)
+    return str(refusal.value)
+
+
 class TestScenarioFromBuilderForm:
     """The fleet scenario document scenario_from_builder_form builds from a builder form, and its refusals."""
 
@@ -61,11 +74,6 @@ class TestScenarioFromBuilderForm:
             pytest.param({}, "import_rate", id="rate"),
             pytest.param({}, "n_homes", id="number-of-homes"),
             pytest.param({"location_preset": "custom"}, "latitude", id="custom-coordinate"),
-            pytest.param(
-                {"pv_distribution_type": "normal", "pv_mean": 4},
-                "pv_std",
-                id="distribution-parameter",
-            ),
         ],
     )
     def test_a_number_field_that_is_not_a_finite_number_is_refused_naming_it(
@@ -81,14 +89,19 @@ class TestScenarioFromBuilderForm:
 
     @pytest.mark.parametrize("value", UNUSABLE_NUMBERS)
     @pytest.mark.parametrize(
-        ("rows_holding", "field"),
+        ("distribution_holding", "written_at"),
         [
+            pytest.param(
+                lambda value: {"pv_distribution_type": "normal", "pv_mean": value, "pv_std": 1},
+                ("pv", "capacity_kw", "mean"),
+                id="parameter",
+            ),
             pytest.param(
                 lambda value: {
                     "load_distribution_type": "weighted_discrete",
                     "load_wd_values": [{"value": value, "weight": 1}],
                 },
-                "load_wd_values[0].value",
+                ("load", "annual_consumption_kwh", "values", 0),
                 id="row-value",
             ),
             pytest.param(
@@ -96,7 +109,7 @@ class TestScenarioFromBuilderForm:
                     "battery_distribution_type": "weighted_discrete",
                     "battery_wd_values": [{"value": 5, "weight": value}],
                 },
-                "battery_wd_values[0].weight",
+                ("battery", "capacity_kwh", "weights", 0),
                 id="row-weight",
             ),
             pytest.param(
@@ -104,21 +117,47 @@ class TestScenarioFromBuilderForm:
                     "pv_distribution_type": "shuffled_pool",
                     "pv_sp_entries": [{"value": 4, "count": value}],
                 },
-                "pv_sp_entries[0].count",
+                ("pv", "capacity_kw", "counts", 0),
                 id="row-count",
             ),
         ],
     )
-    def test_a_distribution_row_number_that_is_not_a_finite_number_is_refused_naming_its_row(
+    def test_a_distribution_number_is_written_as_sent_and_its_refusal_is_the_loaders(
         self,
-        rows_holding: Callable[[object], dict[str, object]],
-        field: str,
+        distribution_holding: Callable[[object], dict[str, object]],
+        written_at: tuple[str | int, ...],
         value: object,
+        tmp_path: Path,
     ) -> None:
-        """A row's value, weight or count holding a number too large for a float, an infinity, NaN or a boolean is refused naming the row's field."""
-        with pytest.raises(ValueError) as exc_info:
-            scenario_from_builder_form({**_ACCEPTED_FORM, **rows_holding(value)})
-        assert str(exc_info.value) == f"{field} must be a finite number, got {value!r}"
+        """A distribution's parameter, or a row's value, weight or count, holding a number too large for a float, an infinity, NaN or a boolean is written into the scenario as sent, and builder_form_errors reports load_fleet_config's refusal of it: the builder reads no distribution number."""
+        form = {**_ACCEPTED_FORM, **distribution_holding(value)}
+        written: Any = scenario_from_builder_form(form)["fleet_distribution"]
+        for step in written_at:
+            written = written[step]
+        assert written is value
+        assert builder_form_errors(form) == [_loader_refusal(form, tmp_path)]
+
+    def test_a_normal_mean_that_is_not_finite_is_refused_by_the_loaders_naming_mean(
+        self, tmp_path: Path
+    ) -> None:
+        """An infinite pv_mean reaches the scenario as sent, and the form's one reason is load_fleet_config's refusal naming the normal's mean under its YAML path."""
+        form = {**_ACCEPTED_FORM, "pv_distribution_type": "normal", "pv_mean": math.inf, "pv_std": 1}
+        refusal = _loader_refusal(form, tmp_path)
+        assert builder_form_errors(form) == [refusal]
+        assert "fleet_distribution.pv.capacity_kw" in refusal
+        assert "mean" in refusal
+
+    def test_a_distribution_type_the_editor_does_not_offer_is_written_as_sent_and_its_refusal_is_the_loaders(
+        self, tmp_path: Path
+    ) -> None:
+        """A type the distribution editor does not offer is written into the scenario as sent, and builder_form_errors reports load_fleet_config's refusal of the spec, naming its YAML path."""
+        form = {**_ACCEPTED_FORM, "battery_distribution_type": "fixed"}
+        assert scenario_from_builder_form(form)["fleet_distribution"]["battery"] == {
+            "capacity_kwh": {"type": "fixed"}
+        }
+        refusal = _loader_refusal(form, tmp_path)
+        assert builder_form_errors(form) == [refusal]
+        assert "fleet_distribution.battery.capacity_kwh" in refusal
 
     @pytest.mark.parametrize(
         ("changes", "message"),
@@ -139,43 +178,21 @@ class TestScenarioFromBuilderForm:
                 "got {'value': 2900}",
                 id="row-without-its-weight",
             ),
-            pytest.param(
-                {"battery_distribution_type": "fixed"},
-                "battery_distribution_type must be one of normal, uniform, weighted_discrete, "
-                "shuffled_pool, got 'fixed'",
-                id="type-the-editor-does-not-offer",
-            ),
         ],
     )
     def test_a_malformed_distribution_is_refused_with_the_fleet_forms_refusal_naming_the_builders_field(
         self, changes: dict[str, object], message: str
     ) -> None:
-        """Each refusal is the fleet form's refusal of the same distribution, under the builder's field names: both forms' distributions are read by one reader."""
+        """Each refusal of a distribution's shape is the fleet form's refusal of the same distribution, under the builder's field names: both forms' distributions are translated by one translator."""
         with pytest.raises(ValueError) as exc_info:
             scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
         assert str(exc_info.value) == message
 
-    @pytest.mark.parametrize(
-        ("changes", "field"),
-        [
-            pytest.param({"n_homes": 2.5}, "n_homes", id="number-of-homes"),
-            pytest.param(
-                {
-                    "pv_distribution_type": "shuffled_pool",
-                    "pv_sp_entries": [{"value": 4, "count": 2.5}],
-                },
-                "pv_sp_entries[0].count",
-                id="row-count",
-            ),
-        ],
-    )
-    def test_a_count_with_a_fractional_part_is_refused_naming_it(
-        self, changes: dict[str, object], field: str
-    ) -> None:
-        """The number of homes, or a shuffled pool row's count, with a fractional part is refused, not truncated."""
+    def test_a_number_of_homes_with_a_fractional_part_is_refused_naming_it(self) -> None:
+        """The number of homes with a fractional part is refused, not truncated."""
         with pytest.raises(ValueError) as exc_info:
-            scenario_from_builder_form({**_ACCEPTED_FORM, **changes})
-        assert str(exc_info.value) == f"{field} must be a whole number, got 2.5"
+            scenario_from_builder_form({**_ACCEPTED_FORM, "n_homes": 2.5})
+        assert str(exc_info.value) == "n_homes must be a whole number, got 2.5"
 
     @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
     def test_a_number_of_homes_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
@@ -187,50 +204,41 @@ class TestScenarioFromBuilderForm:
         assert (type(block["n_homes"]), block["n_homes"]) == (int, WHOLE_NUMBER)
 
     @pytest.mark.parametrize("count", WHOLE_NUMBER_FORMS)
-    def test_a_shuffled_pool_row_count_that_is_a_whole_number_in_another_form_is_the_int_it_equals(
+    def test_a_shuffled_pool_row_count_that_is_a_whole_number_in_another_form_is_written_as_sent_and_loads_as_the_int_it_equals(
         self, count: object
     ) -> None:
-        """A shuffled pool row's count sent as a whole float or a numeric string is the int it equals in the pool's counts, not a float or a string."""
+        """A shuffled pool row's count sent as a whole float or a numeric string is written into the pool's counts as sent, and the loaders read it as the int it equals: a pool of 2 and that count fills a fleet of 2 + WHOLE_NUMBER homes."""
         form = {
-            **_ACCEPTED_FORM,
-            "pv_distribution_type": "shuffled_pool",
-            "pv_sp_entries": [{"value": 3, "count": 2}, {"value": 4, "count": count}],
+            **_form_with_pv_pool([{"value": 3, "count": 2}, {"value": 4, "count": count}]),
+            "n_homes": 2 + WHOLE_NUMBER,
         }
-        pv_block = scenario_from_builder_form(form)["fleet_distribution"]["pv"]
+        counts = scenario_from_builder_form(form)["fleet_distribution"]["pv"]["capacity_kw"]["counts"]
 
-        counts = pv_block["capacity_kw"]["counts"]
-        assert [(type(read), read) for read in counts] == [(int, 2), (int, WHOLE_NUMBER)]
+        assert counts[1] is count
+        assert builder_form_errors(form) == []
 
     @pytest.mark.parametrize(
         "count",
         [
             pytest.param(-1, id="negative"),
+            pytest.param(2.5, id="fraction"),
             pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
             pytest.param(10**12, id="the-count-of-finding-fk-9dd1d9389dd2"),
             pytest.param(1e300, id="huge-float"),
+            pytest.param(MAX_FLEET_HOMES - 1, id="counts-totalling-one-above-the-fleet-limit"),
         ],
     )
-    def test_a_shuffled_pool_row_count_outside_0_to_the_fleet_limit_is_refused_naming_it(
-        self, count: object
+    def test_a_shuffled_pool_row_count_the_loaders_refuse_is_written_as_sent_and_their_refusal_is_the_forms_one_reason(
+        self, count: object, tmp_path: Path
     ) -> None:
-        """A shuffled pool row's count outside 0 to the dashboard's fleet limit is refused, naming the row's count, the range and the value as sent: 1e300 reads 'got 1e+300', not its 301-digit int."""
-        rows = [{"value": 3, "count": 2}, {"value": 4, "count": count}]
-        with pytest.raises(ValueError) as exc_info:
-            scenario_from_builder_form(_form_with_pv_pool(rows))
-        assert str(exc_info.value) == (
-            f"pv_sp_entries[1].count must be between 0 and {MAX_FLEET_HOMES}, got {count!r}"
-        )
+        """A shuffled pool row's count is written into the scenario as sent; ShuffledPoolDistribution refuses one below 0 or with a fractional part, and the fleet's F6 refuses counts that do not total its homes, before any value of the pool is built: n_homes, at most MAX_FLEET_HOMES, bounds every pool."""
+        form = _form_with_pv_pool([{"value": 3, "count": 2}, {"value": 4, "count": count}])
+        counts = scenario_from_builder_form(form)["fleet_distribution"]["pv"]["capacity_kw"]["counts"]
 
-    def test_a_shuffled_pool_whose_counts_total_more_than_the_fleet_limit_is_refused_naming_its_rows_and_the_total(
-        self,
-    ) -> None:
-        """Counts each within the dashboard's fleet limit are refused when together they hold values for more homes than a dashboard fleet has."""
-        rows = [{"value": 3, "count": 2}, {"value": 4, "count": MAX_FLEET_HOMES - 1}]
-        with pytest.raises(ValueError) as exc_info:
-            scenario_from_builder_form(_form_with_pv_pool(rows))
-        assert str(exc_info.value) == (
-            f"pv_sp_entries counts must total at most {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
-        )
+        assert counts[1] is count
+        refusal = _loader_refusal(form, tmp_path)
+        assert builder_form_errors(form) == [refusal]
+        assert "pv.capacity_kw" in refusal
 
     def test_shuffled_pool_counts_from_0_to_a_total_of_the_fleet_limit_are_read_as_given(
         self,
@@ -328,26 +336,21 @@ class TestBuilderFormErrors:
         ]
 
     @pytest.mark.parametrize(
-        ("rows", "reason"),
+        "rows",
         [
             pytest.param(
-                [{"value": 4, "count": MAX_FLEET_HOMES + 1}],
-                f"pv_sp_entries[0].count must be between 0 and {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}",
-                id="a-count-one-above-the-fleet-limit",
+                [{"value": 4, "count": MAX_FLEET_HOMES + 1}], id="a-count-one-above-the-fleet-limit"
             ),
             pytest.param(
                 [{"value": 4, "count": MAX_FLEET_HOMES}, {"value": 5, "count": 1}],
-                f"pv_sp_entries counts must total at most {MAX_FLEET_HOMES}, "
-                f"got {MAX_FLEET_HOMES + 1}",
                 id="counts-totalling-one-above-the-fleet-limit",
             ),
         ],
     )
-    def test_a_shuffled_pool_too_large_for_a_dashboard_fleet_is_the_forms_one_reason(
-        self, rows: list[dict[str, object]], reason: str
+    def test_a_shuffled_pool_too_large_for_a_dashboard_fleet_is_refused_by_the_loaders_or_by_the_number_of_homes(
+        self, rows: list[dict[str, object]], tmp_path: Path
     ) -> None:
-        """The refusal comes from the form's conversion, before load_fleet_config would build every value of the pool.
+        """A pool of one value more than the fleet limit is refused by load_fleet_config, whose F6 holds a pool to the fleet's homes before any value of it is built; for a fleet above the limit the dashboard's number of homes is the one reason, and the loaders do not run.
 
         The pool sent is one value over the limit, never a count such as finding
         fk-9dd1d9389dd2's 10**12, so a regressed bound builds a pool of 10,001 values
@@ -357,7 +360,11 @@ class TestBuilderFormErrors:
         assert builder_form_errors({**_form_with_pv_pool(at_limit), "n_homes": MAX_FLEET_HOMES}) == [], (
             "premise: a pool of the fleet limit's values is accepted for a fleet of that many homes"
         )
-        assert builder_form_errors(_form_with_pv_pool(rows)) == [reason]
+        form = _form_with_pv_pool(rows)
+        assert builder_form_errors(form) == [_loader_refusal(form, tmp_path)]
+        assert builder_form_errors({**form, "n_homes": MAX_FLEET_HOMES + 1}) == [
+            f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}."
+        ]
 
 
 class TestBothFormsWriteADistributionAlike:
