@@ -6,7 +6,7 @@ It reads each component's keys by that component's table in solar_challenge.scen
 
 import math
 import random
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from types import MappingProxyType
 from typing import (
     Any,
@@ -20,7 +20,7 @@ from typing import (
 )
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.boolean_fields import as_boolean
+from solar_challenge.boolean_fields import as_boolean, is_boolean
 from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -47,7 +47,6 @@ from solar_challenge.scenario_blocks import (
     HEAT_PUMP_BLOCK,
     LOAD_BLOCK,
     PV_BLOCK,
-    BlockType,
     ComponentBlock,
     FieldKind,
     FleetField,
@@ -517,7 +516,7 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
         if component is None or block.presence is None:
             continue
         spec = component.draws.get(block.presence)
-        if isinstance(spec, (int, float, str)):
+        if isinstance(spec, (*_NUMBER_TYPES, str)):
             block.asks_for_component(spec, f"{name}.{block.presence}")
 
 
@@ -534,9 +533,12 @@ _GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKin
 #: The kinds whose draws are numbers: a count is drawn as a number is, then converted.
 _NUMBER_KINDS: frozenset[FieldKind] = frozenset({FieldKind.NUMBER, FieldKind.COUNT})
 
+#: The Python types of a number: the scalar form's spec, which gives it every home, and a value a home draws.
+_NUMBER_TYPES: tuple[type[int], type[float]] = (int, float)
+
 
 @dataclass(frozen=True)
-class _DrawnKindRule:
+class DrawnKindRule:
     """What a fleet may give a key of one drawn kind: the specs the kind draws, and the values a spec of it may list.
 
     *spec_types* are the types of the specs the kind draws, beside null. *admits* says whether a
@@ -552,9 +554,9 @@ class _DrawnKindRule:
 
 
 #: A number or count field's rule. A value it lists is no string; the home's type reads it as a number.
-_NUMBER_KIND_RULE = _DrawnKindRule(
+_NUMBER_KIND_RULE = DrawnKindRule(
     spec_types=(
-        int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
+        *_NUMBER_TYPES, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
         ShuffledPoolDistribution, ProportionalDistribution,
     ),
     admits=lambda value, row: not isinstance(value, str),
@@ -564,7 +566,7 @@ _NUMBER_KIND_RULE = _DrawnKindRule(
     describe_values=lambda row: "null or a number",
 )
 
-_CHOICE_KIND_RULE = _DrawnKindRule(
+_CHOICE_KIND_RULE = DrawnKindRule(
     spec_types=(str, WeightedDiscreteDistribution, ShuffledPoolDistribution),
     admits=lambda value, row: value in row.choices,
     describe_specs=lambda row: (
@@ -573,13 +575,9 @@ _CHOICE_KIND_RULE = _DrawnKindRule(
     describe_values=lambda row: f"null or one of {list(row.choices)}",
 )
 
-#: The distribution types a CHOICE key draws, by name: those that list their outcomes, the
-#: distributions among _CHOICE_KIND_RULE's spec types.
-_CHOICE_DISTRIBUTION_TYPES: frozenset[str] = frozenset({"weighted_discrete", "shuffled_pool"})
-
 #: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
 #: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
-_DRAWN_KIND_RULES: Mapping[FieldKind, _DrawnKindRule] = MappingProxyType({
+DRAWN_KIND_RULES: Mapping[FieldKind, DrawnKindRule] = MappingProxyType({
     **dict.fromkeys(_NUMBER_KINDS, _NUMBER_KIND_RULE),
     FieldKind.CHOICE: _CHOICE_KIND_RULE,
 })
@@ -609,9 +607,9 @@ def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str,
     _held_in_the_wrong_place states. A spec of a type the kind does not draw is refused naming
     *path* and *written*, the spec as its block gives it. A value it lists, or a bare spec, that
     the kind does not admit is refused naming *path* and the value, even one no home would draw.
-    _DRAWN_KIND_RULES holds each drawn kind's rule.
+    DRAWN_KIND_RULES holds each drawn kind's rule.
     """
-    rule = _DRAWN_KIND_RULES.get(row.kind)
+    rule = DRAWN_KIND_RULES.get(row.kind)
     if rule is None:
         raise _held_in_the_wrong_place(path, row)
     if spec is None:
@@ -657,6 +655,116 @@ def _fleet_components(
 
 
 # --- Distribution Parsing and Sampling ---
+
+
+@dataclass(frozen=True)
+class SpecParameter:
+    """One scalar key of a distribution type, its caption in an editor, and whether a spec must give it."""
+
+    key: str
+    title: str
+    required: bool = True
+
+
+@dataclass(frozen=True)
+class SpecRows:
+    """A distribution type's paired lists: 'values', and the list paired with it, with its caption in an editor and its entries' kind."""
+
+    paired_key: str
+    paired_title: str
+    paired_kind: FieldKind
+
+    @property
+    def keys(self) -> tuple[str, str]:
+        """The two lists' keys, 'values' first."""
+        return ("values", self.paired_key)
+
+
+@dataclass(frozen=True)
+class DistributionType:
+    """One type a distribution spec names in its ``type:`` key: its title, the spec_type its build returns, and its keys beside 'type', those an editor holds as parameters and rows, then the unheld keys it has no input for."""
+
+    name: str
+    title: str
+    spec_type: type[DistributionSpec]
+    build: Callable[[dict[str, Any], str], DistributionSpec]
+    parameters: tuple[SpecParameter, ...] = ()
+    rows: Optional[SpecRows] = None
+    unheld_keys: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Refuse a type whose keys do not hold its spec, naming them: a spec dataclass's keys are its fields in order, and the scalar form's are one key beside 'type'."""
+        if is_dataclass(self.spec_type):
+            spec_fields = tuple(each.name for each in fields(self.spec_type))
+            if self.spec_keys != spec_fields:
+                raise ConfigurationError(
+                    f"DistributionType {self.name!r}: its keys {self.spec_keys!r} must be "
+                    f"{self.spec_type.__name__}'s fields in order, {spec_fields!r}"
+                )
+        elif len(self.spec_keys) != 1 or "type" in self.spec_keys:
+            raise ConfigurationError(
+                f"DistributionType {self.name!r}: the scalar form gives one key beside 'type', got {self.spec_keys!r}"
+            )
+
+    @property
+    def spec_keys(self) -> tuple[str, ...]:
+        """Every key a spec of the type gives beside 'type', in order: its parameters', its rows', then its unheld keys."""
+        rows = self.rows.keys if self.rows is not None else ()
+        return (*(parameter.key for parameter in self.parameters), *rows, *self.unheld_keys)
+
+    @property
+    def recognised_keys(self) -> frozenset[str]:
+        """Every key a spec of the type recognises, 'type' among them."""
+        return frozenset({"type", *self.spec_keys})
+
+    @property
+    def editable(self) -> bool:
+        """Whether an editor holds every key of the type: one with unheld keys is not."""
+        return not self.unheld_keys
+
+    @property
+    def is_scalar_form(self) -> bool:
+        """Whether its spec is the bare number a key gives every home, which an editor offers as its own Fixed Value option."""
+        return not is_dataclass(self.spec_type)
+
+    def drawn_by(self, kind: FieldKind) -> bool:
+        """Whether a field of *kind* draws a spec of the type, as DRAWN_KIND_RULES says; a kind it holds no rule for draws none."""
+        rule = DRAWN_KIND_RULES.get(kind)
+        return rule is not None and issubclass(self.spec_type, rule.spec_types)
+
+    def write(self, spec: DistributionSpec) -> dict[str, Any]:
+        """The mapping build reads back as *spec*: its type, then every key in spec_keys' order, a None one as null, which build reads as absent.
+
+        A spec dataclass gives each key its field of the same name, as construction checks; the
+        scalar form's spec is its one key's value.
+
+        Raises:
+            ConfigurationError: If *spec* is not of the type, naming the type and *spec*: a
+                dataclass type's spec is an instance of its spec_type, the scalar form's a null
+                or a number, as _is_a_number_spec says.
+        """
+        if self.is_scalar_form:
+            of_the_type = spec is None or _is_a_number_spec(spec)
+        else:
+            of_the_type = isinstance(spec, self.spec_type)
+        if not of_the_type:
+            raise ConfigurationError(f"DistributionType {self.name!r} cannot write {spec!r}, which is no spec of its type")
+        held = (spec,) if self.is_scalar_form else tuple(getattr(spec, key) for key in self.spec_keys)
+        return {"type": self.name, **{key: _written_value(value) for key, value in zip(self.spec_keys, held, strict=True)}}
+
+
+def _is_a_number_spec(spec: object) -> bool:
+    """Whether *spec* is a number, the scalar form's spec: of _NUMBER_TYPES but no bool, an int that the grammar refuses as a number."""
+    return isinstance(spec, _NUMBER_TYPES) and not is_boolean(spec)
+
+
+def _written_value(value: object) -> object:
+    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, anything else as it is."""
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, SweepSpec):
+        return {"type": "sweep", **{each.name: getattr(value, each.name) for each in fields(value)}}
+    return value
 
 
 _SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
@@ -748,32 +856,87 @@ def _build_proportional_to_spec(
     return constructed(block_path, ProportionalDistribution, source=data["source"], **given)
 
 
-_DISTRIBUTION_SPEC_TYPES: Mapping[str, BlockType[DistributionSpec]] = MappingProxyType({
-    "weighted_discrete": BlockType(
-        frozenset({"type", "values", "weights"}),
-        _build_weighted_discrete_spec,
-    ),
-    "normal": BlockType(
-        frozenset({"type", "mean", "std", "min", "max"}),
-        _build_normal_spec,
-    ),
-    "uniform": BlockType(
-        frozenset({"type", "min", "max"}),
-        _build_uniform_spec,
-    ),
-    "fixed": BlockType(
-        frozenset({"type", "value"}),
-        _build_fixed_spec,
-    ),
-    "shuffled_pool": BlockType(
-        frozenset({"type", "values", "counts"}),
-        _build_shuffled_pool_spec,
-    ),
-    "proportional_to": BlockType(
-        frozenset({"type", "source", "multiplier", "offset"}),
-        _build_proportional_to_spec,
-    ),
+#: The per-type table of the distribution grammar, by name, in the order a refusal lists them,
+#: which the parser, the editor and the writers read.
+DISTRIBUTION_TYPES: Mapping[str, DistributionType] = MappingProxyType({
+    distribution_type.name: distribution_type
+    for distribution_type in (
+        DistributionType(
+            "weighted_discrete",
+            "Weighted Discrete",
+            WeightedDiscreteDistribution,
+            _build_weighted_discrete_spec,
+            rows=SpecRows("weights", "Weight", FieldKind.NUMBER),
+        ),
+        DistributionType(
+            "normal",
+            "Normal (Gaussian)",
+            NormalDistribution,
+            _build_normal_spec,
+            parameters=(
+                SpecParameter("mean", "Mean"),
+                SpecParameter("std", "Std Dev"),
+                SpecParameter("min", "Min (clamp)", required=False),
+                SpecParameter("max", "Max (clamp)", required=False),
+            ),
+        ),
+        DistributionType(
+            "uniform",
+            "Uniform",
+            UniformDistribution,
+            _build_uniform_spec,
+            parameters=(SpecParameter("min", "Min"), SpecParameter("max", "Max")),
+        ),
+        DistributionType(
+            "fixed", "Fixed Value", float, _build_fixed_spec, parameters=(SpecParameter("value", "Value"),)
+        ),
+        DistributionType(
+            "shuffled_pool",
+            "Shuffled Pool",
+            ShuffledPoolDistribution,
+            _build_shuffled_pool_spec,
+            rows=SpecRows("counts", "Count", FieldKind.COUNT),
+        ),
+        DistributionType(
+            "proportional_to",
+            "Proportional To",
+            ProportionalDistribution,
+            _build_proportional_to_spec,
+            unheld_keys=("source", "multiplier", "offset"),
+        ),
+    )
 })
+
+
+def write_distribution_spec(spec: DistributionSpec) -> object:
+    """Write *spec* as the value the grammar reads back as it, the inverse of its reading of a drawn key.
+
+    A null, a number or a choice, the scalar forms, is written as it is; any other spec as the
+    write of the DISTRIBUTION_TYPES record whose spec_type it is an instance of.
+
+    Raises:
+        ConfigurationError: If no record writes *spec*, naming it and the table's types.
+    """
+    if spec is None or isinstance(spec, str) or _is_a_number_spec(spec):
+        return spec
+    for distribution_type in DISTRIBUTION_TYPES.values():
+        if isinstance(spec, distribution_type.spec_type):
+            return distribution_type.write(spec)
+    raise ConfigurationError(
+        f"Cannot write {spec!r}; valid specs: null, a number, a choice, or a spec of {', '.join(DISTRIBUTION_TYPES)}"
+    )
+
+
+def editor_types(kind: FieldKind) -> tuple[DistributionType, ...]:
+    """The editable types a field of *kind* draws, in table order; none for a kind no home draws.
+
+    The scalar form is left out: it is the editor's own Fixed Value option, titled by its record.
+    """
+    return tuple(
+        distribution_type
+        for distribution_type in DISTRIBUTION_TYPES.values()
+        if distribution_type.drawn_by(kind) and distribution_type.editable and not distribution_type.is_scalar_form
+    )
 
 
 def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
@@ -802,14 +965,14 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         raise ConfigurationError(
             f"Distribution for '{param_name}' requires 'type' field"
         )
-    block_type = _DISTRIBUTION_SPEC_TYPES.get(dist_type) if isinstance(dist_type, str) else None
-    if block_type is None:
+    distribution_type = DISTRIBUTION_TYPES.get(dist_type) if isinstance(dist_type, str) else None
+    if distribution_type is None:
         raise ConfigurationError(
             f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            f"Supported: {', '.join(_DISTRIBUTION_SPEC_TYPES)}"
+            f"Supported: {', '.join(DISTRIBUTION_TYPES)}"
         )
-    refuse_unrecognised_keys(param_name, data, block_type.recognised_keys)
-    return block_type.build(data, param_name)
+    refuse_unrecognised_keys(param_name, data, distribution_type.recognised_keys)
+    return distribution_type.build(data, param_name)
 
 
 def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
@@ -826,16 +989,17 @@ def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> Distribut
 def _is_a_choice_spec_as_written(row: FleetField, data: object) -> bool:
     """Whether *data*, given the key whose fleet row is *row*, is a CHOICE's spec as written, never read as a distribution.
 
-    It is when it is no mapping, or a mapping naming a type of _DISTRIBUTION_SPEC_TYPES outside
-    _CHOICE_DISTRIBUTION_TYPES, which draws numbers, so the CHOICE refuses it as a spec it does
-    not draw before a number in it is read, a fixed one's value included.
+    It is when it is no mapping, or a mapping naming a type of DISTRIBUTION_TYPES that the row's
+    kind does not draw, as its drawn_by says, a type of numbers, so the CHOICE refuses it as a spec
+    it does not draw before a number in it is read, a fixed one's value included.
     """
     if row.kind is not FieldKind.CHOICE:
         return False
     if not isinstance(data, dict):
         return True
     named = data.get("type")
-    return isinstance(named, str) and named in _DISTRIBUTION_SPEC_TYPES and named not in _CHOICE_DISTRIBUTION_TYPES
+    named_type = DISTRIBUTION_TYPES.get(named) if isinstance(named, str) else None
+    return named_type is not None and not named_type.drawn_by(row.kind)
 
 
 def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
@@ -994,11 +1158,11 @@ def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> Spe
             and the value; or as _nearest_count does, for a normal or uniform distribution with
             no whole number from its min to its max.
     """
-    if isinstance(spec, (int, float)):
+    if isinstance(spec, _NUMBER_TYPES):
         return spec
-    if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
+    if isinstance(value, _NUMBER_TYPES) and isinstance(spec, (NormalDistribution, UniformDistribution)):
         return _nearest_count(value, spec, path)
-    if isinstance(value, (int, float)) and isinstance(spec, ProportionalDistribution):
+    if isinstance(value, _NUMBER_TYPES) and isinstance(spec, ProportionalDistribution):
         _refuse_unless_finite(value, path)
         return _nearest_whole_number(value)
     return value
@@ -1110,7 +1274,7 @@ class _DistributionSampler:
     def _next_value(self, spec: DistributionSpec, setting: str) -> SpecValue:
         if setting in self._drawn_ahead:
             return self._next_value_drawn_ahead(setting)
-        if spec is None or isinstance(spec, (str, int, float)):
+        if spec is None or isinstance(spec, (str, *_NUMBER_TYPES)):
             return spec
         if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
             return spec.draw(self._rng)
