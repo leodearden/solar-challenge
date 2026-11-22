@@ -686,7 +686,7 @@ class DistributionType:
 
     name: str
     title: str
-    spec_type: type[object]
+    spec_type: type[DistributionSpec]
     build: Callable[[dict[str, Any], str], DistributionSpec]
     parameters: tuple[SpecParameter, ...] = ()
     rows: Optional[SpecRows] = None
