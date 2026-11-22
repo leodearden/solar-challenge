@@ -313,6 +313,20 @@ def _grid_power_to_target_kw(
 TARGET_SOC_FRACTION: Final = FRACTION
 """The grid-charge targets a battery may be given, as fractions of its effective (SOH-derated) capacity: greater than 0 and at most 1."""
 
+GridChargeForecast: TypeAlias = Literal["pv_blind", "trailing_14_days", "perfect_foresight"]
+"""The forecasts that may size a battery's grid charge in cheap periods; GridChargeConfig.forecast says what each does."""
+
+GRID_CHARGE_FORECASTS: Final = get_args(GridChargeForecast)
+"""Every GridChargeForecast, in its declared order."""
+
+
+def _refuse_unknown_forecast(forecast: object) -> None:
+    """Raise ConfigurationError, naming forecast, the value and every GRID_CHARGE_FORECASTS name, unless forecast is one of them."""
+    if not (isinstance(forecast, str) and forecast in GRID_CHARGE_FORECASTS):
+        raise ConfigurationError.must_be(
+            "forecast", f"one of {', '.join(map(repr, GRID_CHARGE_FORECASTS))}", got=forecast
+        )
+
 
 @dataclass(frozen=True)
 class GridChargeConfig:
@@ -325,17 +339,28 @@ class GridChargeConfig:
             most 1, held as the float read. Defaults to 0.9. A target above the
             battery's max_soc_fraction charges it to max_soc_kwh
             (Battery.grid_charge_target_kwh).
+        forecast: What sizes a cheap period's grid charge, one of GRID_CHARGE_FORECASTS;
+            defaults to 'pv_blind'. 'pv_blind' fills to the target whatever PV the day
+            brings. 'trailing_14_days' caps the fill at the forecast useful-charge
+            ceiling, the charge the PV after it is not forecast to strand
+            (docs/grid-charge-forecast.md). 'perfect_foresight' is an upper-bound
+            analysis mode: it reads the run's own future PV and demand, and is never
+            used for board figures.
 
     Raises:
         ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
-            is outside that range, naming target_soc_fraction and the value.
+            is outside that range, naming target_soc_fraction and the value; or if
+            forecast is not one of GRID_CHARGE_FORECASTS, naming forecast, the value and
+            every forecast.
     """
 
     target_soc_fraction: float = 0.9
+    forecast: GridChargeForecast = "pv_blind"
 
     def __post_init__(self) -> None:
-        """Read target_soc_fraction, and hold the float read."""
+        """Read target_soc_fraction, and hold the float read; refuse a forecast outside GRID_CHARGE_FORECASTS."""
         read_field(self, "target_soc_fraction", as_finite_float, TARGET_SOC_FRACTION)
+        _refuse_unknown_forecast(self.forecast)
 
 
 _PEAK_WINDOW_HOURS = Interval(0, 24)

@@ -299,7 +299,7 @@ def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
     return _read_component_block(PV_BLOCK, data, block_path=block_path)
 
 
-_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
+_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction", "forecast"})
 
 
 def parse_grid_charge_config(
@@ -307,10 +307,12 @@ def parse_grid_charge_config(
 ) -> Optional[GridChargeConfig]:
     """Parse grid-charging configuration from a dict or None.
 
-    An omitted ``target_soc_fraction`` takes GridChargeConfig's declared default.
+    An omitted ``target_soc_fraction`` or ``forecast`` takes GridChargeConfig's declared
+    default, so a block that names no forecast is PV-blind.
 
     Args:
-        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
+        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9, 'forecast':
+            'trailing_14_days'}``) or None.
         block_path: The block's path in its file, named in error messages.
 
     Returns:
@@ -318,8 +320,8 @@ def parse_grid_charge_config(
 
     Raises:
         ConfigurationError: If data is present but not a mapping, or carries a key
-            other than ``target_soc_fraction``; or as GridChargeConfig refuses its
-            target, prefixed by the block's path.
+            other than ``target_soc_fraction`` and ``forecast``; or as GridChargeConfig
+            refuses its target or its forecast, prefixed by the block's path.
     """
     if data is None:
         return None
@@ -330,7 +332,7 @@ def parse_grid_charge_config(
 
 def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
     """The grid_charging: block parse_grid_charge_config reads back as *grid_charging*."""
-    return {"target_soc_fraction": grid_charging.target_soc_fraction}
+    return {"target_soc_fraction": grid_charging.target_soc_fraction, "forecast": grid_charging.forecast}
 
 
 _PER_DIRECTION_EFFICIENCY_KEYS: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")

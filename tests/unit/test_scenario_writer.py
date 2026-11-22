@@ -83,7 +83,7 @@ def _every_grammar_field_home() -> HomeConfig:
                 max_discharge_kw=3.5,
                 name="Wall",
                 dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
                 min_soc_fraction=0.15,
                 max_soc_fraction=0.95,
                 system_age_years=2.0,
