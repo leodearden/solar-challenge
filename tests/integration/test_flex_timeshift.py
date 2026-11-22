@@ -36,13 +36,14 @@ from tests.integration._helpers import SCENARIO
 
 
 def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
-    """All battery homes in the flex scenario inherit Economy-7 tariff, grid_charging,
-    and tou_optimized dispatch_strategy.
+    """All battery homes in the flex scenario inherit Economy-7 tariff, grid_charging
+    sized by the trailing_14_days forecast, and tou_optimized dispatch_strategy.
 
     Verifies the β/β′ seam threading (load_fleet_config at config.py:2030):
     scenario-level `tariff:` → every generated home; `fleet_distribution.battery.
     grid_charging:` → every battery home; `fleet_distribution.dispatch_strategy:` →
-    every home.
+    every home. The forecast leaves this file's single-day runs PV-blind: they end
+    before its 14-day warm-up (docs/grid-charge-forecast.md).
     """
     fleet = load_fleet_config(SCENARIO)
     battery_homes = [h for h in fleet.homes if h.battery_config is not None]
@@ -79,6 +80,11 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
         assert home.battery_config.grid_charging.target_soc_fraction == 0.9, (
             f"Expected target_soc_fraction=0.9, "
             f"got {home.battery_config.grid_charging.target_soc_fraction}"
+        )
+        assert home.battery_config.grid_charging.forecast == "trailing_14_days", (
+            f"Home {home.name!r}: the board fleet sizes its grid charge by the trailing_14_days "
+            "forecast, set explicitly (fleet_distribution.battery.grid_charging.forecast), "
+            f"got {home.battery_config.grid_charging.forecast!r}"
         )
 
         # ---- Dispatch strategy must be tou_optimized --------------------------
