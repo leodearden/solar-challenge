@@ -28,8 +28,9 @@ from solar_challenge.dispatch import (
 )
 from solar_challenge.flow import simulate_timestep
 from solar_challenge.tariff import TariffConfig
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
-_E7 = TariffConfig.economy_7()
+_E7 =TariffConfig.economy_7()
 
 _MINUTES = pd.date_range("2024-01-15 01:00", periods=180, freq="min")
 
@@ -98,12 +99,12 @@ def _strategy_path(battery: Battery, minute: pd.Timestamp, strategy: Optional[Di
 
 def _tariff_clock_path(battery: Battery, minute: pd.Timestamp) -> None:
     """Simulate *minute* through simulate_timestep, dispatched by TOUOptimizedStrategy on Economy 7's clock."""
-    simulate_timestep(0.0, 0.3, battery, 1.0, minute.to_pydatetime(), TOUOptimizedStrategy(tariff=_E7), tariff=_E7)
+    simulate_timestep(0.0, 0.3, battery, 1.0, minute.to_pydatetime(), **on_the_tariff_s_clock(_E7))
 
 
 _PATHS = [
     pytest.param(_tariff_clock_path, id="tou_on_the_tariff_s_clock"),
-    pytest.param(_strategy_path, id="tou_peak_hours"),
+    pytest.param(_strategy_path, id="tou_on_peak_hours"),
 ]
 
 

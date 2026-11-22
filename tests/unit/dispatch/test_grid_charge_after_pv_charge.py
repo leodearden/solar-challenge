@@ -22,6 +22,7 @@ from tests._june_minute_day import (
     morning_drain_demand_kw,
     strategy_day,
 )
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 _E10 = TariffConfig.economy_10()
 
@@ -59,7 +60,7 @@ class TestTheMorningDrainDay:
         on_the_clock = [
             result.grid_charge
             for result in strategy_day(
-                morning_drain_battery(1.0), morning_drain_demand_kw, TOUOptimizedStrategy(tariff=_E10), _E10
+                morning_drain_battery(1.0), morning_drain_demand_kw, **on_the_tariff_s_clock(_E10)
             )
         ]
         on_peak_hours = [

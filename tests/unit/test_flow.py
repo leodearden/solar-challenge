@@ -35,6 +35,7 @@ from tests._same_schedule_tariffs import (
     NIGHT_DAY_PEAK_DAY_AS_FIVE_PERIODS,
     NIGHT_DAY_PEAK_DAY_AS_FOUR_PERIODS,
 )
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 
 @pytest.fixture
@@ -582,8 +583,7 @@ class TestTouOnTheTariffClockGridCharge:
             battery=grid_charge_battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.battery_charge > 0, "Battery should charge from grid during cheap period"
         assert result.grid_export == pytest.approx(0.0)
@@ -606,8 +606,7 @@ class TestTouOnTheTariffClockGridCharge:
             battery=bat_ref,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         pv_charge_drawn = ref.battery_charge  # 0.5 kWh: the battery draws the whole excess
 
@@ -623,8 +622,7 @@ class TestTouOnTheTariffClockGridCharge:
             battery=bat_gc,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         # Grid also topped up → total charge > pv-only
         assert result.battery_charge > pv_charge_drawn, \
@@ -649,8 +647,7 @@ class TestTouOnTheTariffClockGridCharge:
             battery=battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         duration_hours = 60.0 / 60.0
         # Total drawn energy / dt must not exceed the hardware charge-rate limit
@@ -672,8 +669,7 @@ class TestTouOnTheTariffClockGridCharge:
                 battery=battery,
                 timestep_minutes=60,
                 timestamp=ts,
-                strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-                tariff=economy7_tariff,
+                **on_the_tariff_s_clock(economy7_tariff),
             )
             assert validate_energy_balance(result), \
                 f"Energy balance violated at {ts} (gen={gen}, dem={dem})"
@@ -689,8 +685,7 @@ class TestTouOnTheTariffClockGridCharge:
             battery=battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=tariff),
-            tariff=tariff,
+            **on_the_tariff_s_clock(tariff),
         )
         # excess = 2 kWh; the battery draws all of it, battery.charge(2.0, 60) = 2.0 kWh, storing 1.95
         # grid_export = max(0, 2.0 - 2.0) = 0 kWh; shortfall=0 → grid_import=0
@@ -992,8 +987,7 @@ class TestEnergyFlowResultGridCharge:
             battery=grid_charge_battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge > 0.0, (
             "grid_charge should be > 0 during cheap period when grid_charging is set"
@@ -1014,8 +1008,7 @@ class TestEnergyFlowResultGridCharge:
             battery=grid_charge_battery,
             timestep_minutes=60,
             timestamp=peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -1035,8 +1028,7 @@ class TestEnergyFlowResultGridCharge:
             battery=battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -1074,8 +1066,7 @@ class TestEnergyFlowResultGridCharge:
             battery=battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge <= result.battery_charge + 1e-9
 
@@ -1092,8 +1083,7 @@ class TestEnergyFlowResultGridCharge:
             battery=grid_charge_battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
-            tariff=economy7_tariff,
+            **on_the_tariff_s_clock(economy7_tariff),
         )
         assert result.grid_charge <= result.grid_import + 1e-9
 
@@ -1134,8 +1124,7 @@ def _tou_shortfall_step(tariff: TariffConfig, timestamp: pd.Timestamp) -> Energy
         battery=Battery(BatteryConfig.default_5kwh()),
         timestep_minutes=60,
         timestamp=timestamp,
-        strategy=TOUOptimizedStrategy(tariff=tariff),
-        tariff=tariff,
+        **on_the_tariff_s_clock(tariff),
     )
 
 
@@ -1181,8 +1170,7 @@ class TestTouDispatchOnSpreadFreeTariff:
             battery=Battery(BatteryConfig.default_5kwh()),
             timestep_minutes=1.0,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=tariff),
-            tariff=tariff,
+            **on_the_tariff_s_clock(tariff),
         )
         greedy = simulate_timestep(
             generation_kw=generation_kw,
@@ -1208,8 +1196,7 @@ class TestTouDispatchOnSpreadFreeTariff:
                 battery=tou_battery,
                 timestep_minutes=60,
                 timestamp=ts,
-                strategy=TOUOptimizedStrategy(tariff=tariff),
-                tariff=tariff,
+                **on_the_tariff_s_clock(tariff),
             )
             greedy = simulate_timestep(
                 generation_kw=gen,
@@ -1233,8 +1220,7 @@ class TestTouDispatchOnSpreadFreeTariff:
             battery=grid_charge_battery,
             timestep_minutes=60,
             timestamp=off_peak_ts,
-            strategy=TOUOptimizedStrategy(tariff=tariff),
-            tariff=tariff,
+            **on_the_tariff_s_clock(tariff),
         )
         assert result.grid_charge == 0.0
 
@@ -1306,7 +1292,7 @@ def _step_on_the_tariff_s_clock(
     generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
 ) -> EnergyFlowResult:
     return simulate_timestep(
-        generation_kw, demand_kw, battery, 1.0, minute, TOUOptimizedStrategy(tariff=tariff), tariff=tariff
+        generation_kw, demand_kw, battery, 1.0, minute, **on_the_tariff_s_clock(tariff)
     )
 
 
@@ -1360,8 +1346,8 @@ class TestDispatchFollowsTheTariffSchedule:
     @pytest.mark.parametrize(
         "step",
         [
-            pytest.param(_step_on_the_tariff_s_clock, id="tariff_clock"),
-            pytest.param(_step_on_peak_hours, id="peak_hours"),
+            pytest.param(_step_on_the_tariff_s_clock, id="tou_on_the_tariff_s_clock"),
+            pytest.param(_step_on_peak_hours, id="tou_on_peak_hours"),
         ],
     )
     def test_one_schedule_as_four_or_five_periods_gives_the_same_flows(self, step: _Step) -> None:
@@ -1386,8 +1372,7 @@ SELF_CONSUMING_STEPS = [
         functools.partial(
             simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 18:00"),
-            strategy=TOUOptimizedStrategy(tariff=_E7),
-            tariff=_E7,
+            **on_the_tariff_s_clock(_E7),
         ),
         id="tou_on_the_tariff_s_clock-peak",
     ),
@@ -1409,8 +1394,7 @@ GRID_CHARGING_STEPS = [
         functools.partial(
             simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 03:00"),
-            strategy=TOUOptimizedStrategy(tariff=_E7),
-            tariff=_E7,
+            **on_the_tariff_s_clock(_E7),
         ),
         id="tou_on_the_tariff_s_clock-off_peak",
     ),

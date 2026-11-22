@@ -24,6 +24,7 @@ from tests._balanced_sim_results import make_balanced_fleet
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._june_minute_day import MINUTES, strategy_day
 from tests._synthetic_weather import sunless_weather, weather_for
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 _E7 = TariffConfig.economy_7()
 
@@ -42,7 +43,7 @@ def _an_hour_of_excess_pv(battery: Battery) -> EnergyFlowResult:
 def _an_expensive_hour_of_excess_pv(battery: Battery) -> EnergyFlowResult:
     """One hour of 1 kW PV and no demand at noon, an expensive Economy 7 hour, through simulate_timestep with TOU dispatch on Economy 7's clock."""
     return simulate_timestep(
-        1.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 12:00"), TOUOptimizedStrategy(tariff=_E7), tariff=_E7
+        1.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 12:00"), **on_the_tariff_s_clock(_E7)
     )
 
 
@@ -56,7 +57,7 @@ def _a_cheap_hour_on_peak_hours(battery: Battery) -> EnergyFlowResult:
 def _a_cheap_hour_on_the_tariff_s_clock(battery: Battery) -> EnergyFlowResult:
     """One hour from 02:00, a cheap Economy 7 hour, of no PV and no demand through simulate_timestep with TOU dispatch on Economy 7's clock."""
     return simulate_timestep(
-        0.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 02:00"), TOUOptimizedStrategy(tariff=_E7), tariff=_E7
+        0.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 02:00"), **on_the_tariff_s_clock(_E7)
     )
 
 
@@ -72,7 +73,7 @@ def _peak_hours_day(battery: Battery) -> list[EnergyFlowResult]:
 
 def _tariff_clock_day(battery: Battery) -> list[EnergyFlowResult]:
     """Each minute of the day's flows through simulate_timestep, dispatched by TOU on Economy 7's clock."""
-    return strategy_day(battery, _demand_kw, TOUOptimizedStrategy(tariff=_E7), _E7)
+    return strategy_day(battery, _demand_kw, **on_the_tariff_s_clock(_E7))
 
 
 def _soc_change_by_the_identity_kwh(battery: Battery, flow: EnergyFlowResult) -> float:
@@ -112,7 +113,7 @@ class TestGridChargingImportsWhatItDrew:
     @pytest.mark.parametrize(
         "step",
         [
-            pytest.param(_a_cheap_hour_on_peak_hours, id="tou_peak_hours"),
+            pytest.param(_a_cheap_hour_on_peak_hours, id="tou_on_peak_hours"),
             pytest.param(_a_cheap_hour_on_the_tariff_s_clock, id="tou_on_the_tariff_s_clock"),
         ],
     )
@@ -140,7 +141,7 @@ class TestStorageIdentity:
 
     @pytest.fixture(
         params=[
-            pytest.param(_peak_hours_day, id="tou_peak_hours"),
+            pytest.param(_peak_hours_day, id="tou_on_peak_hours"),
             pytest.param(_tariff_clock_day, id="tou_on_the_tariff_s_clock"),
         ]
     )

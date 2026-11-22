@@ -30,6 +30,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
+from tests._tou_on_the_tariff_s_clock import on_the_tariff_s_clock
 
 NOT_FINITE_AND_AT_LEAST_0 = [
     pytest.param(math.nan, id="nan"),
@@ -52,8 +53,7 @@ DISPATCHES = [
         functools.partial(
             simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 18:00"),
-            strategy=TOUOptimizedStrategy(tariff=_E7),
-            tariff=_E7,
+            **on_the_tariff_s_clock(_E7),
         ),
         id="tou_on_the_tariff_s_clock-peak",
     ),
