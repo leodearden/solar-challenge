@@ -4,7 +4,8 @@
 field_tree writes a dataclass's field tree. read_field_tree reads one back as its class's
 annotations declare, refusing a value with a FieldTreeRefused that names the value's dotted path,
 with [i] for an item and None for the root, and the reason. without_unknown_keys drops each key
-the reader refuses as one no field has, reporting each as an UnknownKey. The tests drive those
+the reader refuses as one no field has, reporting each as an UnknownKey, unless the predicate
+it is given, asked with the dataclass whose object holds the key, spares it. The tests drive those
 names over this module's dataclasses, which hold every shape the codec reads, a date and a
 timedelta among them, and shapes no stored dataclass has today: a list, a dict of dataclasses, a
 pd.Timestamp and Any. The agreement test pins the drop to the reader: a key no field has, added
@@ -575,6 +576,79 @@ def test_without_unknown_keys_keeps_whole_a_value_the_reader_refuses(keys: Keys,
 
     assert without_unknown_keys(content, _EveryShape) == (content, ())
     _refusal(content, _EveryShape)
+
+
+@dataclass(frozen=True)
+class _Inner:
+    """A dataclass held at depth, in an Optional field and in a list's items."""
+
+    x: float
+
+
+@dataclass(frozen=True)
+class _Outer:
+    """A dataclass holding an _Inner in an Optional field and _Inners in a list."""
+
+    inner: _Inner | None
+    items: list[_Inner]
+
+
+def _outer_holding_unknown_keys() -> dict[str, Any]:
+    """An _Outer's object whose root holds the unknown key "old", and each _Inner object the unknown keys "extra" and "spare"."""
+    return {
+        "old": 0,
+        "inner": {"x": 1.0, "extra": 1, "spare": 10},
+        "items": [{"x": 2.0, "extra": 2, "spare": 20}, {"x": 3.0, "extra": 3, "spare": 30}],
+    }
+
+
+def test_without_unknown_keys_keeps_as_it_is_each_unknown_key_its_predicate_spares_at_any_depth() -> None:
+    content = _outer_holding_unknown_keys()
+
+    assert without_unknown_keys(content, _Outer, drops=lambda owner, key: owner is _Outer) == (
+        {key: value for key, value in content.items() if key != "old"},
+        (UnknownKey("old", 0),),
+    )
+
+
+def test_without_unknown_keys_drops_and_reports_each_unknown_key_its_predicate_drops_by_its_path() -> None:
+    kept, dropped = without_unknown_keys(_outer_holding_unknown_keys(), _Outer, drops=lambda owner, key: key == "extra")
+
+    assert kept == {
+        "old": 0,
+        "inner": {"x": 1.0, "spare": 10},
+        "items": [{"x": 2.0, "spare": 20}, {"x": 3.0, "spare": 30}],
+    }
+    assert dropped == (UnknownKey("inner.extra", 1), UnknownKey("items[0].extra", 2), UnknownKey("items[1].extra", 3))
+
+
+def test_without_unknown_keys_asks_its_predicate_about_each_unknown_key_with_the_dataclass_whose_object_holds_it() -> None:
+    asked: list[tuple[type, str]] = []
+
+    def drops(owner: type, key: str) -> bool:
+        asked.append((owner, key))
+        return False
+
+    without_unknown_keys(_outer_holding_unknown_keys(), _Outer, drops=drops)
+
+    assert asked == [
+        (_Outer, "old"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+        (_Inner, "extra"),
+        (_Inner, "spare"),
+    ]
+
+
+def test_without_unknown_keys_drops_every_unknown_key_with_no_predicate() -> None:
+    kept, dropped = without_unknown_keys(_outer_holding_unknown_keys(), _Outer)
+
+    assert read_field_tree(kept, _Outer) == _Outer(_Inner(1.0), [_Inner(2.0), _Inner(3.0)])
+    assert [key.path for key in dropped] == [
+        "old", "inner.extra", "inner.spare", "items[0].extra", "items[0].spare", "items[1].extra", "items[1].spare"
+    ]
 
 
 def test_without_unknown_keys_changes_none_of_its_input() -> None:
