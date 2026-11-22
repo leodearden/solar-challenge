@@ -4,7 +4,7 @@
 A home's battery is dispatched by its own strategy when it names one, else by tou_optimized on the
 tariff's clock when the home asks for it, else by self-consumption. A home with no battery runs no
 strategy, and its results name the one it configures. A strategy given to simulate_home runs in place
-of the configured one, and is handed each row's instant on the location's clock.
+of the configured one, and is handed each row's instant on the location's clock, as a python datetime.
 """
 
 import dataclasses
@@ -156,7 +156,7 @@ class _TimestampRecordingStrategy(DispatchStrategy):
 
 
 def test_a_strategy_given_to_simulate_home_is_handed_each_rows_own_instant_on_the_locations_clock_in_row_order():
-    """On a BST day, where UTC's wall clock reads an hour behind the location's, the strategy decides once per row, in row order, at the row's own wall-clock minute and UTC offset."""
+    """On a BST day, where UTC's wall clock reads an hour behind the location's, the strategy decides once per row, in row order, at the row's own wall-clock minute and UTC offset, each handed as a python datetime, not a pd.Timestamp."""
     day = pd.Timestamp("2024-06-21")
     recording = _TimestampRecordingStrategy(SelfConsumptionStrategy())
 
@@ -169,6 +169,7 @@ def test_a_strategy_given_to_simulate_home_is_handed_each_rows_own_instant_on_th
     assert [(t.date(), t.hour, t.minute, t.utcoffset()) for t in recording.timestamps] == [
         (row.date(), row.hour, row.minute, row.utcoffset()) for row in rows
     ]
+    assert {type(t) for t in recording.timestamps} == {datetime.datetime}
 
 
 def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_does_not():
