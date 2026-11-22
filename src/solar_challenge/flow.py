@@ -273,7 +273,7 @@ def simulate_timestep(
     generation_kw: float,
     demand_kw: float,
     battery: Optional[Battery],
-    timestep_minutes: float = 1.0,
+    timestep_minutes: float,
     timestamp: Optional[datetime] = None,
     strategy: Optional[DispatchStrategy] = None,
     *,
@@ -368,7 +368,7 @@ def simulate_timestep_tou(
     battery: Optional[Battery],
     timestamp: pd.Timestamp,
     tariff: TariffConfig,
-    timestep_minutes: float = 1.0,
+    timestep_minutes: float,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep, the battery dispatched by TOUOptimizedStrategy on the tariff's clock through simulate_timestep.
 

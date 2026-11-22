@@ -56,6 +56,7 @@ class TestSelfConsumptionStrategyExcessPV:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 3.0 - 1.0 = 2.0 kW
         assert decision.charge_kw == 2.0
@@ -69,6 +70,7 @@ class TestSelfConsumptionStrategyExcessPV:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 5.0 - 1.0 = 4.0 kW
         assert decision.charge_kw == 4.0
@@ -82,6 +84,7 @@ class TestSelfConsumptionStrategyExcessPV:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 1.1 - 1.0 = 0.1 kW
         assert decision.charge_kw == pytest.approx(0.1)
@@ -95,6 +98,7 @@ class TestSelfConsumptionStrategyExcessPV:
             demand_kw=0.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 3.0 - 0.0 = 3.0 kW
         assert decision.charge_kw == 3.0
@@ -112,6 +116,7 @@ class TestSelfConsumptionStrategyShortfall:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall = 3.0 - 1.0 = 2.0 kW
         assert decision.charge_kw == 0.0
@@ -125,6 +130,7 @@ class TestSelfConsumptionStrategyShortfall:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall = 5.0 - 1.0 = 4.0 kW
         assert decision.charge_kw == 0.0
@@ -138,6 +144,7 @@ class TestSelfConsumptionStrategyShortfall:
             demand_kw=1.1,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall = 1.1 - 1.0 = 0.1 kW
         assert decision.charge_kw == 0.0
@@ -151,6 +158,7 @@ class TestSelfConsumptionStrategyShortfall:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall = 3.0 - 0.0 = 3.0 kW
         assert decision.charge_kw == 0.0
@@ -168,6 +176,7 @@ class TestSelfConsumptionStrategyBalanced:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -180,6 +189,7 @@ class TestSelfConsumptionStrategyBalanced:
             demand_kw=0.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -198,6 +208,7 @@ class TestSelfConsumptionStrategySOCIndependence:
             demand_kw=1.0,
             battery_soc_kwh=4.0,  # High SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_low = self_consumption_strategy.decide_action(
             timestamp=timestamp,
@@ -205,6 +216,7 @@ class TestSelfConsumptionStrategySOCIndependence:
             demand_kw=1.0,
             battery_soc_kwh=1.0,  # Low SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision_high.charge_kw == decision_low.charge_kw
         assert decision_high.discharge_kw == decision_low.discharge_kw
@@ -219,6 +231,7 @@ class TestSelfConsumptionStrategySOCIndependence:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,  # Small battery
+            timestep_minutes=1.0,
         )
         decision_large = self_consumption_strategy.decide_action(
             timestamp=timestamp,
@@ -226,6 +239,7 @@ class TestSelfConsumptionStrategySOCIndependence:
             demand_kw=1.0,
             battery_soc_kwh=5.0,
             battery_capacity_kwh=10.0,  # Large battery
+            timestep_minutes=1.0,
         )
         assert decision_small.charge_kw == decision_large.charge_kw
         assert decision_small.discharge_kw == decision_large.discharge_kw
@@ -246,6 +260,7 @@ class TestSelfConsumptionStrategyTimestampIndependence:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_afternoon = self_consumption_strategy.decide_action(
             timestamp=afternoon,
@@ -253,6 +268,7 @@ class TestSelfConsumptionStrategyTimestampIndependence:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_evening = self_consumption_strategy.decide_action(
             timestamp=evening,
@@ -260,6 +276,7 @@ class TestSelfConsumptionStrategyTimestampIndependence:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert decision_morning.charge_kw == decision_afternoon.charge_kw
@@ -280,6 +297,7 @@ class TestSelfConsumptionStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_demand_raises(self, self_consumption_strategy, timestamp):
@@ -291,6 +309,7 @@ class TestSelfConsumptionStrategyValidation:
                 demand_kw=-1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_soc_raises(self, self_consumption_strategy, timestamp):
@@ -302,6 +321,7 @@ class TestSelfConsumptionStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=-1.0,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_capacity_raises(self, self_consumption_strategy, timestamp):
@@ -313,6 +333,7 @@ class TestSelfConsumptionStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=0.0,
                 battery_capacity_kwh=0.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_capacity_raises(self, self_consumption_strategy, timestamp):
@@ -324,6 +345,7 @@ class TestSelfConsumptionStrategyValidation:
                 demand_kw=1.0,
                 battery_soc_kwh=1.0,
                 battery_capacity_kwh=-5.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_timestep_raises(self, self_consumption_strategy, timestamp):
@@ -397,6 +419,7 @@ class TestStrategyInterfaceContract:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert isinstance(result, DispatchDecision)
 
@@ -420,6 +443,7 @@ class TestStrategyInterfaceContract:
                 demand_kw=dem,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
             # Either charge_kw or discharge_kw must be zero (or both)
             assert decision.charge_kw == 0.0 or decision.discharge_kw == 0.0
@@ -444,6 +468,7 @@ class TestStrategyInterfaceContract:
                 demand_kw=dem,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
             assert decision.charge_kw >= 0.0
             assert decision.discharge_kw >= 0.0
