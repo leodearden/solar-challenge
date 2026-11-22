@@ -281,8 +281,15 @@ conventions:
       surface change. An Enum is pinned by every member name, aliases included. Other names
       importable only from submodules stay
       outside it; this refines the freeze policy in docs/prds/domain-library-extraction.md §3.1.
-      Adding, removing, renaming, or changing the signature of a public symbol or member is a
-      BREAKING CHANGE that requires a deliberate version/tag bump — never a silent edit. Each class
+      Each surface-lock failure labels each drifted entry additive or breaking, as
+      tests/_surface_forms.py's is_additive_change and is_additive_member_change classify it:
+      their _ADDITIVE_PARTS table lists the additive parts, and anything it does not prove
+      additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row and its
+      release note, docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
+      A breaking entry, such as a removed, renamed or retyped name, parameter or member, lands
+      only with a deliberate version/tag bump — never a silent edit. Under D29
+      (plans/review-all-program-solar_challenge-20261014.md), a leaf whose own edit prints
+      `breaking` is a held leaf for S29's release. Each class
       the contract covers declares in its class body each public attribute it sets on its
       instances, as an annotation such as `cache_dir: Path`.
     why: >
@@ -332,7 +339,8 @@ conventions:
       is the isolated external-wheel install test (imports every __all__ name in a fresh
       interpreter). All three tables are spelled alike
       on every admitted Python minor, and each fails until its table edit lands, naming every
-      drifted symbol and asking for the change's release note, one file per task under
+      drifted symbol, labelled additive or breaking, and asking for an additive change's
+      release note, one file per task under
       docs/unreleased/ (docs/domain-library-consumption.md, "Changes merged since the last
       tag"), in the same commit.
       `__init__.py` is
