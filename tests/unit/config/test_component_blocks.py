@@ -49,7 +49,7 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
     """Each way *block* fails to place its dataclass's fields, naming the field; empty when it places every one.
 
     Every field is either one of the block's keys or outside its grammar, never both; the keys
-    follow field order; and every sub-block and when-omitted entry is one of the keys. Every key
+    follow field order; and every sub-block, when-omitted entry and reader-only key is one of the keys. Every key
     is either drawn by the fleet or outside it, never both; the fleet keys follow key order; the
     presence field is the first of them, since a home draws nothing of a component before
     learning whether it has one; and a sub-block the fleet carries is a SETTING.
@@ -70,6 +70,7 @@ def _placement_faults(block: ComponentBlock[Any]) -> list[str]:
         ),
         *(f"sub-block {key} is not a key" for key in block.sub_blocks if key not in keys),
         *(f"when_omitted {key} is not a key" for key in block.when_omitted if key not in keys),
+        *(f"reader-only {key} is not a key" for key in block.reader_only if key not in keys),
         *(f"{key} is both drawn by the fleet and outside it" for key in block.keys if key in fleet & not_in_fleet),
         *(
             f"{key} is a key but neither drawn by the fleet nor outside it"
@@ -164,27 +165,29 @@ def test_a_field_declaring_a_default_factory_is_built_with_the_factorys_value() 
 
 
 @pytest.mark.parametrize(
-    ("block", "outside_grammar", "sub_blocks", "when_omitted"),
+    ("block", "outside_grammar", "sub_blocks", "when_omitted", "reader_only"),
     [
         pytest.param(
             PV_BLOCK,
             {"custom_module_params", "custom_inverter_params"},
             (),
             {"capacity_kw": 4.0},
+            set(),
             id="PVConfig",
         ),
         pytest.param(
-            BATTERY_BLOCK, set(), ("dispatch_strategy", "grid_charging"), {"capacity_kwh": 5.0},
+            BATTERY_BLOCK, set(), ("dispatch_strategy", "grid_charging"), {"capacity_kwh": 5.0}, {"efficiency"},
             id="BatteryConfig",
         ),
-        pytest.param(LOAD_BLOCK, set(), (), {}, id="LoadConfig"),
-        pytest.param(HEAT_PUMP_BLOCK, set(), (), {}, id="HeatPumpConfig"),
-        pytest.param(EV_BLOCK, set(), (), {}, id="EVConfig"),
+        pytest.param(LOAD_BLOCK, set(), (), {}, set(), id="LoadConfig"),
+        pytest.param(HEAT_PUMP_BLOCK, set(), (), {}, set(), id="HeatPumpConfig"),
+        pytest.param(EV_BLOCK, set(), (), {}, set(), id="EVConfig"),
         pytest.param(
             LOCATION_BLOCK,
             set(),
             (),
             {"timezone": _BRISTOL.timezone, "altitude": _BRISTOL.altitude},
+            set(),
             id="Location",
         ),
     ],
@@ -194,8 +197,9 @@ def test_each_table_holds_its_rows(
     outside_grammar: set[str],
     sub_blocks: tuple[str, ...],
     when_omitted: dict[str, object],
+    reader_only: set[str],
 ) -> None:
-    """T2: every field but those outside the grammar, each with its reason, is a key; then the sub-blocks in order and the when-omitted values."""
+    """T2: every field but those outside the grammar, each with its reason, is a key; then the sub-blocks in order, the when-omitted values and the reader-only keys."""
     field_names = {field.name for field in dataclasses.fields(block.config_type)}
 
     assert set(block.outside_grammar) == outside_grammar
@@ -203,6 +207,14 @@ def test_each_table_holds_its_rows(
     assert set(block.keys) == field_names - outside_grammar
     assert tuple(block.sub_blocks) == sub_blocks
     assert dict(block.when_omitted) == when_omitted
+    assert set(block.reader_only) == reader_only
+
+
+def test_a_reader_only_key_outside_the_keys_is_reported() -> None:
+    """T1 holds the reader-only keys to the table's keys: PV_BLOCK's table given BATTERY_BLOCK's reader-only keys reports each."""
+    faults = _placement_faults(dataclasses.replace(PV_BLOCK, reader_only=BATTERY_BLOCK.reader_only))
+
+    assert faults == ["reader-only efficiency is not a key"]
 
 
 _NUMBER = FleetField(FieldKind.NUMBER)

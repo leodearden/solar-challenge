@@ -2,7 +2,6 @@
 
 import dataclasses
 from pathlib import Path
-from collections.abc import Collection
 from typing import Any, Callable, TypeVar
 
 import pytest
@@ -45,12 +44,12 @@ from solar_challenge.tariff import TariffConfig
 _Config = TypeVar("_Config")
 
 
-def _setting_every_key(block: ComponentBlock[Any], config: _Config, *, unwritten: Collection[str] = ()) -> _Config:
-    """*config*, refused unless each of *block*'s keys but *unwritten*, those the writer never writes, is set away from what an omitted key reads as."""
+def _setting_every_key(block: ComponentBlock[Any], config: _Config) -> _Config:
+    """*config*, refused unless each of *block*'s keys but its reader-only ones, which the writer never writes, is set away from what an omitted key reads as."""
     unset = [
         key
         for key in block.keys
-        if key not in unwritten and getattr(config, key) == block.value_when_omitted(key)
+        if key not in block.reader_only and getattr(config, key) == block.value_when_omitted(key)
     ]
     assert not unset, f"{block.config_type.__name__} leaves {unset} as an omitted key reads"
     return config
@@ -92,7 +91,6 @@ def _every_grammar_field_home() -> HomeConfig:
                 soh_floor=0.6,
                 soh=0.95,
             ).with_round_trip(0.9),
-            unwritten=("efficiency",),
         ),
         load_config=_setting_every_key(
             LOAD_BLOCK,
@@ -253,7 +251,7 @@ def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_orde
 
     battery = home_scenario(home, name="Split efficiencies")["home"]["battery"]
 
-    assert list(battery) == [key for key in BATTERY_BLOCK.keys if key != "efficiency"]
+    assert list(battery) == [key for key in BATTERY_BLOCK.keys if key not in BATTERY_BLOCK.reader_only]
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.96, 0.97)
 
 

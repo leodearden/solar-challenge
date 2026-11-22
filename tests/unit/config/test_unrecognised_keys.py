@@ -744,8 +744,19 @@ class TestFleetDistributionBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal(block_path, key)):
             _parsed_fleet_distribution(**sections)
 
-    def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A block setting every fleet key of every component's table, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
+    @pytest.mark.parametrize(
+        ("efficiency_draws", "other_efficiency_keys"),
+        [
+            pytest.param(
+                {"charge_efficiency": 0.96, "discharge_efficiency": 0.96}, ("efficiency",), id="pair"
+            ),
+            pytest.param({"efficiency": 0.92}, ("charge_efficiency", "discharge_efficiency"), id="round-trip"),
+        ],
+    )
+    def test_block_setting_every_recognised_key_is_accepted(
+        self, efficiency_draws: dict[str, float], other_efficiency_keys: tuple[str, ...]
+    ) -> None:
+        """A block setting every fleet key of every component's table, its battery's efficiency in one form at a time, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
         fleet_distribution: dict[str, Any] = {
             "n_homes": 2,
             "seed": 42,
@@ -776,9 +787,7 @@ class TestFleetDistributionBlockKeys:
                 "grid_charging": {"target_soc_fraction": 0.8, "forecast": "trailing_14_days"},
                 "min_soc_fraction": 0.15,
                 "max_soc_fraction": 0.95,
-                "charge_efficiency": 0.96,
-                "discharge_efficiency": 0.96,
-                "efficiency": 0.92,
+                **efficiency_draws,
                 "system_age_years": 2.0,
                 "calendar_fade_rate_per_year": 0.015,
                 "cycle_fade_per_equivalent_full_cycle": 4e-05,
@@ -825,9 +834,7 @@ class TestFleetDistributionBlockKeys:
                     "max_discharge_kw": 3.0,
                     "min_soc_fraction": 0.15,
                     "max_soc_fraction": 0.95,
-                    "charge_efficiency": 0.96,
-                    "discharge_efficiency": 0.96,
-                    "efficiency": 0.92,
+                    **efficiency_draws,
                     "system_age_years": 2.0,
                     "calendar_fade_rate_per_year": 0.015,
                     "cycle_fade_per_equivalent_full_cycle": 4e-05,
@@ -855,12 +862,16 @@ class TestFleetDistributionBlockKeys:
             random_order="bristol_legacy",
             dispatch_strategy="tou_optimized",
         )
+        unset = {"battery": set(other_efficiency_keys)}
         assert {component: set(fleet_distribution[component]) for component in tables} == {
-            component: set(table.fleet) for component, table in tables.items()
+            component: set(table.fleet) - unset.get(component, set()) for component, table in tables.items()
         }
         assert parse_fleet_distribution_config(fleet_distribution) == expected
         _assert_blocks_recognise_exactly_their_keys(
-            parse_fleet_distribution_config, fleet_distribution, "fleet_distribution"
+            parse_fleet_distribution_config,
+            fleet_distribution,
+            "fleet_distribution",
+            also_recognised={"fleet_distribution.battery": other_efficiency_keys},
         )
 
     @pytest.mark.parametrize(
