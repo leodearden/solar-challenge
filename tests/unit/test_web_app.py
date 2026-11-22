@@ -28,7 +28,7 @@ from solar_challenge.weather import WeatherCache
 from solar_challenge.web.app import create_app, default_jobs
 from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.database import Database
-from solar_challenge.web.jobs import JobManager, live_managers
+from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.schema import SCHEMA_VERSION, SchemaVersionMismatch, StoreUnreadable
 from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.sse import JobStreamPolicy
@@ -238,13 +238,6 @@ def test_dropping_a_closed_app_frees_its_job_manager(tmp_path: Path) -> None:
     gc.collect()
 
     assert job_manager_ref() is None
-
-
-def test_a_live_apps_job_manager_is_among_the_live_managers(build_app: BuildApp, tmp_path: Path) -> None:
-    """While the app lives, live_managers() reports its job manager, so shutdown code that walks that registry reaches it."""
-    app = build_app(tmp_path)
-
-    assert dashboard_of(app).jobs in live_managers()
 
 
 def test_an_app_on_a_store_another_app_holds_is_refused_naming_this_process_and_the_holders_running_run_stays_running(

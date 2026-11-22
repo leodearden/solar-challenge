@@ -20,7 +20,6 @@ import logging
 import threading
 import time
 import uuid
-import weakref
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from collections.abc import Callable, Mapping
@@ -103,34 +102,10 @@ def check_job_transition(job_id: str, run_id: str, from_status: JobStatus, to_st
     if to_status not in LEGAL_JOB_TRANSITIONS[from_status]:
         raise IllegalJobTransition(job_id, run_id, from_status, to_status)
 
-# Module-level weak registry of all live JobManager instances.
-# WeakSet avoids keeping managers alive past their natural lifetime.
-_active_managers: "weakref.WeakSet[JobManager]" = weakref.WeakSet()
-
 
 def _random_id() -> str:
     """Return a new random UUID as a string."""
     return str(uuid.uuid4())
-
-
-def live_managers() -> "frozenset[JobManager]":
-    """Return a snapshot of every JobManager not yet garbage-collected, shut down or not."""
-    return frozenset(_active_managers)
-
-
-def shutdown_all_managers(wait: bool = False) -> None:
-    """Shut down every live JobManager, as JobManager.shutdown does.
-
-    A server whose requests submit jobs must call this when it stops, since
-    nothing else drops the jobs still queued.  Shutting down an
-    already-shut-down manager is a no-op, making this safe to call more than
-    once (idempotent).
-
-    Args:
-        wait: If True, block until every manager's running jobs finish.
-    """
-    for manager in live_managers():
-        manager.shutdown(wait=wait)
 
 
 @dataclass(frozen=True)
@@ -293,15 +268,14 @@ class JobManager:
         self._job_changed = threading.Condition(self._lock)
         self._unfinished_job_count = 0
         self._jobs: dict[str, _TrackedJob] = {}
-        _active_managers.add(self)
 
     def shutdown(self, wait: bool = False) -> None:
         """Refuse new jobs and drop the jobs still queued.
 
         Each job it drops reports failed, "Dropped: the server shut down before the job ran", before shutdown
         returns, and its run is marked failed with that message. Running jobs cannot be interrupted, and the interpreter waits for them
-        at exit.  Call this before the interpreter starts exiting: by the time
-        atexit hooks run, concurrent.futures has already run every queued job.
+        at exit. Call this before the interpreter starts exiting: by then concurrent.futures has already run every
+        queued job.
 
         Args:
             wait: If True, block until the running jobs finish before returning.

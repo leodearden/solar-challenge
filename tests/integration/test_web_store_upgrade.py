@@ -15,9 +15,9 @@ run, but render and export only the stored ones.
 
 `web start` refuses the store until `web migrate` has migrated it, and then serves it.
 Flask.run is replaced by a recorder, so `web start` hands its dashboard over without serving
-it, and each test drives that dashboard through its test client. cli/web.py's _serve shuts
-every job manager down once its server stops (shutdown_all_managers), so no test submits a
-job.
+it, and each test drives that dashboard through its test client. cli/web.py's _serve, the
+root that built the dashboard, closes it once its server stops (dashboard_of(app).close()),
+shutting its job manager down, so no test submits a job.
 """
 
 import io

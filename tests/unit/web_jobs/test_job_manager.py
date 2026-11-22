@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.jobs: JobManager, live_managers and shutdown_all_managers."""
+"""Tests for solar_challenge.web.jobs' JobManager."""
 
 import logging
 import multiprocessing
@@ -23,13 +23,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherProvider
 from solar_challenge.web.dashboard import dashboard_of
-from solar_challenge.web.jobs import (
-    JobManager,
-    JobSnapshot,
-    JobState,
-    live_managers,
-    shutdown_all_managers,
-)
+from solar_challenge.web.jobs import JobManager, JobSnapshot, JobState
 from solar_challenge.web.storage import RunQuery, RunRecord, RunStorage
 from tests._fleet_runner import MarkingHomeSimulator, started, wait_until_started
 from tests._manual_clock import ManualClock
@@ -1356,32 +1350,6 @@ class TestJobManagerShutdown:
 
         assert [(record.name, record.getMessage()) for record in caplog.records if record.levelno >= logging.ERROR] == []
 
-    def test_shutdown_all_managers_shuts_down_every_live_manager(
-        self, storage: RunStorage, new_job_manager: NewJobManager
-    ) -> None:
-        managers = [new_job_manager(storage, RecordingSimulation(), max_workers=1) for _ in range(2)]
-
-        shutdown_all_managers()
-
-        for manager in managers:
-            with pytest.raises(RuntimeError, match="after shutdown"):
-                _submit_home_job(manager)
-
-    def test_shutdown_all_managers_is_idempotent(self, storage: RunStorage, new_job_manager: NewJobManager) -> None:
-        """Test that calling shutdown_all_managers() twice does not raise."""
-        # Bind to a local variable so the manager has a strong reference and
-        # is not garbage-collected from the WeakSet before the first shutdown
-        # call — without this the WeakSet could be empty and the test would
-        # pass trivially without exercising the double-shutdown path.
-        jm = new_job_manager(storage, RecordingSimulation(), max_workers=1)
-
-        shutdown_all_managers()
-        shutdown_all_managers()  # must not raise
-
-        # Suppress "local variable 'jm' assigned but never used" lint; the
-        # strong reference is the point — it keeps jm alive through both calls.
-        del jm
-
 
 class TestJobManagerWaitUntilIdle:
     """Tests for JobManager.wait_until_idle, which blocks until no job is queued or running."""
@@ -1456,33 +1424,6 @@ class TestJobManagerWaitUntilIdle:
             _submit_home_job(manager)
 
         assert manager.wait_until_idle(timeout=0) is True
-
-
-class TestLiveManagers:
-    """Tests for live_managers(), the snapshot of every JobManager not yet garbage-collected."""
-
-    def test_live_managers_reports_a_newly_constructed_manager(
-        self, storage: RunStorage, new_job_manager: NewJobManager
-    ) -> None:
-        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
-
-        assert manager in live_managers()
-
-    def test_an_earlier_snapshot_does_not_gain_managers_constructed_after_it(
-        self, storage: RunStorage, new_job_manager: NewJobManager
-    ) -> None:
-        snapshot = live_managers()
-        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
-
-        assert manager not in snapshot
-
-    def test_live_managers_includes_shut_down_managers(
-        self, storage: RunStorage, new_job_manager: NewJobManager
-    ) -> None:
-        manager = new_job_manager(storage, RecordingSimulation(), max_workers=1)
-        manager.shutdown()
-
-        assert manager in live_managers()
 
 
 class TestRecoveryOfInterruptedRuns:
