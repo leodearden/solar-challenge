@@ -260,7 +260,7 @@ class SweepSpec:
             )
 
     def _points_are_finite(self) -> bool:
-        """Whether every point get_values gives is finite; a power too large for a float, which raises OverflowError, gives none."""
+        """Whether every point get_values gives is finite, an OverflowError from a power too large for a float counting as a point that is not."""
         try:
             return all(math.isfinite(point) for point in self.get_values())
         except OverflowError:
