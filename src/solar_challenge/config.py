@@ -118,23 +118,6 @@ def _period_day(value: object, field: str) -> date:
 
 
 @dataclass(frozen=True)
-class OutputConfig:
-    """Configuration for simulation output.
-
-    Attributes:
-        csv_path: Path to save CSV results (optional)
-        include_minute_data: Include 1-minute resolution data in output
-        include_summary: Include summary statistics
-        aggregation: Aggregation level for output (minute, daily, monthly, annual)
-    """
-
-    csv_path: Optional[str] = None
-    include_minute_data: bool = True
-    include_summary: bool = True
-    aggregation: str = "minute"
-
-
-@dataclass(frozen=True)
 class ScenarioConfig:
     """Configuration for a simulation scenario.
 
@@ -146,11 +129,8 @@ class ScenarioConfig:
             a 'YYYY-MM-DD' string or a Timestamp, or whose last day precedes its first
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
-        output: Output preferences, which no command reads; a scenario file's output: key is refused
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
             as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
-        tariff_config: Refused when set: no simulation reads it, so a home's
-            tariff is its HomeConfig.tariff_config
         finance: Financial appraisal parameters (None for no financial analysis)
     """
 
@@ -160,9 +140,7 @@ class ScenarioConfig:
     location: Optional[Location] = None
     homes: tuple[HomeConfig, ...] = ()
     home: Optional[HomeConfig] = None
-    output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
-    tariff_config: Optional[TariffConfig] = None
     finance: Optional[FinanceConfig] = None
 
     def __post_init__(self) -> None:
@@ -178,11 +156,6 @@ class ScenarioConfig:
             )
         self._read_the_seg_rate()
         self._refuse_a_home_seg_rate_other_than_the_scenarios()
-        if self.tariff_config is not None:
-            raise ConfigurationError(
-                f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
-                "give each home its tariff as HomeConfig.tariff_config"
-            )
         self._refuse_a_period_that_is_not_a_run_of_days()
 
     @property
