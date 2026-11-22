@@ -251,8 +251,7 @@ Labels are the sidecar's. Every leaf carries `x_finding_run = review-all-solar_c
 - **γ. Finance and optimize require their simulator** (leaf). Files:
   - `finance.py` (`project_multi_year`: `simulate: FleetSimulate` required, its default and function-local import go; docstrings);
   - `optimize.py` (`run_sweep`, `sensitivity_panel`: required; `run_sweep`'s default, which α pointed at `default_runner()`, goes);
-  - the four calls that pass none: `test_finance_calibration.py`, `test_cost_recovery_calibration.py` ×2, `test_optimize_sweep.py`;
-  - `tests/unit/test_import_structure.py`'s entry, if 775 has landed.
+  - the four calls that pass none: `test_finance_calibration.py`, `test_cost_recovery_calibration.py` ×2, `test_optimize_sweep.py`.
 
   Signal: B10. `project_multi_year(scenario, finance)` raises `TypeError` naming `simulate`. Today it silently fans out on every CPU through a hidden import. The library consumer's projection is driven only by the simulator it passes.
 
