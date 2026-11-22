@@ -2,7 +2,6 @@
 """Tests for solar_challenge.web.jobs' JobManager."""
 
 import logging
-import multiprocessing
 import sqlite3
 import threading
 import time
@@ -402,15 +401,6 @@ def _three_homes() -> list[HomeConfig]:
     ]
 
 
-@pytest.fixture
-def pool_workers_started_by_forkserver() -> Iterator[None]:
-    """Start the fleet runner's pool workers through forkserver until the test ends: a job's thread starts the pool, and a fork of a process running threads may deadlock its child."""
-    previous = multiprocessing.get_start_method(allow_none=True)
-    multiprocessing.set_start_method("forkserver", force=True)
-    yield
-    multiprocessing.set_start_method(previous, force=True)
-
-
 class TestJobManagerSimulation:
     """Tests for the simulation a JobManager runs through its runner."""
 
@@ -487,7 +477,6 @@ class TestJobManagerSimulation:
         assert storage.run_record(run_id) == created
         assert not stored_run_dir(storage, run_id).exists()
 
-    @pytest.mark.usefixtures("pool_workers_started_by_forkserver")
     def test_a_fleet_job_on_a_pool_whose_run_is_cancelled_while_its_first_home_simulates_never_starts_a_home_not_yet_handed_to_the_pool(
         self, storage: RunStorage, tmp_path: Path, closes_at_teardown: ExitStack
     ) -> None:

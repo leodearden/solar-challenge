@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Home simulators for FleetRunner tests: one marks each home as it starts and as it finishes, so a test reads back which homes started, in which process, on which weather, and which finished; one ends its worker process at named homes, to break a pool.
+"""Home simulators for FleetRunner tests: one marks each home as it starts and as it finishes, so a test reads back which homes started, in which process, on which weather, holding which of the marks made in the caller's memory, and which finished; one ends its worker process at named homes, to break a pool.
 
 A FleetRunner's pool pickles its home simulator into each job, so a spawn or forkserver
 worker imports this module to unpickle it. That is why each simulator is a top-level class
@@ -8,7 +8,7 @@ of a helper module rather than one defined in a test.
 Usage::
 
     from tests._fleet_runner import (
-        MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, started, wait_until_started
+        MarkingHomeSimulator, ProcessEndingHomeSimulator, finished, marked_in_this_process, started, wait_until_started
     )
 
     runner = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, failing=frozenset({"Home 1"})))
@@ -16,6 +16,10 @@ Usage::
         runner.simulate(fleet, start, end)
     assert len(started(tmp_path)) < len(fleet.homes)
     assert finished(tmp_path) == set(started(tmp_path))
+
+    with marked_in_this_process("caller"):
+        FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path), parallel=True).simulate(fleet, start, end)
+    assert [start.process_marks for start in started(tmp_path).values()] == [()] * len(fleet.homes)
 
     marking = FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(tmp_path, seconds=0.2))
     each = marking.simulate_each(fleets, start, end)
@@ -31,10 +35,12 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,20 +53,39 @@ from tests._finance_builders import make_sim_results
 _STARTED_SUFFIX = ".json"
 _FINISHED_SUFFIX = ".finished"
 
+_marks_held: set[str] = set()
+"""The marks marked_in_this_process holds in this module's memory, which a forked process inherits and a fresh import of the module starts without."""
+
+
+@contextlib.contextmanager
+def marked_in_this_process(mark: str) -> Iterator[None]:
+    """Hold *mark* in this module's memory until the block ends.
+
+    A process forked from this one meanwhile holds the mark too, as it holds a copy of all this process's
+    memory. A process started by forkserver or spawn imports this module afresh and holds none.
+    """
+    _marks_held.add(mark)
+    try:
+        yield
+    finally:
+        _marks_held.discard(mark)
+
 
 @dataclass(frozen=True)
 class HomeStart:
-    """What MarkingHomeSimulator recorded as a home started: the id of the process it ran in, and the names of the locations its weather held, None for weather other than a PrefetchedWeather."""
+    """What MarkingHomeSimulator recorded as a home started: the id of the process it ran in, the names of the locations its weather held, None for weather other than a PrefetchedWeather, and the marks that process held, sorted (marked_in_this_process)."""
 
     pid: int
     locations: tuple[str, ...] | None
+    process_marks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class MarkingHomeSimulator:
     """A HomeSimulator that marks each home it starts in *marker_dir*, waits *seconds*, refuses each home named in *failing*, and marks the home finished once its call ends, whether it returns or raises.
 
-    A home's start marker, at start_marker(marker_dir, <home name>), and its finish marker, at
+    A home's start marker records its process, its weather's locations and the marks its process holds
+    (HomeStart). It, at start_marker(marker_dir, <home name>), and the home's finish marker, at
     finish_marker(marker_dir, <home name>), each appear at that path only once whole: each is written
     under a temporary name that carries the writer's process id and thread id, since two pool workers,
     or two threads of one process, can mark homes of one name at once, and then renamed. The finish
@@ -87,7 +112,8 @@ class MarkingHomeSimulator:
         """Mark config's home as started, wait, then raise ValueError naming a failing home, else return its results; either way, mark the home finished as the call ends."""
         locations = [location.name for location in weather.frames] if isinstance(weather, PrefetchedWeather) else None
         _write_whole(
-            start_marker(self.marker_dir, config.name), json.dumps({"pid": os.getpid(), "locations": locations})
+            start_marker(self.marker_dir, config.name),
+            json.dumps({"pid": os.getpid(), "locations": locations, "process_marks": sorted(_marks_held)}),
         )
         try:
             release = dict(self.held_until).get(config.name)
@@ -138,7 +164,9 @@ def started(marker_dir: Path) -> dict[str, HomeStart]:
         recorded = json.loads(marker.read_text(encoding="utf-8"))
         locations = recorded["locations"]
         starts[marker.name.removesuffix(_STARTED_SUFFIX)] = HomeStart(
-            pid=recorded["pid"], locations=None if locations is None else tuple(locations)
+            pid=recorded["pid"],
+            locations=None if locations is None else tuple(locations),
+            process_marks=tuple(recorded["process_marks"]),
         )
     return starts
 
