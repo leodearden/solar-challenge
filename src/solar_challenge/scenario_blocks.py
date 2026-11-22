@@ -90,6 +90,23 @@ def refuse_unrecognised_keys(
     return mapping
 
 
+def refuse_retired_keys(block_path: str, block: Mapping[str, Any], retired: Mapping[str, str]) -> None:
+    """Refuse the block at *block_path* if it holds any key of *retired*, null or not, naming the first one's path and why it is refused."""
+    for key, why in retired.items():
+        if key in block:
+            raise refusal(child_path(block_path, key), why)
+
+
+RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
+    "dispatch_strategy": (
+        "the dispatch strategy is the battery's own setting; write it in the battery block, "
+        "as battery.dispatch_strategy: {strategy_type: tou_optimized}; a battery that sets none "
+        "dispatches self_consumption, as greedy did"
+    ),
+})
+"""The home's and the fleet's retired dispatch_strategy key, with why it is refused and what replaces it."""
+
+
 def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
     """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
     name = block.get("name")

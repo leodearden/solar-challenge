@@ -14,7 +14,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from solar_challenge.dispatch import DispatchStrategyConfig
+from solar_challenge.dispatch import DispatchStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     ComponentDistribution,
@@ -247,8 +247,10 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
     own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
-    either way.  An economy tariff's rate the scenario leaves out loads as its PRESET_RATES
-    rate, the rate the loaders charge it.  A setting the form needs but cannot hold exactly
+    either way.  A battery dispatch strategy on its tariff's clock, which the form has no
+    control for, is named in not_loaded, and the page runs self-consumption.  An economy
+    tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate the
+    loaders charge it.  A setting the form needs but cannot hold exactly
     is refused, naming it, since loading it anyway would run a different fleet.  A period
     the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
     refused naming period.start_date and period.end_date.  A fleet size that is not a whole
@@ -485,7 +487,8 @@ def _read_component(
 def _read_battery(battery: Any, path: str) -> _BlockRead:
     """The fleet form's battery capacity and dispatch strategy: the *path* battery block's, none when it is absent or null.
 
-    A null capacity reads as 0 kWh: a home with no battery either way.
+    A null capacity reads as 0 kWh: a home with no battery either way. A dispatch strategy on its
+    tariff's clock loads none, and its path is named not loaded.
 
     Raises:
         ValueError: From distribution_form_spec, for a capacity the editor cannot hold, or
@@ -578,15 +581,26 @@ def _read_tariff(tariff: Any) -> _BlockRead:
 def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
     """The fleet form's dispatch strategy: the *path* dispatch block, none when it is absent or null.
 
+    A tou_optimized on its tariff's clock, which the form has no control for, loads none and
+    names *path* not loaded.
+
     Raises:
         ValueError: For a dispatch strategy the form cannot hold, naming its setting.
     """
     if dispatch is None:
         return {}, ()
+    if _on_its_tariffs_clock(dispatch, path):
+        return {}, (path,)
     form_dispatch, not_loaded = _read_typed_block(
         dispatch, path, "strategy_type", _FORM_DISPATCH_SETTINGS
     )
     return {"dispatch_strategy": form_dispatch}, not_loaded
+
+
+def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
+    """Whether the *path* dispatch block, one the loaders accept, is tou_optimized on its tariff's clock: it sets no peak_hours."""
+    strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
+    return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
 
 
 def _read_typed_block(

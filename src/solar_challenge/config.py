@@ -53,6 +53,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
     parse_tariff_config,
     refusal,
+    refuse_retired_keys,
     refuse_unrecognised_keys,
     require_keys,
     require_list,
@@ -314,9 +315,7 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
     A retired key is refused first, naming its path and what replaces it.
     """
     scenario = require_mapping(block_path, data)
-    for key, why in _RETIRED_SCENARIO_KEYS.items():
-        if key in scenario:
-            raise refusal(child_path(block_path, key), why)
+    refuse_retired_keys(block_path, scenario, _RETIRED_SCENARIO_KEYS)
     return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
 
 

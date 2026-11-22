@@ -59,6 +59,10 @@ fleet_distribution:
     capacity_kwh: 5.0
     max_charge_kw: 2.5
     max_discharge_kw: 2.5
+    # TOU-optimised dispatch on Economy 7's clock (no peak_hours): it grid-charges in the
+    # tariff's cheap minutes and discharges in its expensive ones.
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.9
       # The realistic forecast caps each night's fill at the charge the day's PV will not
@@ -73,10 +77,6 @@ fleet_distribution:
       min: 2000
       max: 6000
     use_stochastic: false
-
-  # TOU-optimised dispatch: runs TOUOptimizedStrategy through flow.simulate_timestep,
-  # which grid-charges in cheap periods by dispatch.compute_grid_charge_power_kw.
-  dispatch_strategy: tou_optimized
 
 # Financial parameters matching bristol-phase1.yaml baseline.
 # grid_services_model: capacity_at_events prices grid services from the
