@@ -82,7 +82,7 @@ class TestBatteryGridChargeParsing:
         """grid_charging supplied as a number, string or list raises ConfigurationError."""
         with pytest.raises(
             ConfigurationError,
-            match=f"grid_charging must be a mapping, got {type_name}",
+            match=f"grid_charging: must be a mapping, got {type_name}",
         ):
             _parsed_home(
                 battery={"capacity_kwh": 5.0, "grid_charging": grid_charging}
@@ -204,7 +204,7 @@ home:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_home(battery={"capacity_kwh": 5.0, "efficiency": 0.95, **per_direction})
         assert str(refusal.value) == (
-            f"home.battery sets both forms of a battery's efficiency: efficiency and {keys_named}; "
+            f"home.battery: sets both forms of a battery's efficiency: efficiency and {keys_named}; "
             "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
         )
 
@@ -490,25 +490,42 @@ class TestDispatchStrategyParsing:
         assert _parsed_strategy(block) == expected
 
     @pytest.mark.parametrize(
-        "block",
+        "strategy_type",
         [
-            pytest.param({"strategy_type": "tou_optimised"}, id="misspelt"),
-            pytest.param({"strategy_type": ""}, id="empty"),
-            pytest.param({"strategy_type": 42}, id="number"),
-            pytest.param({"strategy_type": ["tou_optimized"]}, id="list"),
-            pytest.param({}, id="missing"),
+            pytest.param("tou_optimised", id="misspelt"),
+            pytest.param("", id="empty"),
+            pytest.param(42, id="number"),
+            pytest.param(["tou_optimized"], id="list"),
         ],
     )
     def test_a_strategy_type_outside_the_table_is_refused_naming_its_path_and_the_tags(
-        self, block: dict[str, Any]
+        self, strategy_type: object
     ) -> None:
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy({"strategy_type": strategy_type})
+
+        assert str(raised.value) == (
+            f"{_DISPATCH_STRATEGY_PATH}.strategy_type: invalid value {strategy_type!r}; "
+            "valid values: ['peak_shaving', 'self_consumption', 'tou_optimized']"
+        )
+
+    @pytest.mark.parametrize(
+        "block", [pytest.param({}, id="absent"), pytest.param({"strategy_type": None}, id="null")]
+    )
+    def test_a_block_without_a_strategy_type_is_refused_naming_it(self, block: dict[str, Any]) -> None:
         with pytest.raises(ConfigurationError) as raised:
             _parsed_strategy(block)
 
-        message = str(raised.value)
-        assert f"{_DISPATCH_STRATEGY_PATH}.strategy_type" in message
-        assert repr(block.get("strategy_type")) in message
-        assert "['peak_shaving', 'self_consumption', 'tou_optimized']" in message
+        assert str(raised.value) == f"{_DISPATCH_STRATEGY_PATH}: requires 'strategy_type'"
+
+    def test_peak_hours_that_are_no_list_are_refused_by_the_strategy_naming_the_block(self) -> None:
+        """The strategy's own type check refuses peak_hours that are no list, prefixed by the block's path."""
+        with pytest.raises(ConfigurationError) as raised:
+            _parsed_strategy({"strategy_type": "tou_optimized", "peak_hours": 5})
+
+        assert str(raised.value) == (
+            f"{_DISPATCH_STRATEGY_PATH}: peak_hours must be a list of (start, end) windows, got 5"
+        )
 
     @pytest.mark.parametrize(
         ("block", "unrecognised", "recognised"),
@@ -537,7 +554,7 @@ class TestDispatchStrategyParsing:
         self, block: dict[str, Any], unrecognised: str, recognised: str
     ) -> None:
         """A key no variant reads is refused even when null: it is a typo, not the old writer's output."""
-        expected = f"Unrecognised keys in {_DISPATCH_STRATEGY_PATH}: {unrecognised}; recognised keys: {recognised}"
+        expected = f"{_DISPATCH_STRATEGY_PATH}: unrecognised keys {unrecognised}; recognised keys: {recognised}"
 
         with pytest.raises(ConfigurationError, match=re.escape(expected)):
             _parsed_strategy(block)
@@ -562,10 +579,10 @@ class TestDispatchStrategyParsing:
             ),
         ],
     )
-    def test_a_required_key_left_out_or_null_is_refused_by_its_path(
+    def test_a_required_key_left_out_or_null_is_refused_naming_the_block_and_the_key(
         self, block: dict[str, Any], required_key: str
     ) -> None:
-        expected = f"Missing required keys in {_DISPATCH_STRATEGY_PATH}: {_DISPATCH_STRATEGY_PATH}.{required_key}"
+        expected = f"{_DISPATCH_STRATEGY_PATH}: requires {required_key!r}"
 
         with pytest.raises(ConfigurationError, match=re.escape(expected)):
             _parsed_strategy(block)
@@ -705,21 +722,21 @@ class TestParseHomeBlockHeatPumpEV:
 
 
 class TestHeatPumpEvRequiredAndOmittedKeys:
-    """A heat_pump or ev block may leave out every key but its type, which it is refused without, by the key's path."""
+    """A heat_pump or ev block may leave out every key but its type, which it is refused without, naming the block by its path."""
 
     def test_heat_pump_missing_heat_pump_type_raises(self) -> None:
-        """heat_pump block without heat_pump_type raises ConfigurationError naming its path."""
-        with pytest.raises(ConfigurationError, match=re.escape("home.heat_pump.heat_pump_type")):
+        """heat_pump block without heat_pump_type raises ConfigurationError naming the block's path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.heat_pump: requires 'heat_pump_type'")):
             _parsed_home(heat_pump={"thermal_capacity_kw": 8.0})
 
     def test_ev_missing_charger_type_raises(self) -> None:
-        """ev block without charger_type raises ConfigurationError naming its path."""
-        with pytest.raises(ConfigurationError, match=re.escape("home.ev.charger_type")):
+        """ev block without charger_type raises ConfigurationError naming the block's path."""
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev: requires 'charger_type'")):
             _parsed_home(ev={"arrival_hour": 18})
 
     def test_ev_with_a_null_charger_type_raises(self) -> None:
         """A null charger_type reads as absent, so the block is refused as one without it."""
-        with pytest.raises(ConfigurationError, match=re.escape("home.ev.charger_type")):
+        with pytest.raises(ConfigurationError, match=re.escape("home.ev: requires 'charger_type'")):
             _parsed_home(ev={"charger_type": None, "arrival_hour": 18})
 
     def test_a_fleet_homes_ev_missing_charger_type_raises_naming_the_homes_place(
@@ -736,7 +753,7 @@ class TestHeatPumpEvRequiredAndOmittedKeys:
             })
         )
 
-        with pytest.raises(ConfigurationError, match=re.escape("homes[1].ev.charger_type")):
+        with pytest.raises(ConfigurationError, match=re.escape("homes[1].ev: requires 'charger_type'")):
             load_fleet_config(path)
 
     def test_a_heat_pump_block_giving_only_its_type_is_an_8_kw_heat_pump(self) -> None:

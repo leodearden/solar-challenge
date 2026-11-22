@@ -47,7 +47,7 @@ def test_a_per_direction_draw_contradicting_a_drawn_round_trip_is_refused_at_gen
     with pytest.raises(ConfigurationError) as fleet_refusal:
         generate_homes_from_distribution(fleet, Location.bristol())
 
-    assert str(fleet_refusal.value) == f"fleet_distribution.battery, home 1: {battery_refusal.value}"
+    assert str(fleet_refusal.value) == f"fleet_distribution.battery: home 1: {battery_refusal.value}"
 
 
 def test_a_per_direction_draw_at_its_default_gives_way_to_a_drawn_round_trip() -> None:

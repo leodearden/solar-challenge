@@ -63,10 +63,9 @@ class TestLoadFleetConfig:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
 
     def test_a_location_block_without_its_longitude_is_refused_naming_it(
         self, tmp_path: Path
@@ -95,7 +94,7 @@ fleet_distribution:
         path = tmp_path / "fleet.yaml"
         path.write_text(yaml_content)
 
-        with pytest.raises(ConfigurationError, match=re.escape("location.longitude")):
+        with pytest.raises(ConfigurationError, match=re.escape("location: requires 'longitude'")):
             load_fleet_config(path)
 
 
@@ -272,10 +271,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
 
     def test_load_fleet_empty_homes_list_raises(self, tmp_path: Path) -> None:
         """Test that empty homes list raises error."""
@@ -283,8 +281,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(ConfigurationError, match="cannot be empty"):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "homes: must list at least one home"
 
 
 class TestBristolPhase1DistributionEquivalence:
@@ -805,17 +804,20 @@ class TestParseSweepFleetConfigs:
                     _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
                     tariff={"type": "economy_8"},
                 ),
-                re.escape("Unknown tariff type 'economy_8'"),
+                re.escape("tariff.type: unknown tariff type 'economy_8'; supported types: "),
                 id="a-tariff-the-loader-refuses",
             ),
             pytest.param(
                 {"homes": [{"pv": {"capacity_kw": _PV_KW}}]},
-                "fleet_distribution",
+                re.escape("the top level: requires 'fleet_distribution'"),
                 id="no-fleet-distribution",
             ),
             pytest.param(
                 _fleet_file(5.0, tariff=_ECONOMY_7),
-                "No sweep specification found",
+                re.escape(
+                    "fleet_distribution: holds no sweep: "
+                    "give battery.capacity_kwh a proportional_to whose multiplier has type: sweep"
+                ),
                 id="no-sweep",
             ),
         ],
@@ -875,7 +877,7 @@ class TestFleetDistributionFileReaders:
         document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in location: 'latitud'"):
+        with pytest.raises(ConfigurationError, match="location: unrecognised keys 'latitud'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
@@ -885,7 +887,7 @@ class TestFleetDistributionFileReaders:
         document = _fleet_file(capacity_kwh, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="Unrecognised keys in fleet_distribution: 'n_homez'"):
+        with pytest.raises(ConfigurationError, match="fleet_distribution: unrecognised keys 'n_homez'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
@@ -893,3 +895,38 @@ class TestFleetDistributionFileReaders:
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         _assert_refused_naming_tou_optimized_and_the_tariff(lambda: read(_fleet_file(capacity_kwh)))
+
+
+class TestParseFleetConfigNamesTheBlockItRefuses:
+    """Each refusal parse_fleet_config writes reads '<block label>: <problem>'."""
+
+    def test_a_home_whose_heat_pump_leaves_out_its_type_is_refused_naming_its_place(self) -> None:
+        """R1: a heat_pump block without heat_pump_type in the second home names homes[1].heat_pump and the key."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": [{}, {"heat_pump": {"thermal_capacity_kw": 8}}]})
+
+        assert str(refusal.value) == "homes[1].heat_pump: requires 'heat_pump_type'"
+
+    def test_a_homes_value_that_is_no_list_is_refused_naming_it(self) -> None:
+        """R2: a homes: 5 was iterated, a TypeError no caller reports as a configuration error."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": 5})
+
+        assert str(refusal.value) == "homes: must be a list, got int"
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    def test_a_document_that_is_no_mapping_is_refused_naming_the_top_level(
+        self, read: Callable[[Any], object]
+    ) -> None:
+        """R3: a web or CLI caller may hand a fleet document reader a list, as a YAML file of one gives."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read([{"pv": {"capacity_kw": _PV_KW}}])
+
+        assert str(refusal.value) == "the top level: must be a mapping, got list"

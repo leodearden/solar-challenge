@@ -20,6 +20,7 @@ from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._html_page import element_attributes
 from tests._repository_paths import SCENARIOS_DIR
@@ -160,7 +161,7 @@ class TestExportFleetYAML:
         [
             pytest.param(
                 {"tariff": {"type": "flat_rate"}},
-                "flat_rate tariff requires 'rate_per_kwh' field",
+                "tariff: requires 'rate_per_kwh'",
                 id="tariff-the-loaders-refuse",
             ),
             pytest.param(
@@ -185,13 +186,12 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {**_FLEET_FORM_BODY["battery"], "enabled": False}},
-                "Unrecognised keys in fleet_distribution.battery: 'enabled'",
+                "fleet_distribution.battery: unrecognised keys 'enabled'",
                 id="battery-enabled-false",
             ),
             pytest.param(
                 {"n_homes": 5},
-                "fleet_distribution: FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' "
-                "must total n_homes",
+                "fleet_distribution: battery.capacity_kwh: shuffled_pool counts must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
             pytest.param(
@@ -201,8 +201,7 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {"capacity_kwh": {"type": "uniform"}}},
-                "uniform distribution for 'fleet_distribution.battery.capacity_kwh' requires "
-                "'min' and 'max'",
+                "fleet_distribution.battery.capacity_kwh: requires 'min', 'max'",
                 id="battery-uniform-without-its-range",
             ),
         ],
@@ -237,7 +236,7 @@ class TestExportFleetYAML:
         export = client.post("/api/fleet/export-yaml", json=body)
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
 
-        refusal = (400, {"error": f"{key} must be a mapping, got {type_name}"})
+        refusal = (400, {"error": non_mapping_block_refusal(key, type_name)})
         assert (export.status_code, export.get_json()) == refusal
         assert (simulate.status_code, simulate.get_json()) == refusal
         mock_job_manager.submit_fleet_job.assert_not_called()

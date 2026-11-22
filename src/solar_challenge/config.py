@@ -52,7 +52,10 @@ from solar_challenge.scenario_blocks import (
     parse_location_block,
     parse_seg_rate,
     parse_tariff_config,
+    refusal,
     refuse_unrecognised_keys,
+    require_keys,
+    require_list,
     require_mapping,
 )
 from solar_challenge.seg import SEGTariff
@@ -109,9 +112,8 @@ def _period_day(value: object, field: str) -> date:
     if isinstance(value, str) and _ISO_DAY.fullmatch(value):
         with contextlib.suppress(ValueError):
             return date.fromisoformat(value)
-    raise ConfigurationError(
-        f"period.{field} is {value!r}, which is not a day: "
-        "give a date, a 'YYYY-MM-DD' string or a Timestamp"
+    raise refusal(
+        child_path("period", field), f"{value!r} is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
     )
 
 
@@ -313,10 +315,9 @@ _PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
 
 
 def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
-    """Parse simulation period from config data."""
+    """Parse the simulation period at *block_path* from config data, refusing it unless it gives both days, naming each it leaves out."""
     refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
-    if "start_date" not in data or "end_date" not in data:
-        raise ConfigurationError("Simulation period requires 'start_date' and 'end_date'")
+    require_keys(block_path, data, ["start_date", "end_date"])
     return SimulationPeriod(
         start_date=data["start_date"],
         end_date=data["end_date"],
@@ -340,19 +341,16 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
     A retired key is refused first, naming its path and what replaces it.
     """
     scenario = require_mapping(block_path, data)
-    for key, refusal in _RETIRED_SCENARIO_KEYS.items():
+    for key, why in _RETIRED_SCENARIO_KEYS.items():
         if key in scenario:
-            raise ConfigurationError(f"{block_label(child_path(block_path, key))}: {refusal}")
+            raise refusal(child_path(block_path, key), why)
     return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
 
 
 def _parse_scenario(data: object, *, block_path: str) -> ScenarioConfig:
-    """Parse the scenario at *block_path* from config data, refusing first any key no scenario reads."""
+    """Parse the scenario at *block_path* from config data, refusing first any key no scenario reads, then a scenario leaving out its name or period, naming each, or giving neither home nor homes; its homes must be a list."""
     scenario = _refuse_keys_no_scenario_reads(data, block_path=block_path)
-    if "name" not in scenario:
-        raise ConfigurationError("Scenario must have a 'name' field")
-    if "period" not in scenario:
-        raise ConfigurationError(f"Scenario '{scenario['name']}' must have a 'period' field")
+    require_keys(block_path, scenario, ["name", "period"])
 
     location = parse_location_block(
         scenario.get("location"), block_path=child_path(block_path, "location")
@@ -362,7 +360,7 @@ def _parse_scenario(data: object, *, block_path: str) -> ScenarioConfig:
     home: Optional[HomeConfig] = None
 
     if "homes" in scenario:
-        for index, home_data in enumerate(scenario["homes"]):
+        for index, home_data in enumerate(require_list(child_path(block_path, "homes"), scenario["homes"])):
             homes.append(
                 parse_home_block(
                     home_data, location, block_path=child_path(block_path, f"homes[{index}]")
@@ -373,9 +371,7 @@ def _parse_scenario(data: object, *, block_path: str) -> ScenarioConfig:
             scenario["home"], location, block_path=child_path(block_path, "home")
         )
     else:
-        raise ConfigurationError(
-            f"Scenario '{scenario['name']}' must define either 'home' or 'homes'"
-        )
+        raise refusal(block_path, "requires 'home' or 'homes'")
 
     return ScenarioConfig(
         name=scenario["name"],
@@ -423,9 +419,9 @@ def _read_placeholder(path: str, text: str) -> Optional[_Placeholder]:
         return _Placeholder(path, name, None if default is None else as_finite_float(default, default_field))
     inside = _PLACEHOLDER_PATTERN.search(text)
     if inside is not None:
-        raise ConfigurationError(
-            f"{block_label(path)}: variable {inside['name']!r} is inside the longer string {text!r}; "
-            "a placeholder must be the whole value"
+        raise refusal(
+            path,
+            f"variable {inside['name']!r} is inside the longer string {text!r}; a placeholder must be the whole value",
         )
     return None
 
@@ -517,9 +513,7 @@ def _refuse_placeholders_without_a_value(
     """Refuse the first of *placeholders* that neither *variables* nor its default gives a value, naming its key path and its variable."""
     for each in placeholders:
         if each.value(variables) is None:
-            raise ConfigurationError(
-                f"{block_label(each.path)}: variable {each.name!r} is not supplied and has no default"
-            )
+            raise refusal(each.path, f"variable {each.name!r} is not supplied and has no default")
 
 
 def substitute_config_variables(
@@ -559,7 +553,8 @@ def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
         Parsed configuration dictionary
 
     Raises:
-        ConfigurationError: If file cannot be read or parsed
+        ConfigurationError: If file cannot be read or parsed, naming the file; or if its
+            document is not a mapping, naming the top level and the document's type
     """
     path = Path(path)
     if not path.exists():
@@ -567,10 +562,10 @@ def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
 
     try:
         with open(path, encoding="utf-8") as f:
-            config: dict[str, Any] = yaml.safe_load(f)
+            config: object = yaml.safe_load(f)
         if config is None:
             raise ConfigurationError(f"Empty configuration file: {path}")
-        return config
+        return require_mapping("", config)
     except yaml.YAMLError as e:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
 
@@ -585,7 +580,8 @@ def load_config_json(path: Union[str, Path]) -> dict[str, Any]:
         Parsed configuration dictionary
 
     Raises:
-        ConfigurationError: If file cannot be read or parsed
+        ConfigurationError: If file cannot be read or parsed, naming the file; or if its
+            document is not a mapping, naming the top level and the document's type
     """
     path = Path(path)
     if not path.exists():
@@ -593,8 +589,8 @@ def load_config_json(path: Union[str, Path]) -> dict[str, Any]:
 
     try:
         with open(path, encoding="utf-8") as f:
-            config: dict[str, Any] = json.load(f)
-        return config
+            config: object = json.load(f)
+        return require_mapping("", config)
     except json.JSONDecodeError as e:
         raise ConfigurationError(f"Invalid JSON in {path}: {e}") from e
 
@@ -644,7 +640,7 @@ def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
     if "scenarios" in config:
         return [
             _parse_scenario(scenario, block_path=f"scenarios[{index}]")
-            for index, scenario in enumerate(config["scenarios"])
+            for index, scenario in enumerate(require_list("scenarios", config["scenarios"]))
         ]
     elif "scenario" in config:
         return [_parse_scenario(config["scenario"], block_path="scenario")]
@@ -714,7 +710,7 @@ def _read_fleet_distribution_file(
     return distribution, _FleetFileSettings(location=location, tariff=tariff)
 
 
-def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
+def parse_fleet_config(document: object) -> FleetConfig:
     """Parse a fleet file's document, already loaded or variable-substituted.
 
     Supports two formats:
@@ -722,30 +718,31 @@ def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
     - Distribution-based generation: `fleet_distribution: {...}`
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         FleetConfig object
 
     Raises:
-        ConfigurationError: If configuration is invalid
+        ConfigurationError: If configuration is invalid, naming the block: a document that is
+            no mapping, homes that are no list or list no home, or a document giving neither
+            homes nor fleet_distribution
     """
+    document = require_mapping("", document)
     if "fleet_distribution" in document:
         distribution, settings = _read_fleet_distribution_file(document)
         homes = settings.generate_homes(distribution)
     elif "homes" in document:
         location = parse_location_block(document.get("location"))
-        homes_data = document["homes"]
+        homes_data = require_list("homes", document["homes"])
         if not homes_data:
-            raise ConfigurationError("Fleet 'homes' list cannot be empty")
+            raise refusal("homes", "must list at least one home")
         homes = [
             parse_home_block(home_data, location, block_path=f"homes[{index}]")
             for index, home_data in enumerate(homes_data)
         ]
     else:
-        raise ConfigurationError(
-            "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
-        )
+        raise refusal("", "requires 'homes' or 'fleet_distribution'")
 
     return FleetConfig(homes=tuple(homes), name=document.get("name", ""))
 
@@ -765,25 +762,27 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     return parse_fleet_config(load_config(path))
 
 
-def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
+def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
         it has no such block or the block no sweep
 
     Raises:
-        ConfigurationError: If its fleet_distribution: block is invalid
+        ConfigurationError: If the document is not a mapping, or its fleet_distribution: block
+            is invalid
     """
+    document = require_mapping("", document)
     if "fleet_distribution" not in document:
         return None
     return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
 
 
-def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, FleetConfig]]:
+def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
     The sweep is the fleet_distribution: block's battery.capacity_kwh multiplier. Every
@@ -791,17 +790,18 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
     once for the whole file.
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         (sweep value, FleetConfig named after it) for each sweep point, in sweep order
 
     Raises:
-        ConfigurationError: If the document has no fleet_distribution: block or no
-            sweep, or if configuration is invalid
+        ConfigurationError: If the document is not a mapping or has no fleet_distribution:
+            block, naming the top level; if the block holds no sweep; or if configuration is
+            invalid
     """
-    if "fleet_distribution" not in document:
-        raise ConfigurationError("A YAML-defined sweep requires a 'fleet_distribution' block")
+    document = require_mapping("", document)
+    require_keys("", document, ["fleet_distribution"])
     distribution, settings = _read_fleet_distribution_file(document)
     return [
         (value, FleetConfig(homes=tuple(settings.generate_homes(point)), name=f"multiplier={value:.4f}"))
@@ -827,9 +827,4 @@ def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
         ConfigurationError: If the file cannot be read or the community block
             is invalid.
     """
-    raw = load_config(path)
-    # yaml.safe_load returns None for an empty file; coerce to a dict so that
-    # .get("community") works cleanly and returns None rather than raising
-    # AttributeError.
-    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    return parse_community_config(data.get("community"), block_path="community")
+    return parse_community_config(load_config(path).get("community"), block_path="community")

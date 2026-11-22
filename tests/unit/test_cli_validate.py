@@ -381,14 +381,14 @@ home:
             ),
             pytest.param(
                 "home:\n  load: {occupants: 3}\n",
-                "Unrecognised keys in home.load: 'occupants';",
+                "home.load: unrecognised keys 'occupants';",
                 id="home-unrecognised-key",
             ),
             pytest.param(
                 "home:\n"
                 "  pv: {capacity_kw: 4.0}\n"
                 "  battery: {capacity_kwh: 5.0, efficiency: 0.95, charge_efficiency: 0.99}\n",
-                "home.battery sets both forms of a battery's efficiency: efficiency and charge_efficiency;",
+                "home.battery: sets both forms of a battery's efficiency: efficiency and charge_efficiency;",
                 id="home-battery-both-efficiency-forms",
             ),
             pytest.param(
@@ -398,12 +398,22 @@ home:
             ),
             pytest.param(
                 "homes:\n  - {}\n  - load: {occupants: 3}\n",
-                "Unrecognised keys in homes[1].load: 'occupants';",
+                "homes[1].load: unrecognised keys 'occupants';",
                 id="homes-list",
             ),
             pytest.param(
+                "homes:\n  - {}\n  - heat_pump: {thermal_capacity_kw: 8}\n",
+                "homes[1].heat_pump: requires 'heat_pump_type'",
+                id="homes-heat-pump-without-its-type",
+            ),
+            pytest.param(
+                "homes:\n  - {}\n  - pv: {azimuth: 400}\n",
+                "homes[1].pv: azimuth must be between 0 and 360, got 400",
+                id="homes-pv-azimuth-out-of-range",
+            ),
+            pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
-                "fleet_distribution.pv, home 1: tilt must be between 0 and 90, got 100.0",
+                "fleet_distribution.pv: home 1: tilt must be between 0 and 90, got 100.0",
                 id="fleet-distribution",
             ),
             pytest.param(
@@ -418,17 +428,17 @@ home:
             ),
             pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
-                "fleet_distribution.battery, home 1: max_charge_kw must be greater than 0, got -1.0",
+                "fleet_distribution.battery: home 1: max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",
             ),
             pytest.param(
                 _SWEEP_FLEET + "tariff: {type: economy_8}\n",
-                "Unknown tariff type 'economy_8'",
+                "tariff.type: unknown tariff type 'economy_8'; supported types:",
                 id="fleet-sweep-tariff",
             ),
             pytest.param(
                 "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
-                "Scenario 'winter' must have a 'period' field",
+                "scenarios[0]: requires 'period'",
                 id="scenarios",
             ),
             pytest.param(
@@ -441,6 +451,8 @@ home:
                 id="scenario",
             ),
             pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),
+            pytest.param("homes: 5\n", "homes: must be a list, got int", id="R2-homes-a-number"),
+            pytest.param("- a\n- b\n", "the top level: must be a mapping, got list", id="R3-a-list-document"),
         ],
     )
     def test_a_file_its_loader_refuses_is_one_error_row(
@@ -450,6 +462,12 @@ home:
 
         assert result.exit_code == 1
         assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    def test_a_homes_value_that_is_no_list_exits_as_a_refusal_not_a_traceback(self, tmp_path: Path) -> None:
+        """R2: homes: 5 was a TypeError, which the command does not catch, so it escaped with a traceback."""
+        result = self._validate_config(tmp_path, "homes: 5\n")
+
+        assert isinstance(result.exception, SystemExit)
 
     @pytest.mark.parametrize(
         ("document", "label", "construct"),
@@ -520,7 +538,7 @@ home:
         [
             pytest.param(
                 "fleet_distribution: {n_homes: 2, pv: {capacity_kw: 4.0}, heat_pump: {heat_pump_type: XSHP}}\n",
-                "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; "
+                "fleet_distribution.heat_pump.heat_pump_type: invalid value 'XSHP'; "
                 "valid values: null or one of ['ASHP', 'GSHP']",
                 id="a heat pump type outside its choices",
             ),
@@ -529,7 +547,7 @@ home:
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0}\n"
                 "  heat_pump: {heat_pump_type: {type: normal, mean: 1, std: 0.1}}\n",
-                "Invalid fleet_distribution.heat_pump.heat_pump_type {'type': 'normal', 'mean': 1, 'std': 0.1}; "
+                "fleet_distribution.heat_pump.heat_pump_type: invalid spec {'type': 'normal', 'mean': 1, 'std': 0.1}; "
                 "valid specs: null, one of ['ASHP', 'GSHP'], or a weighted_discrete or shuffled_pool of them and nulls",
                 id="a normal on a heat pump type",
             ),
@@ -537,7 +555,7 @@ home:
                 "fleet_distribution:\n"
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0, tilt: {type: weighted_discrete, values: [30, '35'], weights: [1, 1]}}\n",
-                "Invalid fleet_distribution.pv.tilt value '35'; valid values: null or a number",
+                "fleet_distribution.pv.tilt: invalid value '35'; valid values: null or a number",
                 id="a string among a number's weighted values",
             ),
         ],
@@ -795,7 +813,7 @@ home:
         text = table_text(result.stdout)
         assert "ERROR" in text
         error_row = text[text.index("ERROR"):]
-        assert "homes[0].battery.dispatch_strategy.strategy_type 'tou_optimised'" in error_row
+        assert "homes[0].battery.dispatch_strategy.strategy_type: invalid value 'tou_optimised';" in error_row
         for strategy in ("peak_shaving", "self_consumption", "tou_optimized"):
             assert strategy in error_row
 
@@ -1027,7 +1045,7 @@ home:
         result = self._validate_config(tmp_path, "home:\n  load: {'[bold]x': 1}\n")
 
         assert result.exit_code == 1
-        assert "ERROR Unrecognised keys in home.load: '[bold]x';" in table_text(
+        assert "ERROR home.load: unrecognised keys '[bold]x';" in table_text(
             result.stdout
         )
 

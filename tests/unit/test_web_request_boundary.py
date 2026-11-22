@@ -186,7 +186,7 @@ class TestReadLocation:
             pytest.param("londn", parse_location, "'londn'", id="unknown-place"),
             pytest.param("95,0", parse_location, "latitude", id="latitude-above-90"),
             pytest.param(
-                {"latitude": 50}, parse_location_block, "location.longitude", id="object-without-longitude"
+                {"latitude": 50}, parse_location_block, "location: requires 'longitude'", id="object-without-longitude"
             ),
         ],
     )

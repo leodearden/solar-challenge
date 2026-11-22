@@ -391,7 +391,9 @@ class TestGenerateHomesRefusesADrawThatIsNotFinite:
 
         with pytest.raises(ConfigurationError) as exc_info:
             generate_homes_from_distribution(fleet, Location.bristol())
-        assert str(exc_info.value) == f"{block}.{field} must draw samples that are finite numbers, got a sample of inf"
+        assert str(exc_info.value) == (
+            f"fleet_distribution.{block}.{field}: must draw samples that are finite numbers, got a sample of inf"
+        )
 
     def test_an_overflowing_draw_pre_sampled_in_bristol_legacy_order_is_refused_as_a_fresh_one_is(self) -> None:
         """random_order bristol_legacy draws every home's annual consumption before it builds the first home; an overflowing one is refused naming its setting and the draw."""
@@ -406,7 +408,7 @@ class TestGenerateHomesRefusesADrawThatIsNotFinite:
         with pytest.raises(ConfigurationError) as exc_info:
             generate_homes_from_distribution(fleet, Location.bristol())
         assert str(exc_info.value) == (
-            "load.annual_consumption_kwh must draw samples that are finite numbers, got a sample of inf"
+            "fleet_distribution.load.annual_consumption_kwh: must draw samples that are finite numbers, got a sample of inf"
         )
 
     def test_a_normal_whose_bounds_clamp_its_overflowing_draws_is_accepted(self) -> None:
@@ -432,7 +434,7 @@ def _first_home_with_an_ev(block: dict) -> int:
 def _ev_config_refusal(field: str, hour: float) -> str:
     """EVConfig's refusal of *hour* as its *field*, named by the EV component and the first home _EVERY_SETTING_DRAWN gives an EV."""
     return prefixed_construction_refusal(
-        f"fleet_distribution.ev, home {_first_home_with_an_ev(_EVERY_SETTING_DRAWN)}",
+        f"fleet_distribution.ev: home {_first_home_with_an_ev(_EVERY_SETTING_DRAWN)}",
         lambda: EVConfig("7kW", **{field: hour}),
     )
 
@@ -766,7 +768,7 @@ fleet_distribution:
                 seed=42,
             )
         assert str(exc_info.value) == (
-            "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
+            "fleet_distribution.heat_pump.heat_pump_type: invalid value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
         )
 
 
@@ -1024,8 +1026,24 @@ class TestGenerateHomesHouseholdOccupants:
             fleet_drawing(spec)
 
         assert str(exc_info.value) == (
-            f"{path} is a count, so a whole number must lie from its min to its max, "
+            f"{path}: a count, so a whole number must lie from its min to its max, "
             f"got a min of {spec.min!r} and a max of {spec.max!r}"
+        )
+
+    def test_a_block_whose_count_spec_holds_no_whole_number_is_refused_after_the_blocks_path(self) -> None:
+        """The parser builds the fleet through its constructed wrap, so the refusal naming the count's path relative to the fleet follows the block's path."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config(
+                {
+                    "n_homes": 2,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"household_occupants": {"type": "uniform", "min": 1.2, "max": 1.8}},
+                }
+            )
+
+        assert str(refusal.value) == (
+            "fleet_distribution: load.household_occupants: a count, so a whole number must lie from its min to its max, "
+            "got a min of 1.2 and a max of 1.8"
         )
 
     @pytest.mark.parametrize("household_occupants", _SPECS_WITH_NO_WHOLE_NUMBER)
@@ -1083,7 +1101,7 @@ class TestGenerateHomesHouseholdOccupants:
         """
         with pytest.raises(ConfigurationError) as exc_info:
             generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
-        assert str(exc_info.value) == f"fleet_distribution.load, home 1: {refusal}"
+        assert str(exc_info.value) == f"fleet_distribution.load: home 1: {refusal}"
 
     def test_a_null_draw_takes_load_configs_default_and_a_whole_number_float_is_held_as_its_int(self) -> None:
         """A null draw gives its home LoadConfig's default of 3 occupants, and a draw of 4.0 gives its home the int 4."""
@@ -1359,7 +1377,7 @@ class TestAComponentsRefusalNamesItsHome:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == f"fleet_distribution.pv, home {shuffled.index(95.0) + 1}: {pv_refusal.value}"
+        assert str(refusal.value) == f"fleet_distribution.pv: home {shuffled.index(95.0) + 1}: {pv_refusal.value}"
         assert isinstance(refusal.value.__cause__, ValueError)
 
     def test_a_null_pv_capacity_is_refused_naming_its_path_and_the_home(self) -> None:
@@ -1369,14 +1387,14 @@ class TestAComponentsRefusalNamesItsHome:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw is required, but home 1 drew null"
+        assert str(refusal.value) == "fleet_distribution.pv.capacity_kw: required, but home 1 drew null"
 
     def test_a_pv_capacity_the_fleet_does_not_draw_is_refused_naming_its_path(self) -> None:
         """A fleet built in code that leaves out pv.capacity_kw is refused as it is built, as the parser refuses a pv block leaving it out, before any home is drawn."""
         with pytest.raises(ConfigurationError) as refusal:
             FleetDistributionConfig(n_homes=2, pv=ComponentDistribution({}))
 
-        assert str(refusal.value) == "Missing required keys in fleet_distribution.pv: fleet_distribution.pv.capacity_kw"
+        assert str(refusal.value) == "fleet_distribution.pv: requires 'capacity_kw'"
 
 
 class TestEveryHomeHasAPVAndALoad:
@@ -1390,4 +1408,4 @@ class TestEveryHomeHasAPVAndALoad:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == f"fleet_distribution.{component} gave home 1 no {component}, which every home needs"
+        assert str(refusal.value) == f"fleet_distribution.{component}: gave home 1 no {component}, which every home needs"

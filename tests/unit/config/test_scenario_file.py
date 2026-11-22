@@ -16,9 +16,12 @@ from solar_challenge.config import (
     OutputConfig,
     ScenarioConfig,
     SimulationPeriod,
+    load_community_config,
     load_config,
     load_config_json,
     load_config_yaml,
+    load_fleet_config,
+    load_home_config,
     load_scenarios,
 )
 from solar_challenge.errors import ConfigurationError
@@ -398,6 +401,14 @@ class TestScenarioConfigRefusals:
         with pytest.raises(ConfigurationError, match=_naming("'x'", "period.start_date", repr(start_date))):
             ScenarioConfig(name="x", period=SimulationPeriod(start_date, end_date), home=_home())
 
+    def test_a_day_that_is_not_a_date_is_refused_after_the_scenario_and_the_days_path(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            ScenarioConfig(name="w", period=SimulationPeriod("2024", "2024-01-07"), home=_home())
+
+        assert str(refusal.value) == (
+            "Scenario 'w': period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        )
+
     def test_an_end_day_that_is_not_a_date_is_refused_by_its_own_name(self) -> None:
         with pytest.raises(ConfigurationError, match=_naming("'x'", "period.end_date", "'2024'")):
             ScenarioConfig(name="x", period=SimulationPeriod("2024-01-01", "2024"), home=_home())
@@ -748,6 +759,86 @@ class TestLoadScenarios:
         assert scenarios[1].name == "Scenario 2"
 
 
+_WEEK = {"start_date": "2024-01-01", "end_date": "2024-01-07"}
+_A_HOME = {"pv": {"capacity_kw": 4.0}}
+
+
+def _refusal_loading(tmp_path: Path, load: Callable[[Path], object], document: object, suffix: str = ".json") -> str:
+    """The message of the ConfigurationError *load* raises reading *document*, written as JSON to a file with *suffix*."""
+    path = tmp_path / f"document{suffix}"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ConfigurationError) as refusal:
+        load(path)
+    return str(refusal.value)
+
+
+class TestAScenarioDocumentNamesTheBlockItRefuses:
+    """Each refusal load_scenarios writes for a scenario document reads '<block label>: <problem>'."""
+
+    @pytest.mark.parametrize(
+        ("document", "expected"),
+        [
+            pytest.param(
+                {"scenarios": [{"name": "a", "period": {"start_date": "2024-01-01"}, "home": {}}]},
+                "scenarios[0].period: requires 'end_date'",
+                id="R4-a-period-without-its-end",
+            ),
+            pytest.param(
+                {"scenario": {"name": "a", "period": {}, "home": _A_HOME}},
+                "scenario.period: requires 'start_date', 'end_date'",
+                id="a-period-with-neither-day",
+            ),
+            pytest.param(
+                {"scenarios": [{"period": _WEEK, "home": _A_HOME}]},
+                "scenarios[0]: requires 'name'",
+                id="no-name",
+            ),
+            pytest.param({"scenario": {"name": "a", "home": _A_HOME}}, "scenario: requires 'period'", id="no-period"),
+            pytest.param(
+                {"scenarios": [{"home": _A_HOME}]}, "scenarios[0]: requires 'name', 'period'", id="neither"
+            ),
+            pytest.param(
+                {"scenario": {"name": "a", "period": _WEEK}},
+                "scenario: requires 'home' or 'homes'",
+                id="no-home-or-homes",
+            ),
+            pytest.param({"name": "a", "home": _A_HOME}, "the top level: requires 'period'", id="the-bare-form"),
+            pytest.param(
+                {"scenario": {"name": "a", "period": _WEEK, "homes": 5}},
+                "scenario.homes: must be a list, got int",
+                id="R2-homes-a-number",
+            ),
+            pytest.param({"scenarios": 5}, "scenarios: must be a list, got int", id="R2-scenarios-a-number"),
+        ],
+    )
+    def test_the_refusal_names_the_block(self, tmp_path: Path, document: dict, expected: str) -> None:
+        assert _refusal_loading(tmp_path, load_scenarios, document) == expected
+
+
+class TestEveryLoaderRefusesADocumentThatIsNoMapping:
+    """R3: a document is a mapping of blocks, so a file holding a list or a scalar is refused naming the top level, never an AttributeError or an empty community."""
+
+    @pytest.mark.parametrize(
+        ("load", "suffix"),
+        [
+            pytest.param(load_config_yaml, ".yaml", id="load_config_yaml"),
+            pytest.param(load_config_json, ".json", id="load_config_json"),
+            pytest.param(load_scenarios, ".yaml", id="load_scenarios"),
+            pytest.param(load_home_config, ".yaml", id="load_home_config"),
+            pytest.param(load_fleet_config, ".yaml", id="load_fleet_config"),
+            pytest.param(load_community_config, ".yaml", id="load_community_config"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("document", "type_name"),
+        [pytest.param(["a", "b"], "list", id="a-list"), pytest.param("a", "str", id="a-string")],
+    )
+    def test_the_document_is_refused_naming_the_top_level_and_its_type(
+        self, tmp_path: Path, load: Callable[[Path], object], suffix: str, document: object, type_name: str
+    ) -> None:
+        assert _refusal_loading(tmp_path, load, document, suffix) == f"the top level: must be a mapping, got {type_name}"
+
+
 class TestLocationBlockParsing:
     """Tests for parse_location_block's public contract."""
 
@@ -807,17 +898,14 @@ class TestLocationBlockParsing:
     def test_a_block_that_leaves_out_a_coordinate_is_refused_naming_each_missing_one(
         self, block: dict[str, object], missing: set[str]
     ) -> None:
-        """A block that sets any key sets both coordinates: each it leaves out or nulls is named by its path, and one it sets is not."""
+        """A block that sets any key sets both coordinates: each it leaves out or nulls is named, and one it sets is not."""
         with pytest.raises(ConfigurationError) as refused:
             parse_location_block(block)
 
-        assert {
-            coordinate
-            for coordinate in ("latitude", "longitude")
-            if f"location.{coordinate}" in str(refused.value)
-        } == missing
+        required = ", ".join(repr(coordinate) for coordinate in ("latitude", "longitude") if coordinate in missing)
+        assert str(refused.value) == f"location: requires {required}"
 
     def test_a_coordinate_left_out_is_named_by_the_blocks_path_in_its_file(self) -> None:
-        """The refusal names the missing coordinate under *block_path*, the block's path in its file."""
-        with pytest.raises(ConfigurationError, match=re.escape("scenarios[1].location.longitude")):
+        """The refusal names the block by *block_path*, its path in its file, and the coordinate it leaves out."""
+        with pytest.raises(ConfigurationError, match=re.escape("scenarios[1].location: requires 'longitude'")):
             parse_location_block({"latitude": 50}, block_path="scenarios[1].location")

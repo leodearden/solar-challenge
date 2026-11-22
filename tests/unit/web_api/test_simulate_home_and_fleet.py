@@ -16,6 +16,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
 from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
@@ -545,7 +546,7 @@ class TestParseHomeConfigErrorPaths:
         """A nested block sent as a non-object is a 400 naming the block and the type sent, never a 500; nothing is submitted."""
         resp = client.post(url, json=body)
         assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        assert non_mapping_block_refusal(key, "str") in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 
@@ -735,7 +736,7 @@ class TestParseHomeConfigErrorPaths:
             pytest.param(
                 "/api/simulate/home",
                 {**VALID_HOME_PAYLOAD, "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}},
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="home-tariff-name",
             ),
             pytest.param(
@@ -749,7 +750,7 @@ class TestParseHomeConfigErrorPaths:
                         ],
                     },
                 },
-                "tariff.periods[0].name must be a string, got 7",
+                "tariff.periods[0].name: must be a string, got 7",
                 id="home-tariff-period-name",
             ),
             pytest.param(
@@ -763,7 +764,7 @@ class TestParseHomeConfigErrorPaths:
                         },
                     ]
                 },
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="fleet-later-home-tariff-name",
             ),
         ],
@@ -843,7 +844,7 @@ class TestSimulateHomeLocation:
     @pytest.mark.parametrize(
         ("location", "named"),
         [
-            pytest.param({"latitude": 50}, ("location.longitude",), id="block-without-longitude"),
+            pytest.param({"latitude": 50}, ("location: requires 'longitude'",), id="block-without-longitude"),
             pytest.param(5, ("location", "int"), id="number"),
         ],
     )

@@ -30,6 +30,7 @@ from solar_challenge.web.simulation_params import (
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
@@ -614,7 +615,7 @@ class TestParseHomeConfigNestedBlockPresence:
         self, key: str, value: object, type_name: str
     ) -> None:
         """A falsy value other than null is not a mapping, so it is refused with a ValueError naming the block and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
+        with pytest.raises(ValueError, match=re.escape(non_mapping_block_refusal(key, type_name))):
             parse_home_config({**VALID_HOME_PAYLOAD, key: value})
 
     @pytest.mark.parametrize("key", ["seg", "tariff", "dispatch_strategy"])
