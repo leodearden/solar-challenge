@@ -240,12 +240,6 @@ class TariffConfig:
         return max(period.rate_per_kwh for period in self.periods)
 
     @cached_property
-    def mean_period_rate(self) -> float:
-        """Mean of the period rates in £/kWh, each period counted once whatever its length."""
-        rates = [period.rate_per_kwh for period in self.periods]
-        return sum(rates) / len(rates)
-
-    @cached_property
     def cheap_minutes_of_day(self) -> frozenset[int]:
         """The minutes of the local day, 0 to 1439, whose rate is below peak_rate and at or below the duration-weighted mean rate; a tariff whose minutes share one rate has none."""
         weighted_mean_rate = math.fsum(self._rate_by_minute) / MINUTES_PER_DAY

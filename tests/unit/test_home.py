@@ -1019,7 +1019,6 @@ class TestSimulateHomeRecordsHowItPricedTheRun:
 
         assert pricing is not None
         assert pricing.import_tariff_mean_rate_gbp_per_kwh == pytest.approx(0.125)
-        assert tariff.mean_period_rate == pytest.approx(0.50 / 3)
         assert pricing.seg_rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
 
     def test_results_read_back_from_their_frame_record_no_pricing(self, june21_weather_data):
