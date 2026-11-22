@@ -90,11 +90,13 @@ def refuse_unrecognised_keys(
     return mapping
 
 
-def refuse_retired_keys(block_path: str, block: Mapping[str, Any], retired: Mapping[str, str]) -> None:
-    """Refuse the block at *block_path* if it holds any key of *retired*, null or not, naming the first one's path and why it is refused."""
+def refuse_retired_keys(block_path: str, data: object, retired: Mapping[str, str]) -> dict[Any, Any]:
+    """Return the block at *block_path*, refusing it unless it is a mapping holding no key of *retired*, null or not, naming the first such key's path and why it is refused."""
+    block = require_mapping(block_path, data)
     for key, why in retired.items():
         if key in block:
             raise refusal(child_path(block_path, key), why)
+    return block
 
 
 RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
@@ -855,8 +857,9 @@ def parse_home_block(
             (RETIRED_DISPATCH_STRATEGY_KEY); as each of its blocks' readers refuses that block;
             or as HomeConfig refuses the home its blocks describe, prefixed by the block's path.
     """
-    refuse_retired_keys(block_path, require_mapping(block_path, data), RETIRED_DISPATCH_STRATEGY_KEY)
-    home = refuse_unrecognised_keys(block_path, data, HOME_BLOCK_KEYS)
+    home = refuse_unrecognised_keys(
+        block_path, refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY), HOME_BLOCK_KEYS
+    )
     return constructed(
         block_path,
         HomeConfig,

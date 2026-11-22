@@ -1079,42 +1079,46 @@ _FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
 
 
 def parse_fleet_distribution_config(
-    data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
+    data: object, *, block_path: str = _FLEET_DISTRIBUTION_PATH
 ) -> FleetDistributionConfig:
     """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
 
-    The refusals of a key outside its component's rows, a required key left out, a spec its
-    key's kind does not draw and a proportional_to source not drawn earlier for every home that
-    draws the dependent name the key under *block_path*. The retired dispatch_strategy key is
-    refused first, naming the battery's in its place.
+    The block is refused first unless it is a mapping, then if it holds the retired
+    dispatch_strategy key, naming the battery's in its place. The refusals of a key outside its
+    component's rows, a required key left out, a spec its key's kind does not draw and a
+    proportional_to source not drawn earlier for every home that draws the dependent name the
+    key under *block_path*.
     """
-    refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY)
-    refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
-    require_keys(block_path, data, ["n_homes", "pv"])
+    block = refuse_unrecognised_keys(
+        block_path,
+        refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY),
+        _FLEET_DISTRIBUTION_BLOCK_KEYS,
+    )
+    require_keys(block_path, block, ["n_homes", "pv"])
 
-    pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=child_path(block_path, "pv"))
-    load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=child_path(block_path, "load"))
+    pv = _parse_component_distribution(PV_BLOCK, block["pv"], block_path=child_path(block_path, "pv"))
+    load = _parse_component_distribution(LOAD_BLOCK, block.get("load", {}), block_path=child_path(block_path, "load"))
     battery = _parse_optional_component_distribution(
-        BATTERY_BLOCK, data.get("battery"), block_path=child_path(block_path, "battery")
+        BATTERY_BLOCK, block.get("battery"), block_path=child_path(block_path, "battery")
     )
     heat_pump = _parse_optional_component_distribution(
-        HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
+        HEAT_PUMP_BLOCK, block.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
     )
-    ev = _parse_optional_component_distribution(EV_BLOCK, data.get("ev"), block_path=child_path(block_path, "ev"))
+    ev = _parse_optional_component_distribution(EV_BLOCK, block.get("ev"), block_path=child_path(block_path, "ev"))
     _refuse_proportional_sources_not_drawn_earlier(
         _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
     )
     return constructed(
         block_path,
         FleetDistributionConfig,
-        n_homes=data["n_homes"],
+        n_homes=block["n_homes"],
         pv=pv,
         load=load,
         battery=battery,
         heat_pump=heat_pump,
         ev=ev,
-        seed=data.get("seed"),
-        random_order=data.get("random_order", "default"),
+        seed=block.get("seed"),
+        random_order=block.get("random_order", "default"),
     )
 
 

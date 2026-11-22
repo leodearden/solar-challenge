@@ -55,6 +55,7 @@ from solar_challenge.scenario_blocks import (
     refusal,
     refuse_retired_keys,
     refuse_unrecognised_keys,
+    require_held_keys,
     require_keys,
     require_list,
     require_mapping,
@@ -314,8 +315,7 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
 
     A retired key is refused first, naming its path and what replaces it.
     """
-    scenario = require_mapping(block_path, data)
-    refuse_retired_keys(block_path, scenario, _RETIRED_SCENARIO_KEYS)
+    scenario = refuse_retired_keys(block_path, data, _RETIRED_SCENARIO_KEYS)
     return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
 
 
@@ -768,12 +768,12 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
         (sweep value, FleetConfig named after it) for each sweep point, in sweep order
 
     Raises:
-        ConfigurationError: If the document is not a mapping or has no fleet_distribution:
-            block, naming the top level; if the block holds no sweep; or if configuration is
-            invalid
+        ConfigurationError: If the document is not a mapping or holds no fleet_distribution:
+            block, naming the top level; if the block is not a mapping or holds no sweep,
+            naming the block; or if configuration is invalid
     """
     document = require_mapping("", document)
-    require_keys("", document, ["fleet_distribution"])
+    require_held_keys("", document, ["fleet_distribution"])
     distribution, settings = _read_fleet_distribution_file(document)
     return [
         (value, FleetConfig(homes=tuple(settings.generate_homes(point)), name=f"multiplier={value:.4f}"))
