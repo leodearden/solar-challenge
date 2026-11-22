@@ -1036,9 +1036,9 @@ def _parse_component_distribution(
     """Read a fleet_distribution: component block by *block*'s fleet rows.
 
     A key outside the rows is refused, naming its path, and so is a block leaving out a key the
-    rows require, naming the block and the key. A SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
-    false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
-    even when null, as _parse_drawn_spec reads it.
+    rows require, naming the block and the key. A SETTING key is read as written, or by its
+    sub-block's reader, and a FLAG key as true or false, naming its path; a null one of either
+    reads as absent. Any other key is a spec, kept even when null, as _parse_drawn_spec reads it.
     """
     mapping = refuse_unrecognised_keys(block_path, data, block.fleet)
     _refuse_required_fleet_keys_left_out(block, mapping, block_path)
