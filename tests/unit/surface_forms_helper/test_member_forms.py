@@ -582,7 +582,7 @@ def test_a_descriptor_typed_dataclass_field_is_both_a_parameter_its_class_form_s
         reading: Rounded = Rounded()
 
     assert (Meter().reading, Meter(2.6).reading) == (0, 3)
-    assert surface_form(Meter) == "dataclass[eq] (reading: Rounded = 0) -> None"
+    assert surface_form(Meter) == "dataclass[eq, match_args] (reading: Rounded = 0) -> None"
     assert member_forms(Meter) == {"reading": "Rounded"}
 
 
@@ -645,9 +645,9 @@ def test_a_named_tuple_field_is_not_a_member_since_its_class_form_pins_it_but_a_
 
     Plain = collections.namedtuple("Plain", ["kwh", "site"])
 
-    assert surface_form(Reading) == "(kwh: float, site: str | None = None)"
+    assert surface_form(Reading) == "class[match_args] (kwh: float, site: str | None = None)"
     assert member_forms(Reading) == {"UNITS": "str", "doubled": "(self) -> float"}
-    assert surface_form(Plain) == "(kwh, site)"
+    assert surface_form(Plain) == "class[match_args] (kwh, site)"
     assert member_forms(Plain) == {}
 
 

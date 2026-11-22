@@ -5,7 +5,8 @@ The module a string annotation is evaluated in, and the errors raised where it c
 evaluated there, have their rules in
 tests/unit/surface_forms_helper/test_surface_form_module_lookup.py.
 
-Wrapper is defined at module level, where its qualified name carries no '<locals>'.
+Wrapper, and the classes whose __match_args__ is refused, are defined at module level,
+where their qualified names carry no '<locals>' and a parametrize decorator can reach them.
 """
 
 import collections
@@ -63,6 +64,34 @@ class Wrapper:
         return f"Wrapper[{self.inner.__qualname__}]"
 
 
+class PositionalMeter:
+    """A class whose constructor takes site, then rate, positionally."""
+
+    def __init__(self, site: str, rate: float = 0.0) -> None: ...
+
+
+class MatchesFewer(PositionalMeter):
+    __match_args__ = ("site",)
+
+
+class MatchesReordered(PositionalMeter):
+    __match_args__ = ("rate", "site")
+
+
+class MatchesByList(PositionalMeter):
+    __match_args__ = ["site", "rate"]
+
+
+@dataclass(init=False)
+class HandOrdered:
+    """A dataclass whose __match_args__ names its fields, site then rate, while its hand-written constructor takes rate, then site."""
+
+    site: str
+    rate: float
+
+    def __init__(self, rate: float, site: str) -> None: ...
+
+
 def test_parameter_kinds_defaults_and_the_return_annotation_are_kept() -> None:
     def f(
         a: int, /, b: str = "x", *args: float, c: bool = True, **kwargs: int
@@ -93,7 +122,7 @@ def test_a_parameter_default_is_spelled_as_ascii_writes_it() -> None:
         surface_form(f)
         == "(band: str = '\\U0001f6dc', label='\\xe9', *, pair: tuple[str, int] = ('\\xe9', 1)) -> None"
     )
-    assert surface_form(Tag) == "dataclass[eq, frozen] (label: str = '\\xe9') -> None"
+    assert surface_form(Tag) == "dataclass[eq, frozen, match_args] (label: str = '\\xe9') -> None"
 
 
 def test_an_optional_or_a_union_is_spelled_with_bars() -> None:
@@ -334,7 +363,7 @@ def test_a_class_form_ends_with_its_constructor_signature() -> None:
 
     assert (
         surface_form(Point)
-        == "dataclass[eq, frozen] (x: float, tags: list[str] = <factory>, label: str = '') -> None"
+        == "dataclass[eq, frozen, match_args] (x: float, tags: list[str] = <factory>, label: str = '') -> None"
     )
     assert surface_form(Plain) == "(a: int, b: str | None = None) -> None"
 
@@ -356,16 +385,90 @@ def test_a_dataclass_form_begins_with_dataclass_then_in_brackets_those_of_eq_ord
     class Probe:
         site: str
 
-    assert surface_form(Register) == "dataclass[eq] (count: int) -> None"
-    assert surface_form(Reading) == "dataclass[eq, frozen] (kwh: float) -> None"
+    assert surface_form(Register) == "dataclass[eq, match_args] (count: int) -> None"
+    assert surface_form(Reading) == "dataclass[eq, frozen, match_args] (kwh: float) -> None"
     assert (
-        surface_form(Rank) == "dataclass[eq, order, unsafe_hash, frozen] (level: int) -> None"
+        surface_form(Rank)
+        == "dataclass[eq, order, unsafe_hash, frozen, match_args] (level: int) -> None"
     )
-    assert surface_form(Probe) == "dataclass (site: str) -> None"
+    assert surface_form(Probe) == "dataclass[match_args] (site: str) -> None"
 
 
-def test_a_dataclass_kind_lists_no_other_dataclass_parameter() -> None:
-    @dataclass(repr=False, match_args=False, kw_only=True, slots=True, weakref_slot=True)
+def test_a_dataclass_kind_lists_match_args_when_its_match_args_names_its_constructors_positional_parameters() -> None:
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+        site: str = ""
+
+    @dataclass(match_args=False)
+    class Unmatched:
+        kwh: float
+
+    @dataclass(kw_only=True)
+    class Keyed:
+        kwh: float
+
+    @dataclass
+    class Empty:
+        pass
+
+    assert surface_form(Reading) == "dataclass[eq, frozen, match_args] (kwh: float, site: str = '') -> None"
+    assert surface_form(Unmatched) == "dataclass[eq] (kwh: float) -> None"
+    assert surface_form(Keyed) == "dataclass[eq] (*, kwh: float) -> None"
+    assert surface_form(Empty) == "dataclass[eq] () -> None"
+
+
+def test_a_class_other_than_a_dataclass_is_spelled_with_the_kind_class_only_when_it_has_a_qualifier() -> None:
+    class Matched:
+        __match_args__ = ("site", "rate")
+
+        def __init__(self, site: str, rate: float = 0.0) -> None: ...
+
+    class Unmatched:
+        def __init__(self, site: str, rate: float = 0.0) -> None: ...
+
+    assert surface_form(Matched) == "class[match_args] (site: str, rate: float = 0.0) -> None"
+    assert surface_form(Unmatched) == "(site: str, rate: float = 0.0) -> None"
+
+
+@pytest.mark.parametrize(
+    ("cls", "naming_it_what_it_holds_and_those_parameters"),
+    [
+        pytest.param(
+            MatchesFewer,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.MatchesFewer\.__match_args__\b"
+            r".*\('site',\).*\('site', 'rate'\)",
+            id="fewer-names",
+        ),
+        pytest.param(
+            MatchesReordered,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.MatchesReordered\.__match_args__\b"
+            r".*\('rate', 'site'\).*\('site', 'rate'\)",
+            id="reordered-names",
+        ),
+        pytest.param(
+            MatchesByList,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.MatchesByList\.__match_args__\b"
+            r".*\['site', 'rate'\].*\('site', 'rate'\)",
+            id="list-of-the-names",
+        ),
+        pytest.param(
+            HandOrdered,
+            r"\btests\.unit\.surface_forms_helper\.test_surface_form_grammar\.HandOrdered\.__match_args__\b"
+            r".*\('site', 'rate'\).*\('rate', 'site'\)",
+            id="dataclass-fields-not-its-hand-written-constructors-parameters",
+        ),
+    ],
+)
+def test_a_class_whose_match_args_is_neither_empty_nor_its_constructors_positional_parameters_raises_a_type_error_naming_it_what_it_holds_and_those_parameters(
+    cls: type, naming_it_what_it_holds_and_those_parameters: str
+) -> None:
+    with pytest.raises(TypeError, match=naming_it_what_it_holds_and_those_parameters):
+        surface_form(cls)
+
+
+def test_a_dataclass_kind_lists_neither_init_repr_nor_kw_only() -> None:
+    @dataclass(repr=False, kw_only=True)
     class Quiet:
         kwh: float
 
@@ -376,7 +479,7 @@ def test_a_dataclass_kind_lists_no_other_dataclass_parameter() -> None:
         def __init__(self, site: str) -> None: ...
 
     assert surface_form(Quiet) == "dataclass[eq] (*, kwh: float) -> None"
-    assert surface_form(Meter) == "dataclass[eq] (site: str) -> None"
+    assert surface_form(Meter) == "dataclass[eq, match_args] (site: str) -> None"
 
 
 def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inherits() -> None:
@@ -387,7 +490,7 @@ def test_an_undecorated_subclass_of_a_dataclass_is_spelled_with_the_kind_it_inhe
     class Scaled(Reading):
         def scaled(self, factor: float) -> float: ...
 
-    assert surface_form(Scaled) == "dataclass[eq, frozen] (kwh: float) -> None"
+    assert surface_form(Scaled) == "dataclass[eq, frozen, match_args] (kwh: float) -> None"
 
 
 def test_an_enum_form_is_its_members_in_definition_order() -> None:

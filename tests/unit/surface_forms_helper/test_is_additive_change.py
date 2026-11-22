@@ -14,7 +14,7 @@ def test_a_frozen_dataclass_that_gains_an_appended_defaulted_field_changes_addit
         b: str = "x"
         c: float = 1.0
 
-    assert is_additive_change("dataclass[eq, frozen] (a: int, b: str = 'x') -> None", Reading)
+    assert is_additive_change("dataclass[eq, frozen, match_args] (a: int, b: str = 'x') -> None", Reading)
 
 
 def test_a_defaulted_field_inserted_before_another_is_breaking() -> None:
@@ -24,7 +24,7 @@ def test_a_defaulted_field_inserted_before_another_is_breaking() -> None:
         z: int = 0
         b: str = "x"
 
-    assert not is_additive_change("dataclass[eq, frozen] (a: int, b: str = 'x') -> None", Reading)
+    assert not is_additive_change("dataclass[eq, frozen, match_args] (a: int, b: str = 'x') -> None", Reading)
 
 
 def test_a_removed_parameter_is_breaking() -> None:
@@ -82,7 +82,7 @@ def test_a_dataclass_whose_kind_gains_a_qualifier_is_breaking() -> None:
     class Rank:
         level: int
 
-    assert not is_additive_change("dataclass[eq, frozen] (level: int) -> None", Rank)
+    assert not is_additive_change("dataclass[eq, frozen, match_args] (level: int) -> None", Rank)
 
 
 def test_a_mapping_constant_that_gains_a_key_is_additive() -> None:

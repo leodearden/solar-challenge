@@ -881,7 +881,7 @@ def test_a_closure_class_whose_constructor_gains_a_keyword_only_parameter_with_a
     assert _printed_entry(message, "battery.SocEnvelope") == [
         "solar_challenge.battery.SocEnvelope",
         f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
-        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
         "change:  additive",
     ]
 
@@ -898,7 +898,7 @@ def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
     assert _printed_entry(message, "battery.SocEnvelope") == [
         "solar_challenge.battery.SocEnvelope",
         f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
-        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
         "change:  breaking",
     ]
 
