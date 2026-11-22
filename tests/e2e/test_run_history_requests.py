@@ -19,6 +19,16 @@ def _answer(route: Route) -> None:
     route.fulfill(json=_ANSWER)
 
 
+_FETCH_THE_PRESETS = """() => {
+    fetch('/api/presets').then(response => response.json()).then(answer => { window.presetsAnswer = answer; });
+}"""
+
+
+def _the_presets_answer(page: Page) -> object:
+    """The answer page's presets fetch read, once it has one; an unanswered fetch fails at Playwright's default timeout rather than hanging the run."""
+    return page.wait_for_function("() => window.presetsAnswer").json_value()
+
+
 def test_a_request_the_page_makes_once_answer_each_has_been_called_is_answered_with_it(
     page: Page, live_server: str
 ) -> None:
@@ -27,8 +37,9 @@ def test_a_request_the_page_makes_once_answer_each_has_been_called_is_answered_w
     page.goto(live_server + "/")
 
     held_requests.answer_each(_answer)
+    page.evaluate(_FETCH_THE_PRESETS)
 
-    assert page.evaluate("() => fetch('/api/presets').then(response => response.json())") == _ANSWER
+    assert _the_presets_answer(page) == _ANSWER
 
 
 def test_a_request_the_page_made_before_answer_each_but_playwright_hands_over_only_after_it_is_answered_with_it(
@@ -44,9 +55,9 @@ def test_a_request_the_page_made_before_answer_each_but_playwright_hands_over_on
 
     page.route(_is_presets_request, hand_over_once_released)
     page.goto(live_server + "/")
-    page.evaluate("() => { window.presetsAnswer = fetch('/api/presets').then(response => response.json()); }")
+    page.evaluate(_FETCH_THE_PRESETS)
 
     held_requests.answer_each(_answer)
     page.evaluate("() => { window.handOverReleased = true; }")
 
-    assert page.evaluate("() => window.presetsAnswer") == _ANSWER
+    assert _the_presets_answer(page) == _ANSWER
