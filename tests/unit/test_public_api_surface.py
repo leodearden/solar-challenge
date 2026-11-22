@@ -107,7 +107,6 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- flow (flow.py) ---
     "EnergyFlowResult": "dataclass[eq, frozen, match_args] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
     "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
-    "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
     "calculate_self_consumption": "(generation: Series, demand: Series) -> Series",
     "calculate_excess_pv": "(generation: Series, demand: Series) -> Series",

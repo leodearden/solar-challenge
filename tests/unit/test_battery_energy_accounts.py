@@ -17,12 +17,12 @@ import pytest
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community, validate_community_balance
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategy
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.home import calculate_summary, simulate_home
 from solar_challenge.tariff import TariffConfig
 from tests._balanced_sim_results import make_balanced_fleet
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
-from tests._june_minute_day import MINUTES, inline_day, strategy_day
+from tests._june_minute_day import MINUTES, strategy_day
 from tests._synthetic_weather import sunless_weather, weather_for
 
 _E7 = TariffConfig.economy_7()
@@ -40,20 +40,24 @@ def _an_hour_of_excess_pv(battery: Battery) -> EnergyFlowResult:
 
 
 def _an_expensive_hour_of_excess_pv(battery: Battery) -> EnergyFlowResult:
-    """One hour of 1 kW PV and no demand through simulate_timestep_tou at noon, an expensive Economy 7 hour."""
-    return simulate_timestep_tou(1.0, 0.0, battery, pd.Timestamp("2024-01-15 12:00"), _E7, 60)
+    """One hour of 1 kW PV and no demand at noon, an expensive Economy 7 hour, through simulate_timestep with TOU dispatch on Economy 7's clock."""
+    return simulate_timestep(
+        1.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 12:00"), TOUOptimizedStrategy(tariff=_E7), tariff=_E7
+    )
 
 
-def _a_cheap_hour_dispatched_by_strategy(battery: Battery) -> EnergyFlowResult:
-    """One hour from 02:00, a cheap Economy 7 hour, of no PV and no demand through simulate_timestep with TOU dispatch."""
+def _a_cheap_hour_on_peak_hours(battery: Battery) -> EnergyFlowResult:
+    """One hour from 02:00, a cheap Economy 7 hour, of no PV and no demand through simulate_timestep with TOU dispatch on peak hours 17:00 to 20:00."""
     return simulate_timestep(
         0.0, 0.0, battery, 60, datetime(2024, 1, 15, 2, 0), TOUOptimizedStrategy([(17, 20)]), tariff=_E7
     )
 
 
-def _a_cheap_hour_dispatched_inline(battery: Battery) -> EnergyFlowResult:
-    """One hour from 02:00, a cheap Economy 7 hour, of no PV and no demand through simulate_timestep_tou."""
-    return simulate_timestep_tou(0.0, 0.0, battery, pd.Timestamp("2024-01-15 02:00"), _E7, 60)
+def _a_cheap_hour_on_the_tariff_s_clock(battery: Battery) -> EnergyFlowResult:
+    """One hour from 02:00, a cheap Economy 7 hour, of no PV and no demand through simulate_timestep with TOU dispatch on Economy 7's clock."""
+    return simulate_timestep(
+        0.0, 0.0, battery, 60, pd.Timestamp("2024-01-15 02:00"), TOUOptimizedStrategy(tariff=_E7), tariff=_E7
+    )
 
 
 def _demand_kw(h: float) -> float:
@@ -61,14 +65,14 @@ def _demand_kw(h: float) -> float:
     return 0.4 + (1.5 if 17 <= h < 20 else 0.0)
 
 
-def _strategy_day(battery: Battery) -> list[EnergyFlowResult]:
+def _peak_hours_day(battery: Battery) -> list[EnergyFlowResult]:
     """Each minute of the day's flows through simulate_timestep, dispatched by TOU with peak hours 16:00 to 20:00 on Economy 7."""
     return strategy_day(battery, _demand_kw, TOUOptimizedStrategy([(16, 20)]), _E7)
 
 
-def _inline_day(battery: Battery) -> list[EnergyFlowResult]:
-    """Each minute of the day's flows through simulate_timestep_tou on Economy 7."""
-    return inline_day(battery, _demand_kw, _E7)
+def _tariff_clock_day(battery: Battery) -> list[EnergyFlowResult]:
+    """Each minute of the day's flows through simulate_timestep, dispatched by TOU on Economy 7's clock."""
+    return strategy_day(battery, _demand_kw, TOUOptimizedStrategy(tariff=_E7), _E7)
 
 
 def _soc_change_by_the_identity_kwh(battery: Battery, flow: EnergyFlowResult) -> float:
@@ -88,8 +92,8 @@ class TestPvChargeLossIsNotExport:
     @pytest.mark.parametrize(
         "step",
         [
-            pytest.param(_an_hour_of_excess_pv, id="simulate_timestep"),
-            pytest.param(_an_expensive_hour_of_excess_pv, id="simulate_timestep_tou"),
+            pytest.param(_an_hour_of_excess_pv, id="self_consumption"),
+            pytest.param(_an_expensive_hour_of_excess_pv, id="tou_on_the_tariff_s_clock"),
         ],
     )
     def test_the_battery_draws_the_whole_excess_and_stores_its_charge_efficiency_share(self, step: Step) -> None:
@@ -108,8 +112,8 @@ class TestGridChargingImportsWhatItDrew:
     @pytest.mark.parametrize(
         "step",
         [
-            pytest.param(_a_cheap_hour_dispatched_by_strategy, id="simulate_timestep"),
-            pytest.param(_a_cheap_hour_dispatched_inline, id="simulate_timestep_tou"),
+            pytest.param(_a_cheap_hour_on_peak_hours, id="tou_peak_hours"),
+            pytest.param(_a_cheap_hour_on_the_tariff_s_clock, id="tou_on_the_tariff_s_clock"),
         ],
     )
     def test_the_grid_import_is_the_energy_the_battery_drew(self, step: Step) -> None:
@@ -135,11 +139,14 @@ class TestStorageIdentity:
     """
 
     @pytest.fixture(
-        params=[pytest.param(_strategy_day, id="simulate_timestep"), pytest.param(_inline_day, id="simulate_timestep_tou")]
+        params=[
+            pytest.param(_peak_hours_day, id="tou_peak_hours"),
+            pytest.param(_tariff_clock_day, id="tou_on_the_tariff_s_clock"),
+        ]
     )
     def day(self, request: pytest.FixtureRequest) -> Day:
-        engine: Day = request.param
-        return engine
+        dispatched_day: Day = request.param
+        return dispatched_day
 
     @pytest.fixture(
         params=[

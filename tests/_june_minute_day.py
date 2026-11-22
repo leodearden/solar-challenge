@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The synthetic one-minute June day of docs/prds/one-dispatch-engine.md §2.2, run into a battery through either engine.
+"""The synthetic one-minute June day of docs/prds/one-dispatch-engine.md §2.2, run into a battery through simulate_timestep.
 
 The day is the 1,440 minutes of 2024-06-21, with PV of 3·sin(π(h − 5)/16) kW from 05:00 to 21:00 and none outside, h
-being the hour of the day a minute starts at. A test gives the day its own demand and tariff, and runs it through
-simulate_timestep, dispatched by a strategy, or through simulate_timestep_tou.
+being the hour of the day a minute starts at. A test gives the day its own demand, tariff and dispatch strategy.
 
 §2.2's morning-drain day is one such demand and battery: morning_drain_demand_kw, whose 3.5 kW drain from 06:00 to
 13:00 empties the battery in Economy 10's expensive morning, and morning_drain_battery, a 10 kWh battery that
@@ -13,7 +12,6 @@ Usage::
 
     from tests._june_minute_day import (
         MINUTES,
-        inline_day,
         morning_drain_battery,
         morning_drain_demand_kw,
         strategy_day,
@@ -24,8 +22,6 @@ Usage::
 
     flows = strategy_day(battery, evening_peak_kw, TOUOptimizedStrategy([(16, 20)]), TariffConfig.economy_7())
     assert len(flows) == len(MINUTES)
-
-    inline = inline_day(morning_drain_battery(1.0), morning_drain_demand_kw, TariffConfig.economy_10())
 """
 
 import math
@@ -35,7 +31,7 @@ import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import DispatchStrategy, GridChargeConfig
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep
 from solar_challenge.tariff import TariffConfig
 
 MINUTES = pd.date_range("2024-06-21 00:00", periods=1440, freq="min")
@@ -62,14 +58,6 @@ def strategy_day(
         simulate_timestep(
             _pv_kw(minute), demand_kw(_hour(minute)), battery, 1.0, minute.to_pydatetime(), strategy, tariff=tariff
         )
-        for minute in MINUTES
-    ]
-
-
-def inline_day(battery: Battery, demand_kw: DemandProfile, tariff: TariffConfig) -> list[EnergyFlowResult]:
-    """Each minute of the day's flows through simulate_timestep_tou on tariff."""
-    return [
-        simulate_timestep_tou(_pv_kw(minute), demand_kw(_hour(minute)), battery, minute, tariff, 1.0)
         for minute in MINUTES
     ]
 

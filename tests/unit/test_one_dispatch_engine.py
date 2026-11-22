@@ -2,9 +2,8 @@
 """docs/prds/one-dispatch-engine.md §9 rows 13-14: a battery that dispatches tou_optimized on its tariff's clock is dispatched by one engine.
 
 Row 13: a battery that dispatches tou_optimized on its tariff's clock runs TOUOptimizedStrategy on the tariff's clock through simulate_timestep,
-and simulate_timestep_tou delegates to that route (§5.5). So simulate_timestep_tou on §2.2's morning-drain Economy 10
-day, and the bristol-arbitrage home on its sunless 2024-01-15, equal the route exactly in every minute, which is within
-the row's 1e-9 kWh. Row 14: a home's dispatch is refused by build_dispatch_strategy's refusals.
+and the bristol-arbitrage home on its sunless 2024-01-15 equals that route exactly in every minute, which is within the
+row's 1e-9 kWh. Row 14: a home's dispatch is refused by build_dispatch_strategy's refusals.
 """
 
 import dataclasses
@@ -20,34 +19,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
-from tests._june_minute_day import MINUTES, inline_day, morning_drain_battery, morning_drain_demand_kw, strategy_day
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
-
-_E10 = TariffConfig.economy_10()
-
-_MORNING_DRAIN_SOCS = [pytest.param(soc_kwh, id=f"from-{soc_kwh}-kwh") for soc_kwh in (1.0, 4.0, 5.9)]
-"""The morning-drain day's initial states of charge, in kWh: §2.2's three."""
-
-
-class TestTheInlineNameDelegates:
-    """simulate_timestep_tou is one call of TOUOptimizedStrategy on the tariff's clock through simulate_timestep, so it cannot drift from it (§6 decision 6).
-
-    §2.2's morning-drain Economy 10 day grid-charges, so the equality covers the grid-charge gate too.
-    """
-
-    @pytest.mark.parametrize("soc_kwh", _MORNING_DRAIN_SOCS)
-    def test_its_morning_drain_day_is_the_strategy_route_s_exactly(self, soc_kwh: float) -> None:
-        inline = inline_day(morning_drain_battery(soc_kwh), morning_drain_demand_kw, _E10)
-        routed = strategy_day(
-            morning_drain_battery(soc_kwh), morning_drain_demand_kw, TOUOptimizedStrategy(tariff=_E10), _E10
-        )
-
-        assert [
-            (minute, inline_flow, routed_flow)
-            for minute, inline_flow, routed_flow in zip(MINUTES, inline, routed, strict=True)
-            if inline_flow != routed_flow
-        ] == []
-        assert sum(flow.grid_charge for flow in routed) > 0
 
 
 class TestTheBristolArbitrageHome:

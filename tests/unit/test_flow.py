@@ -17,7 +17,6 @@ from solar_challenge.flow import (
     calculate_excess_pv,
     calculate_shortfall,
     simulate_timestep,
-    simulate_timestep_tou,
     validate_energy_balance,
     EnergyFlowResult,
 )
@@ -563,11 +562,11 @@ class _RecordingStrategy(DispatchStrategy):
 
 
 # ---------------------------------------------------------------------------
-# simulate_timestep_tou grid-charge split accounting
+# TOUOptimizedStrategy on the tariff's clock: grid-charge split accounting
 # ---------------------------------------------------------------------------
 
-class TestSimulateTimestepTouGridCharge:
-    """Function-path grid-charge tests using real Economy 7 + GridChargeConfig.
+class TestTouOnTheTariffClockGridCharge:
+    """Grid-charge tests of TOUOptimizedStrategy on the tariff's clock, using real Economy 7 + GridChargeConfig.
 
     Tests (a) and (b) cover grid charging itself.
     Tests (c)-(e) are forward-/backward-compat guards.
@@ -577,13 +576,14 @@ class TestSimulateTimestepTouGridCharge:
         self, economy7_tariff: TariffConfig, off_peak_ts: pd.Timestamp, grid_charge_battery: Battery
     ) -> None:
         """(a) Cheap period, gen=demand=0: battery must charge from grid."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.battery_charge > 0, "Battery should charge from grid during cheap period"
         assert result.grid_export == pytest.approx(0.0)
@@ -600,9 +600,14 @@ class TestSimulateTimestepTouGridCharge:
             capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
         )
         bat_ref = Battery(config_no_gc, initial_soc_kwh=2.0)
-        ref = simulate_timestep_tou(
-            generation_kw=1.0, demand_kw=0.5, battery=bat_ref,
-            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        ref = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.5,
+            battery=bat_ref,
+            timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         pv_charge_drawn = ref.battery_charge  # 0.5 kWh: the battery draws the whole excess
 
@@ -612,9 +617,14 @@ class TestSimulateTimestepTouGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         bat_gc = Battery(config_gc, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
-            generation_kw=1.0, demand_kw=0.5, battery=bat_gc,
-            timestamp=off_peak_ts, tariff=economy7_tariff, timestep_minutes=60,
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=0.5,
+            battery=bat_gc,
+            timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         # Grid also topped up → total charge > pv-only
         assert result.battery_charge > pv_charge_drawn, \
@@ -633,13 +643,14 @@ class TestSimulateTimestepTouGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=5.0,   # well above max_charge_kw=2.5
             demand_kw=0.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         duration_hours = 60.0 / 60.0
         # Total drawn energy / dt must not exceed the hardware charge-rate limit
@@ -655,9 +666,14 @@ class TestSimulateTimestepTouGridCharge:
         battery = Battery(config, initial_soc_kwh=2.0)
         timestamps = pd.date_range("2024-01-01 00:00", periods=24, freq="h")
         for ts, gen, dem in zip(timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW):
-            result = simulate_timestep_tou(
-                generation_kw=gen, demand_kw=dem, battery=battery,
-                timestamp=ts, tariff=economy7_tariff, timestep_minutes=60,
+            result = simulate_timestep(
+                generation_kw=gen,
+                demand_kw=dem,
+                battery=battery,
+                timestep_minutes=60,
+                timestamp=ts,
+                strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+                tariff=economy7_tariff,
             )
             assert validate_energy_balance(result), \
                 f"Energy balance violated at {ts} (gen={gen}, dem={dem})"
@@ -666,13 +682,15 @@ class TestSimulateTimestepTouGridCharge:
         """(e) grid_charging=None: exact backward-compatible values are preserved."""
         config = BatteryConfig.default_5kwh()   # no grid_charging field
         battery = Battery(config)               # initial SOC = midpoint = 2.5 kWh
-        result = simulate_timestep_tou(
+        tariff = TariffConfig.economy_7()
+        result = simulate_timestep(
             generation_kw=3.0,
             demand_kw=1.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=TariffConfig.economy_7(),
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=tariff),
+            tariff=tariff,
         )
         # excess = 2 kWh; the battery draws all of it, battery.charge(2.0, 60) = 2.0 kWh, storing 1.95
         # grid_export = max(0, 2.0 - 2.0) = 0 kWh; shortfall=0 → grid_import=0
@@ -683,11 +701,11 @@ class TestSimulateTimestepTouGridCharge:
 
 
 # ---------------------------------------------------------------------------
-# simulate_timestep grid-charge strategy path
+# simulate_timestep grid charging, seen by a recording strategy
 # ---------------------------------------------------------------------------
 
 class TestSimulateTimestepGridCharge:
-    """Strategy-path grid-charge tests using _RecordingStrategy stub.
+    """Grid-charge tests using the _RecordingStrategy stub.
 
     Tests (a)-(f) cover the tariff keyword argument of simulate_timestep.
     Test (c-i) covers the case where no tariff is given, so the grid-charge
@@ -968,13 +986,14 @@ class TestEnergyFlowResultGridCharge:
         the kWh added to the battery from the grid.
         """
         # No PV generation or demand → all battery charge must come from the grid
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.grid_charge > 0.0, (
             "grid_charge should be > 0 during cheap period when grid_charging is set"
@@ -989,13 +1008,14 @@ class TestEnergyFlowResultGridCharge:
         grid_charge_battery: Battery,
     ) -> None:
         """(c-i) Peak period: grid_charge == 0.0 (no grid-charging in peak)."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -1004,18 +1024,19 @@ class TestEnergyFlowResultGridCharge:
         economy7_tariff: TariffConfig,
         off_peak_ts: pd.Timestamp,
     ) -> None:
-        """(c-ii) simulate_timestep_tou with grid_charging=None: grid_charge == 0.0."""
+        """(c-ii) TOUOptimizedStrategy on the tariff's clock with grid_charging=None: grid_charge == 0.0."""
         config = BatteryConfig(
             capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5, grid_charging=None
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.grid_charge == pytest.approx(0.0)
 
@@ -1047,13 +1068,14 @@ class TestEnergyFlowResultGridCharge:
             grid_charging=GridChargeConfig(target_soc_fraction=0.9),
         )
         battery = Battery(config, initial_soc_kwh=2.0)
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=1.0,
             demand_kw=0.5,
             battery=battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.grid_charge <= result.battery_charge + 1e-9
 
@@ -1064,13 +1086,14 @@ class TestEnergyFlowResultGridCharge:
         grid_charge_battery: Battery,
     ) -> None:
         """(d-ii) grid_charge <= grid_import (grid-charged energy is part of import)."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=economy7_tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=economy7_tariff),
+            tariff=economy7_tariff,
         )
         assert result.grid_charge <= result.grid_import + 1e-9
 
@@ -1105,13 +1128,14 @@ THREE_TIER_TARIFF = TariffConfig(
 
 def _tou_shortfall_step(tariff: TariffConfig, timestamp: pd.Timestamp) -> EnergyFlowResult:
     """One TOU step with a 2 kW shortfall against a fresh default battery (2.5 kWh stored)."""
-    return simulate_timestep_tou(
+    return simulate_timestep(
         generation_kw=0.0,
         demand_kw=2.0,
         battery=Battery(BatteryConfig.default_5kwh()),
-        timestamp=timestamp,
-        tariff=tariff,
         timestep_minutes=60,
+        timestamp=timestamp,
+        strategy=TOUOptimizedStrategy(tariff=tariff),
+        tariff=tariff,
     )
 
 
@@ -1150,14 +1174,15 @@ class TestTouDispatchOnSpreadFreeTariff:
     def test_a_sunlit_shortfall_minute_discharges_exactly_as_self_consumption(
         self, tariff: TariffConfig, off_peak_ts: pd.Timestamp, generation_kw: float, demand_kw: float
     ) -> None:
-        """Both paths ask the battery for the same shortfall power whenever demand exceeds generation, so their flows agree to the last digit."""
-        tou = simulate_timestep_tou(
+        """Both dispatches ask the battery for the same shortfall power whenever demand exceeds generation, so their flows agree to the last digit."""
+        tou = simulate_timestep(
             generation_kw=generation_kw,
             demand_kw=demand_kw,
             battery=Battery(BatteryConfig.default_5kwh()),
-            timestamp=off_peak_ts,
-            tariff=tariff,
             timestep_minutes=1.0,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=tariff),
+            tariff=tariff,
         )
         greedy = simulate_timestep(
             generation_kw=generation_kw,
@@ -1177,13 +1202,14 @@ class TestTouDispatchOnSpreadFreeTariff:
         for ts, gen, dem in zip(
             timestamps, HOURLY_GENERATION_KW, HOURLY_DEMAND_KW, strict=True
         ):
-            tou = simulate_timestep_tou(
+            tou = simulate_timestep(
                 generation_kw=gen,
                 demand_kw=dem,
                 battery=tou_battery,
-                timestamp=ts,
-                tariff=tariff,
                 timestep_minutes=60,
+                timestamp=ts,
+                strategy=TOUOptimizedStrategy(tariff=tariff),
+                tariff=tariff,
             )
             greedy = simulate_timestep(
                 generation_kw=gen,
@@ -1201,13 +1227,14 @@ class TestTouDispatchOnSpreadFreeTariff:
         grid_charge_battery: Battery,
     ) -> None:
         """No spread to arbitrage, so a grid-charging battery below target is not topped up."""
-        result = simulate_timestep_tou(
+        result = simulate_timestep(
             generation_kw=0.0,
             demand_kw=0.0,
             battery=grid_charge_battery,
-            timestamp=off_peak_ts,
-            tariff=tariff,
             timestep_minutes=60,
+            timestamp=off_peak_ts,
+            strategy=TOUOptimizedStrategy(tariff=tariff),
+            tariff=tariff,
         )
         assert result.grid_charge == 0.0
 
@@ -1218,7 +1245,7 @@ class TestTouDispatchOnSpreadFreeTariff:
         off_peak_ts: pd.Timestamp,
         grid_charge_battery: Battery,
     ) -> None:
-        """The strategy path classifies periods the same way as the TOU function path."""
+        """The context simulate_timestep offers reports no cheap period."""
         stub = _RecordingStrategy()
         simulate_timestep(
             generation_kw=0.0,
@@ -1275,13 +1302,15 @@ class TestTouDispatchOnTieredTariff:
 _Step = Callable[[float, float, Battery, pd.Timestamp, TariffConfig], EnergyFlowResult]
 
 
-def _step_by_the_tou_function(
+def _step_on_the_tariff_s_clock(
     generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
 ) -> EnergyFlowResult:
-    return simulate_timestep_tou(generation_kw, demand_kw, battery, minute, tariff, timestep_minutes=1.0)
+    return simulate_timestep(
+        generation_kw, demand_kw, battery, 1.0, minute, TOUOptimizedStrategy(tariff=tariff), tariff=tariff
+    )
 
 
-def _step_by_the_tou_strategy(
+def _step_on_peak_hours(
     generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
 ) -> EnergyFlowResult:
     strategy = TOUOptimizedStrategy(peak_hours=[(16, 19)])
@@ -1331,8 +1360,8 @@ class TestDispatchFollowsTheTariffSchedule:
     @pytest.mark.parametrize(
         "step",
         [
-            pytest.param(_step_by_the_tou_function, id="simulate_timestep_tou"),
-            pytest.param(_step_by_the_tou_strategy, id="tou_optimized_strategy"),
+            pytest.param(_step_on_the_tariff_s_clock, id="tariff_clock"),
+            pytest.param(_step_on_peak_hours, id="peak_hours"),
         ],
     )
     def test_one_schedule_as_four_or_five_periods_gives_the_same_flows(self, step: _Step) -> None:
@@ -1347,37 +1376,43 @@ class TestDispatchFollowsTheTariffSchedule:
 # A battery whose SOC an assigned limit has moved past
 # ---------------------------------------------------------------------------
 
-# Both entries discharge for a shortfall and charge from a surplus.
+_E7 = TariffConfig.economy_7()
+
+# Self-consumption, and TOU on Economy 7's clock at its 18:00 peak rate, both discharge for a shortfall and charge from a
+# surplus.
 SELF_CONSUMING_STEPS = [
-    pytest.param(simulate_timestep, id="simulate_timestep"),
+    pytest.param(simulate_timestep, id="self_consumption"),
     pytest.param(
         functools.partial(
-            simulate_timestep_tou,
+            simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 18:00"),
-            tariff=TariffConfig.economy_7(),
+            strategy=TOUOptimizedStrategy(tariff=_E7),
+            tariff=_E7,
         ),
-        id="simulate_timestep_tou-peak",
+        id="tou_on_the_tariff_s_clock-peak",
     ),
 ]
 
-# Both entries top a grid-charging battery up from the grid at Economy 7's 03:00 off-peak rate.
+# TOU on peak hours 07:00 to 24:00, and TOU on Economy 7's clock, both top a grid-charging battery up from the grid at
+# Economy 7's 03:00 off-peak rate.
 GRID_CHARGING_STEPS = [
     pytest.param(
         functools.partial(
             simulate_timestep,
             timestamp=datetime(2024, 1, 1, 3),
             strategy=TOUOptimizedStrategy(peak_hours=[(7, 24)]),
-            tariff=TariffConfig.economy_7(),
+            tariff=_E7,
         ),
-        id="simulate_timestep-tou_optimized",
+        id="tou_on_peak_hours-off_peak",
     ),
     pytest.param(
         functools.partial(
-            simulate_timestep_tou,
+            simulate_timestep,
             timestamp=pd.Timestamp("2024-01-01 03:00"),
-            tariff=TariffConfig.economy_7(),
+            strategy=TOUOptimizedStrategy(tariff=_E7),
+            tariff=_E7,
         ),
-        id="simulate_timestep_tou-off_peak",
+        id="tou_on_the_tariff_s_clock-off_peak",
     ),
 ]
 
@@ -1565,7 +1600,7 @@ NOT_POSITIVE_AND_FINITE_MINUTES = [
     pytest.param(-60.0, id="negative"),
 ]
 
-# Both engines, self-consuming at peak and grid-charging at Economy 7's off-peak.
+# Every dispatch above, self-consuming at peak and grid-charging at Economy 7's off-peak.
 EVERY_STEP = SELF_CONSUMING_STEPS + GRID_CHARGING_STEPS
 
 STEP_POWERS = [
