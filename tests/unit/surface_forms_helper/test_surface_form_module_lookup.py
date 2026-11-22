@@ -46,7 +46,7 @@ def test_a_dataclass_dataclasses_make_dataclass_makes_raises_the_lookup_error_na
         with pytest.raises(LookupError, match=made_not_bound_in("types")):
             surface_form(spelledmaking.Made)
     else:
-        assert surface_form(spelledmaking.Made) == "dataclass[eq] (spare: Decimal) -> None"
+        assert surface_form(spelledmaking.Made) == "dataclass[eq, match_args] (spare: Decimal) -> None"
 
 
 def test_a_string_annotation_in_a_signature_a_partial_carries_over_a_routine_defined_in_c_raises_the_type_error_named_classes_raises_for_it_naming_the_partial_and_the_string() -> None:

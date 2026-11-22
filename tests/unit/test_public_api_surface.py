@@ -61,7 +61,8 @@ from tests._surface_forms import (
 #
 # The keys are grouped by origin module.  Each value is the name's
 # surface_form (tests/_surface_forms.py): a class's or routine's signature, a
-# dataclass's following its kind, e.g. 'dataclass[eq, frozen] (...)'; an Enum's
+# class's following its kind where it has one, e.g.
+# 'dataclass[eq, frozen, match_args] (...)'; an Enum's
 # members, aliases included; or a constant's type, then a mapping's entries or a
 # list's or tuple's items, e.g. 'dict {1: float}'.  Any add/remove to __all__
 # must be reflected in the keys, and any change to a name's form in its value;
@@ -74,19 +75,19 @@ FROZEN_SURFACE: dict[str, str] = {
     "householder_bill": "(summary: SummaryStatistics, window_self_consumption_kwh: float, finance: FinanceConfig) -> BillBreakdown",
     "solve_cost_recovery_rate": "(scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: Callable[[FleetConfig, Timestamp, Timestamp], FleetResults] | None = None) -> CostRecoverySolution",
     "bill_distribution": "(summaries: Sequence[SummaryStatistics], finance: FinanceConfig) -> BillDistribution",
-    "BillBreakdown": "dataclass[eq, frozen] (standing_charge_gbp: float, import_cost_gbp: float, own_use_payment_gbp: float, vat_gbp: float, total_outlay_gbp: float, own_use_vat_gbp: float, cbs_amount_due_gbp: float, self_consumption_saving_gbp: float, baseline_bill_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, self_consumption_fraction: float) -> None",
-    "BillDistribution": "dataclass[eq, frozen] (representative: BillBreakdown, per_home_net_bill_gbp: tuple[float, ...], min_gbp: float, mean_gbp: float, median_gbp: float, max_gbp: float, annualised_from: SimulationWindow, grid_charge_forecasts: tuple[Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'], ...] = ()) -> None",
-    "CostRecoverySolution": "dataclass[eq, frozen] (own_use_rate_pence_per_kwh: float, outlay: BillDistribution, representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
-    "FinanceConfig": "dataclass[eq, frozen] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: float | None = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_income_per_kw_per_year_gbp: float = 0.0, grid_services_model: str = 'flat', grid_services_events: GridServicesEventsConfig | None = None) -> None",
+    "BillBreakdown": "dataclass[eq, frozen, match_args] (standing_charge_gbp: float, import_cost_gbp: float, own_use_payment_gbp: float, vat_gbp: float, total_outlay_gbp: float, own_use_vat_gbp: float, cbs_amount_due_gbp: float, self_consumption_saving_gbp: float, baseline_bill_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, self_consumption_fraction: float) -> None",
+    "BillDistribution": "dataclass[eq, frozen, match_args] (representative: BillBreakdown, per_home_net_bill_gbp: tuple[float, ...], min_gbp: float, mean_gbp: float, median_gbp: float, max_gbp: float, annualised_from: SimulationWindow, grid_charge_forecasts: tuple[Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'], ...] = ()) -> None",
+    "CostRecoverySolution": "dataclass[eq, frozen, match_args] (own_use_rate_pence_per_kwh: float, outlay: BillDistribution, representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
+    "FinanceConfig": "dataclass[eq, frozen, match_args] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: float | None = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_income_per_kw_per_year_gbp: float = 0.0, grid_services_model: str = 'flat', grid_services_events: GridServicesEventsConfig | None = None) -> None",
     # --- signature-closure types ---
-    "SummaryStatistics": "dataclass[eq, frozen] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
-    "ScenarioConfig": "dataclass[eq, frozen] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
-    "FleetConfig": "dataclass[eq, frozen] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
-    "FleetResults": "dataclass[eq, frozen] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
+    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
+    "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
+    "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
+    "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
-    "DispatchDecision": "dataclass[eq, frozen] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
-    "GridChargeContext": "dataclass[eq, frozen] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float, useful_charge_ceiling_kwh: float | None = None) -> None",
+    "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
+    "GridChargeContext": "dataclass[eq, frozen, match_args] (current_rate: float, peak_rate: float, is_cheap_period: bool, target_soc_kwh: float, max_charge_kw: float, round_trip_efficiency: float, charge_efficiency: float, useful_charge_ceiling_kwh: float | None = None) -> None",
     "compute_grid_charge_power_kw": "(ctx: GridChargeContext, *, battery_soc_kwh: float, pv_charge_power_kw: float, timestep_minutes: float) -> float",
     "SelfConsumptionStrategy": "()",
     "TOUOptimizedStrategy": "(peak_hours: list[tuple[int, int]] | None = None, *, tariff: TariffConfig | None = None) -> None",
@@ -94,10 +95,10 @@ FROZEN_SURFACE: dict[str, str] = {
     "DispatchTariffPeriod": "PEAK='peak', OFF_PEAK='off_peak'",
     # --- battery (battery.py) ---
     "Battery": "(config: BatteryConfig, initial_soc_kwh: float | None = None, min_soc_fraction: float | None = None, max_soc_fraction: float | None = None, charge_efficiency: float | None = None, discharge_efficiency: float | None = None) -> None",
-    "BatteryConfig": "dataclass[eq, frozen] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
+    "BatteryConfig": "dataclass[eq, frozen, match_args] (capacity_kwh: float, max_charge_kw: float = 2.5, max_discharge_kw: float = 2.5, name: str = '', dispatch_strategy: SelfConsumptionStrategyConfig | TOUOptimizedStrategyConfig | PeakShavingStrategyConfig | None = None, grid_charging: GridChargeConfig | None = None, min_soc_fraction: float = 0.1, max_soc_fraction: float = 0.9, charge_efficiency: float = 0.975, discharge_efficiency: float = 0.975, efficiency: float | None = None, system_age_years: float = 0.0, calendar_fade_rate_per_year: float = 0.02, cycle_fade_per_equivalent_full_cycle: float = 5e-05, soh_floor: float = 0.5, soh: float | None = None) -> None",
     "compute_soh": "(system_age_years: float, cumulative_throughput_kwh: float, usable_capacity_kwh: float, params: BatteryConfig) -> float",
     # --- flow (flow.py) ---
-    "EnergyFlowResult": "dataclass[eq, frozen] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
+    "EnergyFlowResult": "dataclass[eq, frozen, match_args] (generation: float, demand: float, self_consumption: float, battery_charge: float, battery_discharge: float, grid_export: float, grid_import: float, battery_soc: float, grid_charge: float = 0.0) -> None",
     "simulate_timestep": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestep_minutes: float, timestamp: datetime | None = None, strategy: DispatchStrategy | None = None, *, tariff: TariffConfig | None = None, useful_charge_ceiling_kwh: float | None = None) -> EnergyFlowResult",
     "simulate_timestep_tou": "(generation_kw: float, demand_kw: float, battery: Battery | None, timestamp: Timestamp, tariff: TariffConfig, timestep_minutes: float) -> EnergyFlowResult",
     "validate_energy_balance": "(result: EnergyFlowResult, tolerance: float = 0.001) -> bool",
@@ -105,34 +106,34 @@ FROZEN_SURFACE: dict[str, str] = {
     "calculate_excess_pv": "(generation: Series, demand: Series) -> Series",
     "calculate_shortfall": "(generation: Series, demand: Series) -> Series",
     # --- tariff (tariff.py) ---
-    "TariffConfig": "dataclass[eq, frozen] (periods: tuple[TariffPeriod, ...], name: str = '') -> None",
-    "TariffPeriod": "dataclass[eq, frozen] (start_time: str, end_time: str, rate_per_kwh: float, name: str = '') -> None",
+    "TariffConfig": "dataclass[eq, frozen, match_args] (periods: tuple[TariffPeriod, ...], name: str = '') -> None",
+    "TariffPeriod": "dataclass[eq, frozen, match_args] (start_time: str, end_time: str, rate_per_kwh: float, name: str = '') -> None",
     "calculate_bill": "(energy_kwh: Series, tariff: TariffConfig) -> float",
     "FlatRateTariff": "(rate_per_kwh: float, name: str = '') -> TariffConfig",
     # --- seg (seg.py) ---
-    "SEGTariff": "dataclass[eq, frozen] (name: str, rate_pence_per_kwh: float) -> None",
+    "SEGTariff": "dataclass[eq, frozen, match_args] (name: str, rate_pence_per_kwh: float) -> None",
     "resolve_seg_tariff": "(name: str) -> SEGTariff",
     "calculate_seg_revenue": "(export_kwh: float, tariff: SEGTariff) -> float",
     "SEG_PRESETS": "dict {'Octopus': SEGTariff, 'British Gas': SEGTariff, 'EDF': SEGTariff, 'E.ON': SEGTariff, 'Scottish Power': SEGTariff, 'OVO': SEGTariff}",
     # --- gridservices (gridservices.py) ---
-    "GridServicesRateBand": "dataclass[eq, frozen] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '', flat_gbp_per_kw_per_year: float = 0.0) -> None",
-    "GridServicesRateBands": "dataclass[eq, frozen] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
+    "GridServicesRateBand": "dataclass[eq, frozen, match_args] (availability_gbp_per_kw_per_event: float, utilisation_gbp_per_mwh: float, provenance: str = '', flat_gbp_per_kw_per_year: float = 0.0) -> None",
+    "GridServicesRateBands": "dataclass[eq, frozen, match_args] (low: GridServicesRateBand, central: GridServicesRateBand, high: GridServicesRateBand) -> None",
     "resolve_grid_services_rate_band": "(band: str) -> GridServicesRateBand",
-    "EventWindow": "dataclass[eq, frozen] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
-    "GridServicesEventsConfig": "dataclass[eq, frozen] (band: str = 'central', event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None, delivery_baseline: str = 'operational') -> None",
-    "GridServicesAtEvents": "dataclass[eq, frozen] (annual_income_gbp: float, per_window_avail_kw: tuple[float, ...], per_window_income_gbp: tuple[float, ...], per_window_avail_p50_kw: tuple[float, ...] = (), per_window_avail_p90_kw: tuple[float, ...] = (), per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = (), per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()) -> None",
+    "EventWindow": "dataclass[eq, frozen, match_args] (months: tuple[int, ...], weekdays: tuple[int, ...], hours: tuple[int, ...], events_per_year: int, event_hours: float) -> None",
+    "GridServicesEventsConfig": "dataclass[eq, frozen, match_args] (band: str = 'central', event_windows: tuple[EventWindow, ...] = (EventWindow(months=(11, 12, 1, 2), weekdays=(0, 1, 2, 3, 4), hours=(16, 17, 18), events_per_year=12, event_hours=3.0),), aggregator_share: float = 0.25, utilisation_factor: float = 0.6, availability_gbp_per_kw_per_event: float | None = None, utilisation_gbp_per_mwh: float | None = None, delivery_baseline: str = 'operational') -> None",
+    "GridServicesAtEvents": "dataclass[eq, frozen, match_args] (annual_income_gbp: float, per_window_avail_kw: tuple[float, ...], per_window_income_gbp: tuple[float, ...], per_window_avail_p50_kw: tuple[float, ...] = (), per_window_avail_p90_kw: tuple[float, ...] = (), per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = (), per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()) -> None",
     "compute_fleet_spare_capacity_kw": "(fleet_results: FleetResults, windows: tuple[EventWindow, ...], delivery_baseline: str = 'operational') -> tuple[float, ...]",
     "compute_grid_services_at_events": "(fleet_results: FleetResults, cfg: GridServicesEventsConfig) -> GridServicesAtEvents",
     "GRID_SERVICES_RATE_BANDS": "GridServicesRateBands",
     "DEFAULT_EVENT_WINDOWS": "tuple [EventWindow]",
     # --- community (community.py) ---
-    "CommunityConfig": "dataclass[eq, frozen] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
-    "CommunityBillingConfig": "dataclass[eq, frozen] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
-    "CommunityResults": "dataclass[eq, frozen] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
+    "CommunityConfig": "dataclass[eq, frozen, match_args] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
+    "CommunityBillingConfig": "dataclass[eq, frozen, match_args] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
+    "CommunityResults": "dataclass[eq, frozen, match_args] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
     "simulate_community": "(fleet_results: FleetResults, config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
     "validate_community_balance": "(fleet_results: FleetResults, community_results: CommunityResults, tolerance: float = 0.001) -> bool",
     # --- pv (pv.py) ---
-    "PVConfig": "dataclass[eq, frozen] (capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float | None = None, temperature_coefficient: float | None = None, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005, system_losses: float = 0.14075660688264469) -> None",
+    "PVConfig": "dataclass[eq, frozen, match_args] (capacity_kw: float, azimuth: float = 180.0, tilt: float = 35.0, name: str = '', module_efficiency: float | None = None, temperature_coefficient: float | None = None, custom_module_params: dict[str, float] | None = None, inverter_efficiency: float = 0.96, inverter_capacity_kw: float | None = None, custom_inverter_params: dict[str, float] | None = None, system_age_years: float = 0.0, degradation_rate_per_year: float = 0.005, system_losses: float = 0.14075660688264469) -> None",
     "simulate_pv_output": "(config: PVConfig, location: Location, weather_data: DataFrame) -> Series",
     "create_model_chain": "(config: PVConfig, location: Location) -> ModelChain",
     "create_pv_system": "(config: PVConfig) -> PVSystem",
@@ -145,15 +146,15 @@ FROZEN_SURFACE: dict[str, str] = {
     "get_weather_cache": "() -> WeatherCache",
     "set_weather_cache": "(cache: WeatherCache | None) -> None",
     "WeatherProvider": "(*args, **kwargs)",
-    "PvgisTmy": "dataclass[eq, frozen] (cache: WeatherCache | None) -> None",
-    "PrefetchedWeather": "dataclass[frozen] (frames: Mapping[Location, DataFrame]) -> None",
+    "PvgisTmy": "dataclass[eq, frozen, match_args] (cache: WeatherCache | None) -> None",
+    "PrefetchedWeather": "dataclass[frozen, match_args] (frames: Mapping[Location, DataFrame]) -> None",
     # --- load (load.py) ---
-    "LoadConfig": "dataclass[eq, frozen] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
+    "LoadConfig": "dataclass[eq, frozen, match_args] (annual_consumption_kwh: float | None = None, household_occupants: int = 3, name: str = '', use_stochastic: bool = True, seed: int | None = None) -> None",
     "OFGEM_TDCV_BY_OCCUPANTS": "dict {1: float, 2: float, 3: float, 4: float, 5: float}",
     "ELEXON_PROFILE_CLASS_1": "list [float × 48]",
     "SEASONAL_FACTORS": "dict {1: float, 2: float, 3: float, 4: float, 5: float, 6: float, 7: float, 8: float, 9: float, 10: float, 11: float, 12: float}",
     # --- location (location.py) ---
-    "Location": "dataclass[eq, frozen] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
+    "Location": "dataclass[eq, frozen, match_args] (latitude: float, longitude: float, timezone: str = 'Europe/London', altitude: float = 0.0, name: str = '') -> None",
     # --- errors (errors.py) ---
     "ConfigurationError": "(*args: object) -> None",
 }
@@ -226,20 +227,20 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # __all__.
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
-    "battery.SocEnvelope": "dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
-    "config.OutputConfig": "dataclass[eq, frozen] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
-    "config.SimulationPeriod": "dataclass[eq, frozen] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
-    "dispatch.GridChargeConfig": "dataclass[eq, frozen] (target_soc_fraction: float = 0.9, forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] = 'pv_blind') -> None",
-    "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen] (import_limit_kw: float) -> None",
+    "battery.SocEnvelope": "dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
+    "config.OutputConfig": "dataclass[eq, frozen, match_args] (csv_path: str | None = None, include_minute_data: bool = True, include_summary: bool = True, aggregation: str = 'minute') -> None",
+    "config.SimulationPeriod": "dataclass[eq, frozen, match_args] (start_date: str | Timestamp, end_date: str | Timestamp) -> None",
+    "dispatch.GridChargeConfig": "dataclass[eq, frozen, match_args] (target_soc_fraction: float = 0.9, forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] = 'pv_blind') -> None",
+    "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen, match_args] (import_limit_kw: float) -> None",
     "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
-    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen] (peak_hours: tuple[tuple[int, int], ...] | None = None) -> None",
-    "ev.EVConfig": "dataclass[eq, frozen] (charger_type: str, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
-    "heat_pump.HeatPumpConfig": "dataclass[eq, frozen] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
-    "home.HomeConfig": "dataclass[eq, frozen] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
-    "home.RunPricing": "dataclass[eq, frozen] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
-    "home.SimulationResults": "dataclass[eq, frozen] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
-    "timebase.LocalDay": "dataclass[frozen] (date: date, rows: DatetimeIndex) -> None",
-    "timebase.SimulationWindow": "dataclass[eq, frozen] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
+    "dispatch.TOUOptimizedStrategyConfig": "dataclass[eq, frozen, match_args] (peak_hours: tuple[tuple[int, int], ...] | None = None) -> None",
+    "ev.EVConfig": "dataclass[eq, frozen, match_args] (charger_type: str, arrival_hour: int = 18, departure_hour: int = 7, required_charge_kwh: float = 35.0, smart_charging_mode: str = 'none', name: str = '') -> None",
+    "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
+    "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, dispatch_strategy: str = 'greedy', seg_tariff: SEGTariff | None = None) -> None",
+    "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
+    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
+    "timebase.LocalDay": "dataclass[frozen, match_args] (date: date, rows: DatetimeIndex) -> None",
+    "timebase.SimulationWindow": "dataclass[eq, frozen, match_args] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
 }
 
 _SUBMODULE_PREFIX = f"{solar_challenge.__name__}."
@@ -648,7 +649,7 @@ def test_every_pinned_dataclass_is_frozen() -> None:
     assert not unlisted and not stale, (
         f"Pinned dataclasses that are not frozen: {unlisted}. Freeze each with "
         "@dataclass(frozen=True), add frozen to its kind in FROZEN_SURFACE or "
-        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen]', and add its release note, "
+        "FROZEN_CLOSURE, e.g. 'dataclass[eq, frozen, match_args]', and add its release note, "
         "docs/unreleased/domain-library-consumption/<task id>.md, in the same commit; "
         "or list it in UNFROZEN_PINNED_DATACLASSES with the task that freezes it. "
         "UNFROZEN_PINNED_DATACLASSES entries that name no unfrozen pinned dataclass "
@@ -881,7 +882,7 @@ def test_a_closure_class_whose_constructor_gains_a_keyword_only_parameter_with_a
     assert _printed_entry(message, "battery.SocEnvelope") == [
         "solar_challenge.battery.SocEnvelope",
         f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
-        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float, *, floor_kwh: float = 0.0) -> None",
         "change:  additive",
     ]
 
@@ -898,7 +899,45 @@ def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
     assert _printed_entry(message, "battery.SocEnvelope") == [
         "solar_challenge.battery.SocEnvelope",
         f"frozen:  {FROZEN_CLOSURE['battery.SocEnvelope']}",
-        "current: dataclass[eq, frozen] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
+        "current: dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: int, max_soc_kwh: float) -> None",
+        "change:  breaking",
+    ]
+
+
+def test_a_pinned_class_that_gains_match_args_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
+    positional = tuple(
+        name
+        for name, parameter in inspect.signature(solar_challenge.Battery).parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    )
+    scratch_edit.setattr(solar_challenge.Battery, "__match_args__", positional, raising=False)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "Battery") == [
+        "solar_challenge.Battery",
+        f"frozen:  {FROZEN_SURFACE['Battery']}",
+        f"current: class[match_args] {FROZEN_SURFACE['Battery']}",
+        "change:  additive",
+    ]
+
+
+def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class SEGTariff:
+        name: str
+        rate_pence_per_kwh: float
+
+    scratch_edit.setattr(solar_challenge, "SEGTariff", SEGTariff)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "SEGTariff") == [
+        "solar_challenge.SEGTariff",
+        f"frozen:  {FROZEN_SURFACE['SEGTariff']}",
+        f"current: {FROZEN_SURFACE['SEGTariff'].replace('match_args]', 'match_args, slots]')}",
         "change:  breaking",
     ]
 

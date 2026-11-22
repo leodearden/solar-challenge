@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or overrides type's __getattribute__, and the MRO a class records, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
+"""A class's own namespace and own annotations, refused where its metaclass shadows __dict__ or overrides type's __getattribute__, the MRO a class records, and whether its instances hold a __dict__ and take a weakref, each read as attribute lookup or inspect reads it, whatever its metaclass gives.
 
 The helper's other modules read classes through own_namespace, own_annotations,
-recorded_mro, overriding_getattribute_holder and namespace_holders. Of the helper, this
+recorded_mro, overriding_getattribute_holder, namespace_holders, instances_hold_a_dict
+and instances_take_a_weakref. Of the helper, this
 module imports only the modules below it in tests/unit/test_surface_forms_layers.py's
 LAYERS, which checks that.
 """
@@ -124,6 +125,26 @@ def recorded_mro(cls: type) -> tuple[type, ...]:
     """The MRO *cls* records, which attribute lookup and inspect.getattr_static walk: what type's own __mro__ descriptor gives for *cls*, whatever __mro__ its metaclass gives."""
     mro: tuple[type, ...] = type.__dict__["__mro__"].__get__(cls)
     return mro
+
+
+def instances_hold_a_dict(cls: type) -> bool:
+    """Whether instances of *cls* hold a __dict__: whether type's own __dictoffset__ descriptor gives *cls* a non-zero offset, whatever __dictoffset__ its metaclass gives.
+
+    Only whether the offset is zero is read, since its value differs by minor;
+    docs/surface-forms-inspect-readings.md §3.6 says how each minor reads it.
+    """
+    offset: int = type.__dict__["__dictoffset__"].__get__(cls)
+    return offset != 0
+
+
+def instances_take_a_weakref(cls: type) -> bool:
+    """Whether instances of *cls* take a weakref: whether type's own __weakrefoffset__ descriptor gives *cls* a non-zero offset, whatever __weakrefoffset__ its metaclass gives.
+
+    Only whether the offset is zero is read, since its value differs by minor;
+    docs/surface-forms-inspect-readings.md §3.6 says how each minor reads it.
+    """
+    offset: int = type.__dict__["__weakrefoffset__"].__get__(cls)
+    return offset != 0
 
 
 def namespace_holders(classes: Iterable[type], *names: str) -> Iterator[type]:

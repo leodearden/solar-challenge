@@ -275,7 +275,12 @@ conventions:
       such class, such as HomeConfig, SimulationResults, SimulationPeriod and GridChargeConfig:
       their constructors and public members. For each class the contract covers that is a
       dataclass, the contract also covers which of the dataclass parameters eq, order,
-      unsafe_hash and frozen it sets. Each exported constant is in the contract by its
+      unsafe_hash and frozen it sets. For every class the contract covers, an Enum aside, it
+      also covers whether a positional class pattern matches its instances by the
+      constructor's positional parameters (match_args), whether they hold no __dict__ (slots)
+      and, if so, whether they take a weakref (weakref_slot). These are spelled as qualifiers
+      of the class's kind, e.g. 'dataclass[eq, frozen, match_args] (...)' or
+      'class[slots] (...)'. Each exported constant is in the contract by its
       structure, not by its type name: a mapping by its keys, in order, and the type of each
       value; a list or tuple by its length and the type of each item (task 915). Its numbers
       are data, so a changed preset rate is a change to what a public name returns, not a
@@ -316,12 +321,15 @@ conventions:
       had to record that break by hand, sending consumers to dataclasses.replace), eq and
       unsafe_hash how instances compare and hash, and order whether <, <=, > and >= work. The
       decorator generates these as dunders, which member forms leave out (task 404), so a
-      dataclass's class form spells them as its kind, e.g. 'dataclass[eq, frozen] (...)'. init
-      and kw_only already show in the constructor's signature, and repr is text no form pins.
-      match_args, slots and weakref_slot are not pinned yet, because CPython 3.11's
-      __dataclass_params__, which the kind is read from, does not record them. They too change
-      what a consumer can do (match_args=False breaks a positional class pattern, and slots=True
-      removes an instance's __dict__), and task 668 decides whether the contract covers them.
+      dataclass's class form spells them as its kind, e.g.
+      'dataclass[eq, frozen, match_args] (...)'. init and kw_only already show in the
+      constructor's signature, and repr is text no form pins.
+      match_args, slots and weakref_slot are in the contract too (task 668), for every class but
+      an Enum, because they change what a consumer can do with an instance: match_args=False
+      breaks `case Location(lat, lon)`, slots removes vars() and attributes set ad hoc, and
+      weakref_slot decides whether weakref.ref takes one. They are read from the class itself on
+      every admitted minor, as what its instances can do, because CPython 3.11's
+      __dataclass_params__ does not record them, and no class but a dataclass has one.
       A constant's structure is in the contract too (task 915), because the platform indexes
       the exported constants, as in SEG_PRESETS['Octopus'] or ELEXON_PROFILE_CLASS_1[47]: a
       dropped key or item breaks it while the type name stays dict or list.
