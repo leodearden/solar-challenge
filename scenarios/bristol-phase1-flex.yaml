@@ -61,6 +61,9 @@ fleet_distribution:
     max_discharge_kw: 2.5
     grid_charging:
       target_soc_fraction: 0.9
+      # The realistic forecast caps each night's fill at the charge the day's PV will not
+      # strand; pv_blind, the default, always fills to the target (docs/grid-charge-forecast.md).
+      forecast: trailing_14_days
 
   load:
     annual_consumption_kwh:
@@ -71,8 +74,8 @@ fleet_distribution:
       max: 6000
     use_stochastic: false
 
-  # TOU-optimised dispatch: routes through the grid-charging controller
-  # (simulate_timestep_tou + compute_grid_charge_power_kw in flow.py).
+  # TOU-optimised dispatch: runs TOUOptimizedStrategy through flow.simulate_timestep,
+  # which grid-charges in cheap periods by dispatch.compute_grid_charge_power_kw.
   dispatch_strategy: tou_optimized
 
 # Financial parameters matching bristol-phase1.yaml baseline.

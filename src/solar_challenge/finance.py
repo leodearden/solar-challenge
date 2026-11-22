@@ -1206,6 +1206,8 @@ def householder_bill(
             if the home's ledger refuses its year, naming the invariant and its
             values, such as an own-use that with the import does not cover the
             demand (L3) (:class:`HomeLedger`).
+        ConfigurationError: If the perfect_foresight forecast sized the
+            summary's grid charge, as :func:`annualise` refuses it.
     """
     _require_summary_days(simulation_days, summary)
     _require_finite_and_not_negative({"annual_self_consumption_kwh": annual_self_consumption_kwh})
