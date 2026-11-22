@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The rules of tests/_surface_forms.py's is_additive_change, one per test."""
 
+import enum
 from dataclasses import dataclass
 
 from tests._surface_forms import is_additive_change
@@ -82,3 +83,46 @@ def test_a_dataclass_whose_kind_gains_a_qualifier_is_breaking() -> None:
         level: int
 
     assert not is_additive_change("dataclass[eq, frozen] (level: int) -> None", Rank)
+
+
+def test_a_mapping_constant_that_gains_a_key_is_additive() -> None:
+    assert is_additive_change("dict {'a': float}", {"a": 1.0, "b": 2.0})
+    assert is_additive_change("dict {'a': float, 'b': float}", {"a": 1.0, "m": 0.5, "b": 2.0})
+
+
+def test_a_mapping_constant_that_loses_a_key_is_breaking() -> None:
+    assert not is_additive_change("dict {'a': float, 'b': float}", {"a": 1.0})
+
+
+def test_a_mapping_constant_whose_value_is_retyped_is_breaking() -> None:
+    assert not is_additive_change("dict {'a': float}", {"a": 1})
+
+
+def test_a_list_constant_that_gains_an_item_is_breaking() -> None:
+    assert not is_additive_change("list [float]", [1.0, 2.0])
+
+
+def test_an_enum_that_gains_a_member_is_additive() -> None:
+    class Band(enum.Enum):
+        LOW = 1
+        MID = 2
+        HIGH = 3
+
+    assert is_additive_change("LOW=1, HIGH=3", Band)
+
+
+def test_an_enum_whose_member_changes_its_value_is_breaking() -> None:
+    class Band(enum.Enum):
+        LOW = 1
+        HIGH = 4
+
+    assert not is_additive_change("LOW=1, HIGH=3", Band)
+
+
+def test_an_enum_of_64_members_is_classified_at_once_where_trying_every_subset_of_them_never_would_finish() -> None:
+    members = [(f"M{value:02d}", value) for value in range(64)]
+    wide = enum.Enum("Wide", members)
+    renumbered = enum.Enum("Renumbered", [(name, -1 if name == "M31" else value) for name, value in members])
+
+    assert is_additive_change(", ".join(f"{name}={value}" for name, value in members if name != "M31"), wide)
+    assert not is_additive_change(", ".join(f"{name}={value}" for name, value in members), renumbered)
