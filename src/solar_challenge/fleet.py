@@ -6,6 +6,7 @@ import itertools
 import math
 import multiprocessing
 import os
+import signal
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
@@ -351,7 +352,8 @@ class FleetRunner:
             The pool's workers start as multiprocessing's default start method says, except that a default of fork
             starts them by forkserver, because a call may come from any thread of a process running others (the
             dashboard's job threads). So a script that makes a parallel call guards its entry point with
-            ``if __name__ == "__main__":``. Decision 12 of docs/prds/fleet-execution-policy.md says why
+            ``if __name__ == "__main__":``. The workers ignore SIGINT, so a Ctrl+C that interrupts the call waits for the
+            homes already running to finish, none started after it. Decision 12 of docs/prds/fleet-execution-policy.md says why
         max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
     """
 
@@ -508,7 +510,7 @@ def _homes_in_a_pool(
     """
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
     waiting = iter(jobs)
-    pool = ProcessPoolExecutor(max_workers=workers, mp_context=_worker_context())
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=_worker_context(), initializer=_ignoring_interrupts)
 
     def submitted(job: _HomeJob) -> Future[SimulationResults]:
         """job's home submitted to the pool; a BrokenProcessPool the submit raises carries _naming_the_home's note for job."""
@@ -532,6 +534,11 @@ def _homes_in_a_pool(
                 yield job, results
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _ignoring_interrupts() -> None:
+    """Make this pool worker ignore SIGINT: a terminal's Ctrl+C signals the caller's whole process group, workers included, and the calling process alone owns interruption, closing the generator so no home not yet handed on starts and the started ones finish."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _worker_context() -> BaseContext:

@@ -18,6 +18,7 @@ from typing import TypeVar
 import pytest
 pytest.importorskip("flask")
 
+import tests._fleet_runner as marked_homes
 from solar_challenge.web.database import Database
 from solar_challenge.web.storage import RunRecord
 from tests._run_stores import run_storage_over
@@ -50,6 +51,30 @@ class BlockingRunner:
 
 signal.signal(signal.SIGINT, signal.default_int_handler)
 app(["web", "start", "--port", port], obj=CliInvocation(runner=BlockingRunner()))
+"""
+
+SERVER_WITH_A_PARALLEL_FLEET_RUNNER = """
+import sys
+from pathlib import Path
+
+repo_root, marker_dir, port, release_file = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4])
+sys.path.insert(0, repo_root)
+
+from solar_challenge.cli import app
+from solar_challenge.cli.utils import CliInvocation
+from solar_challenge.fleet import FleetRunner
+from tests._fleet_runner import MarkingHomeSimulator
+from tests._synthetic_weather import synthetic_june_weather
+
+
+class JuneWeather:
+    def get(self, location):
+        return synthetic_june_weather("2024-06-21")
+
+
+held = MarkingHomeSimulator(marker_dir, held_until=(("A", release_file), ("B", release_file)))
+runner = FleetRunner(weather=JuneWeather(), home_simulator=held, parallel=True, max_workers=2)
+app(["web", "start", "--port", port], obj=CliInvocation(runner=runner))
 """
 
 WEB_START = """
@@ -87,6 +112,8 @@ import sys
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 os.execv(sys.executable, [sys.executable, "-c", *sys.argv[1:]])
 """
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _LOCALHOST = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -197,9 +224,19 @@ def _serving_port(server: _ChildServer) -> int:
 
 def _submit_home_job(port: int, pv_kw: float) -> str:
     """Submit a home job of pv_kw to the server on port, and return its run's id."""
+    return _submit_job(port, "/api/simulate/home", {"pv_kw": pv_kw, "days": 1})
+
+
+def _submit_fleet_job(port: int, home_names: list[str]) -> str:
+    """Submit a fleet job of one-day homes named home_names to the server on port, and return its run's id."""
+    return _submit_job(port, "/api/simulate/fleet", {"homes": [{"name": name, "days": 1} for name in home_names]})
+
+
+def _submit_job(port: int, path: str, body: dict[str, object]) -> str:
+    """POST body to the job endpoint path of the server on port, and return the submitted job's run's id."""
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/simulate/home",
-        data=json.dumps({"pv_kw": pv_kw, "days": 1}).encode(),
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
     )
     with _LOCALHOST.open(request, timeout=_PATIENCE_SECS) as response:
@@ -324,6 +361,38 @@ def test_stopping_the_server_drops_the_jobs_still_queued_and_holds_the_store_unt
         assert [
             (record.status, record.error_message) for record in (_stored_run(tmp_path, run_id) for run_id in running)
         ] == [("failed", "stub simulation")] * 2
+
+
+def _refuses_connections(port: int) -> bool:
+    """Whether the server on port has closed its listening socket, which it does once SIGINT has stopped its serving loop."""
+    try:
+        _dashboard_status(port)
+    except OSError:
+        return True
+    return False
+
+
+def test_ctrl_c_in_a_terminal_lets_the_homes_of_a_running_parallel_fleet_job_finish(tmp_path: Path) -> None:
+    """B14 for the dashboard's default fleet path: a terminal's Ctrl+C signals the server's whole process group, its fleet pool's workers included, and the running fleet job's homes still finish, so its run reads completed."""
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    release_file = tmp_path / "release"
+
+    with _server(
+        tmp_path, SERVER_WITH_A_PARALLEL_FLEET_RUNNER, str(_REPO_ROOT), str(marker_dir), "0", str(release_file)
+    ) as server:
+        port = _serving_port(server)
+        run_id = _submit_fleet_job(port, ["A", "B"])
+        _wait_until(server, lambda: len(marked_homes.started(marker_dir)) == 2, "both homes run in the pool")
+
+        os.killpg(server.process.pid, signal.SIGINT)
+        _wait_until(server, lambda: _refuses_connections(port), "SIGINT stops the server's serving loop")
+        release_file.touch()
+        returncode = server.process.wait(timeout=_PATIENCE_SECS)
+
+        assert returncode == 0
+        assert marked_homes.finished(marker_dir) == {"A", "B"}
+        assert _stored_run(tmp_path, run_id).status == "completed"
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
