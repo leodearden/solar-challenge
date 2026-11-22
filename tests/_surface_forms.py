@@ -387,7 +387,7 @@ def is_additive_member_change(frozen: str, cls: type, name: str) -> bool:
 
 @dataclasses.dataclass(frozen=True)
 class _Part:
-    """A part of a form: its text, as the form spells it, and the value it spells, by which an _ADDITIVE_PARTS row recognises it."""
+    """A part of a form: its text, as the form spells it, and the value an _ADDITIVE_PARTS row recognises it by: the parameter it spells, or else the marker of its kind."""
 
     text: str
     value: object
@@ -419,26 +419,23 @@ def _fixed_form(text: str) -> _PartedForm:
 
 
 @dataclasses.dataclass(frozen=True)
-class _Qualifier:
-    """A qualifier of a kind, as frozen qualifies dataclass in dataclass[frozen]."""
+class _PropertyAbility:
+    """Marks a part as an ability that qualifies a property's kind, as settable qualifies property in property[settable]."""
 
-    kind: str
-    name: str
+
+@dataclasses.dataclass(frozen=True)
+class _DataclassParameter:
+    """Marks a part as a decorator parameter that qualifies a dataclass's kind, as frozen qualifies dataclass in dataclass[frozen]."""
 
 
 @dataclasses.dataclass(frozen=True)
 class _EnumMember:
-    """A member of an Enum, by the name __members__ lists it under, an alias's included."""
-
-    name: str
+    """Marks a part as a member of an Enum, an alias included."""
 
 
 @dataclasses.dataclass(frozen=True)
 class _MappingEntry:
-    """An entry of a mapping constant: its key as _spelled_key spells it, and its value read as a constant."""
-
-    key: str
-    value: "_Constant"
+    """Marks a part as an entry of a mapping constant."""
 
 
 def _parted_form(obj: object) -> _PartedForm:
@@ -456,7 +453,7 @@ def _parted_form(obj: object) -> _PartedForm:
 def _enum_form(cls: type[enum.Enum]) -> _PartedForm:
     """The form of the Enum *cls*: its members, aliases included, as NAME=value in definition order, an alias with the value of the member it names, each value as _spelled_value spells it; each member is a part."""
     parts = tuple(
-        _Part(f"{name}={_spelled_value(member.value)}", _EnumMember(name))
+        _Part(f"{name}={_spelled_value(member.value)}", _EnumMember())
         for name, member in cls.__members__.items()
     )
     return _PartedForm(
@@ -470,10 +467,7 @@ def _constant_form(value: object) -> _PartedForm:
     if not isinstance(constant, _Entries):
         return _fixed_form(constant.text())
     return _PartedForm(
-        tuple(
-            _Part(text, _MappingEntry(key, item))
-            for text, (key, item) in zip(constant.entry_texts(), constant.entries, strict=True)
-        ),
+        tuple(_Part(text, _MappingEntry()) for text in constant.entry_texts()),
         lambda kept: _Entries(constant.kind, tuple(itertools.compress(constant.entries, kept))).text(),
     )
 
@@ -556,9 +550,7 @@ _ADDITIVE_PARTS: tuple[_AdditivePart, ...] = (
     _AdditivePart("an Enum member", lambda value: isinstance(value, _EnumMember)),
     _AdditivePart(
         "a property's settable or deletable qualifier",
-        lambda value: isinstance(value, _Qualifier)
-        and value.kind == "property"
-        and value.name in _PROPERTY_ABILITIES,
+        lambda value: isinstance(value, _PropertyAbility),
     ),
 )
 """The parts whose drop from a form is additive, each kind in one row; a part no row recognises is never dropped, so a change is breaking unless dropping recognised parts alone undoes it."""
@@ -1221,7 +1213,7 @@ def _property_kind_form(member: property) -> _PartedForm:
     abilities = [
         ability for ability, accessor in _PROPERTY_ABILITIES.items() if accessor(member) is not None
     ]
-    return _qualified_kind_form("property", abilities)
+    return _qualified_kind_form("property", abilities, _PropertyAbility())
 
 
 _DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "frozen")
@@ -1232,13 +1224,16 @@ def _dataclass_kind_form(cls: type) -> _PartedForm:
     return _qualified_kind_form(
         "dataclass",
         [name for name in _DATACLASS_KIND_PARAMETERS if dataclass_parameter(cls, name)],
+        _DataclassParameter(),
     )
 
 
-def _qualified_kind_form(kind: str, qualifiers: list[str]) -> _PartedForm:
-    """*kind* qualified by *qualifiers*, as _qualified_kind spells it, each qualifier a part."""
+def _qualified_kind_form(
+    kind: str, qualifiers: list[str], marker: _PropertyAbility | _DataclassParameter
+) -> _PartedForm:
+    """*kind* qualified by *qualifiers*, as _qualified_kind spells it, each qualifier a part that *marker* marks."""
     return _PartedForm(
-        tuple(_Part(name, _Qualifier(kind, name)) for name in qualifiers),
+        tuple(_Part(name, marker) for name in qualifiers),
         lambda kept: _qualified_kind(kind, list(itertools.compress(qualifiers, kept))),
     )
 
