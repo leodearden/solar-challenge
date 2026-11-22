@@ -146,8 +146,8 @@ Later streams add to these modules by these names:
 | C1 | Import direction `errors`, `number_fields` ← `scenario_blocks` ← `fleet_distribution` ← `config`, at any scope | β's and γ's fresh-interpreter tests; γ's AST guard in `tests/unit/test_import_structure.py` |
 | C2 | No grammar module imports a name starting `simulate_` from any package module | α (deletes the only use); γ's guard |
 | C3 | One spelling: every `from solar_challenge.{scenario_blocks,fleet_distribution,config} import X` in src and tests names an `X` that the module defines; no module imports an underscore name from a grammar module | mypy --strict (src); γ's guard (src and tests) |
-| C4 | Every `ConfigurationError` that a module-level function of the three grammar modules raises is built by `scenario_blocks.refusal`, reading `<block label>: <problem>`. Exempt: the file loaders, whose subject is a file path (Permanent), and `_substitute_variables` (Transitional, task 707). Methods of input types (`__post_init__`) name their field (S4) and are not readers | δ's AST guard (seeded-violation test plus the real tree) |
-| C5 | Every module-level reader (`parse_*`, `_parse_*`, `_build_*`) in the three modules takes `block_path` | δ's guard |
+| C4 | Every `ConfigurationError` that a module-level function of the three grammar modules raises is built by `scenario_blocks.refusal`, reading `<block label>: <problem>`. Exempt, each Permanent, because its subject is no block of a document: the file loaders `load_config_yaml`, `load_config_json` and `load_config` (a file path); `_refuse_unmatched_variables` (the variables a caller supplies; task 707's note); and `write_distribution_spec` (a writer, whose subject is a spec value its caller holds). `_read_placeholder` and `_refuse_placeholders_without_a_value` build through `refusal`. Methods of input types (`__post_init__`) name their field (S4) and are not readers | δ's AST guard (seeded-violation test plus the real tree) |
+| C5 | Every module-level reader (`parse_*`, `_parse_*`, `_build_*`) in the three modules takes `block_path`. Exempt (Permanent): `parse_fleet_config` and `parse_sweep_fleet_configs`, which read a whole fleet document at the top level, where the fleet grammar's paths are fixed at `fleet_distribution` | δ's guard |
 | C6 | A scenario document is refused if it holds a key `_parse_scenario` does not read. A retired key's refusal names its replacement | ε's tests |
 | C7 | α to ε change no parsed value and no `FROZEN_*` entry; β and γ change no message text either | the existing suite; `validate config` OK on the 10 shipped scenarios; `test_public_api_surface.py` unchanged |
 
@@ -186,7 +186,7 @@ Error semantics: `refusal` returns, and does not raise, a `ConfigurationError`, 
 | 509 | pending | One unrecognised-key rule for config and web. After β, `scenario_blocks.refuse_unrecognised_keys` is public below both, and δ fixes its message form. The web half is S17's (S1 PRD §8). 509 stays and gains a dependency on δ. |
 | 866 (S4 ε) | deferred, held with `x_seam_wait {S5, partition module names}` | Gains a dependency on β and is released by this session's decompose. |
 | 868 (S4 ζ) | pending | Gains a dependency on γ (it edits the fleet grammar by its final name). |
-| 707 | pending | Edits `_substitute_variables`, which stays in config.py. C4's Transitional entry names it. No edge. |
+| 707 | pending | Edits `_substitute_variables`, which stays in config.py and raises nothing, so C4 exempts none of it. No edge. |
 | 297, 422, 485, 186, 558, 559, 599, 600, 616, 706, 755, 759 | pending | Their anchors in config.py move with β and γ. Their architects re-read at dispatch (freshness clause). No edges: none blocks or is blocked by the partition. |
 
 ## 7. Cross-PRD relationship
@@ -312,7 +312,7 @@ Each leaf records the measurement of §2.3 it re-measured at its base.
   - Make `_constructed` build through `refusal`.
   - Require list-shaped values to be lists: `homes`, `scenarios`, a tariff's `periods`, `event_windows`, `peak_hours`.
   - Require each loader's document to be a mapping.
-  - Add the AST guard for C4/C5 with its exemption table (file loaders: Permanent; `_substitute_variables`: Transitional, task 707) and seed P6.
+  - Add the AST guard for C4/C5, in `tests/unit/config/test_refusal_form_guard.py`, with its exemption table as the C4 and C5 rows of §4.2 give it (every entry Permanent), and seed P6. This settles §10 Q1's open names: `refusal`, `require_list`, and `refuse_missing_keys` in the role of `require_keys`.
   - Add an Unreleased line: grammar refusals now read `<block path>: <problem>`; two message forms changed.
   - Supersedes 423.
 - **Signal:**
@@ -381,7 +381,7 @@ No leaf is high or critical, so none joins trigger-chain gate 772. See lead ques
   - ε removes three silent accepts (`output:`, scenario `tariff_config:`, unknown scenario keys);
   - δ turns two tracebacks into named refusals;
   - α removes a runner that silently dropped home fields.
-- **`exceptions-owned-or-ratified`:** C4's two exemptions carry a Permanent contract or a Transitional owner, as S1's γ allow-list does.
+- **`exceptions-owned-or-ratified`:** each C4 and C5 exemption carries a Permanent contract, as S1's γ allow-list does.
 - **`guards-exercise-behaviour`:**
   - the guards scan the real tree and a seeded `tmp_path` violation;
   - the fresh-interpreter tests import the modules;
