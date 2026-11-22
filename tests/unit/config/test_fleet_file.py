@@ -870,3 +870,24 @@ class TestParseFleetConfigNamesTheBlockItRefuses:
             read([{"pv": {"capacity_kw": _PV_KW}}])
 
         assert str(refusal.value) == "the top level: must be a mapping, got list"
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("fleet_distribution", "type_name"),
+        [pytest.param(None, "NoneType", id="null"), pytest.param(5, "int", id="a-number")],
+    )
+    def test_a_fleet_distribution_that_is_no_mapping_is_refused_naming_it(
+        self, read: Callable[[Any], object], fleet_distribution: object, type_name: str
+    ) -> None:
+        """A YAML file's empty or scalar fleet_distribution: is refused as no mapping, not iterated into a bare TypeError."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read({"fleet_distribution": fleet_distribution})
+
+        assert str(refusal.value) == f"fleet_distribution: must be a mapping, got {type_name}"

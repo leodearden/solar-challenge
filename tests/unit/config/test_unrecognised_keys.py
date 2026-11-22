@@ -909,6 +909,22 @@ class TestFleetDistributionBlockKeys:
         ):
             _parsed_fleet_distribution(dispatch_strategy=dispatch_strategy, **{_PROBE_KEY: None})
 
+    @pytest.mark.parametrize(
+        ("data", "type_name"),
+        [
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param(5, "int", id="a-number"),
+            pytest.param(["dispatch_strategy"], "list", id="a-list-holding-the-retired-key"),
+            pytest.param("dispatch_strategy", "str", id="the-retired-key-as-a-string"),
+        ],
+    )
+    def test_a_block_that_is_no_mapping_is_refused_as_no_mapping(self, data: object, type_name: str) -> None:
+        """The block is refused as not a mapping before any key of it is read, so neither a bare TypeError escapes nor a list or string holding the retired key's name is refused as that key."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"fleet_distribution: must be a mapping, got {type_name}")
+        ):
+            parse_fleet_distribution_config(data)
+
     def test_every_home_of_every_sweep_point_carries_grid_charging_and_dispatch_strategy(self) -> None:
         """Every home of every sweep point, built by parse_sweep_fleet_configs as ``fleet sweep`` builds them, carries the battery block's dispatch_strategy and grid_charging."""
         sweep = {"type": "sweep", "min": 1.0, "max": 2.0, "steps": 2}

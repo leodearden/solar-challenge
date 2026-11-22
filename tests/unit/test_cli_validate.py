@@ -423,6 +423,16 @@ home:
                 id="fleet-distribution-fractional-n-homes",
             ),
             pytest.param(
+                "fleet_distribution:\n",
+                "fleet_distribution: must be a mapping, got NoneType",
+                id="fleet-distribution-null",
+            ),
+            pytest.param(
+                "fleet_distribution: 5\n",
+                "fleet_distribution: must be a mapping, got int",
+                id="fleet-distribution-a-number",
+            ),
+            pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: true}\n",
                 "fleet_distribution.pv.capacity_kw must be a finite number, got True",
                 id="fleet-distribution-boolean-capacity",
