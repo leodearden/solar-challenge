@@ -12,7 +12,10 @@
  * Each drawn chart is fitted to its container whenever the container's size
  * changes while it is shown, as when the sidebar is toggled, the window is
  * resized or the chart's tab is shown again, so the chart ends as wide as
- * its container.
+ * its container. A size change made while a CSS transition runs around the
+ * container, such as the main column's slide when the sidebar is toggled, is
+ * fitted once the transition ends. The chart is then drawn at the width its
+ * container settles at, never at one it passes through.
  *
  * Each chart takes its chrome colours from the computed style of its
  * container (AC9): color for its texts, and --chart-grid for its grid, zero
@@ -38,6 +41,9 @@
 
     /** The containers whose charts are drawn, each mapped to the keys of its chart's subplots. */
     var _drawn = new Map();
+
+    /** The drawn containers whose fit waits for the CSS transitions running around them to end. */
+    var _fittingOnceSettled = new Set();
 
     /**
      * The chrome colours the computed style of container names: text, its
@@ -123,10 +129,10 @@
     }
 
     /**
-     * Calls plotlyCall, which throws or returns the promise of a Plotly call,
-     * and then onSuccess, if given, once that promise resolves. Either failure,
-     * a throw or a rejection, logs one console error naming the activity and
-     * the id of container.
+     * Calls plotlyCall, which throws or returns the promise of a Plotly call
+     * or of the wait for one, and then onSuccess, if given, once that promise
+     * resolves. Either failure, a throw or a rejection, logs one console error
+     * naming the activity and the id of container.
      */
     function _attempt(container, activity, plotlyCall, onSuccess) {
         new Promise(function (resolve) {
@@ -172,13 +178,6 @@
     function _recolour(container) {
         _attempt(container, 'recolour the chart of', function () {
             return Plotly.relayout(container, _chrome(_drawn.get(container), _chromeColours(container)));
-        });
-    }
-
-    /** Fits the chart of container, which is drawn, to the container's size. */
-    function _fit(container) {
-        _attempt(container, 'fit the chart of', function () {
-            return Plotly.Plots.resize(container);
         });
     }
 
@@ -230,11 +229,59 @@
     /** Recolours each requested container's chart now if shown, else the first time it is shown (AC10). */
     var _recolourOnceShown = _onceShown(_recolour);
 
-    /** Fits each observed container's chart, which is drawn, whenever the container's size changes while it has a width. */
+    /**
+     * The CSS transitions running on container or on an ancestor of it,
+     * whatever property each animates, such as base.html's main column
+     * sliding when the sidebar is toggled. Any of them can change container's
+     * size on any frame until it ends. One whose effect or target a script has
+     * removed changes nothing, so it is not listed.
+     */
+    function _transitionsAround(container) {
+        return document.getAnimations().filter(function (animation) {
+            return animation instanceof CSSTransition
+                && animation.playState === 'running'
+                && animation.effect
+                && animation.effect.target
+                && animation.effect.target.contains(container);
+        });
+    }
+
+    /**
+     * Fits the chart of container, which is drawn, once no CSS transition runs
+     * around it, so a slide is fitted once, at the size it settles at, however
+     * far apart its frames are:
+     * tests/e2e/test_results_page.py::test_a_sidebar_slide_drawn_in_frames_further_apart_than_plotlys_resize_wait_redraws_each_shown_chart_only_at_its_settled_width
+     * says why. The transitions are looked for again once they have ended, for
+     * one started meanwhile. A cancelled transition rejects its finished
+     * promise, so the wait is on Promise.allSettled. A container hidden by
+     * then is fitted by _fitWhileShown when it is shown again.
+     */
+    function _fitOnceSettled(container) {
+        if (_fittingOnceSettled.has(container)) {
+            return;
+        }
+        _attempt(container, 'fit the chart of', function () {
+            var running = _transitionsAround(container);
+            if (running.length === 0) {
+                return Plotly.Plots.resize(container);
+            }
+            _fittingOnceSettled.add(container);
+            return Promise.allSettled(running.map(function (transition) {
+                return transition.finished;
+            })).then(function () {
+                _fittingOnceSettled.delete(container);
+                if (_drawn.has(container) && _isShown(container)) {
+                    _fitOnceSettled(container);
+                }
+            });
+        });
+    }
+
+    /** Fits each observed container's chart, which is drawn, whenever the container's size changes while it has a width, once the CSS transitions around the container have ended. */
     var _fitWhileShown = new ResizeObserver(function (entries) {
         entries.forEach(function (entry) {
             if (_isShown(entry.target)) {
-                _fit(entry.target);
+                _fitOnceSettled(entry.target);
             }
         });
     });
@@ -260,6 +307,7 @@
     function _forget(container) {
         _drawOnceShown.cancel(container);
         _fitWhileShown.unobserve(container);
+        _fittingOnceSettled.delete(container);
         _recolourOnceShown.cancel(container);
         if (_drawn.delete(container)) {
             _attempt(container, 'purge the chart of', function () {
