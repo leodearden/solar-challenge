@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
+from solar_challenge.dispatch import DispatchStrategy, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
@@ -70,7 +70,7 @@ def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | No
 
 
 def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | None) -> DispatchStrategy:
-    """The strategy the community battery's dispatch_strategy names, self-consumption when it names none, built for its grid_charging at the billing tariff.
+    """The strategy the community battery's dispatch_strategy names, built for its grid_charging at the billing tariff.
 
     Raises
     ------
@@ -82,7 +82,7 @@ def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | 
     """
     _refuse_a_grid_charge_forecast(battery)
     return build_dispatch_strategy(
-        battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+        battery.dispatch_strategy,
         grid_charging=battery.grid_charging,
         tariff=_billing_tariff(billing),
     )
@@ -137,9 +137,8 @@ class CommunityConfig:
         ``"community_battery"`` config has none; or if the community
         battery's dispatch would ignore its grid_charging, as
         :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses it:
-        the strategy its dispatch_strategy names, self-consumption when it
-        names none, does not charge from the grid, or billing names no tariff
-        to find a cheap period in.
+        the strategy its dispatch_strategy names does not charge from the
+        grid, or billing names no tariff to find a cheap period in.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -328,8 +327,8 @@ def simulate_community(
         and each net surplus/deficit step, the fleet window's ``step_minutes``
         long, is dispatched in order via
         :func:`~solar_challenge.flow.simulate_timestep` with the strategy the
-        battery's ``dispatch_strategy`` names, self-consumption when it names
-        none, built by :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
+        battery's ``dispatch_strategy`` names, built by
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
         and with ``billing.tariff`` as the step's tariff.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by

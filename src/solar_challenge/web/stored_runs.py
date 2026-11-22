@@ -50,9 +50,10 @@ stored battery's efficiency, the round trip its charge_efficiency and discharge_
 derived from, wherever the battery is, reporting each value that is not null; v2 keeps a
 battery's efficiency for it the same way. v8 moves each stored home's dispatch_strategy into its
 battery, whose own setting it is: a battery naming no strategy whose home asked for tou_optimized
-takes tou_optimized on its tariff's clock, as the home ran, reported with the value it holds now;
-then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for v3 and v8 the
-same way.
+takes tou_optimized on its tariff's clock, as the home ran, reported with the value it holds now,
+and every other battery that names no strategy names self_consumption, the dispatch it ran,
+unreported; then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for
+v3 and v8 the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -1187,20 +1188,24 @@ def _home_with_its_dispatch_in_its_battery(home: Any) -> tuple[Any, list[_FieldC
 
     v3 left a home asking for tou_optimized beside a battery naming its own strategy, which its run
     dispatched by; beside a battery naming none on a tariff, which ran tou_optimized on the
-    tariff's clock; or with no battery, which dispatched none. So a battery naming no strategy
-    whose home asked for tou_optimized takes tou_optimized on its tariff's clock, the one field
-    reported, and every other home only loses the key. A home that is not an object, or that
-    holds no key, is left as it is.
+    tariff's clock; or with no battery, which dispatched none. Every other home asked for greedy,
+    whose battery naming none ran self-consumption. So a battery naming no strategy whose home
+    asked for tou_optimized takes tou_optimized on its tariff's clock, the one field reported; any
+    other battery naming none names self_consumption, unreported; and every home loses the key.
+    A home that is not an object, or that holds no key, is left as it is.
     """
     if not isinstance(home, dict) or _HOME_DISPATCH not in home:
         return home, []
     without_the_key = {key: value for key, value in home.items() if key != _HOME_DISPATCH}
     battery = home.get("battery_config")
-    if home[_HOME_DISPATCH] != "tou_optimized" or not isinstance(battery, dict) or battery.get("dispatch_strategy") is not None:
+    if not isinstance(battery, dict) or battery.get("dispatch_strategy") is not None:
         return without_the_key, []
-    change = ("battery_config.dispatch_strategy", None, _tou_optimized_on_the_tariffs_clock())
-    battery_with_it = {**battery, "dispatch_strategy": _tou_optimized_on_the_tariffs_clock()}
-    return {**without_the_key, "battery_config": battery_with_it}, [change]
+    if home[_HOME_DISPATCH] == "tou_optimized":
+        strategy = _tou_optimized_on_the_tariffs_clock()
+        changes = [("battery_config.dispatch_strategy", None, _tou_optimized_on_the_tariffs_clock())]
+    else:
+        strategy, changes = {"strategy_type": "self_consumption"}, []
+    return {**without_the_key, "battery_config": {**battery, "dispatch_strategy": strategy}}, changes
 
 
 def _tou_optimized_on_the_tariffs_clock() -> dict[str, Any]:
@@ -1249,8 +1254,8 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         8,
         "Move each stored home's dispatch_strategy into its battery, where a battery that names no strategy "
-        "takes tou_optimized on its tariff's clock when its home asked for it, then drop the home's key, "
-        "which no HomeConfig has",
+        "takes tou_optimized on its tariff's clock when its home asked for it, and every other battery that "
+        "names no strategy names self_consumption, then drop the home's key, which no HomeConfig has",
         _home_dispatch_moved_to_its_battery,
     ),
 )

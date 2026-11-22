@@ -258,9 +258,11 @@ def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryCon
         settings["max_discharge_kw"] = max_discharge_kw
     round_trip = _read_efficiency(params["efficiency_pct"])
     try:
-        settings["dispatch_strategy"] = parse_dispatch_strategy_config(params["dispatch_strategy"])
+        dispatch_strategy = parse_dispatch_strategy_config(params["dispatch_strategy"])
     except ConfigurationError as exc:
         raise ValueError(str(exc)) from exc
+    if dispatch_strategy is not None:
+        settings["dispatch_strategy"] = dispatch_strategy
     if has_battery(capacity_kwh, "battery_kwh"):
         battery = BatteryConfig(capacity_kwh=capacity_kwh, **settings)
         return battery if round_trip is None else battery.with_round_trip(round_trip)

@@ -10,6 +10,7 @@ import yaml
 
 pytest.importorskip("flask")
 
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
@@ -199,11 +200,13 @@ class TestParseFleetForm:
     ) -> None:
         """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value.
 
-        A home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
+        A form without a dispatch strategy leaves every battery BatteryConfig's self-consumption. A
+        home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
         """
         tariff = parse_tariff_config(form.get("tariff"))
         seg = parse_seg_tariff(form.get("seg"))
-        dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        form_dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        dispatch = SelfConsumptionStrategyConfig() if form_dispatch is None else form_dispatch
         battery_pool = form["battery"]["capacity_kwh"]["entries"]
         homes_with_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] > 0)
         homes_without_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] == 0)

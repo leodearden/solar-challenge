@@ -1224,7 +1224,8 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     No later step of the migration, nor its catch-up, is given the files, so they are reported
     once. legacy_fleet's runs row, its config and its FleetSummary, is brought forward on its own:
     v6 drops its FleetSummary's null SEG revenue pair, v7 its first home's battery's null
-    efficiency, v8 each home's dispatch_strategy, and no step changes the rest of it.
+    efficiency, v8 each home's dispatch_strategy, its first home's battery naming no strategy
+    taking self_consumption, and no step changes the rest of it.
     """
     run_id = install_stored_run_fixture(
         "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
@@ -1247,6 +1248,7 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     }
     config_brought_forward = json.loads(row_before["config_json"])
     del config_brought_forward["homes"][0]["battery_config"]["efficiency"]
+    config_brought_forward["homes"][0]["battery_config"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
     for home in config_brought_forward["homes"]:
         del home["dispatch_strategy"]
     assert json.loads(row_after["config_json"]) == config_brought_forward

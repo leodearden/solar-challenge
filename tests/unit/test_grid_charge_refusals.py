@@ -43,8 +43,9 @@ _FLAT = TariffConfig.flat_rate(0.25)
 
 
 def _battery(strategy: DispatchStrategyConfig | None = None) -> BatteryConfig:
-    """A 5 kWh battery that grid-charges to 0.9, dispatched by *strategy*, or by self-consumption when None."""
-    return BatteryConfig(capacity_kwh=5.0, dispatch_strategy=strategy, grid_charging=GridChargeConfig(0.9))
+    """A 5 kWh battery that grid-charges to 0.9, dispatched by *strategy*, or naming no strategy, so by self-consumption, when None."""
+    battery = BatteryConfig(capacity_kwh=5.0, grid_charging=GridChargeConfig(0.9))
+    return battery if strategy is None else dataclasses.replace(battery, dispatch_strategy=strategy)
 
 
 def _home(battery: BatteryConfig | None, *, tariff: TariffConfig | None = None) -> HomeConfig:
@@ -74,7 +75,7 @@ _HONOURED: dict[str, tuple[Callable[[], HomeConfig], str]] = {
 }
 
 
-# Each refused row builds its battery's strategy, None for self-consumption, when the test runs.
+# Each refused row builds its battery's strategy, None for a battery naming none, which dispatches self-consumption, when the test runs.
 @pytest.mark.parametrize(
     ("build_battery_strategy", "tariff", "named"),
     [

@@ -80,7 +80,7 @@ class HomeConfig:
 
 
 def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStrategy:
-    """A new instance of battery's dispatch strategy, self-consumption while it names none, built for its grid_charging at the home's tariff.
+    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff.
 
     Raises:
         ConfigurationError: build_dispatch_strategy's refusals: tou_optimized on the tariff's
@@ -88,7 +88,7 @@ def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStr
             grid_charging the strategy would ignore.
     """
     return build_dispatch_strategy(
-        battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+        battery.dispatch_strategy,
         grid_charging=battery.grid_charging,
         tariff=config.tariff_config,
     )
