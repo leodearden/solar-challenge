@@ -380,7 +380,8 @@ class FleetDistributionConfig:
 
         Past n_homes, seed, random_order and dispatch_strategy it refuses, in this order: a component
         key outside its table's fleet rows, or held in the wrong one of its draws and settings
-        (F1); a required key a component does not draw (F5); a spec its key's kind does not
+        (F1); a reader-only key a component draws or sets beside a field it sets; a required key
+        a component does not draw (F5); a spec its key's kind does not
         draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
         source is not a number or count field drawn earlier for every home that draws it (F4);
         a shuffled pool whose counts do not total n_homes (F6); a fixed presence value its
@@ -399,6 +400,7 @@ class FleetDistributionConfig:
                 self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
             )
         _refuse_keys_held_where_no_row_puts_them(self)
+        _refuse_both_forms_of_a_reader_only_key(self)
         _refuse_required_keys_not_drawn(self)
         _refuse_specs_their_kinds_cannot_draw(self)
         _refuse_proportional_sources_not_drawn_earlier(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
@@ -477,6 +479,20 @@ def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) ->
         for key, row in block.fleet.items():
             if key in (component.draws if row.kind in _GIVEN_EVERY_HOME else component.settings):
                 raise _held_in_the_wrong_place(child_path(block_path, key), row)
+
+
+def _non_null_keys(values: Mapping[str, object]) -> list[str]:
+    """The keys of *values* whose value is not null, as a block's null key reads as absent."""
+    return [key for key, value in values.items() if value is not None]
+
+
+def _refuse_both_forms_of_a_reader_only_key(config: FleetDistributionConfig) -> None:
+    """Refuse *config* when a component draws or sets a reader-only key beside a field it sets, as the parser refuses its block, naming the component's path and each key."""
+    for name, (block, component) in _fleet_components(config).items():
+        if component is not None:
+            block.refuse_both_forms(
+                _non_null_keys({**component.draws, **component.settings}), child_path(_FLEET_DISTRIBUTION_PATH, name)
+            )
 
 
 def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
@@ -1036,12 +1052,14 @@ def _parse_component_distribution(
     """Read a fleet_distribution: component block by *block*'s fleet rows.
 
     A key outside the rows is refused, naming its path, and so is a block leaving out a key the
-    rows require, naming the block and the key. A SETTING key is read as written, or by its
+    rows require, naming the block and the key, and one setting a reader-only key beside a field
+    it sets, as the table's refuse_both_forms refuses it. A SETTING key is read as written, or by its
     sub-block's reader, and a FLAG key as true or false, naming its path; a null one of either
     reads as absent. Any other key is a spec, kept even when null, as _parse_drawn_spec reads it.
     """
     mapping = refuse_unrecognised_keys(block_path, data, block.fleet)
     _refuse_required_fleet_keys_left_out(block, mapping, block_path)
+    block.refuse_both_forms(_non_null_keys(mapping), block_path)
     draws: dict[str, DistributionSpec] = {}
     settings: dict[str, SettingValue] = {}
     for key, row in block.fleet.items():
@@ -1330,8 +1348,10 @@ def _drawn_component(
     Each row *component* draws is drawn in the table's order, and recorded in *drawn* under its
     path; SETTING and FLAG rows, and rows it does not draw, are skipped. The home has no such
     component when the presence field is not drawn, draws null, or draws a value the table's
-    presence rule says asks for none. The dataclass is built from the non-null draws, the
-    settings and *given*, so each field drawn null or not drawn takes its default.
+    presence rule says asks for none. The dataclass is built from the non-null draws of its
+    fields, the settings and *given*, so each field drawn null or not drawn takes its default;
+    then each reader-only key drawn non-null is applied, as the table's with_reader_only_keys
+    applies it.
 
     Raises:
         ConfigurationError: As sampler.draw refuses a draw, naming its path; as the table's
@@ -1358,7 +1378,8 @@ def _drawn_component(
             got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
             raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, path), f"required, but {got}")
     try:
-        return block.config_type(**values, **component.settings, **given)
+        built = block.config_type(**block.without_reader_only_keys(values), **component.settings, **given)
+        return block.with_reader_only_keys(built, values, "")
     except (ValueError, TypeError) as exc:
         raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, name), f"home {home_number}: {exc}") from exc
 
