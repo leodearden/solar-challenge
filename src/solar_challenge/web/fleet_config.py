@@ -18,6 +18,7 @@ from typing import Any, TypeGuard
 
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
 from solar_challenge.web.fleet_components import (
+    FLEET_SIZE,
     FLEET_SIZE_DEFAULT,
     MAX_FLEET_HOMES,
     SEED_DEFAULT,
@@ -75,7 +76,7 @@ def sample_distribution(
             a finite number, as finite params whose draws overflow a float can; that error
             names params and the sample.
     """
-    n_samples = as_whole_number(n_samples, "n_samples", within=Interval(1, MAX_FLEET_HOMES))
+    n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
     params = _require_dict(params, "params")
     fields = {**_fields_under("params"), "type": "type"}
     distribution = {**params, "type": dist_type}

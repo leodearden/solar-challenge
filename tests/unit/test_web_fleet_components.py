@@ -635,6 +635,11 @@ class TestPagesRenderPageLimits:
         assert texts_after(page, "Period", len(titles)) == titles
         assert _click_handlers(page, "setPeriod(") == [f"setPeriod({json.dumps(title)})" for title in titles]
 
+    def test_the_sweeps_days_admit_the_window_days(self, client: FlaskClient) -> None:
+        page = client.get("/scenarios/sweep").get_data(as_text=True)
+        window_days = page_limits().window_days
+        assert _bounds_of_input(page, "sweep_base_days") == (str(window_days.low), str(window_days.high))
+
     def test_the_home_pages_pv_capacity_slider_spans_the_pv_components_value_range(
         self, client: FlaskClient
     ) -> None:

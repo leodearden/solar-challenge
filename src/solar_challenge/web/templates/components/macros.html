@@ -231,6 +231,21 @@
 {% endmacro %}
 
 
+{# A button per day choice of limits, a PageLimits, in order: each sets the Alpine expression model to its days and is drawn selected while model holds them, captioned '1 year' for the full year, else '<days> days' #}
+{% macro day_choice_buttons(model, limits) %}
+<div class="flex flex-wrap gap-2">
+    {% for days in limits.day_choices %}
+    <button type="button" @click="{{ model }} = {{ days }}"
+        class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
+        :class="{{ model }} == {{ days }}
+            ? 'bg-primary-500 text-white border-primary-500'
+            : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
+    >{{ '1 year' if days == limits.full_year_days else days ~ ' days' }}</button>
+    {% endfor %}
+</div>
+{% endmacro %}
+
+
 {# Run badges: a pill naming a run's status or type in that value's colours; a value with none of its own is drawn neutral #}
 {% set _badge_shape_classes = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium' %}
 {% set _neutral_badge_classes = 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300' %}
