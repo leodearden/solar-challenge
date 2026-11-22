@@ -55,6 +55,7 @@ app(["web", "start", "--port", port], obj=CliInvocation(runner=BlockingRunner())
 """
 
 SERVER_WITH_A_PARALLEL_FLEET_RUNNER = """
+import signal
 import sys
 from pathlib import Path
 
@@ -75,6 +76,7 @@ class JuneWeather:
 
 held = MarkingHomeSimulator(marker_dir, held_until=(("A", release_file), ("B", release_file)))
 runner = FleetRunner(weather=JuneWeather(), home_simulator=held, parallel=True, max_workers=2)
+signal.signal(signal.SIGINT, signal.default_int_handler)
 app(["web", "start", "--port", port], obj=CliInvocation(runner=runner))
 """
 
@@ -372,13 +374,19 @@ def _refuses_connections(port: int) -> bool:
 
 
 def test_ctrl_c_in_a_terminal_lets_the_homes_of_a_running_parallel_fleet_job_finish(tmp_path: Path) -> None:
-    """B14 for the dashboard's default fleet path: a terminal's Ctrl+C signals the server's whole process group, its fleet pool's workers included, and the running fleet job's homes still finish, so its run reads completed."""
+    """B14 for the dashboard's default fleet path: a terminal's Ctrl+C signals the server's whole process group, its fleet pool's workers included, and the running fleet job's homes still finish, so its run reads completed, even when the server's launcher left SIGINT ignored."""
     marker_dir = tmp_path / "markers"
     marker_dir.mkdir()
     release_file = tmp_path / "release"
 
     with _server(
-        tmp_path, SERVER_WITH_A_PARALLEL_FLEET_RUNNER, str(REPOSITORY_ROOT), str(marker_dir), "0", str(release_file)
+        tmp_path,
+        RUNS_A_SCRIPT_WITH_SIGINT_IGNORED,
+        SERVER_WITH_A_PARALLEL_FLEET_RUNNER,
+        str(REPOSITORY_ROOT),
+        str(marker_dir),
+        "0",
+        str(release_file),
     ) as server:
         port = _serving_port(server)
         run_id = _submit_fleet_job(port, ["A", "B"])
