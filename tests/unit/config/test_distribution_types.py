@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 import pytest
+import yaml
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
@@ -270,6 +271,15 @@ class TestTheWriterIsTheParsersInverse:
         self, spec: DistributionSpec, at: str
     ) -> None:
         assert _parsed_spec(write_distribution_spec(spec), at=at) == spec
+
+    def test_a_written_sweep_is_plain_data_that_a_yaml_round_trip_reads_back_as_itself(self) -> None:
+        """The proportional_to sample's multiplier is a linear SweepSpec; its mode is written as a string, which yaml.safe_dump writes."""
+        spec, at = _SAMPLE_BY_TYPE["proportional_to"]
+
+        written = write_distribution_spec(spec)
+
+        assert type(written["multiplier"]["mode"]) is str
+        assert _parsed_spec(yaml.safe_load(yaml.safe_dump(written)), at=at) == spec
 
     @pytest.mark.parametrize("scalar", [pytest.param(4.5, id="a-number"), pytest.param(None, id="null"), "GSHP"])
     def test_the_scalar_forms_are_written_as_they_are(self, scalar: DistributionSpec) -> None:

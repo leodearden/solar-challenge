@@ -7,6 +7,7 @@ It reads each component's keys by that component's table in solar_challenge.scen
 import math
 import random
 from dataclasses import dataclass, field, fields, is_dataclass, replace
+from enum import StrEnum
 from types import MappingProxyType
 from typing import (
     Any,
@@ -199,27 +200,52 @@ class ShuffledPoolDistribution:
         return pool
 
 
+class SweepMode(StrEnum):
+    """How a sweep spaces its points from min to max: by a constant step, or by a constant ratio."""
+
+    LINEAR = "linear"
+    GEOMETRIC = "geometric"
+
+    @classmethod
+    def parse(cls, value: object) -> "SweepMode":
+        """Return the mode *value* names: a member's value, exactly, or a member itself.
+
+        Raises:
+            ConfigurationError: If *value* is anything else, naming mode, every mode and *value*.
+        """
+        if isinstance(value, str):
+            try:
+                return cls(value)
+            except ValueError:
+                pass
+        raise ConfigurationError.must_be("mode", " or ".join(member.value for member in cls), got=value)
+
+
 @dataclass(frozen=True)
 class SweepSpec:
     """Sweep specification for parameter exploration.
+
+    A spec whose points are not all finite, its ratio, its step or a point overflowing a float,
+    is refused naming its min and max.
 
     Attributes:
         min: Minimum value, read as a finite float
         max: Maximum value, read as a finite float
         steps: Number of steps, read as a whole number of at least 2
-        mode: "geometric" or "linear" (default: geometric)
+        mode: A SweepMode, a string naming one read as it (default: geometric)
     """
 
     min: float
     max: float
     steps: int
-    mode: str = "geometric"
+    mode: SweepMode = SweepMode.GEOMETRIC
 
     def __post_init__(self) -> None:
         read_field(self, "min", as_finite_float)
         read_field(self, "max", as_finite_float)
         read_field(self, "steps", as_whole_number, Interval(2, math.inf))
-        if self.min <= 0 and self.mode == "geometric":
+        object.__setattr__(self, "mode", SweepMode.parse(self.mode))
+        if self.min <= 0 and self.mode is SweepMode.GEOMETRIC:
             raise ConfigurationError(
                 "SweepSpec: geometric mode requires min > 0"
             )
@@ -227,19 +253,27 @@ class SweepSpec:
             raise ConfigurationError(
                 "SweepSpec: max must be greater than min"
             )
-        if self.mode not in ("geometric", "linear"):
+        if not self._points_are_finite():
             raise ConfigurationError(
-                f"SweepSpec: mode must be 'geometric' or 'linear', got '{self.mode}'"
+                f"SweepSpec: every point of a {self.steps}-step {self.mode} sweep from min {self.min!r} "
+                f"to max {self.max!r} must be finite"
             )
 
-    def get_values(self) -> list[float]:
-        """Generate the sweep values."""
-        if self.mode == "geometric":
+    def _points_are_finite(self) -> bool:
+        """Whether every point get_values gives is finite, an OverflowError from a power too large for a float counting as a point that is not."""
+        try:
+            return all(math.isfinite(point) for point in self.get_values())
+        except OverflowError:
+            return False
+
+    def get_values(self) -> tuple[float, ...]:
+        """The steps points from min to max, as a tuple, spaced as the mode says."""
+        if self.mode is SweepMode.GEOMETRIC:
             ratio = (self.max / self.min) ** (1 / (self.steps - 1))
-            return [self.min * (ratio ** i) for i in range(self.steps)]
+            return tuple(self.min * (ratio ** i) for i in range(self.steps))
         else:
             step = (self.max - self.min) / (self.steps - 1)
-            return [self.min + step * i for i in range(self.steps)]
+            return tuple(self.min + step * i for i in range(self.steps))
 
 
 @dataclass(frozen=True)
@@ -759,11 +793,13 @@ def _is_a_number_spec(spec: object) -> bool:
 
 
 def _written_value(value: object) -> object:
-    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, anything else as it is."""
+    """*value*, a spec's field, as plain data: a tuple as a list of its elements, a SweepSpec as the mapping _parse_proportional_to_multiplier reads, each of its fields as plain data, a StrEnum member as its string, anything else as it is."""
     if isinstance(value, tuple):
         return list(value)
     if isinstance(value, SweepSpec):
-        return {"type": "sweep", **{each.name: getattr(value, each.name) for each in fields(value)}}
+        return {"type": "sweep", **{each.name: _written_value(getattr(value, each.name)) for each in fields(value)}}
+    if isinstance(value, StrEnum):
+        return value.value
     return value
 
 

@@ -262,6 +262,14 @@ def _committed_scenario_with_seg_rate(scenario_name: str, rate: float) -> str:
     return yaml.safe_dump(document)
 
 
+def _committed_battery_sweep_with_multiplier(**multiplier: float) -> str:
+    """scenarios/bristol-phase1-proportional-battery-sweep.yaml as YAML, its battery capacity's sweep multiplier given *multiplier*'s keys."""
+    scenario = SCENARIOS_DIR / "bristol-phase1-proportional-battery-sweep.yaml"
+    document: dict[str, Any] = yaml.safe_load(scenario.read_text())
+    document["fleet_distribution"]["battery"]["capacity_kwh"]["multiplier"].update(multiplier)
+    return yaml.safe_dump(document)
+
+
 def _scenario_document_holding(block: str, setting: Any) -> str:
     """A scenario: document of one 4 kW PV home for a week, the scenario also carrying a *block* block set to *setting*."""
     return yaml.safe_dump(
@@ -621,6 +629,26 @@ home:
 
         assert result.exit_code == 0, result.output
         assert "ERROR" not in result.stdout
+
+    def test_a_sweep_whose_points_are_not_all_finite_is_an_error_row_naming_its_ends_not_an_infinite_point(
+        self, tmp_path: Path
+    ) -> None:
+        """The shipped proportional battery sweep, its geometric multiplier from 1e-300 to 1e300 in 3 steps.
+
+        The row names the sweep's min and max, and no infinite value: the spec is refused as it
+        is built, before any of its points becomes a fleet's multiplier.
+        """
+        result = self._validate_config(
+            tmp_path, _committed_battery_sweep_with_multiplier(min=1.0e-300, max=1.0e300, steps=3)
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert names_as_a_word(error_row, "min")
+        assert names_as_a_word(error_row, "max")
+        assert not names_as_a_word(error_row, "inf")
 
     @pytest.mark.parametrize(
         ("document", "field", "value_repr"),
