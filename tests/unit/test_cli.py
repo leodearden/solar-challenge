@@ -1024,7 +1024,8 @@ class TestHomeRunReportPricesExportOnce:
         assert "| SEG Rate | 15.0 p/kWh |" in lines
         export_kwh = float(cells["Grid Export"])
         assert export_kwh > 0
-        assert float(cells["Grid Export Revenue"]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.01)
+        # The report rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(cells["Grid Export Revenue"]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
         assert "## SEG Revenue" not in result.stdout
 
 
