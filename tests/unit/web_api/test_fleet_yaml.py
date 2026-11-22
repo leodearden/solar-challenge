@@ -296,12 +296,12 @@ class TestImportFleetYAML:
         [
             pytest.param(
                 {"n_homes": float("inf")},
-                "fleet_distribution.n_homes must be a finite number, got inf",
+                "fleet_distribution: n_homes must be a finite number, got inf",
                 id="infinite-fleet-size",
             ),
             pytest.param(
                 {"seed": 1.5},
-                "fleet_distribution.seed must be a whole number, got 1.5",
+                "fleet_distribution: seed must be a whole number, got 1.5",
                 id="fractional-seed",
             ),
         ],
@@ -309,7 +309,7 @@ class TestImportFleetYAML:
     def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_naming_the_scenarios_setting(
         self, client: FlaskClient, settings: dict, message: str
     ) -> None:
-        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows, naming the scenario's setting and the value as written."""
+        """A scenario file whose n_homes or seed is not a whole number gets a 400 the fleet page shows: the loaders' own refusal, naming the setting under fleet_distribution and the value as written."""
         fleet = {
             "n_homes": 25,
             "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
@@ -323,6 +323,9 @@ class TestImportFleetYAML:
             content_type="text/yaml",
         )
 
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(fleet)
+        assert str(loader_refusal.value) == message
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
 

@@ -11,6 +11,7 @@ import yaml
 pytest.importorskip("flask")
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
@@ -574,29 +575,37 @@ class TestFleetFormFromScenario:
             fleet_form_from_scenario({**_FLEET_SCENARIO, "period": period})
         assert str(exc_info.value) == message
 
+    def test_a_fractional_fleet_size_is_refused_with_the_loaders_refusal_naming_n_homes(self) -> None:
+        """An n_homes of 2.5 is refused by the loaders' own reader, naming n_homes under fleet_distribution: the page reads no fleet size ahead of the loaders."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            fleet_form_from_scenario(_with_fleet_distribution(n_homes=2.5))
+        assert str(exc_info.value) == "fleet_distribution: n_homes must be a whole number, got 2.5"
+
     @pytest.mark.parametrize("key", ["n_homes", "seed"])
     @pytest.mark.parametrize(
-        "value", [*UNUSABLE_NUMBERS, pytest.param("x", id="non-numeric-string")]
+        "value",
+        [
+            *UNUSABLE_NUMBERS,
+            pytest.param("x", id="non-numeric-string"),
+            pytest.param(2.5, id="fraction"),
+        ],
     )
-    def test_a_fleet_size_or_seed_that_is_not_a_finite_number_is_refused_naming_it(
+    def test_a_fleet_size_or_seed_that_is_not_a_whole_number_is_refused_with_the_loaders_refusal(
         self, key: str, value: object
     ) -> None:
-        """An n_homes or seed that is not a finite number, a boolean included, is refused with a ValueError naming it as fleet_distribution.<key> and the value as written."""
-        with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(**{key: value}))
-        assert str(exc_info.value) == f"fleet_distribution.{key} must be a finite number, got {value!r}"
+        """An n_homes or seed that is not a whole number, a boolean or a fraction included, is refused with the loaders' own refusal, naming it under fleet_distribution and the value as written.
 
-    @pytest.mark.parametrize("key", ["n_homes", "seed"])
-    def test_a_fleet_size_or_seed_with_a_fractional_part_is_refused_naming_it(self, key: str) -> None:
-        """An n_homes or seed with a fractional part is refused with a ValueError naming it as fleet_distribution.<key> and the value as written.
-
-        Loading it would run a different fleet: the page runs a whole number of homes, and a seed
-        of 2.5 samples another fleet than a seed of 2, since random.Random(2.5) is not
-        random.Random(2), while the page has no seed field to show it.
+        Loading a fractional one would run a different fleet: the page runs a whole number of
+        homes, and a seed of 2.5 samples another fleet than a seed of 2, since
+        random.Random(2.5) is not random.Random(2), while the page has no seed field to show it.
         """
-        with pytest.raises(ValueError) as exc_info:
-            fleet_form_from_scenario(_with_fleet_distribution(**{key: 2.5}))
-        assert str(exc_info.value) == f"fleet_distribution.{key} must be a whole number, got 2.5"
+        document = _with_fleet_distribution(**{key: value})
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(document["fleet_distribution"])
+        with pytest.raises(ConfigurationError) as exc_info:
+            fleet_form_from_scenario(document)
+        assert str(exc_info.value) == str(loader_refusal.value)
+        assert str(exc_info.value).startswith(f"fleet_distribution: {key} ")
 
     def test_a_seed_the_fleet_page_cannot_hold_exactly_is_refused_naming_it(self) -> None:
         """A seed beyond MAX_FLEET_SEED is refused with a ValueError naming fleet_distribution.seed, the range and the value as written.
@@ -612,15 +621,9 @@ class TestFleetFormFromScenario:
             f"got {seed!r}"
         )
 
-    @pytest.mark.parametrize(
-        "n_homes",
-        [
-            pytest.param(0, id="no-homes"),
-            pytest.param(MAX_FLEET_HOMES + 1, id="more-homes-than-the-page-runs"),
-        ],
-    )
-    def test_a_fleet_size_outside_1_to_max_fleet_homes_is_refused_naming_it(self, n_homes: int) -> None:
-        """An n_homes outside 1 to the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+    def test_a_fleet_size_above_max_fleet_homes_is_refused_by_the_dashboards_bound_naming_it(self) -> None:
+        """An n_homes the loaders accept but above the dashboard's fleet limit is refused with a ValueError naming fleet_distribution.n_homes, the range and the value as written."""
+        n_homes = MAX_FLEET_HOMES + 1
         with pytest.raises(ValueError) as exc_info:
             fleet_form_from_scenario(_with_fleet_distribution(n_homes=n_homes))
         assert str(exc_info.value) == (
@@ -638,15 +641,19 @@ class TestFleetFormFromScenario:
                 id="absent",
             ),
             pytest.param(_with_fleet_distribution(n_homes=None), id="null"),
+            pytest.param(_with_fleet_distribution(n_homes=0), id="no-homes"),
         ],
     )
-    def test_a_fleet_without_a_size_is_refused_naming_fleet_distribution_n_homes(
+    def test_a_fleet_without_a_size_the_loaders_accept_is_refused_with_their_refusal(
         self, document: dict[str, Any]
     ) -> None:
-        """A fleet_distribution that leaves n_homes out or sets it null is refused with a ValueError naming fleet_distribution.n_homes: a missing size reads as None, as a missing period date does."""
-        with pytest.raises(ValueError) as exc_info:
+        """A fleet_distribution that leaves n_homes out, sets it null or sets it to no homes is refused with the loaders' own refusal, which names n_homes."""
+        with pytest.raises(ConfigurationError) as loader_refusal:
+            parse_fleet_distribution_config(document["fleet_distribution"])
+        with pytest.raises(ConfigurationError) as exc_info:
             fleet_form_from_scenario(document)
-        assert str(exc_info.value) == "fleet_distribution.n_homes must be a finite number, got None"
+        assert str(exc_info.value) == str(loader_refusal.value)
+        assert "n_homes" in str(exc_info.value)
 
     def test_a_fleet_size_and_seed_written_as_whole_floats_load_as_the_ints_they_equal(self) -> None:
         """An n_homes of 3.0 and a seed of 7.0 load as the ints 3 and 7, the fleet they run: random.Random(7.0) draws as random.Random(7) does."""

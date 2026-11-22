@@ -10,6 +10,11 @@ import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.fleet_distribution import (
+    FleetDistributionConfig,
+    parse_fleet_distribution_config,
+)
+from solar_challenge.web import fleet_config
 from solar_challenge.web.fleet_config import (
     DISTRIBUTION_KEYS,
     MAX_FLEET_HOMES,
@@ -481,91 +486,31 @@ class TestFleetConfigHelpers:
         [
             *UNUSABLE_NUMBERS,
             pytest.param("x", id="non-numeric-string"),
-            pytest.param(None, id="null"),
-        ],
-    )
-    @pytest.mark.parametrize("key", ["n_homes", "seed"])
-    def test_form_to_fleet_distribution_config_refuses_an_n_homes_or_seed_that_is_not_a_finite_number(
-        self, key: str, value: object
-    ) -> None:
-        """An n_homes or seed that is not a finite number, a boolean included, is refused, naming the field and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
-            form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
-        assert str(exc_info.value) == f"{key} must be a finite number, got {value!r}"
-
-    @pytest.mark.parametrize("key", ["n_homes", "seed"])
-    def test_form_to_fleet_distribution_config_refuses_an_n_homes_or_seed_with_a_fractional_part(
-        self, key: str
-    ) -> None:
-        """An n_homes or seed with a fractional part is refused, not truncated, naming the field and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
-            form_to_fleet_distribution_config({**valid_distribution_form(), key: 2.5})
-        assert str(exc_info.value) == f"{key} must be a whole number, got 2.5"
-
-    @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
-    @pytest.mark.parametrize("key", ["n_homes", "seed"])
-    def test_form_to_fleet_distribution_config_reads_an_n_homes_or_seed_that_is_a_whole_number_in_another_form_as_the_int_it_equals(
-        self, key: str, value: object
-    ) -> None:
-        """An n_homes or seed that is a whole number sent as a float or a numeric string converts to the int it equals, not to a float or a string."""
-        config = form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
-
-        assert (type(config[key]), config[key]) == (int, WHOLE_NUMBER)
-
-    @pytest.mark.parametrize(
-        "n_homes",
-        [
+            pytest.param(2.5, id="fraction"),
             pytest.param(0, id="zero"),
             pytest.param(MAX_FLEET_HOMES + 1, id="one-above-the-fleet-limit"),
-            pytest.param(1e300, id="huge-float"),
+            pytest.param(MAX_FLEET_SEED + 2, id="beyond-max-fleet-seed"),
+            *WHOLE_NUMBER_FORMS,
         ],
     )
-    def test_form_to_fleet_distribution_config_refuses_an_n_homes_outside_1_to_max_fleet_homes(
-        self, n_homes: object
+    @pytest.mark.parametrize("key", ["n_homes", "seed"])
+    def test_form_to_fleet_distribution_config_passes_an_n_homes_or_seed_on_as_sent(
+        self, key: str, value: object
     ) -> None:
-        """An n_homes outside 1 to the dashboard's fleet limit is refused, naming the field, the range and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
-            form_to_fleet_distribution_config({**valid_distribution_form(), "n_homes": n_homes})
-        assert str(exc_info.value) == (
-            f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {n_homes!r}"
-        )
+        """An n_homes or seed passes on as sent, whatever it is: fleet_distribution.py's grammar reads it, and the dashboard's bounds apply to the fleet the grammar reads."""
+        config = form_to_fleet_distribution_config({**valid_distribution_form(), key: value})
 
-    def test_form_to_fleet_distribution_config_accepts_a_fleet_of_max_fleet_homes(self) -> None:
-        """A fleet form may ask for as many homes as a dashboard fleet holds."""
-        config = form_to_fleet_distribution_config(
-            {**valid_distribution_form(), "n_homes": MAX_FLEET_HOMES}
-        )
+        assert config[key] is value
 
-        assert config["n_homes"] == MAX_FLEET_HOMES
-
-    @pytest.mark.parametrize(
-        "seed",
-        [
-            pytest.param(MAX_FLEET_SEED + 1, id="one-above-the-largest"),
-            pytest.param(MAX_FLEET_SEED + 2, id="one-a-float-reads-as-the-one-below"),
-            pytest.param(-MAX_FLEET_SEED - 1, id="one-below-the-smallest"),
-        ],
-    )
-    def test_form_to_fleet_distribution_config_refuses_a_seed_beyond_max_fleet_seed(
-        self, seed: int
+    def test_form_to_fleet_distribution_config_reads_an_absent_n_homes_or_seed_as_the_forms_default(
+        self,
     ) -> None:
-        """A seed beyond MAX_FLEET_SEED, positive or negative, is refused, not read as the whole number a float rounds it to, naming the field, the range and the value sent."""
-        with pytest.raises(ValueError) as exc_info:
-            form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
-        assert str(exc_info.value) == (
-            f"seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {seed!r}"
-        )
+        """A form that leaves out n_homes and seed is a fleet of 100 homes with seed 42."""
+        form = {k: v for k, v in valid_distribution_form().items() if k not in ("n_homes", "seed")}
+        config = form_to_fleet_distribution_config(form)
 
-    @pytest.mark.parametrize(
-        "seed", [pytest.param(MAX_FLEET_SEED, id="largest"), pytest.param(-MAX_FLEET_SEED, id="smallest")]
-    )
-    def test_form_to_fleet_distribution_config_reads_a_seed_up_to_max_fleet_seed_exactly(
-        self, seed: int
-    ) -> None:
-        """A seed as large as MAX_FLEET_SEED, positive or negative, is read as the int sent."""
-        config = form_to_fleet_distribution_config({**valid_distribution_form(), "seed": seed})
+        assert (config["n_homes"], config["seed"]) == (100, 42)
 
-        assert config["seed"] == seed
 
     @pytest.mark.parametrize(
         ("value", "type_name"),
@@ -1529,3 +1474,56 @@ class TestDistributionGrammarSpec:
         with pytest.raises(ValueError) as exc_info:
             distribution_grammar_spec(distribution, _BUILDER_PV_FIELDS)
         assert str(exc_info.value) == message
+
+
+class TestRefuseAFleetTheDashboardCannotRun:
+    """refuse_a_fleet_the_dashboard_cannot_run, the dashboard's bounds on a fleet fleet_distribution.py's grammar has read, called with the path its settings are named under."""
+
+    @staticmethod
+    def _fleet(**settings: object) -> FleetDistributionConfig:
+        """The fleet fleet_distribution.py's grammar reads from a block with *settings* over 2 homes of 4 kW PV."""
+        return parse_fleet_distribution_config({"n_homes": 2, "pv": {"capacity_kw": 4.0}, **settings})
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            pytest.param({"n_homes": 1}, id="one-home"),
+            pytest.param({"n_homes": MAX_FLEET_HOMES}, id="the-fleet-limit"),
+            pytest.param({"seed": MAX_FLEET_SEED}, id="the-largest-seed"),
+            pytest.param({"seed": -MAX_FLEET_SEED}, id="the-smallest-seed"),
+            pytest.param({"seed": None}, id="no-seed"),
+        ],
+    )
+    def test_a_fleet_within_the_dashboards_bounds_passes(self, settings: dict) -> None:
+        """A fleet of 1 to MAX_FLEET_HOMES homes, with a seed from -MAX_FLEET_SEED to MAX_FLEET_SEED or none, is one the dashboard runs."""
+        fleet_config.refuse_a_fleet_the_dashboard_cannot_run(self._fleet(**settings), "fleet_distribution")
+
+    @pytest.mark.parametrize(
+        ("path", "field"),
+        [pytest.param("fleet_distribution", "fleet_distribution.n_homes", id="import"), pytest.param("", "n_homes", id="fleet-form")],
+    )
+    def test_a_fleet_above_the_fleet_limit_is_refused_naming_n_homes_under_the_path(
+        self, path: str, field: str
+    ) -> None:
+        """A fleet of MAX_FLEET_HOMES + 1 homes is refused naming n_homes under *path*, the range and the size."""
+        fleet = self._fleet(n_homes=MAX_FLEET_HOMES + 1)
+        with pytest.raises(ValueError) as exc_info:
+            fleet_config.refuse_a_fleet_the_dashboard_cannot_run(fleet, path)
+        assert str(exc_info.value) == (
+            f"{field} must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+        )
+
+    @pytest.mark.parametrize("seed", [MAX_FLEET_SEED + 1, -MAX_FLEET_SEED - 1])
+    @pytest.mark.parametrize(
+        ("path", "field"),
+        [pytest.param("fleet_distribution", "fleet_distribution.seed", id="import"), pytest.param("", "seed", id="fleet-form")],
+    )
+    def test_a_seed_beyond_max_fleet_seed_is_refused_naming_seed_under_the_path(
+        self, path: str, field: str, seed: int
+    ) -> None:
+        """A seed beyond MAX_FLEET_SEED, positive or negative, which the page's JavaScript number cannot hold exactly, is refused naming seed under *path*, the range and the seed."""
+        with pytest.raises(ValueError) as exc_info:
+            fleet_config.refuse_a_fleet_the_dashboard_cannot_run(self._fleet(seed=seed), path)
+        assert str(exc_info.value) == (
+            f"{field} must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {seed}"
+        )

@@ -334,31 +334,33 @@ class TestFleetFromDistribution:
         )
         assert resp.status_code == 400
 
-    def test_invalid_n_homes_returns_400(self, client: FlaskClient) -> None:
-        """n_homes < 1 returns 400."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={"n_homes": 0},
-        )
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            pytest.param({"n_homes": 0}, id="n_homes-zero"),
+            pytest.param({"n_homes": 2.5}, id="n_homes-fraction"),
+            pytest.param({"n_homes": True}, id="n_homes-boolean"),
+            pytest.param({"n_homes": float("inf")}, id="n_homes-infinity"),
+            pytest.param({"seed": 1.5}, id="seed-fraction"),
+            pytest.param({"seed": True}, id="seed-boolean"),
+            pytest.param({"seed": float("inf")}, id="seed-infinity"),
+        ],
+    )
+    def test_n_homes_or_seed_the_grammar_refuses_returns_400_carrying_its_refusal(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict
+    ) -> None:
+        """An n_homes or seed that is not a whole number, or no homes, reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal, naming it; no fleet is queued."""
+        body = {**self._VALID_BODY, **patch}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
+        assert resp.get_json() == {"error": refusal}
+        assert next(iter(patch)) in refusal
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
         ("patch", "message"),
         [
-            pytest.param(
-                {"n_homes": float("inf")},
-                "n_homes must be a finite number, got inf",
-                id="n_homes-infinity",
-            ),
-            pytest.param(
-                {"seed": float("inf")}, "seed must be a finite number, got inf", id="seed-infinity"
-            ),
-            pytest.param(
-                {"n_homes": 2.5},
-                "n_homes must be a whole number, got 2.5",
-                id="n_homes-fraction",
-            ),
-            pytest.param({"seed": 1.5}, "seed must be a whole number, got 1.5", id="seed-fraction"),
             pytest.param(
                 {"seed": MAX_FLEET_SEED + 2},
                 f"seed must be between {-MAX_FLEET_SEED} and {MAX_FLEET_SEED}, got {MAX_FLEET_SEED + 2}",
@@ -375,10 +377,10 @@ class TestFleetFromDistribution:
             pytest.param({"days": 2.5}, "days must be a whole number, got 2.5", id="days-fraction"),
         ],
     )
-    def test_n_homes_seed_or_days_it_cannot_use_returns_400_naming_it(
+    def test_a_fleet_beyond_the_dashboards_bounds_or_days_it_cannot_use_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, patch: dict, message: str
     ) -> None:
-        """An n_homes, seed or days that is not a whole number, a seed beyond MAX_FLEET_SEED, or a fleet above the dashboard's fleet limit, is a 400 naming it and the value sent; no fleet is queued."""
+        """A seed beyond MAX_FLEET_SEED or a fleet above the dashboard's fleet limit, which the grammar accepts, or days that is not a whole number, is a 400 naming it and the value sent; no fleet is queued."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={**self._VALID_BODY, **patch},
