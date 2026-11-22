@@ -438,7 +438,7 @@ home:
             ),
             pytest.param(
                 "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
-                "Scenario 'winter' must have a 'period' field",
+                "scenarios[0]: requires 'period'",
                 id="scenarios",
             ),
             pytest.param(
@@ -451,6 +451,8 @@ home:
                 id="scenario",
             ),
             pytest.param("home: [\n", "Invalid YAML in", id="yaml-syntax"),
+            pytest.param("homes: 5\n", "homes: must be a list, got int", id="R2-homes-a-number"),
+            pytest.param("- a\n- b\n", "the top level: must be a mapping, got list", id="R3-a-list-document"),
         ],
     )
     def test_a_file_its_loader_refuses_is_one_error_row(
@@ -460,6 +462,12 @@ home:
 
         assert result.exit_code == 1
         assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    def test_a_homes_value_that_is_no_list_exits_as_a_refusal_not_a_traceback(self, tmp_path: Path) -> None:
+        """R2: homes: 5 was a TypeError, which the command does not catch, so it escaped with a traceback."""
+        result = self._validate_config(tmp_path, "homes: 5\n")
+
+        assert isinstance(result.exception, SystemExit)
 
     @pytest.mark.parametrize(
         ("document", "label", "construct"),

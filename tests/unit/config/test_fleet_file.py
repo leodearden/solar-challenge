@@ -63,10 +63,9 @@ class TestLoadFleetConfig:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
 
     def test_a_location_block_without_its_longitude_is_refused_naming_it(
         self, tmp_path: Path
@@ -272,10 +271,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(
-            ConfigurationError, match="requires either 'homes' list or 'fleet_distribution'"
-        ):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
 
     def test_load_fleet_empty_homes_list_raises(self, tmp_path: Path) -> None:
         """Test that empty homes list raises error."""
@@ -283,8 +281,9 @@ fleet_distribution:
         path = tmp_path / "fleet.json"
         path.write_text(json.dumps(json_content))
 
-        with pytest.raises(ConfigurationError, match="cannot be empty"):
+        with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
+        assert str(refusal.value) == "homes: must list at least one home"
 
 
 class TestBristolPhase1DistributionEquivalence:
@@ -810,7 +809,7 @@ class TestParseSweepFleetConfigs:
             ),
             pytest.param(
                 {"homes": [{"pv": {"capacity_kw": _PV_KW}}]},
-                "fleet_distribution",
+                re.escape("the top level: requires 'fleet_distribution'"),
                 id="no-fleet-distribution",
             ),
             pytest.param(
@@ -907,3 +906,27 @@ class TestParseFleetConfigNamesTheBlockItRefuses:
             parse_fleet_config({"homes": [{}, {"heat_pump": {"thermal_capacity_kw": 8}}]})
 
         assert str(refusal.value) == "homes[1].heat_pump: requires 'heat_pump_type'"
+
+    def test_a_homes_value_that_is_no_list_is_refused_naming_it(self) -> None:
+        """R2: a homes: 5 was iterated, a TypeError no caller reports as a configuration error."""
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_config({"homes": 5})
+
+        assert str(refusal.value) == "homes: must be a list, got int"
+
+    @pytest.mark.parametrize(
+        "read",
+        [
+            pytest.param(parse_fleet_config, id="parse_fleet_config"),
+            pytest.param(parse_sweep_fleet_configs, id="parse_sweep_fleet_configs"),
+            pytest.param(detect_fleet_sweep_spec, id="detect_fleet_sweep_spec"),
+        ],
+    )
+    def test_a_document_that_is_no_mapping_is_refused_naming_the_top_level(
+        self, read: Callable[[Any], object]
+    ) -> None:
+        """R3: a web or CLI caller may hand a fleet document reader a list, as a YAML file of one gives."""
+        with pytest.raises(ConfigurationError) as refusal:
+            read([{"pv": {"capacity_kw": _PV_KW}}])
+
+        assert str(refusal.value) == "the top level: must be a mapping, got list"
