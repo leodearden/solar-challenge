@@ -437,6 +437,19 @@ class TestDispatchStrategyParsing:
         assert parse_dispatch_strategy_config(None) is None
 
     @pytest.mark.parametrize(
+        "battery",
+        [
+            pytest.param({"capacity_kwh": 5.0}, id="absent"),
+            pytest.param({"capacity_kwh": 5.0, "dispatch_strategy": None}, id="null"),
+        ],
+    )
+    def test_a_battery_that_names_no_strategy_dispatches_self_consumption(self, battery: dict[str, Any]) -> None:
+        battery_config = _parsed_home(battery=battery).battery_config
+
+        assert battery_config is not None
+        assert battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
+
+    @pytest.mark.parametrize(
         ("block", "expected"),
         [
             pytest.param(

@@ -579,7 +579,7 @@ def test_after_migrate_store_a_run_stored_before_786_reads_its_battery_dispatch_
         assert config.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 19),))
 
 
-def _dispatch_settings(home: HomeConfig) -> tuple[str, DispatchStrategyConfig | None, GridChargeConfig | None]:
+def _dispatch_settings(home: HomeConfig) -> tuple[str, DispatchStrategyConfig, GridChargeConfig | None]:
     """*home*'s name, then its battery's dispatch_strategy and grid_charging; *home* has a battery."""
     battery = home.battery_config
     assert battery is not None, f"{home.name} has no battery"
@@ -609,7 +609,7 @@ def test_after_migrate_store_the_pre_787_fleet_of_a_store_at_version_2_reads_eac
         assert [_dispatch_settings(home) for home in homes] == [
             ("Elm Row 1", SelfConsumptionStrategyConfig(), None),
             ("Elm Row 2", TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), None),
-            ("Elm Row 3", None, None),
+            ("Elm Row 3", SelfConsumptionStrategyConfig(), None),
         ]
 
 

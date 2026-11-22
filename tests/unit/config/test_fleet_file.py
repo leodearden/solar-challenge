@@ -16,7 +16,7 @@ from solar_challenge.config import (
     parse_fleet_config,
     parse_sweep_fleet_configs,
 )
-from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
+from solar_challenge.dispatch import GridChargeConfig, SelfConsumptionStrategyConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.fleet_distribution import SweepSpec
@@ -545,15 +545,15 @@ fleet_distribution:
         for battery in with_battery:
             assert battery.dispatch_strategy == TOUOptimizedStrategyConfig(peak_hours=((16, 21),))
 
-    def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_none(
+    def test_a_fleet_battery_block_without_dispatch_strategy_gives_its_batteries_self_consumption(
         self, tmp_path: Path
     ) -> None:
-        """Pins the default the new key leaves alone; it passes before the key exists too."""
+        """A battery that names no strategy dispatches self_consumption, BatteryConfig's default."""
         fleet = self._load_fleet(tmp_path, None)
 
         with_battery = [home.battery_config for home in fleet.homes if home.battery_config is not None]
         assert len(with_battery) == 2, "premise: the pool gives two homes a battery"
-        assert all(battery.dispatch_strategy is None for battery in with_battery)
+        assert all(battery.dispatch_strategy == SelfConsumptionStrategyConfig() for battery in with_battery)
 
     @pytest.mark.parametrize(
         ("dispatch_strategy", "reason"),

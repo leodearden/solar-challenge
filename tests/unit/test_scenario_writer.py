@@ -284,6 +284,16 @@ def test_a_battery_given_a_round_trip_efficiency_is_written_as_the_pair_it_deriv
     assert _load_through_home_run(document, tmp_path).battery_config == battery_config
 
 
+def test_a_default_battery_is_written_dispatching_self_consumption_and_reads_back_equal(tmp_path: Path) -> None:
+    """A battery that names no strategy dispatches self_consumption, so its block names that strategy."""
+    home = _home(4.0, battery_config=BatteryConfig(capacity_kwh=5.0))
+
+    document = home_scenario(home, name="Default battery")
+
+    assert document["home"]["battery"]["dispatch_strategy"] == {"strategy_type": "self_consumption"}
+    assert _load_through_home_run(document, tmp_path) == home
+
+
 def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -> None:
     home = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
 

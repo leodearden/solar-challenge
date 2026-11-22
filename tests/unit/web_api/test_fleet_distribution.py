@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig
+from solar_challenge.dispatch import GridChargeConfig, PeakShavingStrategyConfig, SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     generate_homes_from_distribution,
@@ -715,22 +715,36 @@ class TestFleetFromDistribution:
         }
         mock_job_manager.submit_fleet_job.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("fleet_dispatch", "battery_dispatch"),
+        [
+            pytest.param(
+                {"dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5}},
+                PeakShavingStrategyConfig(import_limit_kw=4.5),
+                id="the-fleets",
+            ),
+            pytest.param({}, SelfConsumptionStrategyConfig(), id="self-consumption-when-the-fleet-sets-none"),
+        ],
+    )
     def test_null_battery_dispatch_strategy_leaves_every_battery_the_fleets(
-        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+        self,
+        client: FlaskClient,
+        mock_job_manager: NonCallableMagicMock,
+        fleet_dispatch: dict,
+        battery_dispatch: object,
     ) -> None:
-        """A null battery dispatch_strategy reads as absent: every queued battery takes the fleet's dispatch_strategy."""
+        """A null battery dispatch_strategy reads as absent: every queued battery takes the fleet's dispatch_strategy, or BatteryConfig's self-consumption when the fleet sets none."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
                 **self._VALID_BODY,
                 "battery": {"capacity_kwh": 5.0, "dispatch_strategy": None},
-                "dispatch_strategy": {"strategy_type": "peak_shaving", "import_limit_kw": 4.5},
+                **fleet_dispatch,
             },
         )
         assert resp.status_code == 201, resp.get_data(as_text=True)
         configs = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
-        fleet_dispatch = PeakShavingStrategyConfig(import_limit_kw=4.5)
-        assert [config.battery_config.dispatch_strategy for config in configs] == [fleet_dispatch] * 2
+        assert [config.battery_config.dispatch_strategy for config in configs] == [battery_dispatch] * 2
 
     @pytest.mark.parametrize("key", OPTIONAL_BLOCKS)
     def test_null_optional_block_reads_as_absent_queueing_the_fleet_without_it(

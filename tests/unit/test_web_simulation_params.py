@@ -10,6 +10,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
@@ -539,6 +540,12 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy is not None
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
+    def test_a_null_dispatch_strategy_builds_a_battery_that_dispatches_self_consumption(self) -> None:
+        """A null dispatch_strategy names no strategy, so the battery takes BatteryConfig's, with no refusal."""
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "dispatch_strategy": None})
+        assert home_config.battery_config is not None
+        assert home_config.battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
+
     def test_valid_dispatch_strategy_without_battery_makes_no_battery(self) -> None:
         """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
@@ -602,12 +609,14 @@ class TestParseHomeConfigNestedBlockPresence:
         ("key", "parsed_block"),
         [pytest.param(key, field, id=key) for key, field in NESTED_BLOCK_FIELDS.items()],
     )
-    def test_null_block_means_none(
+    def test_null_block_means_none_as_an_absent_one_does(
         self, key: str, parsed_block: Callable[[HomeConfig], object]
     ) -> None:
-        """A null block, like an absent one, means none."""
-        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
-        assert parsed_block(home_config) is None
+        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy."""
+        assert key not in VALID_HOME_PAYLOAD, "premise: the payload leaves the block out"
+        with_null, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
+        without, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
+        assert parsed_block(with_null) == parsed_block(without)
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
     @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))

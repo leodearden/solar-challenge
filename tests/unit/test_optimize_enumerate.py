@@ -308,8 +308,8 @@ class TestBatteryHomogenization:
     def _make_mixed_battery_base(self) -> ScenarioConfig:
         """Fleet with one home that HAS a non-default battery and one without.
 
-        The battery names no dispatch strategy and grid-charges, so its home dispatches
-        tou_optimized by its tariff's rates, which honours grid charging.
+        The battery dispatches tou_optimized on its tariff's clock, which honours its grid
+        charging.
         """
         battery = BatteryConfig(
             capacity_kwh=7.0,
@@ -367,8 +367,8 @@ class TestBatteryHomogenization:
         assert home_without.battery_config.capacity_kwh == pytest.approx(5.0)
         # Fabricated battery must have the default max_discharge_kw (2.5)
         assert home_without.battery_config.max_discharge_kw == pytest.approx(2.5)
-        # Fabricated battery must have no dispatch/grid-charging overrides (diverse dispatch preserved at None)
-        assert home_without.battery_config.dispatch_strategy is None
+        # Fabricated battery must have BatteryConfig's defaults: self-consumption, no grid charging
+        assert home_without.battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
         assert home_without.battery_config.grid_charging is None
 
     def test_small_positive_battery_kwh_fabricates_not_sentinel(self) -> None:
