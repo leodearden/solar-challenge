@@ -14,6 +14,7 @@ from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
     DispatchStrategy,
     DispatchStrategyConfig,
+    GridChargeForecast,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
     build_dispatch_strategy,
@@ -21,6 +22,7 @@ from solar_challenge.dispatch import (
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
@@ -262,6 +264,9 @@ class SimulationResults:
             both battery_charge and grid_import (None when tariff_config is None)
         pricing: How the run's grid flows were priced (None for results simulate_home did
             not make, e.g. from_dataframe's)
+        grid_charge_forecast: The forecast that sized the run's grid charge in cheap
+            periods, its battery's GridChargeConfig.forecast (None when the run did not
+            grid-charge)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -282,6 +287,7 @@ class SimulationResults:
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
     pricing: Optional[RunPricing] = None
+    grid_charge_forecast: Optional[GridChargeForecast] = None
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from.
@@ -380,8 +386,10 @@ class SimulationResults:
         )
 
     @classmethod
-    def from_dataframe(cls, frame: pd.DataFrame, *, strategy_name: str) -> "SimulationResults":
-        """Build the results whose to_dataframe() is frame, simulated under strategy_name.
+    def from_dataframe(
+        cls, frame: pd.DataFrame, *, strategy_name: str, grid_charge_forecast: Optional[GridChargeForecast] = None
+    ) -> "SimulationResults":
+        """Build the results whose to_dataframe() is frame, simulated under strategy_name, its grid charge sized by grid_charge_forecast.
 
         Optional series whose column is absent are None.
 
@@ -405,6 +413,7 @@ class SimulationResults:
             raise ValueError(f"frame lacks required series columns: {', '.join(missing_columns)}")
         return cls(
             strategy_name=strategy_name,
+            grid_charge_forecast=grid_charge_forecast,
             **{name: frame[column] for name, column in cls._series_columns() if column in frame.columns},
         )
 
@@ -449,6 +458,9 @@ class SummaryStatistics:
     window: Optional[SimulationWindow] = None
     # How the run's grid flows were priced, None when that is unknown.
     pricing: Optional[RunPricing] = None
+    # The forecast that sized the run's grid charge in cheap periods; None when the run did
+    # not grid-charge, or its stored summary predates the field.
+    grid_charge_forecast: Optional[GridChargeForecast] = None
 
     def __post_init__(self) -> None:
         """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and, when a window is set, a simulation_days other than its days."""
@@ -567,10 +579,11 @@ def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow)
     return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
 
 
-_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
+_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float, Optional[float]], EnergyFlowResult]
 """One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
-From that battery and the row's timestamp, generation in kW and demand in kW, to the row's flows.
+From that battery and the row's timestamp, generation in kW, demand in kW and useful-charge
+ceiling in kWh (None when the row's grid charge has none), to the row's flows.
 """
 
 
@@ -583,10 +596,14 @@ class _DispatchPath:
 
 
 def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig], step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates up to the row's useful-charge ceiling."""
 
     def timestep(
-        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+        battery: Optional[Battery],
+        timestamp: pd.Timestamp,
+        generation_kw: float,
+        demand_kw: float,
+        ceiling_kwh: Optional[float],
     ) -> EnergyFlowResult:
         return simulate_timestep(
             generation_kw=generation_kw,
@@ -596,16 +613,21 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
             timestamp=timestamp.to_pydatetime(),
             strategy=strategy,
             tariff=tariff,
+            useful_charge_ceiling_kwh=ceiling_kwh,
         )
 
     return timestep
 
 
 def _settling_timestep(step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, of a run with no battery, which simulate_timestep only settles with the grid."""
+    """Each row, step_minutes long, of a run with no battery, which simulate_timestep only settles with the grid; the row's ceiling has nothing to cap."""
 
     def timestep(
-        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+        battery: Optional[Battery],
+        timestamp: pd.Timestamp,
+        generation_kw: float,
+        demand_kw: float,
+        ceiling_kwh: Optional[float],
     ) -> EnergyFlowResult:
         return simulate_timestep(
             generation_kw=generation_kw, demand_kw=demand_kw, battery=None, timestep_minutes=step_minutes
@@ -631,14 +653,34 @@ def _dispatch_path(
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
 
 
+def _grid_charge_forecast(config: HomeConfig) -> Optional[GridChargeForecast]:
+    """The forecast that sizes the home's grid charge in cheap periods: its battery's, None when its battery does not grid-charge."""
+    battery = config.battery_config
+    return None if battery is None or battery.grid_charging is None else battery.grid_charging.forecast
+
+
+def _grid_charge_ceilings(
+    config: HomeConfig, generation_kw: pd.Series, demand_kw: pd.Series
+) -> tuple[Optional[float], ...]:
+    """Each row's useful-charge ceiling, from the run's generation and demand, under the forecast that sizes the home's grid charge.
+
+    Every row's is None when the home's battery does not grid-charge at a tariff.
+    """
+    battery, tariff = config.battery_config, config.tariff_config
+    if battery is None or battery.grid_charging is None or tariff is None:
+        return (None,) * len(generation_kw)
+    return grid_charge_ceilings_kwh(battery.grid_charging.forecast, generation_kw, demand_kw, battery, tariff)
+
+
 def _row_flows(
     timestep: _Timestep,
     battery_config: Optional[BatteryConfig],
     generation_kw: pd.Series,
     demand_kw: pd.Series,
+    ceilings_kwh: Sequence[Optional[float]],
     validate_balance: bool,
 ) -> list[EnergyFlowResult]:
-    """Each row's flows, in order, from timestep run on that row's generation and demand.
+    """Each row's flows, in order, from timestep run on that row's generation, demand and useful-charge ceiling.
 
     The run's battery, built from battery_config when it is set, carries its state of charge
     from each row to the next. With validate_balance, each row's flows are checked for
@@ -646,8 +688,10 @@ def _row_flows(
     """
     battery = None if battery_config is None else Battery(battery_config)
     flows: list[EnergyFlowResult] = []
-    for timestamp, generation, demand in zip(demand_kw.index, generation_kw, demand_kw, strict=True):
-        flow = timestep(battery, timestamp, float(generation), float(demand))
+    for timestamp, generation, demand, ceiling in zip(
+        demand_kw.index, generation_kw, demand_kw, ceilings_kwh, strict=True
+    ):
+        flow = timestep(battery, timestamp, float(generation), float(demand), ceiling)
         if validate_balance:
             validate_energy_balance(flow)
         flows.append(flow)
@@ -720,11 +764,12 @@ def _results(
     heat_pump_load: Optional[pd.Series],
     strategy_name: str,
     pricing: RunPricing,
+    grid_charge_forecast: Optional[GridChargeForecast],
 ) -> SimulationResults:
     """The run's results on its rows, each lasting step_hours hours.
 
-    Each flow's power in kW, the battery's state of charge in kWh, the run's prices, and
-    pricing, how they were priced.
+    Each flow's power in kW, the battery's state of charge in kWh, the run's prices,
+    pricing, how they were priced, and grid_charge_forecast, what sized its grid charge.
     """
     kw_per_kwh = 1 / step_hours
 
@@ -748,6 +793,7 @@ def _results(
         grid_charge_cost=import_pricing.grid_charge_cost,
         grid_charge=None if import_pricing.grid_charge_cost is None else power_kw(lambda flow: flow.grid_charge),
         pricing=pricing,
+        grid_charge_forecast=grid_charge_forecast,
     )
 
 
@@ -795,14 +841,22 @@ def simulate_home(
             (_dispatch_strategy_config). It is driven through
             flow.simulate_timestep with config's tariff, so it is offered a
             GridChargeContext exactly when a configured strategy is: with a
-            tariff and battery_config.grid_charging. The results'
-            strategy_name is its name.
+            tariff and battery_config.grid_charging, each row's carrying the
+            same useful-charge ceiling. The results' strategy_name is its name.
+
+    Each cheap period's grid charge fills the battery to its target, or to
+    the period's useful-charge ceiling when that is lower: grid_charge_ceilings_kwh
+    under battery_config.grid_charging's forecast, from the run's generation and
+    demand (docs/grid-charge-forecast.md). Under 'pv_blind' no period has a
+    ceiling.
 
     Returns:
         SimulationResults with every time series on the run's window's rows:
         one a minute on config.location's clock, from the first day's local
         midnight up to the midnight after the last day; their pricing records
-        the rates config's tariffs priced the run's grid flows at
+        the rates config's tariffs priced the run's grid flows at, and their
+        grid_charge_forecast the forecast that sized its grid charge, None
+        when the battery does not grid-charge
 
     Raises:
         ValueError: If end_date's date is before start_date's, naming both;
@@ -821,7 +875,10 @@ def simulate_home(
     demand = _demand(config, hourly_weather, window)
     generation_kw = align_tmy_to_index(minute_generation, rows)
     dispatch = _dispatch_path(config, window.step_minutes, strategy)
-    flows = _row_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
+    ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
+    flows = _row_flows(
+        dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, ceilings_kwh, validate_balance
+    )
     import_pricing = _price_imports(config.tariff_config, flows, rows)
     export_revenue = _export_revenue(config.seg_tariff, flows, rows)
     if config.tariff_config is not None and config.seg_tariff is None:
@@ -840,6 +897,7 @@ def simulate_home(
         heat_pump_load=demand.heat_pump_kw,
         strategy_name=dispatch.strategy_name,
         pricing=_run_pricing(config, import_pricing.tariff_rate),
+        grid_charge_forecast=_grid_charge_forecast(config),
     )
 
 
@@ -860,7 +918,8 @@ def calculate_summary(
 
     Returns:
         SummaryStatistics with totals and ratios, carrying the window its results
-        cover, whose calendar days are its simulation_days, and the results' pricing
+        cover, whose calendar days are its simulation_days, the results' pricing and
+        the forecast that sized their grid charge
 
     Notes:
         **Two-path SEG design** — ``total_export_revenue_gbp`` and
@@ -952,4 +1011,5 @@ def calculate_summary(
         total_grid_charge_kwh=total_grid_charge,
         window=window,
         pricing=results.pricing,
+        grid_charge_forecast=results.grid_charge_forecast,
     )
