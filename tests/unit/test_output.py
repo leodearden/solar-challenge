@@ -455,12 +455,12 @@ class TestPeriodTotalsAndPeaks:
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
 
 
-def _annualised_from(window: SimulationWindow | None) -> BillDistribution:
+def _annualised_from(window: SimulationWindow) -> BillDistribution:
     """make_bill_distribution's distribution, its yearly figures annualised from *window*."""
     return replace(make_bill_distribution(), annualised_from=window)
 
 
-def _one_config_sweep(window: SimulationWindow | None) -> RankedSweep:
+def _one_config_sweep(window: SimulationWindow) -> RankedSweep:
     """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
     cr = make_config_result(outlay=_annualised_from(window))
     return make_ranked_sweep((cr,))
@@ -581,12 +581,9 @@ class TestExtrapolationNotice:
         [
             pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
             pytest.param(make_window(days=731, first_day=date(2023, 1, 1)), id="two-calendar-years"),
-            pytest.param(None, id="hand-built"),
         ],
     )
-    def test_a_finance_report_from_whole_calendar_years_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
-    ) -> None:
+    def test_a_finance_report_from_whole_calendar_years_has_no_notice(self, window: SimulationWindow) -> None:
         report = generate_finance_report(_annualised_from(window), scenario_name="Bristol")
 
         assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
@@ -602,17 +599,8 @@ class TestExtrapolationNotice:
             "| Config"
         )
 
-    @pytest.mark.parametrize(
-        "window",
-        [
-            pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
-            pytest.param(None, id="hand-built"),
-        ],
-    )
-    def test_a_ranking_report_from_a_whole_calendar_year_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
-    ) -> None:
-        report = generate_config_ranking_report(_one_config_sweep(window))
+    def test_a_ranking_report_from_a_whole_calendar_year_has_no_notice(self) -> None:
+        report = generate_config_ranking_report(_one_config_sweep(make_window(days=365, first_day=date(2023, 1, 1))))
 
         assert "extrapolated" not in report
         assert report.startswith("## Cost-Recovery Rank\n\n| Config")
