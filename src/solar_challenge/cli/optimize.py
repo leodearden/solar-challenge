@@ -300,10 +300,10 @@ def configs(
     seg_rate = parse_seg_rate(raw.get("seg"))
     if seg_rate is not None:
         seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-        homes_with_seg = [
+        homes_with_seg = tuple(
             dataclasses.replace(home, seg_tariff=seg_tariff)
             for home in fleet_config.homes
-        ]
+        )
         fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
 
     # ---- Resolve start/end: CLI args override scenario period; fall back to
@@ -342,7 +342,7 @@ def configs(
             start_date=_start_str,
             end_date=_end_str,
         ),
-        homes=tuple(fleet_config.homes),
+        homes=fleet_config.homes,
         location=loc,
         finance=finance,
     )

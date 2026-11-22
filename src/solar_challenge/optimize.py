@@ -872,7 +872,7 @@ def _age0_baseline_outlay(
     ]
 
     start_ts, end_ts = scenario.simulation_bounds()
-    fleet_config = FleetConfig(homes=aged_homes, name="age-0-baseline")
+    fleet_config = FleetConfig(homes=tuple(aged_homes), name="age-0-baseline")
     fleet_results = simulate(fleet_config, start_ts, end_ts)
 
     summaries = [

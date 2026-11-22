@@ -96,7 +96,7 @@ def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> Fl
     seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
     return dataclasses.replace(
         fleet_config,
-        homes=[dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes],
+        homes=tuple(dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes),
     )
 
 
@@ -258,7 +258,7 @@ def run(
     scenario_config = ScenarioConfig(
         name=raw.get("name", str(scenario)),
         period=SimulationPeriod(start_date=start, end_date=end),
-        homes=tuple(fleet_config.homes),
+        homes=fleet_config.homes,
         location=loc,
         finance=finance,
         # Only --cost-recovery passes the rate on:

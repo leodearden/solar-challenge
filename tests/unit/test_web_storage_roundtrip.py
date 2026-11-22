@@ -920,7 +920,29 @@ class TestTupleFieldRoundtrip:
 
         loaded_fleet = storage.load_run("tou-fleet-001").fleet_results
 
-        assert loaded_fleet.home_configs == home_configs
+        assert loaded_fleet.home_configs == tuple(home_configs)
+
+    def test_a_fleet_saved_from_lists_loads_with_tuple_fields_holding_its_homes(self, storage: RunStorage) -> None:
+        """A fleet built from lists is held, and loads back, as tuples of its homes' configs and results."""
+        home_configs = [_make_home_config(f"Home {i}") for i in range(2)]
+        home_results = [_make_simulation_results(_make_index()) for _ in range(2)]
+
+        storage.save_fleet_run(
+            run_id="list-built-fleet",
+            fleet_results=FleetResults(per_home_results=home_results, home_configs=home_configs),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary() for _ in range(2)],
+            name="Saved Run",
+        )
+
+        loaded_fleet = storage.load_run("list-built-fleet").fleet_results
+
+        assert type(loaded_fleet.home_configs) is tuple
+        assert type(loaded_fleet.per_home_results) is tuple
+        assert loaded_fleet.home_configs == tuple(home_configs)
+        for loaded, saved in zip(loaded_fleet.per_home_results, home_results, strict=True):
+            pd.testing.assert_series_equal(loaded.generation, saved.generation, check_names=False, check_freq=False)
+            pd.testing.assert_series_equal(loaded.demand, saved.demand, check_names=False, check_freq=False)
 
 
 class TestEveryFieldShapeRoundtrip:
@@ -963,7 +985,7 @@ class TestEveryFieldShapeRoundtrip:
 
         loaded_fleet = storage.load_run("every-shape-fleet").fleet_results
 
-        assert loaded_fleet.home_configs == home_configs
+        assert loaded_fleet.home_configs == tuple(home_configs)
 
 
 class TestPersistedJson:

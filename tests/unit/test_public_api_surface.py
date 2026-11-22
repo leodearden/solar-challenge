@@ -81,8 +81,8 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- signature-closure types ---
     "SummaryStatistics": "dataclass[eq, frozen] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', seg_revenue_gbp: float | None = None, total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
     "ScenarioConfig": "dataclass[eq, frozen] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
-    "FleetConfig": "dataclass[eq] (homes: list[HomeConfig] = <factory>, name: str = '') -> None",
-    "FleetResults": "dataclass[eq] (per_home_results: list[SimulationResults], home_configs: list[HomeConfig]) -> None",
+    "FleetConfig": "dataclass[eq, frozen] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
+    "FleetResults": "dataclass[eq, frozen] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
     "DispatchDecision": "dataclass[eq, frozen] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
@@ -128,7 +128,7 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- community (community.py) ---
     "CommunityConfig": "dataclass[eq, frozen] (sharing_mode: Literal['p2p', 'community_battery'], community_battery: BatteryConfig | None = None, billing: CommunityBillingConfig | None = None) -> None",
     "CommunityBillingConfig": "dataclass[eq, frozen] (tariff: TariffConfig | None = None, seg_rate_pence_per_kwh: float | None = None) -> None",
-    "CommunityResults": "dataclass[eq] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
+    "CommunityResults": "dataclass[eq, frozen] (grid_import: Series, grid_export: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, fleet_results: FleetResults, sharing_mode: Literal['p2p', 'community_battery'], baseline_net_cost_gbp: float | None = None, community_net_cost_gbp: float | None = None, community_savings_gbp: float | None = None) -> None",
     "simulate_community": "(fleet_results: FleetResults, config: CommunityConfig, *, validate_balance: bool = True) -> CommunityResults",
     "validate_community_balance": "(fleet_results: FleetResults, community_results: CommunityResults, tolerance: float = 0.001) -> bool",
     # --- pv (pv.py) ---
@@ -633,11 +633,7 @@ def test_reviewed_computed_name_writes_name_only_pinned_classes() -> None:
 # the task that freezes the class.  An entry whose class is frozen, is no
 # pinned dataclass, or is misspelled fails the guard, so drop the entry then.
 # ---------------------------------------------------------------------------
-UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {
-    "FleetConfig": "task 910",
-    "FleetResults": "task 910",
-    "CommunityResults": "task 910",
-}
+UNFROZEN_PINNED_DATACLASSES: dict[str, str] = {}
 
 
 def test_every_pinned_dataclass_is_frozen() -> None:

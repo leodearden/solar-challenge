@@ -1175,9 +1175,7 @@ class RunStorage:
         This is the save a finished fleet job makes.
 
         Raises:
-            ValueError: If fleet_results has no homes, or its home_configs does not hold one
-                HomeConfig per home's results; the save has written nothing then. Otherwise
-                as save_fleet_run raises.
+            ValueError: As save_fleet_run raises it.
         """
         home_summaries = calculate_home_summaries(fleet_results)
         self.save_fleet_run(

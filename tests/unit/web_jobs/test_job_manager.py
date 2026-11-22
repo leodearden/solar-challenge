@@ -422,7 +422,7 @@ class TestJobManagerSimulation:
         assert _wait_until_finished(manager, job_id).status == "completed"
         [call] = runner.fleet_calls
         assert (call.fleet.homes, call.fleet.name, call.start_date, call.end_date) == (
-            _three_homes(),
+            tuple(_three_homes()),
             "Three Roofs",
             _JUNE_1,
             _JUNE_2,

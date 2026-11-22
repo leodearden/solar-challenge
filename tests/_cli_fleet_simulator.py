@@ -88,7 +88,7 @@ class _Answering:
 
     def simulate_home(self, home: HomeConfig, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationResults:
         """answer's results for the one-home fleet of home, named as home is."""
-        (results,) = self.answer(FleetConfig([home], name=home.name), start_date, end_date).per_home_results
+        (results,) = self.answer(FleetConfig((home,), name=home.name), start_date, end_date).per_home_results
         return results
 
 

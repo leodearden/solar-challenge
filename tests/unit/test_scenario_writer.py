@@ -202,7 +202,7 @@ def _through_load_fleet_config(tmp_path: Path) -> tuple[object, object]:
     """The homes load_fleet_config reads back, and the homes written, without the SEG tariff it does not read."""
     homes = _two_every_key_homes()
     fleet = load_fleet_config(_written(fleet_scenario(homes, name="Fleet run"), tmp_path))
-    return fleet.homes, [dataclasses.replace(home, seg_tariff=None) for home in homes]
+    return fleet.homes, tuple(dataclasses.replace(home, seg_tariff=None) for home in homes)
 
 
 @pytest.mark.parametrize(
@@ -396,7 +396,7 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
 
     fleet = load_fleet_config(path)
 
-    assert fleet.homes == homes
+    assert fleet.homes == tuple(homes)
     assert fleet.name == "Fleet run"
 
 

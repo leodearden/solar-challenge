@@ -813,7 +813,7 @@ class JobManager:
                 progress(5.0 + 90.0 * done / total, f"Homes {done}/{total}", f"Simulated {done} of {total} homes")
 
             results = self._runner.simulate(
-                FleetConfig(homes=list(configs), name=run.name), start_date, end_date, progress=homes_done
+                FleetConfig(homes=tuple(configs), name=run.name), start_date, end_date, progress=homes_done
             )
 
             progress(97.0, "Saving", "Persisting fleet results...")

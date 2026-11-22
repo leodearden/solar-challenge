@@ -747,7 +747,7 @@ def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
             "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
         )
 
-    return FleetConfig(homes=homes, name=document.get("name", ""))
+    return FleetConfig(homes=tuple(homes), name=document.get("name", ""))
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
@@ -804,7 +804,7 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
         raise ConfigurationError("A YAML-defined sweep requires a 'fleet_distribution' block")
     distribution, settings = _read_fleet_distribution_file(document)
     return [
-        (value, FleetConfig(homes=settings.generate_homes(point), name=f"multiplier={value:.4f}"))
+        (value, FleetConfig(homes=tuple(settings.generate_homes(point)), name=f"multiplier={value:.4f}"))
         for value, point in expand_sweep_configs(distribution)
     ]
 

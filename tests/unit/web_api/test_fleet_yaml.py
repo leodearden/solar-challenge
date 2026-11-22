@@ -133,7 +133,7 @@ class TestExportFleetYAML:
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
         homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
-        assert load_fleet_config(path).homes == homes
+        assert load_fleet_config(path).homes == tuple(homes)
 
     @pytest.mark.parametrize(
         "body",

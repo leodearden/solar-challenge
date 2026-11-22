@@ -1885,7 +1885,7 @@ def project_multi_year(
         from solar_challenge.pv import calculate_degradation_factor
 
         aged = _aged_homes(homes, age, cum_tp)
-        fleet_config = FleetConfig(homes=aged, name=f"proj-age-{age}")
+        fleet_config = FleetConfig(homes=tuple(aged), name=f"proj-age-{age}")
         fleet_results = simulate(fleet_config, start_ts, end_ts)
         _refuse_results_without_the_fleets_batteries(fleet_config, fleet_results)
 
@@ -2567,7 +2567,7 @@ def solve_cost_recovery_rate(
     from solar_challenge.home import calculate_summary
 
     aged0 = _aged_homes(homes, 0)
-    fleet_cfg = FleetConfig(homes=aged0, name="cr4-solve-age0")
+    fleet_cfg = FleetConfig(homes=tuple(aged0), name="cr4-solve-age0")
     fr_age0 = simulate(fleet_cfg, start_ts, end_ts)
 
     summaries = [calculate_summary(r) for r in fr_age0.per_home_results]

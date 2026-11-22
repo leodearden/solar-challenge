@@ -834,6 +834,29 @@ class TestCommunityBillingSavings:
         assert cr.community_savings_gbp >= 0
         assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
 
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(CommunityResults)])
+    def test_assigning_a_field_of_a_result_raises_frozen_instance_error(
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig, field_name: str
+    ) -> None:
+        cr = simulate_community(billing_fleet, billing_cfg)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(cr, field_name, getattr(cr, field_name))
+
+    def test_a_community_battery_prices_the_grid_flows_left_after_it_stores_the_surplus(
+        self, billing_fleet: FleetResults
+    ) -> None:
+        """The battery stores the fleet's 1 kW net surplus each hour, so the community's grid flows, and its net cost, are zero."""
+        config = CommunityConfig(
+            sharing_mode="community_battery", community_battery=_community_battery(), billing=self._COMPLETE_BILLING
+        )
+
+        cr = simulate_community(billing_fleet, config)
+
+        assert cr.baseline_net_cost_gbp == pytest.approx(0.954, abs=1e-6)
+        assert cr.community_net_cost_gbp == pytest.approx(0.0, abs=1e-6)
+        assert cr.community_savings_gbp == pytest.approx(0.954, abs=1e-6)
+
     def test_no_billing_fields_are_none_when_billing_absent(
         self, billing_fleet: FleetResults
     ) -> None:

@@ -263,7 +263,7 @@ def make_fleet_results_of(
     """
     if homes is None:
         homes = [make_home_config() for _ in per_home_results]
-    return FleetResults(per_home_results=list(per_home_results), home_configs=list(homes))
+    return FleetResults(per_home_results=tuple(per_home_results), home_configs=tuple(homes))
 
 
 def make_fleet_results(
