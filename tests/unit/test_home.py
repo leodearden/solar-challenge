@@ -1367,6 +1367,9 @@ class TestCalculateSummaryWindow:
 
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
+_FIGURES_IN_THE_POSITIONS_OF_0_5_0 = (100.0, 80.0, 60.0, 20.0, 40.0, 10.0, 8.0, 3.5, 2.5, 0.6, 0.25, 0.4, 7, 5.0, 6.0, -1.0)
+"""A summary's sixteen required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
+
 
 class TestSummaryStatistics:
     """Test SummaryStatistics dataclass."""
@@ -1386,24 +1389,37 @@ class TestSummaryStatistics:
             self_consumption_ratio=0.6,
             grid_dependency_ratio=0.25,
             export_ratio=0.4,
-            simulation_days=7,
+            window=_TWO_JUNE_DAYS,
             total_import_cost_gbp=5.0,
             total_export_revenue_gbp=8.0,
             net_cost_gbp=-3.0,
         )
         assert stats.total_generation_kwh == 100.0
-        assert stats.simulation_days == 7
+        assert stats.window == _TWO_JUNE_DAYS
 
-    def test_a_summary_holds_the_window_whose_days_are_its_simulation_days(self):
-        """A summary whose simulation_days is its window's days holds that window."""
-        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
+    def test_a_summarys_simulation_days_are_its_windows_days(self):
+        assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
 
-        assert summary.window == _TWO_JUNE_DAYS
+    @pytest.mark.parametrize(
+        ("build", "window"),
+        [
+            pytest.param(lambda: home_summary(window=None), None, id="none"),
+            pytest.param(
+                lambda: SummaryStatistics(*_FIGURES_IN_THE_POSITIONS_OF_0_5_0), 7, id="a-0.5.0-positional-day-count"
+            ),
+        ],
+    )
+    def test_a_window_that_is_not_a_simulation_window_is_refused_naming_it_and_calculate_summary(
+        self, build: typing.Callable[[], SummaryStatistics], window: object
+    ) -> None:
+        """A 0.5.0 caller's positional simulation_days lands in window, where it is refused by name rather than read as a total."""
+        with pytest.raises(ValueError) as refused:
+            build()
 
-    def test_a_simulation_days_other_than_its_windows_days_is_refused_naming_both(self):
-        """A summary whose simulation_days is not its window's days is refused, naming both."""
-        with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
-            home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
+        message = str(refused.value)
+        assert f"window={window!r}" in message
+        assert "SimulationWindow" in message
+        assert "calculate_summary" in message
 
     @pytest.mark.parametrize(
         ("discharge_kwh", "self_consumption_kwh"),
@@ -1433,11 +1449,14 @@ class TestSummaryStatistics:
         assert summary.total_direct_self_consumption_kwh == 0.0
 
     def test_refuses_a_field_assignment(self) -> None:
-        """A summary is a frozen value, so a simulation_days construction checked against its window cannot be assigned after it."""
-        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
+        """A summary is a frozen value: neither its window nor simulation_days, a read-only property of its window, can be assigned after construction."""
+        summary = home_summary(window=_TWO_JUNE_DAYS)
 
         with pytest.raises(dataclasses.FrozenInstanceError):
+            summary.window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 3), timedelta(minutes=1), "Europe/London")  # type: ignore[misc]
+        with pytest.raises(AttributeError):
             summary.simulation_days = 3  # type: ignore[misc]
+        assert (summary.window, summary.simulation_days) == (_TWO_JUNE_DAYS, 2)
 
     def test_each_flow_property_is_the_difference_of_two_of_its_totals(self):
         summary = home_summary(

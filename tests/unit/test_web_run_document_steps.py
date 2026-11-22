@@ -25,10 +25,12 @@ with no cheap period, one whose periods all charge the same rate: which grid_cha
 what it leaves as it is, and that it changes none of its input.
 
 Last it pins v5, the step that sets each stored SummaryStatistics document lacking a window to the
-window of its run's own time series, read through the documents' StoredTimeSeries: which summaries
-it sets, from which series, in a run's files and its runs row alike; that it reads no series for a
-summary holding a window and leaves every other document as it is; and that it refuses a summary
-whose series is missing or is not a run's.
+window of its run's own time series, read through the documents' StoredTimeSeries, and drops each
+one's simulation_days: which summaries it sets, from which series, in a run's files and its runs
+row alike; that it drops simulation_days from every summary, reporting only one that differs from
+its window's days, and keeps a FleetSummary's; that v2 keeps a summary's simulation_days for it;
+that it reads no series for a summary holding a window and leaves every other document as it is;
+and that it refuses a summary whose series is missing or is not a run's.
 """
 
 import copy
@@ -831,7 +833,7 @@ def _window_of_the_series(run_dir: Path, series: str) -> dict[str, Any]:
     return json.loads(json.dumps(field_tree(SimulationWindow.of_index(index))))
 
 
-_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES = {
+_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES: dict[str, tuple[tuple[str, str], ...]] = {
     "pre_469_home": (("summary.json", "data.parquet"),),
     "legacy_fleet": (
         ("homes/home_0_summary.json", "homes/home_0.parquet"),
@@ -842,16 +844,26 @@ _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES = {
 """Each fixture saved before summaries carried a window: each of its SummaryStatistics documents, all lacking one, and the time series of the results it summarises."""
 
 
+_SUMMARIES_HOLDING_A_WINDOW = {
+    "pre_787_dispatch_fleet": tuple(f"homes/home_{index}_summary.json" for index in range(3)),
+    "pre_839_flat_grid_charging_fleet": tuple(f"homes/home_{index}_summary.json" for index in range(3)),
+}
+"""Each fixture saved once summaries carried a window: each of its SummaryStatistics documents, all holding one beside its simulation_days."""
+
+
 def _with_the_windows_of_their_series(documents: StoredRunDocuments, name: str, run_dir: Path) -> StoredRunDocuments:
-    """*documents*, of fixture *name*, with each summary _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES names set to the window of its time series in *run_dir*."""
+    """*documents*, of fixture *name*, with each summary _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES names set to the window of its time series in *run_dir*, and without its simulation_days."""
     for document, series in _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES[name]:
         documents = _with_value(documents, document, ("window",), _window_of_the_series(run_dir, series))
+        documents = _without(documents, document, "simulation_days")
     return documents
 
 
 @pytest.mark.parametrize("name", list(_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES))
-def test_v5_sets_each_summary_without_a_window_to_the_window_of_its_time_series_reporting_nothing(name: str) -> None:
-    """A home run's summary is of data.parquet and a fleet's i-th home summary of homes/home_i.parquet; a fleet's FleetSummary and every config are left as they are."""
+def test_v5_sets_each_summary_without_a_window_to_the_window_of_its_time_series_dropping_its_days_reporting_nothing(
+    name: str,
+) -> None:
+    """A home run's summary is of data.parquet and a fleet's i-th home summary of homes/home_i.parquet; each stored simulation_days is its window's 1 day, so none is reported. A fleet's FleetSummary, its simulation_days with it, and every config are left as they are."""
     v5 = _step(5)
     documents = _documents_before(v5, name)
 
@@ -879,12 +891,13 @@ def test_v5_sets_a_home_run_s_runs_row_summary_without_a_window_to_the_window_of
     result = v5.apply("home", documents)
 
     window = _window_of_the_series(stored_run_fixture_dir(name), "data.parquet")
-    assert result.documents == _with_value(documents, "runs.summary_json", ("window",), window)
+    with_its_window = _with_value(documents, "runs.summary_json", ("window",), window)
+    assert result.documents == _without(with_its_window, "runs.summary_json", "simulation_days")
     assert (result.dropped, result.rewritten) == ((), ())
 
 
 def test_v5_leaves_a_fleet_run_s_runs_row_as_it_is() -> None:
-    """A fleet's runs row holds its config and its FleetSummary, which has no window; it holds no home summary."""
+    """A fleet's runs row holds its config and its FleetSummary, which has no window and keeps its simulation_days; it holds no home summary."""
     v5 = _step(5)
     documents = _brought_forward_before(v5, "fleet", _runs_row_documents("legacy_fleet"))
 
@@ -905,10 +918,11 @@ def _documents_before_v5_read_from(run_dir: Path, name: str) -> StoredRunDocumen
     return _brought_forward_before(_step(5), run_type, read_run_documents(run_dir, name, run_type))
 
 
-@pytest.mark.parametrize("name", ["pre_787_dispatch_fleet", "pre_839_flat_grid_charging_fleet"])
-def test_v5_leaves_a_run_whose_summaries_hold_a_window_as_it_is_reading_none_of_its_time_series(
+@pytest.mark.parametrize("name", list(_SUMMARIES_HOLDING_A_WINDOW))
+def test_v5_drops_only_the_days_of_a_run_whose_summaries_hold_a_window_reading_none_of_its_time_series(
     name: str, tmp_path: Path
 ) -> None:
+    """Each summary keeps its window, and its simulation_days, its window's 1 day, goes unreported; the fleet's FleetSummary and config are left as they are."""
     run_dir = _copy_of_the_fixture_run(name, tmp_path)
     for series in run_dir.glob("homes/*.parquet"):
         series.unlink()
@@ -916,8 +930,43 @@ def test_v5_leaves_a_run_whose_summaries_hold_a_window_as_it_is_reading_none_of_
 
     result = _step(5).apply(fixture_run_type(name), documents)
 
-    assert result.documents == documents
+    expected = documents
+    for document in _SUMMARIES_HOLDING_A_WINDOW[name]:
+        expected = _without(expected, document, "simulation_days")
+    assert result.documents == expected
     assert (result.dropped, result.rewritten) == ((), ())
+
+
+_DAYS_OTHER_THAN_THE_WINDOW_S = [
+    pytest.param("pre_469_home", "summary.json", id="a-window-it-derives"),
+    pytest.param("pre_787_dispatch_fleet", "homes/home_1_summary.json", id="a-window-the-summary-holds"),
+]
+"""A fixture and one of its SummaryStatistics documents, whose window, derived from its 1-day series or held, covers 1 day."""
+
+
+@pytest.mark.parametrize(("name", "document"), _DAYS_OTHER_THAN_THE_WINDOW_S)
+def test_v5_reports_a_dropped_simulation_days_that_differs_from_its_window_s_days(name: str, document: str) -> None:
+    """A summary saved before simulation_days was its window's days, e.g. over a window crossing the autumn clock change, showed a day count the window does not: its run's page now shows the window's."""
+    v5 = _step(5)
+    before = _documents_before(v5, name)
+
+    result = v5.apply(fixture_run_type(name), _with_value(before, document, ("simulation_days",), 2))
+
+    assert result.documents == v5.apply(fixture_run_type(name), before).documents
+    assert result.dropped == (DroppedValue(name, document, "simulation_days", 2),)
+    assert result.rewritten == ()
+
+
+@pytest.mark.parametrize("name", list(_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES))
+def test_v2_keeps_each_summary_s_simulation_days_for_v5_reporting_none(name: str) -> None:
+    """v5 compares a summary's simulation_days with its window's days before it drops it, so v2, which drops each key a dataclass lacks, keeps it."""
+    documents = _fixture_documents(name)
+
+    result = _V2.apply(fixture_run_type(name), documents)
+
+    summaries = [result.documents.summary, *result.documents.home_summaries]
+    assert all(summary.content["simulation_days"] == 1 for summary in summaries)
+    assert [each for each in result.dropped if each.field == "simulation_days"] == []
 
 
 def _no_series(run_dir: Path) -> None:

@@ -7,8 +7,8 @@ Tests cover:
 - total_grid_charge_kwh survives a home roundtrip, and a summary saved without it
   loads it as 0.0
 - A summary's window survives home and fleet roundtrips and is stored as ISO 8601
-  text; a summary saved without one loads it as None, and one whose simulation_days
-  is not its window's days is refused
+  text; a current-format summary without one is refused naming it, and so is one
+  holding a simulation_days, which is no field of SummaryStatistics
 - A summary's pricing survives home and fleet roundtrips, and a summary saved
   without one loads it as None
 - A stored summary whose battery discharge exceeds its self-consumption is refused
@@ -384,13 +384,13 @@ _NAIVE_HALF_HOURLY_WINDOW = SimulationWindow(
 
 def _make_summary_over(window: SimulationWindow) -> SummaryStatistics:
     """_make_summary's summary, computed over *window*: simulation_days is its days."""
-    return dataclasses.replace(_make_summary(), simulation_days=window.days, window=window)
+    return dataclasses.replace(_make_summary(), window=window)
 
 
 class TestSummaryWindowRoundtrip:
-    """A summary keeps its window when reloaded, stored as ISO 8601 text; a summary
-    saved before the field existed loads it as None, and one whose simulation_days is
-    not its window's days is refused."""
+    """A summary keeps its window when reloaded, stored as ISO 8601 text; a summary.json
+    in the current format without its window is refused naming it, and one holding a
+    simulation_days, which SummaryStatistics derives from its window, is refused naming that."""
 
     @pytest.mark.parametrize(
         "window",
@@ -455,9 +455,10 @@ class TestSummaryWindowRoundtrip:
         assert _read_json(summary_path)["window"] == stored_window
         assert json.loads(run.summary_json)["window"] == stored_window
 
-    def test_summary_saved_without_a_window_loads_none(self, storage: RunStorage) -> None:
-        """Every summary.json written before the window field existed lacks its key, and the
-        field's default reads it with no RunDocumentStep."""
+    def test_a_current_format_summary_without_its_window_is_refused_naming_it(self, storage: RunStorage) -> None:
+        """Only a summary saved before the window field existed lacks its key, and v5 sets it as it brings
+        such a run forward (tests/unit/test_web_run_document_steps.py); a run in the current format is not
+        brought forward."""
         storage.save_home_run(
             run_id="no-window-001",
             config=_make_home_config(),
@@ -470,15 +471,15 @@ class TestSummaryWindowRoundtrip:
         del stored["window"]
         summary_path.write_text(json.dumps(stored, indent=2))
 
-        loaded_summary = storage.load_run("no-window-001").summary
+        with pytest.raises(StoredRunUnreadable) as refused:
+            storage.load_run("no-window-001")
 
-        assert loaded_summary.window is None
-        assert loaded_summary.simulation_days == 61
+        assert (refused.value.document, refused.value.field) == ("summary.json", "window")
 
-    def test_a_stored_summary_whose_days_disagree_with_its_window_is_refused(
+    def test_a_current_format_summary_holding_a_simulation_days_is_refused_as_no_field_of_summary_statistics(
         self, storage: RunStorage
     ) -> None:
-        """SummaryStatistics refuses it as it loads, as it refuses it at construction, naming both."""
+        """A summary's simulation_days is its window's days, which a save does not write."""
         storage.save_home_run(
             run_id="window-days-001",
             config=_make_home_config(),
@@ -488,13 +489,18 @@ class TestSummaryWindowRoundtrip:
         )
         summary_path = stored_run_dir(storage, "window-days-001") / "summary.json"
         stored = _read_json(summary_path)
-        stored["simulation_days"] = 62
+        assert "simulation_days" not in stored
+        stored["simulation_days"] = 61
         summary_path.write_text(json.dumps(stored, indent=2))
 
-        with pytest.raises(StoredRunUnreadable, match=r"simulation_days=62 for a window of 61 days") as refused:
+        with pytest.raises(StoredRunUnreadable) as refused:
             storage.load_run("window-days-001")
 
-        assert refused.value.document == "summary.json"
+        assert (refused.value.document, refused.value.field, refused.value.reason) == (
+            "summary.json",
+            "simulation_days",
+            "is not a field of SummaryStatistics",
+        )
 
 
 class TestSummaryPricingRoundtrip:

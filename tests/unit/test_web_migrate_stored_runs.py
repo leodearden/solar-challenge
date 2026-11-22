@@ -29,7 +29,8 @@ A store at version 3, whose runs were saved in format 3, is brought forward by v
 alone, which drops each battery's grid_charging that its run ignored on a tariff with no cheap
 period. A store at version 4, holding runs an earlier migration brought to format 4 from before
 summaries carried a window, is brought forward by version 5's step alone, which sets each such
-summary's window, in a run's files and its runs row alike, to the window of its run's time series.
+summary's window, in a run's files and its runs row alike, to the window of its run's time series,
+and drops each summary's simulation_days, its window's days.
 A run that store's migration left in format 1, with no format.json, has its files brought
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
 steps, migrate_store catches up: it brings forward each run an earlier migration left in its
@@ -727,10 +728,16 @@ _SUMMARIES_V5_REWRITES: Mapping[str, tuple[frozenset[str], frozenset[str]]] = {
     "pre_469_home": (frozenset({"summary.json"}), frozenset({"summary_json"})),
     "legacy_fleet": (frozenset({"homes/home_0_summary.json", "homes/home_1_summary.json"}), frozenset()),
     "pre_786_dispatch_home": (frozenset({"summary.json"}), frozenset({"summary_json"})),
+    "pre_787_dispatch_fleet": (frozenset(f"homes/home_{index}_summary.json" for index in range(3)), frozenset()),
+    "pre_839_flat_grid_charging_fleet": (
+        frozenset(f"homes/home_{index}_summary.json" for index in range(3)),
+        frozenset(),
+    ),
 }
-"""Each legacy stored-run fixture whose summaries v5 rewrites, by name: the files, then the runs columns, holding a SummaryStatistics without a window, which v5 sets.
+"""Each legacy stored-run fixture's summaries v5 rewrites, by name: the files, then the runs columns, holding a SummaryStatistics.
 
-A fleet's runs row holds its FleetSummary, which v5 leaves as it is.
+v5 drops each one's simulation_days, and sets its window when it holds none. A fleet's runs row
+holds its FleetSummary, which v5 leaves as it is.
 """
 
 
@@ -740,7 +747,8 @@ def test_migrate_store_rewrites_only_the_documents_the_steps_change_and_writes_e
     """Every document and runs column no step changes is left byte for byte, and no temporary file is left behind.
 
     Each run's format.json is added, or rewritten where a save at format 2 left one. Every older
-    store is below version 5, so v5 rewrites each summary it sets the window of.
+    store is below version 5, so v5 rewrites each SummaryStatistics document, dropping its
+    simulation_days.
     """
     store = older_store.path
     files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in older_store.run_ids.values()}
