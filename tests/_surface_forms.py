@@ -6,7 +6,9 @@ inspect's own rendering does not. surface_form spells a name's form, and
 is_frozen_dataclass says whether a class's form is a frozen dataclass's.
 is_additive_change says whether a name's form changed from a frozen one additively: whether
 the current form, less some of its additive parts, spells the frozen one. member_forms
-spells the forms of the public members a class's own body defines or declares.
+spells the forms of the public members a class's own body defines or declares, and
+is_additive_member_change classifies a member's change as is_additive_change classifies a
+name's.
 named_classes gives the classes those forms name, and signature_closure the classes of a
 package that some names' forms name, directly or through another such class. member_forms
 reads class bodies, so undeclared_attributes and unset_attributes check the attributes a
@@ -187,7 +189,9 @@ def member_forms(cls: type) -> dict[str, str]:
     docs/surface-forms-inspect-readings.md §4.4 and §4.6 say how each minor reads and
     binds such a partial.
     """
-    return {name: _member_form(member, cls) for name, member in _public_members(cls).items()}
+    return {
+        name: _member_form(member, cls).text() for name, member in _public_members(cls).items()
+    }
 
 
 def named_classes(obj: object) -> set[type]:
@@ -371,6 +375,16 @@ def is_additive_change(frozen: str, obj: object) -> bool:
     return _spells_less_additive_parts(_parted_form(obj), frozen)
 
 
+def is_additive_member_change(frozen: str, cls: type, name: str) -> bool:
+    """The same as is_additive_change, for member_forms(cls)[name].
+
+    It reads the member as member_forms does, through _public_members(cls), so it raises
+    what member_forms(cls) raises reading *cls*'s members and that member's form, and
+    KeyError for a name that is no public member of *cls*.
+    """
+    return _spells_less_additive_parts(_member_form(_public_members(cls)[name], cls), frozen)
+
+
 @dataclasses.dataclass(frozen=True)
 class _Part:
     """A part of a form: its text, as the form spells it, and the value it spells, by which an _ADDITIVE_PARTS row recognises it."""
@@ -540,6 +554,12 @@ _ADDITIVE_PARTS: tuple[_AdditivePart, ...] = (
     _AdditivePart("*args or **kwargs", _is_variadic),
     _AdditivePart("an entry of a mapping constant", lambda value: isinstance(value, _MappingEntry)),
     _AdditivePart("an Enum member", lambda value: isinstance(value, _EnumMember)),
+    _AdditivePart(
+        "a property's settable or deletable qualifier",
+        lambda value: isinstance(value, _Qualifier)
+        and value.kind == "property"
+        and value.name in _PROPERTY_ABILITIES,
+    ),
 )
 """The parts whose drop from a form is additive, each kind in one row; a part no row recognises is never dropped, so a change is breaking unless dropping recognised parts alone undoes it."""
 
@@ -1167,32 +1187,41 @@ def _is_class_var(annotation: object, cls: type) -> bool:
     return annotation is typing.ClassVar or typing.get_origin(annotation) is typing.ClassVar
 
 
-def _member_form(member: object, cls: type) -> str:
+def _member_form(member: object, cls: type) -> _PartedForm:
+    """The form of *member*, one of *cls*'s, read as its parts: after abstract if it is an abstract method."""
     form = _form_by_kind(member, cls)
     if getattr(member, "__isabstractmethod__", False):
-        return f"abstract {form}"
+        return _fixed_form("abstract").followed_by(form)
     return form
 
 
-def _form_by_kind(member: object, cls: type) -> str:
-    """The form of *member*, one of *cls*'s, by its kind."""
+def _form_by_kind(member: object, cls: type) -> _PartedForm:
+    """The form of *member*, one of *cls*'s, by its kind, read as its parts: an attribute's has none, and a property's kind has its abilities, before the parts of the form of the function the member spells."""
     if isinstance(member, _AnnotatedAttribute):
-        return f"attribute {_attribute_construct(member, cls, _looked_up_when_read).text()}"
+        return _fixed_form(
+            f"attribute {_attribute_construct(member, cls, _looked_up_when_read).text()}"
+        )
     function = spelled_function(member)
     if function is None:
-        return surface_form(member)
+        return _parted_form(member)
     if isinstance(member, property):
-        return f"{_property_kind(member)} {surface_form(function)}"
-    return f"{type(member).__name__} {surface_form(function)}"
+        return _property_kind_form(member).followed_by(_parted_form(function))
+    return _fixed_form(type(member).__name__).followed_by(_parted_form(function))
 
 
-def _property_kind(member: property) -> str:
+_PROPERTY_ABILITIES: dict[str, Callable[[property], object]] = {
+    "settable": lambda member: member.fset,
+    "deletable": lambda member: member.fdel,
+}
+"""Each ability a property's kind may name, by the accessor whose presence gives it."""
+
+
+def _property_kind_form(member: property) -> _PartedForm:
+    """The kind of the property *member*: property, qualified by each ability its accessors give it, as in property[settable, deletable]."""
     abilities = [
-        ability
-        for ability, accessor in (("settable", member.fset), ("deletable", member.fdel))
-        if accessor is not None
+        ability for ability, accessor in _PROPERTY_ABILITIES.items() if accessor(member) is not None
     ]
-    return _qualified_kind("property", abilities)
+    return _qualified_kind_form("property", abilities)
 
 
 _DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "frozen")
