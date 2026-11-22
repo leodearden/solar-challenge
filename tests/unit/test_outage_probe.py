@@ -162,7 +162,7 @@ def test_an_endpoint_pvgis_refuses_or_fails_is_named_by_its_status_whatever_its_
 ) -> None:
     """The body is read only after a status that is no outage, so one outage prints one line: otherwise a body cut short or stalled would name its own cause on some runs and the status on others."""
     with _stand_in({"tmy": status}, body_faults={"tmy": fault}) as (origin, _):
-        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
 
     assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: tmy: HTTP {status}\n")
 
