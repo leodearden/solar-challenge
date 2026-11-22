@@ -83,14 +83,14 @@ class TestSimulateHomeRoute:
     def test_annual_consumption_input_is_bounded_and_stepped_as_the_fleet_load_component(
         self, client: FlaskClient
     ) -> None:
-        """GET /simulate/home renders one annual consumption input, whose step, min and max are the load component's step and fixed range."""
+        """GET /simulate/home renders one annual consumption input, whose step, min and max are the load component's step and value_range."""
         page = client.get("/simulate/home").get_data(as_text=True)
         load = FLEET_COMPONENTS["load"]
         assert [
             (attributes.get("step"), attributes.get("min"), attributes.get("max"))
             for attributes in element_attributes(page, "input")
             if attributes.get("id") == "consumption_kwh"
-        ] == [(str(load.step), str(load.fixed_range[0]), str(load.fixed_range[1]))]
+        ] == [(str(load.step), str(load.value_range.low), str(load.value_range.high))]
 
     def test_home_page_offers_the_home_run_kinds_default_name_as_its_simulation_name_placeholder(
         self, client: FlaskClient

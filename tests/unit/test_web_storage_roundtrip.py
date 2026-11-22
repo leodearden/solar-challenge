@@ -52,6 +52,7 @@ pytest.importorskip("flask")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import (
     GridChargeConfig,
+    GridChargeForecast,
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
@@ -556,6 +557,106 @@ class TestSummaryPricingRoundtrip:
         loaded_summary = storage.load_run("no-pricing-001").summary
 
         assert loaded_summary.pricing is None
+
+
+class TestGridChargeForecastRoundtrip:
+    """A stored run keeps the forecast that sized its grid charge, on its summary and on the
+    results rebuilt from its time series; a summary saved before the field existed loads None."""
+
+    def test_home_run_reloads_its_forecast_on_the_summary_and_the_results(self, storage: RunStorage) -> None:
+        storage.save_home_run(
+            run_id="forecast-home-001",
+            config=_make_home_config(),
+            results=dataclasses.replace(_make_simulation_results(), grid_charge_forecast="trailing_14_days"),
+            summary=dataclasses.replace(_make_summary(), grid_charge_forecast="trailing_14_days"),
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecast-home-001")
+
+        assert loaded.summary.grid_charge_forecast == "trailing_14_days"
+        assert loaded.results.grid_charge_forecast == "trailing_14_days"
+
+    def test_fleet_run_reloads_each_homes_forecast_on_its_results(self, storage: RunStorage) -> None:
+        forecasts: list[GridChargeForecast | None] = ["pv_blind", None]
+        storage.save_fleet_run(
+            run_id="forecast-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[
+                    dataclasses.replace(_make_simulation_results(), grid_charge_forecast=forecast)
+                    for forecast in forecasts
+                ],
+                home_configs=[_make_home_config(f"Home {i}") for i, _ in enumerate(forecasts)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=len(forecasts)),
+            per_home_summaries=[
+                dataclasses.replace(_make_summary(), grid_charge_forecast=forecast) for forecast in forecasts
+            ],
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecast-fleet-001")
+
+        assert [results.grid_charge_forecast for results in loaded.fleet_results.per_home_results] == forecasts
+
+    def test_fleet_run_reloads_its_fleet_summarys_forecasts(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(
+                _make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind", "trailing_14_days")
+            ),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ("pv_blind", "trailing_14_days")
+
+    def test_fleet_summary_saved_without_its_forecasts_loads_none(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="no-forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(_make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind",)),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-forecasts-fleet-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["grid_charge_forecasts"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded = storage.load_run("no-forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ()
+
+    def test_summary_saved_without_a_forecast_loads_none(self, storage: RunStorage) -> None:
+        """Every summary.json written before the field existed lacks its key, and the field's
+        default reads it with no RunDocumentStep: those runs were all PV-blind or did not
+        grid-charge."""
+        storage.save_home_run(
+            run_id="no-forecast-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), grid_charge_forecast="pv_blind"),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-forecast-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["grid_charge_forecast"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded = storage.load_run("no-forecast-001")
+
+        assert loaded.summary.grid_charge_forecast is None
+        assert loaded.results.grid_charge_forecast is None
 
 
 class TestStoredSummaryDischargeBound:

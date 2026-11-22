@@ -24,7 +24,7 @@ from flask.testing import FlaskClient
 
 from solar_challenge.load import OFGEM_TDCV_BY_OCCUPANTS, LoadConfig
 from solar_challenge.location import LOCATION_PRESETS
-from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
+from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.validation import (
     BRISTOL_DEFAULT_SYSTEM_YIELD_KWH_PER_KWP,
     UK_BATTERY_SELF_CONSUMPTION_BENCHMARK_PERCENT,
@@ -773,6 +773,27 @@ class TestSimulationToolSurface:
             props["run_fleet_simulation"][f] for f in window_fields
         ]
 
+    @pytest.mark.parametrize(
+        ("tool_name", "field", "key"),
+        [
+            pytest.param("run_home_simulation", "pv_kw", "pv", id="home-pv_kw"),
+            pytest.param("run_home_simulation", "battery_kwh", "battery", id="home-battery_kwh"),
+            pytest.param("run_home_simulation", "consumption_kwh", "load", id="home-consumption_kwh"),
+            pytest.param("run_fleet_simulation", "pv_kw", "pv", id="fleet-pv_kw"),
+            pytest.param("run_fleet_simulation", "battery_kwh", "battery", id="fleet-battery_kwh"),
+        ],
+    )
+    def test_a_trigger_tools_component_value_is_described_with_the_range_its_reader_admits(
+        self, tool_name: str, field: str, key: str
+    ) -> None:
+        """Both trigger tools read the value with parse_home_config, within its fleet component's value_range, so the model is told that range."""
+        tool = next(t for t in TOOLS if t["name"] == tool_name)
+        description = tool["input_schema"]["properties"][field]["description"]
+        value_range = FLEET_COMPONENTS[key].value_range
+        assert f"({value_range.low:g}–{value_range.high:g}" in description, (
+            f"Expected {tool_name}'s {field} description to give {value_range}; got {description!r}"
+        )
+
     def test_dispatch_run_home_simulation(self, tmp_path: Path) -> None:
         """dispatch_tool('run_home_simulation', {...}) with a mock job_manager in its context returns handler result."""
         jm = autospecced_job_manager()
@@ -1167,7 +1188,7 @@ class TestMalformedToolInput:
                 "suggest_config",
                 {"annual_consumption_kwh": 0, "goal": "bill_savings"},
                 partial(
-                    as_finite_float, 0, "annual_consumption_kwh", Interval(*FLEET_COMPONENTS["load"].fixed_range)
+                    as_finite_float, 0, "annual_consumption_kwh", FLEET_COMPONENTS["load"].value_range
                 ),
                 id="consumption-zero",
             ),

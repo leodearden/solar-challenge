@@ -1,11 +1,10 @@
 document.addEventListener('alpine:init', () => {
-    // The fleet form's period and seed until it is changed, and when a loaded scenario sets none.
-    const DEFAULT_PERIOD_DAYS = 30;
-    const DEFAULT_SEED = 42;
+    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
+    const limits = JSON.parse(document.getElementById('page-limits').textContent);
 
     Alpine.data('fleetSimulator', (tariffPresetRates) => ({
-        n_homes: 100,
-        seed: DEFAULT_SEED,
+        n_homes: limits.fleet_size_default,
+        seed: limits.seed_default,
         submitting: false,
         submittedJob: null,
         errorMsg: '',
@@ -14,9 +13,9 @@ document.addEventListener('alpine:init', () => {
 
         /* ---- Period state ---- */
         periodMode: 'preset',
-        periodDays: DEFAULT_PERIOD_DAYS,
-        startDate: '2024-06-01',
-        endDate: '2024-06-30',
+        periodDays: limits.default_days,
+        startDate: limits.custom_range_default[0],
+        endDate: limits.custom_range_default[1],
 
         /* ---- PV distribution state ---- */
         pvDist: {
@@ -90,27 +89,11 @@ document.addEventListener('alpine:init', () => {
             ]
         },
 
-        /* ---- Form validation: why Run refuses the form, none when it runs it ---- */
-        formErrors() {
-            const errors = [];
-            const n = parseInt(this.n_homes);
-            if (isNaN(n) || n < 1) errors.push('Fleet size must be at least 1');
-            if (n > 1000) errors.push('Fleet size must be at most 1000');
-            if (this.pvDist.type === 'normal' && parseFloat(this.pvDist.std) <= 0) {
-                errors.push('PV std deviation must be positive');
-            }
-            if ((this.pvDist.type === 'uniform' || this.pvDist.type === 'normal')
-                && parseFloat(this.pvDist.min) >= parseFloat(this.pvDist.max)) {
-                errors.push('PV min must be less than max');
-            }
-            return errors;
-        },
-
         /* ---- Build payload from current state ---- */
         buildPayload() {
             const payload = {
                 name: this.simName,
-                n_homes: parseInt(this.n_homes),
+                n_homes: this.n_homes,
                 seed: this.seed,
                 pv: { capacity_kw: this._buildDistPayload(this.pvDist) },
                 load: { annual_consumption_kwh: this._buildDistPayload(this.loadDist) }
@@ -119,7 +102,7 @@ document.addEventListener('alpine:init', () => {
                 payload.battery = { capacity_kwh: this._buildDistPayload(this.batteryDist) };
             }
             if (this.periodMode === 'preset') {
-                payload.days = parseInt(this.periodDays);
+                payload.days = this.periodDays;
             } else {
                 payload.start = this.startDate;
                 payload.end = this.endDate;
@@ -147,7 +130,7 @@ document.addEventListener('alpine:init', () => {
             if (this.batteryEnabled && this.dispatchStrategyType !== 'self_consumption') {
                 const ds = { strategy_type: this.dispatchStrategyType };
                 if (this.dispatchStrategyType === 'tou_optimized') {
-                    ds.peak_hours = [[parseInt(this.dispatchPeakStart), parseInt(this.dispatchPeakEnd)]];
+                    ds.peak_hours = [[this.dispatchPeakStart, this.dispatchPeakEnd]];
                 } else if (this.dispatchStrategyType === 'peak_shaving') {
                     ds.import_limit_kw = parseFloat(this.dispatchImportLimitKw);
                 }
@@ -177,15 +160,10 @@ document.addEventListener('alpine:init', () => {
         },
 
         /* ---- Simulation submission ---- */
+        /* The server refuses a form it cannot run; a refused Run leaves the earlier run's progress and results. */
         async submitFleet() {
-            const errors = this.formErrors();
-            if (errors.length > 0) {
-                this.errorMsg = errors.join('; ');
-                return;
-            }
             this.submitting = true;
             this.errorMsg = '';
-            this.submittedJob = null;
             try {
                 const resp = await fetch('/api/simulate/fleet-from-distribution', {
                     method: 'POST',
@@ -275,7 +253,7 @@ document.addEventListener('alpine:init', () => {
         applyConfig(form) {
             this.simName = form.name ?? '';
             this.n_homes = form.n_homes;
-            this.seed = form.seed ?? DEFAULT_SEED;
+            this.seed = form.seed ?? limits.seed_default;
             this.pvDist = this._distFromConfig(form.pv.capacity_kw, this.pvDist);
             this.batteryEnabled = Boolean(form.battery);
             if (form.battery) {
@@ -302,7 +280,7 @@ document.addEventListener('alpine:init', () => {
                 this.endDate = end;
             } else {
                 this.periodMode = 'preset';
-                this.periodDays = DEFAULT_PERIOD_DAYS;
+                this.periodDays = limits.default_days;
             }
         },
 

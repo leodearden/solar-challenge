@@ -15,7 +15,7 @@ from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
+from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
     ImportedFleetForm,
@@ -25,7 +25,8 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS, parse_seg_tariff
+from solar_challenge.web.simulation_params import parse_seg_tariff
+from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -281,6 +282,61 @@ class TestParseFleetFormRefusalOrder:
         with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
             parse_fleet_form({**ungeneratable, key: value})
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+
+#: Each component's fixed value no home may hold (P3), with the refusal parse_fleet_form gives a fleet form fixing it.
+_FIXED_VALUES_OUTSIDE_THEIR_RANGES = [
+    pytest.param(
+        "pv",
+        {"capacity_kw": 50},
+        "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1",
+        id="pv",
+    ),
+    pytest.param(
+        "battery",
+        {"capacity_kwh": 500},
+        "battery.capacity_kwh must be between 0 and 100 for every home, got 500.0 for home 1",
+        id="battery",
+    ),
+    pytest.param(
+        "load",
+        {"annual_consumption_kwh": 100000},
+        "load.annual_consumption_kwh must be between 500 and 20000 for every home, got 100000.0 for home 1",
+        id="load",
+    ),
+]
+
+#: A PV distribution every home draws above the pv component's range (P15).
+_PV_DRAWN_ABOVE_ITS_RANGE = {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}}
+
+#: The refusal of a home drawing PV above its range, the value drawn left open.
+_PV_DRAWN_ABOVE_ITS_RANGE_REFUSAL = re.compile(
+    r"pv\.capacity_kw must be between 0\.5 and 20 for every home, got \d+\.\d+ for home \d+"
+)
+
+
+class TestParseFleetFormBoundsEveryHome:
+    """parse_fleet_form refuses a fleet whose homes hold a PV, battery or load value outside its component's value_range, fixed or drawn (L2)."""
+
+    @pytest.mark.parametrize(("key", "block", "message"), _FIXED_VALUES_OUTSIDE_THEIR_RANGES)
+    def test_a_fixed_value_outside_its_components_range_is_refused_naming_its_path_the_home_the_range_and_the_value(
+        self, key: str, block: dict[str, Any], message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_fleet_form({**valid_distribution_form(), key: block})
+        assert str(exc_info.value) == message
+
+    def test_a_drawn_value_outside_its_components_range_is_refused_naming_its_path_and_the_home(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_fleet_form({**valid_distribution_form(), "pv": _PV_DRAWN_ABOVE_ITS_RANGE})
+        assert _PV_DRAWN_ABOVE_ITS_RANGE_REFUSAL.fullmatch(str(exc_info.value)), str(exc_info.value)
+
+    def test_scenario_from_fleet_form_refuses_the_same_form(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            scenario_from_fleet_form({**valid_distribution_form(), "pv": {"capacity_kw": 50}})
+        assert str(exc_info.value) == (
+            "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1"
+        )
 
 
 class TestScenarioFromFleetForm:

@@ -374,7 +374,7 @@ class TestHomeBlockKeys:
             "degradation_rate_per_year": 0.006,
             "system_losses": 0.05,
         }
-        grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8}
+        grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8, "forecast": "trailing_14_days"}
         dispatch_strategy: dict[str, Any] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
         battery_without_efficiency: dict[str, Any] = {
             "capacity_kwh": 9.5,
@@ -773,7 +773,7 @@ class TestFleetDistributionBlockKeys:
                 "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
                 "max_discharge_kw": 3.0,
                 "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
-                "grid_charging": {"target_soc_fraction": 0.8},
+                "grid_charging": {"target_soc_fraction": 0.8, "forecast": "trailing_14_days"},
                 "min_soc_fraction": 0.15,
                 "max_soc_fraction": 0.95,
                 "charge_efficiency": 0.96,
@@ -836,7 +836,7 @@ class TestFleetDistributionBlockKeys:
                 },
                 settings={
                     "dispatch_strategy": TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-                    "grid_charging": GridChargeConfig(target_soc_fraction=0.8),
+                    "grid_charging": GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
                 },
             ),
             heat_pump=ComponentDistribution(

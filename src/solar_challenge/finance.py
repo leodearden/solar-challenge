@@ -14,6 +14,8 @@ Provides:
   - ``AnnualPhysics`` — frozen dataclass of a summary's totals scaled to its
     window's year, beside the window and how its run was priced.
   - ``annualise`` — the one annualisation rule, a summary to its AnnualPhysics.
+  - ``refuse_analysis_only_forecasts`` — refuses, before they are simulated,
+    homes whose grid charge a forecast no board figure may use sizes.
   - ``basis_c_own_use_kwh`` — a summary's basis-C own-use, demand − import,
     over its window.
   - ``OwnUseBasis`` — enum of where a home's ledger takes its own-use from.
@@ -45,12 +47,18 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Iterator, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator
 
+from solar_challenge.dispatch import (
+    ANALYSIS_ONLY_FORECASTS,
+    GRID_CHARGE_FORECASTS,
+    GridChargeForecast,
+    distinct_grid_charge_forecasts,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.gridservices import (
     FlatGridServices,
@@ -409,6 +417,9 @@ class BillDistribution:
     None only for a distribution built by hand, until the field is required.
     """
 
+    grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
+    """The forecasts that sized the homes' grid charge (dispatch.distinct_grid_charge_forecasts), () when none grid-charged."""
+
 
 # ---------------------------------------------------------------------------
 # CostRecoverySolution — solve_cost_recovery_rate output
@@ -596,6 +607,44 @@ def _summary_pricing(summary: "SummaryStatistics") -> "RunPricing":
     return pricing
 
 
+def _refuse_an_analysis_only_forecast(forecast: Optional[GridChargeForecast], *, held_as: str) -> None:
+    """Refuse *forecast*, which *held_as* names, when it is one of ANALYSIS_ONLY_FORECASTS, which no bill, projection or cost-recovery figure may use.
+
+    The one refusal finance's two checks share: annualise's of a summary, and
+    refuse_analysis_only_forecasts' of the homes a projection is about to simulate.
+
+    Raises:
+        ConfigurationError: Naming *held_as*, the forecast, why, and the forecasts to run the
+            battery's grid_charging under instead.
+    """
+    if forecast in ANALYSIS_ONLY_FORECASTS:
+        board = " or ".join(repr(each) for each in GRID_CHARGE_FORECASTS if each not in ANALYSIS_ONLY_FORECASTS)
+        raise ConfigurationError(
+            f"finance bills and projects board figures, and {held_as} is {forecast!r}, which reads the run's "
+            "own future PV and demand: it is an upper-bound analysis mode board figures never use. Simulate "
+            f"the battery's grid_charging with forecast {board} instead"
+        )
+
+
+def refuse_analysis_only_forecasts(homes: Iterable["HomeConfig"]) -> None:
+    """Refuse *homes*, before they are simulated, when a home's battery grid-charges by one of ANALYSIS_ONLY_FORECASTS, whose summary annualise would refuse once simulated.
+
+    :func:`project_multi_year` and :func:`solve_cost_recovery_rate` call it before their
+    first simulation, so a fleet they could not bill is refused before it is simulated.
+
+    Raises:
+        ConfigurationError: Naming the first such home's battery_config.grid_charging.forecast,
+            the home by its position in *homes*, the forecast, why, and the forecasts to run
+            the battery's grid_charging under instead.
+    """
+    for index, home in enumerate(homes):
+        battery = home.battery_config
+        if battery is not None and battery.grid_charging is not None:
+            _refuse_an_analysis_only_forecast(
+                battery.grid_charging.forecast, held_as=f"home {index}'s battery_config.grid_charging.forecast"
+            )
+
+
 # ---------------------------------------------------------------------------
 # annualise — the one annualisation rule
 # ---------------------------------------------------------------------------
@@ -644,7 +693,13 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
         ValueError: If the summary has no window (:func:`_summary_window`) or
             no pricing (:func:`_summary_pricing`), naming the missing field and
             calculate_summary, which sets both.
+        ConfigurationError: If one of ANALYSIS_ONLY_FORECASTS, perfect_foresight,
+            sized the summary's grid charge (:func:`_refuse_an_analysis_only_forecast`):
+            it reads the run's own future, so no board figure may use it.
     """
+    _refuse_an_analysis_only_forecast(
+        summary.grid_charge_forecast, held_as="this SummaryStatistics' grid_charge_forecast"
+    )
     window = _summary_window(summary)
     scale = window.annualisation_scale
     return AnnualPhysics(
@@ -1177,6 +1232,8 @@ def householder_bill(
             if the home's ledger refuses its year, naming the invariant and its
             values, such as an own-use that with the import does not cover the
             demand (L3) (:class:`HomeLedger`).
+        ConfigurationError: If the perfect_foresight forecast sized the
+            summary's grid charge, as :func:`annualise` refuses it.
     """
     _require_summary_days(simulation_days, summary)
     _require_finite_and_not_negative({"annual_self_consumption_kwh": annual_self_consumption_kwh})
@@ -1511,7 +1568,9 @@ def bill_distribution(
         simulation_days: The summaries' own day count, their window's days.
 
     Returns:
-        A BillDistribution with representative and per-home statistics.
+        A BillDistribution with representative and per-home statistics, the
+        window they were annualised from and the forecasts that sized the
+        homes' grid charge.
 
     Raises:
         ValueError: If ``summaries`` is empty; if a summary has no window; if
@@ -1519,6 +1578,8 @@ def bill_distribution(
             whose window differs and both windows; if *simulation_days* is
             not the summaries' own day count (INV-8), naming both; or if a
             summary has no pricing, naming calculate_summary.
+        ConfigurationError: If the perfect_foresight forecast sized a
+            summary's grid charge, as :func:`annualise` refuses it.
     """
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
@@ -1554,6 +1615,9 @@ def bill_distribution(
         median_gbp=median_val,
         max_gbp=float(series.max()),
         annualised_from=window,
+        grid_charge_forecasts=distinct_grid_charge_forecasts(
+            summary.grid_charge_forecast for summary in summaries
+        ),
     )
 
 
@@ -1830,8 +1894,12 @@ def project_multi_year(
             at a recorded SEG rate is negative, which
             :func:`~solar_challenge.seg.calculate_seg_revenue` refuses, naming
             the export.
+        ConfigurationError: Before any simulation, if a home's battery
+            grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
+            :func:`refuse_analysis_only_forecasts` refuses it.
     """
     homes = scenario.simulated_homes()
+    refuse_analysis_only_forecasts(homes)
     start_ts, end_ts = scenario.simulation_bounds()
 
     grid_services_model = grid_services_model_of(finance)
@@ -2460,13 +2528,20 @@ def solve_cost_recovery_rate(
 
     Returns:
         A :class:`CostRecoverySolution` with the solved rate and outlay.
+
+    Raises:
+        ConfigurationError: Before any simulation, if a home's battery
+            grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
+            :func:`refuse_analysis_only_forecasts` refuses it.
     """
+    homes = scenario.simulated_homes()
+    refuse_analysis_only_forecasts(homes)
+
     # ---- The frozen default simulator (until S16 ζ) --------------------------
     if simulate is None:
         from solar_challenge.fleet import default_runner
         simulate = default_runner().simulate
 
-    homes = scenario.simulated_homes()
     start_ts, end_ts = scenario.simulation_bounds()
 
     # ---- (1) Base curve at the configured r0 ---------------------------------

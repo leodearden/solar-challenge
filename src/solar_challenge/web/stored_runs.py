@@ -539,8 +539,8 @@ def _check_window(results: SimulationResults) -> None:
     _ = results.window
 
 
-def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
-    """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
+def _time_series(run_dir: Path, run_id: str, name: str, summary: SummaryStatistics) -> SimulationResults:
+    """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *summary*'s strategy_name, their grid charge sized by its grid_charge_forecast.
 
     Raises:
         StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions or a
@@ -556,7 +556,11 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
     if not path.is_file():
         raise StoredRunUnreadable(run_id, name, None, "is missing")
     try:
-        results = SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+        results = SimulationResults.from_dataframe(
+            pd.read_parquet(path, engine="pyarrow"),
+            strategy_name=summary.strategy_name,
+            grid_charge_forecast=summary.grid_charge_forecast,
+        )
         _check_window(results)
     except SeriesRefused as refused:
         raise StoredRunUnreadable(run_id, name, refused.column, refused.reason) from refused
@@ -578,7 +582,7 @@ def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
     documents = _home_run_documents(run_dir, run_id)
     config = documents.config.read(HomeConfig)
     summary = documents.summary.read(SummaryStatistics)
-    results = _time_series(run_dir, run_id, "data.parquet", summary.strategy_name)
+    results = _time_series(run_dir, run_id, "data.parquet", summary)
     return StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
 
 
@@ -595,7 +599,7 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
     summary = documents.summary.read(FleetSummary)
     home_summaries = tuple(each.read(SummaryStatistics) for each in documents.home_summaries)
     per_home_results = [
-        _time_series(run_dir, run_id, _home_time_series(index), home_summary.strategy_name)
+        _time_series(run_dir, run_id, _home_time_series(index), home_summary)
         for index, home_summary in enumerate(home_summaries)
     ]
     return StoredFleetRun(

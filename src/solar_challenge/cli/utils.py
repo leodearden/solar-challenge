@@ -50,6 +50,7 @@ from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import parse_location
 from solar_challenge.scenario_writer import location_block
@@ -231,11 +232,12 @@ def home_summary_rows(summary: SummaryStatistics) -> tuple[tuple[str, str], ...]
             net_cost_gbp=summary.net_cost_gbp,
             seg_revenue_gbp=summary.seg_revenue_gbp,
         ),
+        *_grid_charge_forecast_rows(distinct_grid_charge_forecasts([summary.grid_charge_forecast])),
     )
 
 
 def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
-    """The (metric, value) rows `fleet run` prints for a fleet's summary: the fleet's totals, then, after a blank row, the spread of its homes' generation and self-consumption ratios."""
+    """The (metric, value) rows `fleet run` prints for a fleet's summary: the fleet's totals and the forecasts that sized its grid charge, then, after a blank row, the spread of its homes' generation and self-consumption ratios."""
     return (
         *_energy_total_rows(summary),
         ("Self-Consumption Ratio", f"{summary.fleet_self_consumption_ratio:.1%}"),
@@ -248,6 +250,7 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
             net_cost_gbp=summary.total_net_cost_gbp,
             seg_revenue_gbp=summary.total_seg_revenue_gbp,
         ),
+        *_grid_charge_forecast_rows(summary.grid_charge_forecasts),
         ("", ""),
         (
             "Per-Home Generation (min/max)",
@@ -266,6 +269,11 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
             f"{summary.per_home_self_consumption_ratio_mean:.1%}",
         ),
     )
+
+
+def _grid_charge_forecast_rows(forecasts: tuple[GridChargeForecast, ...]) -> tuple[tuple[str, str], ...]:
+    """The Grid-charge forecast row naming *forecasts*, the forecasts that sized a summary's grid charge; none when nothing grid-charged."""
+    return (("Grid-charge forecast", ", ".join(forecasts)),) if forecasts else ()
 
 
 def _energy_total_rows(summary: SummaryStatistics | FleetSummary) -> tuple[tuple[str, str], ...]:

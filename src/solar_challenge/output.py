@@ -5,7 +5,7 @@ import math
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Union
 
 import pandas as pd
 
@@ -16,6 +16,8 @@ from solar_challenge.home import (
     heat_pump_load_ratio,
     self_consumption_ratio,
 )
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
+from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
@@ -53,6 +55,16 @@ def _extrapolation_notice(window: Optional[SimulationWindow]) -> str:
     )
 
 
+def _grid_charge_forecast_notice(forecasts: Sequence[GridChargeForecast]) -> str:
+    """The paragraph, ending in a blank line, that tells the board which forecasts sized a report's battery grid charging, each with what it is; empty when nothing grid-charged."""
+    if not forecasts:
+        return ""
+    sized_by = "; and by ".join(
+        f"the {forecast} forecast: {GRID_CHARGE_FORECAST_LABELS[forecast]}" for forecast in forecasts
+    )
+    return f"*Battery grid charging in cheap periods was sized by {sized_by}.*\n\n"
+
+
 def export_to_csv(
     results: SimulationResults,
     filepath: Union[str, Path],
@@ -88,15 +100,17 @@ def generate_summary_report(
             If provided, a SEG Revenue section is included in the report.
 
     Returns:
-        Formatted markdown text report
+        Formatted markdown text report. When a forecast sized the run's grid
+        charge, it opens, under its title, with a notice naming the forecast.
     """
     summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
+    notice = _grid_charge_forecast_notice(distinct_grid_charge_forecasts([summary.grid_charge_forecast]))
 
     report = f"""{title}
 
-## Simulation Period
+{notice}## Simulation Period
 - Duration: {summary.simulation_days} days
 - Start: {results.generation.index[0]}
 - End: {results.generation.index[-1]}
@@ -394,13 +408,20 @@ def generate_community_report(
             append as a separate section.
 
     Returns:
-        Formatted markdown report string.
+        Formatted markdown report string. When forecasts sized the grid charge
+        of the fleet's homes, whose grid flows it nets, it opens, under its
+        title, with a notice naming each, and what it is.
     """
     m = compute_community_metrics(community_results)
+    notice = _grid_charge_forecast_notice(
+        distinct_grid_charge_forecasts(
+            home.grid_charge_forecast for home in community_results.fleet_results.per_home_results
+        )
+    )
 
     report = f"""# Community Energy Sharing Report
 
-## Sharing Mode
+{notice}## Sharing Mode
 {m.sharing_mode}
 
 ## Community vs Unshared Grid Flows (kWh)
@@ -471,7 +492,9 @@ def generate_finance_report(
 
     When ``bill_physics.annualised_from`` is not whole calendar years, the
     report opens, under its title, with a notice that its yearly figures are
-    extrapolated from that window.
+    extrapolated from that window. When forecasts sized the homes' grid charge
+    (``bill_physics.grid_charge_forecasts``), a notice naming each, and what it
+    is, follows.
 
     Args:
         bill_physics: BillDistribution from the physics self-consumption path.
@@ -518,7 +541,9 @@ def generate_finance_report(
     )
 
     rep = bill_physics.representative
-    notice = _extrapolation_notice(bill_physics.annualised_from)
+    notice = _extrapolation_notice(bill_physics.annualised_from) + _grid_charge_forecast_notice(
+        bill_physics.grid_charge_forecasts
+    )
 
     if bill_spreadsheet is None:
         # ---- Physics-only path (own-use payment + total outlay; no SEG) --
@@ -744,7 +769,9 @@ def generate_config_ranking_report(
     When the feasible configs' bills are annualised from a window that is not
     whole calendar years (``results[0].solution.outlay.annualised_from``), the
     report opens, under its first heading, with a notice that its yearly figures
-    are extrapolated from that window.
+    are extrapolated from that window. When forecasts sized the homes' grid
+    charge (``results[0].solution.outlay.grid_charge_forecasts``), a notice
+    naming each, and what it is, follows.
 
     Args:
         ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
@@ -761,7 +788,9 @@ def generate_config_ranking_report(
     if not ranked.results:
         report += "*No feasible configurations found.*\n"
     else:
-        report += _extrapolation_notice(ranked.results[0].solution.outlay.annualised_from)
+        outlay = ranked.results[0].solution.outlay
+        report += _extrapolation_notice(outlay.annualised_from)
+        report += _grid_charge_forecast_notice(outlay.grid_charge_forecasts)
         report += (
             "| Config | Solved Rate (p/kWh) | Rep Outlay (£) | "
             "Min/Mean/Median/Max (£) | CBS Surplus (£/home/yr) | "

@@ -30,10 +30,8 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
@@ -103,7 +101,7 @@ class TestScenarioBuilderRoute:
                     "key": component.key,
                     "fixed_field": component.fixed_field,
                     "grammar_key": component.grammar_key,
-                    "dist": component.builder_default.editor_state(),
+                    "dist": component.start.editor_state(),
                 }
                 for component in FLEET_COMPONENTS.values()
             ]
@@ -325,6 +323,27 @@ class TestScenarioAPI:
         data = response.get_json()
         assert data["valid"] is False
         assert any(error_text in error for error in data["errors"]), data["errors"]
+
+    def test_validate_reports_a_drawn_value_outside_its_components_range(
+        self, client: FlaskClient
+    ) -> None:
+        """P15: the default form with its PV a normal around 50 kW, which every home draws above the pv component's range, is invalid, naming pv.capacity_kw and the range."""
+        form = {
+            **TestBuilderScenarioYaml._DEFAULT_FORM,
+            "pv_distribution_type": "normal",
+            "pv_mean": 50,
+            "pv_std": 1,
+        }
+
+        response = client.post("/api/scenarios/validate", json=form)
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["valid"] is False
+        assert any(
+            error.startswith("pv.capacity_kw must be between 0.5 and 20 for every home, got ")
+            for error in data["errors"]
+        ), data["errors"]
 
     def test_validate_reports_a_shuffled_pool_too_small_for_the_fleet(
         self, client: FlaskClient

@@ -150,6 +150,36 @@ class TestCommunityConfig:
         )
         assert cfg.community_battery is battery
 
+    @pytest.mark.parametrize("forecast", ["trailing_14_days", "perfect_foresight"])
+    def test_a_community_battery_whose_grid_charge_a_forecast_sizes_is_refused(self, forecast: str) -> None:
+        """The community dispatch computes no useful-charge ceilings, so a forecast there would be silently ignored."""
+        battery = _community_battery(
+            dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9, forecast=forecast)
+        )
+        with pytest.raises(ConfigurationError) as refused:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=battery,
+                billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+            )
+
+        message = str(refused.value)
+        assert "community battery" in message
+        assert "forecast" in message
+        assert repr(forecast) in message
+        assert "'pv_blind'" in message
+
+    def test_a_pv_blind_community_battery_builds(self) -> None:
+        battery = _community_battery(
+            dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9, forecast="pv_blind")
+        )
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=battery,
+            billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+        )
+        assert cfg.community_battery is battery
+
     @pytest.mark.parametrize(
         "value",
         [

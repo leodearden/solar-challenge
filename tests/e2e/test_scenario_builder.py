@@ -16,6 +16,8 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.web.fleet_components import days_window
 from tests.e2e._alpine_start import open_once_alpine_has_started
 from tests.e2e._css_transitions import finish_the_css_transitions
 from tests.e2e._fetches_handled import (
@@ -1176,3 +1178,19 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
     )
     assert _form_sent_on_validate(page) == form_before_upload
+
+
+def test_full_year_sets_the_period_to_the_default_window(page: Page, live_server: str) -> None:
+    """Full Year, after 1 Week moved the period, fills Start Date and End Date with timebase's default window."""
+    open_builder(page, live_server)
+    _open_section(page, "Period")
+    start, end = page.get_by_label("Start Date", exact=True), page.get_by_label("End Date", exact=True)
+
+    page.get_by_role("button", name="1 Week", exact=True).click()
+    week_start, week_end = days_window(7)
+    expect(start).to_have_value(week_start.isoformat())
+    expect(end).to_have_value(week_end.isoformat())
+
+    page.get_by_role("button", name="Full Year", exact=True).click()
+    expect(start).to_have_value(DEFAULT_FIRST_DAY.isoformat())
+    expect(end).to_have_value(DEFAULT_LAST_DAY.isoformat())
