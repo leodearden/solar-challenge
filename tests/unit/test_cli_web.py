@@ -18,20 +18,20 @@ from typing import TypeVar
 import pytest
 pytest.importorskip("flask")
 
-SERVER_WITH_BLOCKING_SIMULATIONS = """
-import functools
+from solar_challenge.web.database import Database
+from solar_challenge.web.storage import RunRecord
+from tests._run_stores import run_storage_over
+
+SERVER_WITH_A_BLOCKING_RUNNER = """
 import signal
 import sys
-import threading
+import time
 from pathlib import Path
 
-from flask import request_started
-
 from solar_challenge.cli import app
-from solar_challenge.web.jobs import JobManager
+from solar_challenge.cli.utils import CliInvocation
 
-started_dir, port = Path(sys.argv[1]), sys.argv[2]
-command_returned = threading.Event()
+started_dir, port, release_file = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
 
 
 class BlockingRunner:
@@ -43,25 +43,13 @@ class BlockingRunner:
 
     def simulate_home(self, home, start_date, end_date):
         (started_dir / str(home.pv_config.capacity_kw)).touch()
-        command_returned.wait()
+        while not release_file.exists():
+            time.sleep(0.05)
         raise RuntimeError("stub simulation")
 
 
-@functools.cache
-def blocking_jobs_of(dashboard):
-    return JobManager(dashboard.extensions["storage"], max_workers=2, runner=BlockingRunner())
-
-
-def submit_to_blocking_jobs(dashboard, **extra):
-    dashboard.extensions["job_manager"] = blocking_jobs_of(dashboard)
-
-
-request_started.connect(submit_to_blocking_jobs)
 signal.signal(signal.SIGINT, signal.default_int_handler)
-try:
-    app(["web", "start", "--port", port])
-finally:
-    command_returned.set()
+app(["web", "start", "--port", port], obj=CliInvocation(runner=BlockingRunner()))
 """
 
 WEB_START = """
@@ -234,9 +222,36 @@ def _dashboard_status(port: int) -> int:
         return status
 
 
+def _store_dir(home: Path) -> Path:
+    """The directory of the dashboard store of a server whose HOME is home."""
+    return home / ".solar-challenge"
+
+
 def _store_lock_file(home: Path) -> Path:
     """The lock file of the dashboard store of a server whose HOME is home."""
-    return home / ".solar-challenge" / "dashboard.lock"
+    return _store_dir(home) / "dashboard.lock"
+
+
+def _stored_run(home: Path, run_id: str) -> RunRecord:
+    """The record of run run_id in the dashboard store of a server whose HOME is home, read as a reader beside the server, which keeps the store's lock."""
+    record = run_storage_over(Database(_store_dir(home) / "solar-challenge.db")).run_record(run_id)
+    assert record is not None, f"the store under {home} records no run {run_id}"
+    return record
+
+
+def _web_start_beside(home: Path) -> subprocess.CompletedProcess[str]:
+    """Run a second `web start` with HOME home, beside a server whose HOME it is too, and return how it ended.
+
+    COLUMNS keeps Rich from folding the long lock path at 80 columns on its stderr, which is not a terminal.
+    """
+    return subprocess.run(
+        [sys.executable, "-c", WEB_START, "--port", "0"],
+        cwd=home,
+        env={**os.environ, "HOME": str(home), "COLUMNS": "1000"},
+        capture_output=True,
+        text=True,
+        timeout=_PATIENCE_SECS,
+    )
 
 
 def _store_holder_pid(home: Path) -> int | None:
@@ -264,27 +279,51 @@ def test_a_check_that_fails_while_a_server_runs_reports_what_the_server_printed_
     assert "a line on stderr" in failed.exconly()
 
 
-def test_stopping_the_server_drops_the_jobs_still_queued(tmp_path: Path) -> None:
-    """Ctrl+C drops the jobs still waiting for a worker, so they never run, even when the server's launcher left SIGINT ignored."""
+def test_stopping_the_server_drops_the_jobs_still_queued_and_holds_the_store_until_the_running_ones_finish(
+    tmp_path: Path,
+) -> None:
+    """B14: Ctrl+C drops the jobs still waiting for a worker, so they never run, even when the server's launcher left SIGINT ignored; the jobs already running finish, and the store stays locked until they have.
+
+    The test releases the running simulations itself, once the dropped job's run reads failed,
+    which shutdown has done by then: the server's close waits for them, so they cannot wait for
+    the command to return.
+    """
     started_dir = tmp_path / "started"
     started_dir.mkdir()
+    release_file = tmp_path / "release"
 
     def started() -> list[str]:
         return sorted(path.name for path in started_dir.iterdir())
 
     with _server(
-        tmp_path, RUNS_A_SCRIPT_WITH_SIGINT_IGNORED, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0"
+        tmp_path,
+        RUNS_A_SCRIPT_WITH_SIGINT_IGNORED,
+        SERVER_WITH_A_BLOCKING_RUNNER,
+        str(started_dir),
+        "0",
+        str(release_file),
     ) as server:
         port = _serving_port(server)
-        for pv_kw in (1.0, 2.0, 3.0):
-            _submit_home_job(port, pv_kw)
+        *running, queued = [_submit_home_job(port, pv_kw) for pv_kw in (1.0, 2.0, 3.0)]
         _wait_until(server, lambda: started() == ["1.0", "2.0"], "two jobs run and the third waits for a worker")
 
         server.process.send_signal(signal.SIGINT)
+        _wait_until(server, lambda: _stored_run(tmp_path, queued).status == "failed", "the queued job's run is dropped")
+
+        assert _stored_run(tmp_path, queued).error_message == "Dropped: the server shut down before the job ran"
+        second = _web_start_beside(tmp_path)
+        assert second.returncode == 1, f"the store was released while jobs still ran: {second.stderr}"
+        assert str(_store_lock_file(tmp_path)) in second.stderr
+        assert [_stored_run(tmp_path, run_id).status for run_id in running] == ["running", "running"]
+
+        release_file.touch()
         returncode = server.process.wait(timeout=_PATIENCE_SECS)
 
         assert returncode >= 0, f"SIGINT killed the server (return code {returncode}) instead of raising KeyboardInterrupt in it"
         assert started() == ["1.0", "2.0"]
+        assert [
+            (record.status, record.error_message) for record in (_stored_run(tmp_path, run_id) for run_id in running)
+        ] == [("failed", "stub simulation")] * 2
 
 
 def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_path: Path) -> None:
@@ -305,24 +344,19 @@ def test_web_start_prints_its_ctrl_c_hint_after_its_status_line_on_stderr(tmp_pa
 def test_a_second_web_start_on_the_store_exits_1_naming_the_lock_file_and_its_holder_and_the_first_servers_run_stays_running(
     tmp_path: Path,
 ) -> None:
-    """COLUMNS keeps Rich from folding the long lock path at 80 columns on the second server's stderr, which is not a terminal."""
+    """The first server's simulation is never released, so its job is still running when the second start is refused."""
     started_dir = tmp_path / "started"
     started_dir.mkdir()
     lock_path = str(_store_lock_file(tmp_path))
 
-    with _server(tmp_path, SERVER_WITH_BLOCKING_SIMULATIONS, str(started_dir), "0") as server:
+    with _server(
+        tmp_path, SERVER_WITH_A_BLOCKING_RUNNER, str(started_dir), "0", str(tmp_path / "never-released")
+    ) as server:
         port = _serving_port(server)
         run_id = _submit_home_job(port, 1.0)
         _wait_until(server, lambda: (started_dir / "1.0").exists(), "its job's simulation starts")
 
-        second = subprocess.run(
-            [sys.executable, "-c", WEB_START, "--port", "0"],
-            cwd=tmp_path,
-            env={**os.environ, "HOME": str(tmp_path), "COLUMNS": "1000"},
-            capture_output=True,
-            text=True,
-            timeout=_PATIENCE_SECS,
-        )
+        second = _web_start_beside(tmp_path)
 
         assert second.returncode == 1, second.stderr
         assert lock_path in second.stderr
