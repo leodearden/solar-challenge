@@ -4,6 +4,8 @@
 
 All tests are offline/fast — no PVGIS/network is touched.  An injected synthetic
 simulate (constant FleetResults across ages) stands in for the real fleet simulator.
+The module also pins that the solve refuses a call that passes no simulator: it
+runs only the one its caller passes, never one of its own.
 """
 from __future__ import annotations
 
@@ -700,3 +702,20 @@ class TestSolveCostRecoveryRateShortWindow:
         )
         assert sol_short.binding == sol_full.binding
         assert sol_short.feasible == sol_full.feasible
+
+
+# ---------------------------------------------------------------------------
+# The solve runs only its caller's simulator
+# ---------------------------------------------------------------------------
+
+
+class TestSolveCostRecoveryRateRequiresASimulator:
+    """solve_cost_recovery_rate runs only the simulator its caller passes, never one of its own."""
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        """A call that passes no simulator is refused by name, and no fleet is simulated."""
+        scenario = _make_scenario(n_homes=2)
+        finance = _make_finance()
+
+        with pytest.raises(TypeError, match="simulate"):
+            solve_cost_recovery_rate(scenario, finance)

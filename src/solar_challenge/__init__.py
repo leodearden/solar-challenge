@@ -31,6 +31,12 @@ __all__: list[str] = [
     "ScenarioConfig",      # config.py — arg to solve_cost_recovery_rate
     "FleetConfig",         # fleet.py  — in solve_cost_recovery_rate's simulate signature
     "FleetResults",        # fleet.py  — return type of simulate
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner",
+    "FleetSimulator",
+    "HomeSimulator",
+    "FleetSimulate",
+    "HomesDone",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy",
     "DispatchDecision",
@@ -124,6 +130,12 @@ _SYMBOL_MODULE: dict[str, str] = {
     "ScenarioConfig": "config",
     "FleetConfig": "fleet",
     "FleetResults": "fleet",
+    # fleet execution
+    "FleetRunner": "fleet",
+    "FleetSimulator": "fleet",
+    "HomeSimulator": "fleet",
+    "FleetSimulate": "fleet",
+    "HomesDone": "fleet",
     # dispatch
     "DispatchStrategy": "dispatch",
     "DispatchDecision": "dispatch",
@@ -283,6 +295,12 @@ if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig as ScenarioConfig
     from solar_challenge.fleet import FleetConfig as FleetConfig
     from solar_challenge.fleet import FleetResults as FleetResults
+    # fleet execution
+    from solar_challenge.fleet import FleetRunner as FleetRunner
+    from solar_challenge.fleet import FleetSimulator as FleetSimulator
+    from solar_challenge.fleet import HomeSimulator as HomeSimulator
+    from solar_challenge.fleet import FleetSimulate as FleetSimulate
+    from solar_challenge.fleet import HomesDone as HomesDone
     # dispatch
     from solar_challenge.dispatch import DispatchStrategy as DispatchStrategy
     from solar_challenge.dispatch import DispatchDecision as DispatchDecision

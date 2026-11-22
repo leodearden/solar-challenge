@@ -189,9 +189,8 @@ Accessing a name from any other public submodule (`battery`, `community`,
 `tests/unit/test_public_api_surface.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules`
 pins this split.  Consumers that want to avoid the pvlib cost must not touch the
 `config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
-run it: a function that imports one of those submodules at call time, as a
-`finance` function may when it runs its default simulation, loads `pvlib` when
-called.
+run it, so a function of any other submodule can still load `pvlib` when called,
+by importing one of those submodules at call time.
 
 ### Network I/O
 

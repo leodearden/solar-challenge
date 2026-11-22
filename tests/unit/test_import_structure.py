@@ -11,6 +11,11 @@ its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
 No import statement of solar_challenge, at any scope, names the tests package: the wheel
 ships only src/, so such an import fails in every installed copy.
 
+No function of solar_challenge.finance imports a fleet runner: its function-local imports
+from solar_challenge.fleet bind only FleetConfig, which finance builds for the simulate its
+caller passes. Only a composition root constructs a runner or resolves default_runner
+(docs/prds/fleet-execution-policy.md, resolved design decision 1, sketch step ζ and B18).
+
 Outside its web subpackage, no import statement of solar_challenge names a module of that
 subpackage outside a function. Any module of the subpackage may import the web extra at
 module top, and the CLI, scripts/ and the dev-only offline-lane jobs run without that extra.
@@ -64,6 +69,9 @@ _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
 _RUNNER_PREFIX = "simulate_"
 _DISPATCH = f"{_PACKAGE}.dispatch"
 _SRC_DIR = REPOSITORY_ROOT / "src"
+_FINANCE = f"{_PACKAGE}.finance"
+_FLEET = f"{_PACKAGE}.fleet"
+_FINANCE_FLEET_NAMES = frozenset({"FleetConfig"})
 
 
 _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
@@ -509,6 +517,39 @@ def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
         "these allowed pairs give no reason; each must be a Permanent(<the documented contract "
         "that requires the laziness>) or a Transitional(<the task or program stream that "
         f"removes the import>), with non-blank text:\n{entries}"
+    )
+
+
+def test_finance_functions_import_only_fleet_config_from_fleet(
+    real_tree_imports: tuple[_ImportSite, ...],
+) -> None:
+    """Every name a finance function imports from fleet is FleetConfig: finance builds fleets for its caller's simulate and resolves no runner (fleet-execution-policy B18), until no finance function imports from fleet and this guard goes."""
+    from_fleet = [
+        site
+        for site in _function_local_package_imports(real_tree_imports)
+        if site.importer == _FINANCE and site.imported == _FLEET
+    ]
+    assert from_fleet, (
+        f"no function of {_FINANCE} imports from {_FLEET} any more, so this test and "
+        "_FINANCE_FLEET_NAMES go from tests/unit/test_import_structure.py, in the change that "
+        f"drops the ({_FINANCE!r}, {_FLEET!r}) entry of ALLOWED_FUNCTION_LOCAL_IMPORTS; "
+        "test_every_function_local_package_import_is_allowed then refuses any such import"
+    )
+
+    extra = [
+        (site, name)
+        for site in from_fleet
+        for name in site.names or (site.imported,)
+        if name not in _FINANCE_FLEET_NAMES
+    ]
+    found = "\n".join(f"{site}: {name}" for site, name in extra)
+    assert not extra, (
+        f"these imports inside a function of {_FINANCE} bind names from {_FLEET} other than "
+        f"{sorted(_FINANCE_FLEET_NAMES)}:\n{found}\n"
+        "finance builds the FleetConfig it hands its caller's simulate; only a composition root "
+        "constructs a runner or resolves default_runner (docs/prds/fleet-execution-policy.md, "
+        "resolved design decision 1, sketch step ζ and B18). Take the simulator as a required "
+        "`simulate: FleetSimulate` argument instead"
     )
 
 

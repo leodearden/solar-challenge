@@ -2,10 +2,11 @@
 
 Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
-- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
-  the package to them, the member guards, which accept the writes to self that
-  REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned dataclass is
-  frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that freezes each.
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE, FROZEN_MEMBERS and FROZEN_CALLS,
+  the locks holding the package to them, the member guards, which accept the writes to
+  self that REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned
+  dataclass is frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that
+  freezes each.
   A surface change edits the frozen tables' rows, and adds its release note,
   docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
@@ -73,7 +74,7 @@ FROZEN_SURFACE: dict[str, str] = {
     # --- finance / bill engine (finance.py) ---
     "bill": "(*, period_days: float, generation_kwh: float, demand_kwh: float, self_consumption_kwh: float, import_kwh: float, import_cost_gbp: float, baseline_import_cost_gbp: float, finance: FinanceConfig) -> BillBreakdown",
     "householder_bill": "(summary: SummaryStatistics, window_self_consumption_kwh: float, finance: FinanceConfig) -> BillBreakdown",
-    "solve_cost_recovery_rate": "(scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: Callable[[FleetConfig, Timestamp, Timestamp], FleetResults] | None = None) -> CostRecoverySolution",
+    "solve_cost_recovery_rate": "(scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: Callable[[FleetConfig, Timestamp, Timestamp], FleetResults]) -> CostRecoverySolution",
     "bill_distribution": "(summaries: Sequence[SummaryStatistics], finance: FinanceConfig) -> BillDistribution",
     "BillBreakdown": "dataclass[eq, frozen, match_args] (standing_charge_gbp: float, import_cost_gbp: float, own_use_payment_gbp: float, vat_gbp: float, total_outlay_gbp: float, own_use_vat_gbp: float, cbs_amount_due_gbp: float, self_consumption_saving_gbp: float, baseline_bill_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, self_consumption_fraction: float) -> None",
     "BillDistribution": "dataclass[eq, frozen, match_args] (representative: BillBreakdown, per_home_net_bill_gbp: tuple[float, ...], min_gbp: float, mean_gbp: float, median_gbp: float, max_gbp: float, annualised_from: SimulationWindow, grid_charge_forecasts: tuple[Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'], ...] = ()) -> None",
@@ -84,6 +85,12 @@ FROZEN_SURFACE: dict[str, str] = {
     "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
     "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
     "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": "dataclass[eq, frozen, match_args] (weather: WeatherProvider, home_simulator: HomeSimulator, parallel: bool = True, max_workers: int | None = None) -> None",
+    "FleetSimulator": "(*args, **kwargs)",
+    "HomeSimulator": "(*args, **kwargs)",
+    "FleetSimulate": "_CallableGenericAlias",
+    "HomesDone": "_CallableGenericAlias",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
     "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
@@ -324,6 +331,17 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "total_self_consumption": "property (self) -> Series",
         "to_aggregate_dataframe": "(self) -> DataFrame",
     },
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
+    },
+    "FleetSimulator": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
+    },
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
         "name": "abstract property (self) -> str",
@@ -531,6 +549,37 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
         is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
     )
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
+
+
+# ---------------------------------------------------------------------------
+# The __call__ each pinned class's own body defines, with its frozen form
+#
+# A consumer implements a callable Protocol such as HomeSimulator by its
+# __call__, which neither lock above spells: surface_form spells the Protocol
+# '(*args, **kwargs)', and member_forms skips dunders.  Keys are pinned-class
+# paths, in _pinned_classes order; each value is the __call__'s surface_form,
+# on one line.
+# ---------------------------------------------------------------------------
+FROZEN_CALLS: dict[str, str] = {
+    "HomeSimulator": "(self, config: HomeConfig, start_date: Timestamp, end_date: Timestamp, *, weather: WeatherProvider) -> SimulationResults",
+}
+
+
+def test_every_pinned_class_call_matches_frozen_calls() -> None:
+    """Every pinned class whose own body defines __call__ has the form FROZEN_CALLS pins for it.
+
+    Fails once, naming each drifted class path with its frozen and current __call__
+    forms, labelled additive or breaking; a pinned path whose class no longer defines a
+    __call__ of its own is listed last, breaking.
+    """
+    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
+    drifted = _drifted(
+        FROZEN_CALLS,
+        {path: surface_form(call) for path, call in calls.items()},
+        absent="(no __call__ of its own)",
+        is_additive=lambda path, row: is_additive_change(row, calls[path]),
+    )
+    assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
 
 
 _STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic, BaseException, Exception, ValueError)
@@ -1057,6 +1106,8 @@ EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
     "GRID_SERVICES_RATE_BANDS": "constant", # GOTCHA: frozen-dataclass instance, NOT a class
     "DispatchTariffPeriod": "class",        # Enum alias — verifies clean class re-export
+    "FleetSimulate": "constant",            # GOTCHA: Callable type alias, NOT a class
+    "HomesDone": "constant",                # GOTCHA: Callable type alias, NOT a class
 }
 
 
