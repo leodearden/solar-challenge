@@ -276,7 +276,7 @@ class TestScenarioAPI:
             pytest.param(
                 ("pv_capacity_kw",),
                 {"pv_distribution_type": "normal", "pv_mean": 4},
-                "requires 'mean' and 'std'",
+                "fleet_distribution.pv.capacity_kw: requires 'std'",
                 id="PV normal without its std",
             ),
             pytest.param(

@@ -56,6 +56,7 @@ from solar_challenge.scenario_blocks import (
     constructed,
     dispatch_strategy_argument,
     read_dispatch_strategy_key,
+    refusal,
     refuse_missing_keys,
     refuse_unrecognised_keys,
 )
@@ -513,10 +514,11 @@ def _refuse_proportional_sources_not_drawn_earlier(
                 continue
             path, spec = f"{name}.{key}", component.draws[key]
             if isinstance(spec, ProportionalDistribution) and spec.source not in drawn_earlier:
-                raise ConfigurationError(
-                    f"Invalid {child_path(block_path, path)} source {spec.source!r}; "
+                raise refusal(
+                    child_path(block_path, path),
+                    f"invalid source {spec.source!r}; "
                     "valid sources: a number or count field drawn earlier for every home that draws it, "
-                    f"one of {drawn_earlier!r}"
+                    f"one of {drawn_earlier!r}",
                 )
             if row.kind in _NUMBER_KINDS:
                 drawn_earlier.append(path)
@@ -534,14 +536,11 @@ def _shuffled_pools(
 
 
 def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a shuffled pool's counts do not total its n_homes: a pool holds one value per home."""
+    """Refuse *config* when a shuffled pool's counts do not total its n_homes, naming the pool's path relative to the fleet: a pool holds one value per home."""
     for path, pool in _shuffled_pools(config):
         total = sum(pool.counts)
         if total != config.n_homes:
-            raise ConfigurationError(
-                f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
-                f"({config.n_homes}), got {total}"
-            )
+            raise refusal(path, f"shuffled_pool counts must total n_homes ({config.n_homes}), got {total}")
 
 
 def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) -> None:
@@ -629,8 +628,8 @@ def _listed_values(spec: DistributionSpec) -> tuple[SpecValue, ...]:
 def _held_in_the_wrong_place(path: str, row: FleetField) -> ConfigurationError:
     """The refusal of the key at *path*, whose fleet row is *row*, held in the wrong one of a ComponentDistribution's draws and settings: a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings."""
     held_in, not_in = ("settings", "draws") if row.kind in _GIVEN_EVERY_HOME else ("draws", "settings")
-    return ConfigurationError(
-        f"{path} is a {row.kind.value} key, which a ComponentDistribution holds in its {held_in}, not its {not_in}"
+    return refusal(
+        path, f"a {row.kind.value} key, which a ComponentDistribution holds in its {held_in}, not its {not_in}"
     )
 
 
@@ -649,10 +648,10 @@ def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str,
     if spec is None:
         return None
     if not isinstance(spec, rule.spec_types):
-        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.describe_specs(row)}")
+        raise refusal(path, f"invalid spec {written!r}; valid specs: {rule.describe_specs(row)}")
     for value in _listed_values(spec):
         if value is not None and not rule.admits(value, row):
-            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.describe_values(row)}")
+            raise refusal(path, f"invalid value {value!r}; valid values: {rule.describe_values(row)}")
     return spec
 
 
@@ -810,10 +809,7 @@ def _build_weighted_discrete_spec(
     data: dict[str, Any], block_path: str
 ) -> WeightedDiscreteDistribution:
     """Build the weighted_discrete distribution a spec names, refusing it unless it gives values and weights."""
-    if "values" not in data or "weights" not in data:
-        raise ConfigurationError(
-            f"weighted_discrete distribution for '{block_path}' requires 'values' and 'weights'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("values", "weights") if key not in data])
     return constructed(
         block_path, WeightedDiscreteDistribution, values=data["values"], weights=data["weights"]
     )
@@ -821,20 +817,14 @@ def _build_weighted_discrete_spec(
 
 def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
     """Build the normal distribution a spec names, refusing it unless it gives a mean and a std; a min or max it leaves out is NormalDistribution's default."""
-    if "mean" not in data or "std" not in data:
-        raise ConfigurationError(
-            f"normal distribution for '{block_path}' requires 'mean' and 'std'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("mean", "std") if key not in data])
     bounds = {key: data[key] for key in ("min", "max") if key in data}
     return constructed(block_path, NormalDistribution, mean=data["mean"], std=data["std"], **bounds)
 
 
 def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
     """Build the uniform distribution a spec names, refusing it unless it gives a min and a max."""
-    if "min" not in data or "max" not in data:
-        raise ConfigurationError(
-            f"uniform distribution for '{block_path}' requires 'min' and 'max'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("min", "max") if key not in data])
     return constructed(block_path, UniformDistribution, min=data["min"], max=data["max"])
 
 
@@ -845,10 +835,7 @@ def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
         ConfigurationError: If the spec gives no value, or one that is not a finite number,
             text included, naming *block_path*.
     """
-    if "value" not in data:
-        raise ConfigurationError(
-            f"fixed distribution for '{block_path}' requires 'value'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("value",) if key not in data])
     value = data["value"]
     return None if value is None else as_finite_real(value, block_path)
 
@@ -857,10 +844,7 @@ def _build_shuffled_pool_spec(
     data: dict[str, Any], block_path: str
 ) -> ShuffledPoolDistribution:
     """Build the shuffled_pool distribution a spec names, refusing it unless it gives values and counts."""
-    if "values" not in data or "counts" not in data:
-        raise ConfigurationError(
-            f"shuffled_pool distribution for '{block_path}' requires 'values' and 'counts'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("values", "counts") if key not in data])
     return constructed(block_path, ShuffledPoolDistribution, values=data["values"], counts=data["counts"])
 
 
@@ -868,11 +852,9 @@ def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float
     """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path, refusing one that leaves out its min, max or steps, naming each by its path."""
     if not isinstance(data, dict):
         return data
-    if data.get("type") != "sweep":
-        raise ConfigurationError(
-            f"proportional_to multiplier dict for '{block_path}' must have type='sweep'"
-        )
     multiplier_path = child_path(block_path, "multiplier")
+    if data.get("type") != "sweep":
+        raise refusal(multiplier_path, f"a mapping multiplier must have type 'sweep', got {data.get('type')!r}")
     refuse_unrecognised_keys(multiplier_path, data, _SWEEP_SPEC_KEYS)
     refuse_missing_keys(multiplier_path, [key for key in ("min", "max", "steps") if key not in data])
     return constructed(multiplier_path, SweepSpec, **{key: value for key, value in data.items() if key != "type"})
@@ -882,10 +864,7 @@ def _build_proportional_to_spec(
     data: dict[str, Any], block_path: str
 ) -> ProportionalDistribution:
     """Build the proportional_to distribution a spec names, refusing it unless it gives a source; a multiplier or offset it leaves out is ProportionalDistribution's default."""
-    if "source" not in data:
-        raise ConfigurationError(
-            f"proportional_to distribution for '{block_path}' requires 'source'"
-        )
+    refuse_missing_keys(block_path, [key for key in ("source",) if key not in data])
     given: dict[str, object] = {key: data[key] for key in ("offset",) if key in data}
     if "multiplier" in data:
         given["multiplier"] = _parse_proportional_to_multiplier(data["multiplier"], block_path)
@@ -975,51 +954,50 @@ def editor_types(kind: FieldKind) -> tuple[DistributionType, ...]:
     )
 
 
-def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
+def _parse_distribution_spec(data: Any, block_path: str) -> DistributionSpec:
     """Parse a distribution specification from config data.
 
     Args:
         data: Raw data: null, a distribution mapping, or any other value, read as the number
             every home is given
-        param_name: The parameter's path in its file, named in error messages
+        block_path: The parameter's path in its file, named in error messages
 
     Returns:
         DistributionSpec (distribution object, a finite float, or None)
 
     Raises:
-        ConfigurationError: If distribution specification is invalid; a value that is
-            neither null nor a mapping and is not a finite number, text included, is
-            refused naming *param_name* and the value
+        ConfigurationError: If distribution specification is invalid, naming *block_path*,
+            or *block_path*'s type for a type that is no DISTRIBUTION_TYPES name; a value
+            that is neither null nor a mapping and is not a finite number, text included,
+            is refused naming *block_path* and the value
     """
     if data is None:
         return None
     if not isinstance(data, dict):
-        return as_finite_real(data, param_name)
+        return as_finite_real(data, block_path)
 
     dist_type = data.get("type")
     if dist_type is None:
-        raise ConfigurationError(
-            f"Distribution for '{param_name}' requires 'type' field"
-        )
+        refuse_missing_keys(block_path, ["type"])
     distribution_type = DISTRIBUTION_TYPES.get(dist_type) if isinstance(dist_type, str) else None
     if distribution_type is None:
-        raise ConfigurationError(
-            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            f"Supported: {', '.join(DISTRIBUTION_TYPES)}"
+        raise refusal(
+            child_path(block_path, "type"),
+            f"unknown distribution type {dist_type!r}; supported types: {', '.join(DISTRIBUTION_TYPES)}",
         )
-    refuse_unrecognised_keys(param_name, data, distribution_type.recognised_keys)
-    return distribution_type.build(data, param_name)
+    refuse_unrecognised_keys(block_path, data, distribution_type.recognised_keys)
+    return distribution_type.build(data, block_path)
 
 
-def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
-    """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
+def _parse_drawn_spec(row: FleetField, data: object, block_path: str) -> DistributionSpec:
+    """Read the spec of the drawn key at *block_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
 
     A CHOICE's value is the spec as written when _is_a_choice_spec_as_written says so; any other
     value is read as _parse_distribution_spec reads it. A spec the row's kind does not draw is
-    refused naming *key_path* and the spec as written.
+    refused naming *block_path* and the spec as written.
     """
-    spec = data if _is_a_choice_spec_as_written(row, data) else _parse_distribution_spec(data, key_path)
-    return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
+    spec = data if _is_a_choice_spec_as_written(row, data) else _parse_distribution_spec(data, block_path)
+    return _refuse_a_spec_its_row_cannot_draw(row, spec, block_path, written=data)
 
 
 def _is_a_choice_spec_as_written(row: FleetField, data: object) -> bool:
@@ -1098,10 +1076,7 @@ def parse_fleet_distribution_config(
     draws the dependent name the key under *block_path*.
     """
     refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
-    if "n_homes" not in data:
-        raise ConfigurationError("Fleet distribution config requires 'n_homes'")
-    if "pv" not in data:
-        raise ConfigurationError("Fleet distribution config requires 'pv' section")
+    refuse_missing_keys(block_path, [key for key in ("n_homes", "pv") if key not in data])
 
     pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=child_path(block_path, "pv"))
     load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=child_path(block_path, "load"))
@@ -1140,14 +1115,15 @@ def _count_bounds(
 
     Raises:
         ConfigurationError: If no whole number lies from *spec*'s min to its max,
-            naming *setting*, the min and the max.
+            labelled *setting*, naming the min and the max.
     """
     least: float = math.ceil(spec.min) if spec.min is not None and math.isfinite(spec.min) else -math.inf
     greatest: float = math.floor(spec.max) if spec.max is not None and math.isfinite(spec.max) else math.inf
     if least > greatest:
-        raise ConfigurationError(
-            f"{setting} is a count, so a whole number must lie from its min to its max, "
-            f"got a min of {spec.min!r} and a max of {spec.max!r}"
+        raise refusal(
+            setting,
+            "a count, so a whole number must lie from its min to its max, "
+            f"got a min of {spec.min!r} and a max of {spec.max!r}",
         )
     return least, greatest
 
@@ -1174,9 +1150,9 @@ def _nearest_whole_number(value: float) -> float:
 
 
 def _refuse_unless_finite(value: SpecValue, path: str) -> None:
-    """Refuse *value*, a proportional_to's computed count of the field at *path*, if it is an infinity or a NaN, to which no whole number is nearest, naming *path* and the value; a multiplier overflow makes an infinity."""
+    """Refuse *value*, a proportional_to's computed count of the field at *path*, relative to the fleet, if it is an infinity or a NaN, to which no whole number is nearest, naming the field's spec path and the value; a multiplier overflow makes an infinity."""
     if isinstance(value, float) and not math.isfinite(value):
-        raise ConfigurationError.must_be(path, "a finite number", got=value)
+        raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, path), f"must be a finite number, got {value!r}")
 
 
 def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
@@ -1190,8 +1166,8 @@ def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> Spe
     the component's type to read, so a fractional one is refused there.
 
     Raises:
-        ConfigurationError: If a proportional_to's value is an infinity or a NaN, naming *path*
-            and the value; or as _nearest_count does, for a normal or uniform distribution with
+        ConfigurationError: If a proportional_to's value is an infinity or a NaN, naming the
+            field's spec path under fleet_distribution and the value; or as _nearest_count does, for a normal or uniform distribution with
             no whole number from its min to its max.
     """
     if isinstance(spec, _NUMBER_TYPES):
@@ -1215,20 +1191,21 @@ def _proportional_value(
 
     Raises:
         ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
-            source, or holds a choice, naming *path* and the source; or if the multiplier is a
-            SweepSpec, which expand_sweep_configs replaces before any home is drawn.
+            source, or holds a choice, naming *path*'s spec path under fleet_distribution and
+            the source; or if the multiplier is a SweepSpec, which expand_sweep_configs replaces
+            before any home is drawn, naming that spec path.
     """
+    spec_path = child_path(_FLEET_DISTRIBUTION_PATH, path)
     if spec.source not in drawn:
-        raise ConfigurationError(f"{path} is proportional_to {spec.source}, which no earlier field of the home drew")
+        raise refusal(spec_path, f"proportional_to {spec.source}, which no earlier field of the home drew")
     source = drawn[spec.source]
     if source is None:
         return None
     if isinstance(source, str):
-        raise ConfigurationError(f"{path} is proportional_to {spec.source}, which drew {source!r}, not a number")
+        raise refusal(spec_path, f"proportional_to {spec.source}, which drew {source!r}, not a number")
     if isinstance(spec.multiplier, SweepSpec):
-        raise ConfigurationError(
-            "Cannot sample ProportionalDistribution with SweepSpec multiplier directly. "
-            "Use expand_sweep_configs() to expand sweep values first."
+        raise refusal(
+            spec_path, "proportional_to a sweep multiplier, which expand_sweep_configs replaces before any home is drawn"
         )
     return source * spec.multiplier + spec.offset
 
@@ -1291,10 +1268,11 @@ class _DistributionSampler:
         Raises:
             ConfigurationError: If *setting* was drawn ahead and every value of it is
                 handed out, or if *spec* cannot be drawn afresh, as a proportional_to
-                or a pool not drawn ahead for *setting* cannot, naming *setting*; or if
-                *spec* is a normal or uniform distribution and the value it draws is not
-                a finite number, naming *setting* and the draw. A normal's draw is
-                checked after its min and max clamp it.
+                or a pool not drawn ahead for *setting* cannot; or if *spec* is a normal or
+                uniform distribution and the value it draws is not a finite number, naming
+                the draw. Each refusal names *setting* under fleet_distribution, e.g.
+                'fleet_distribution.pv.tilt'. A normal's draw is checked after its min and
+                max clamp it.
         """
         value = self._next_value(spec, setting)
         if (
@@ -1302,8 +1280,9 @@ class _DistributionSampler:
             and isinstance(value, float)
             and not math.isfinite(value)
         ):
-            raise ConfigurationError(
-                f"{setting} must draw samples that are finite numbers, got a sample of {value!r}"
+            raise refusal(
+                child_path(_FLEET_DISTRIBUTION_PATH, setting),
+                f"must draw samples that are finite numbers, got a sample of {value!r}",
             )
         return value
 
@@ -1314,14 +1293,15 @@ class _DistributionSampler:
             return spec
         if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
             return spec.draw(self._rng)
-        raise ConfigurationError(f"{setting} cannot be drawn from {spec!r}")
+        raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, setting), f"cannot be drawn from {spec!r}")
 
     def _next_value_drawn_ahead(self, setting: str) -> SpecValue:
         values = self._drawn_ahead[setting]
         handed_out = self._handed_out.get(setting, 0)
         if handed_out == len(values):
-            raise ConfigurationError(
-                f"{setting} has no value left to draw: its {len(values)} values, one per home, are all drawn"
+            raise refusal(
+                child_path(_FLEET_DISTRIBUTION_PATH, setting),
+                f"has no value left to draw: its {len(values)} values, one per home, are all drawn",
             )
         self._handed_out[setting] = handed_out + 1
         return values[handed_out]
@@ -1374,13 +1354,11 @@ def _drawn_component(
             values[key] = value
         elif row.required:
             got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
-            raise ConfigurationError(f"{child_path(_FLEET_DISTRIBUTION_PATH, path)} is required, but {got}")
+            raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, path), f"required, but {got}")
     try:
         return block.config_type(**values, **component.settings, **given)
-    except (ValueError, TypeError) as refusal:
-        raise ConfigurationError(
-            f"{child_path(_FLEET_DISTRIBUTION_PATH, name)}, home {home_number}: {refusal}"
-        ) from refusal
+    except (ValueError, TypeError) as exc:
+        raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, name), f"home {home_number}: {exc}") from exc
 
 
 def _drawn_component_every_home_has(
@@ -1401,8 +1379,8 @@ def _drawn_component_every_home_has(
     """
     built = _drawn_component(name, block, component, sampler, drawn, home_number, given=given)
     if built is None:
-        raise ConfigurationError(
-            f"{child_path(_FLEET_DISTRIBUTION_PATH, name)} gave home {home_number} no {name}, which every home needs"
+        raise refusal(
+            child_path(_FLEET_DISTRIBUTION_PATH, name), f"gave home {home_number} no {name}, which every home needs"
         )
     return built
 
@@ -1572,13 +1550,13 @@ def expand_sweep_configs(
         (sweep_value, config) pairs for each sweep point
 
     Raises:
-        ConfigurationError: If no sweep spec found
+        ConfigurationError: If *config* holds no sweep, naming the fleet_distribution block
     """
     sweep = detect_sweep_spec(config)
     if sweep is None:
-        raise ConfigurationError(
-            "No sweep specification found in config. "
-            "Use proportional_to with type: sweep in multiplier."
+        raise refusal(
+            _FLEET_DISTRIBUTION_PATH,
+            "holds no sweep: give battery.capacity_kwh a proportional_to whose multiplier has type: sweep",
         )
 
     for value in sweep.get_values():
