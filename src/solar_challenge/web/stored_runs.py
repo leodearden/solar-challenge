@@ -45,7 +45,10 @@ calculate_summary took it from the same results' index, and drops each summary's
 reporting only a day count other than its window's days; v2 keeps a summary's simulation_days
 for it, as _RETIRED_KEYS_A_LATER_STEP_READS names. v6 drops each fleet summary's
 total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, a second copy of its export revenue,
-reporting each value that is not null; v2 keeps the pair for it the same way.
+reporting each value that is not null; v2 keeps the pair for it the same way. v7 drops each
+stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency were
+derived from, wherever the battery is, reporting each value that is not null; v2 keeps a
+battery's efficiency for it the same way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -81,11 +84,18 @@ from typing import Any, Literal, TypeVar, get_args
 
 import pandas as pd
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.timebase import SimulationWindow
-from solar_challenge.web.field_tree import FieldTreeRefused, field_tree, read_field_tree, without_unknown_keys
+from solar_challenge.web.field_tree import (
+    DropsUnknownKey,
+    FieldTreeRefused,
+    field_tree,
+    read_field_tree,
+    without_unknown_keys,
+)
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.stored_json import UndecodableJson, decoded_json
 
@@ -872,34 +882,55 @@ _SIMULATION_DAYS = "simulation_days"
 _FLEET_SEG_REVENUE_KEYS = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
 """The SEG revenue total and per-home mean a FleetSummary stored before format 6 holds, a second copy of its total_export_revenue_gbp; v6 drops them."""
 
+_BATTERY_ROUND_TRIP = "efficiency"
+"""The key of the round-trip efficiency a BatteryConfig stored before format 7 holds, from which its charge_efficiency and discharge_efficiency were derived; v7 drops it."""
+
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
-    {SummaryStatistics: frozenset({_SIMULATION_DAYS}), FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS)}
+    {
+        SummaryStatistics: frozenset({_SIMULATION_DAYS}),
+        FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS),
+        BatteryConfig: frozenset({_BATTERY_ROUND_TRIP}),
+    }
 )
-"""By dataclass, each key at the root of its stored object that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, reporting each value that is not null."""
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair and v7 a battery's efficiency, each reporting each value that is not null."""
+
+
+def _not_read_by_a_later_step(owner: type, key: str) -> bool:
+    """Whether v2 drops *key*, a key no field of *owner* has: unless _RETIRED_KEYS_A_LATER_STEP_READS names it for *owner*."""
+    return key not in _RETIRED_KEYS_A_LATER_STEP_READS.get(owner, frozenset())
+
+
+def _unknown_keys_dropped(
+    run_type: RunType, documents: StoredRunDocuments, drops: DropsUnknownKey
+) -> StepResult:
+    """*documents* without each key their dataclasses do not have that *drops* holds for, and each dropped value that is not null.
+
+    Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys,
+    which asks *drops* of each such key with the dataclass whose stored object holds it; a key it
+    spares is kept, unreported.
+    """
+    dropped: list[DroppedValue] = []
+
+    def document_without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
+        content, unknown_keys = without_unknown_keys(document.content, cls, drops=drops)
+        dropped.extend(
+            DroppedValue(document.run_id, document.name, key.path, key.value)
+            for key in unknown_keys
+            if key.value is not None
+        )
+        return replace(document, content=content)
+
+    brought_forward = _each_document(run_type, documents, document_without_unknown_keys)
+    return StepResult(documents=brought_forward, dropped=tuple(dropped))
 
 
 def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
     """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
 
-    Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys.
-    A key _RETIRED_KEYS_A_LATER_STEP_READS names for that dataclass is kept, unreported, for the
-    later step that reads it.
+    A key _RETIRED_KEYS_A_LATER_STEP_READS names for the dataclass whose stored object holds it is
+    kept, unreported, for the later step that reads it.
     """
-    dropped: list[DroppedValue] = []
-
-    def document_without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
-        content, unknown_keys = without_unknown_keys(document.content, cls)
-        kept_keys = _RETIRED_KEYS_A_LATER_STEP_READS.get(cls, frozenset())
-        kept = {key.path: key.value for key in unknown_keys if key.path in kept_keys}
-        dropped.extend(
-            DroppedValue(document.run_id, document.name, key.path, key.value)
-            for key in unknown_keys
-            if key.value is not None and key.path not in kept
-        )
-        return replace(document, content={**content, **kept} if kept else content)
-
-    brought_forward = _each_document(run_type, documents, document_without_unknown_keys)
-    return StepResult(documents=brought_forward, dropped=tuple(dropped))
+    return _unknown_keys_dropped(run_type, documents, _not_read_by_a_later_step)
 
 
 def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
@@ -1123,6 +1154,20 @@ def _fleet_seg_revenue_dropped(run_type: RunType, documents: StoredRunDocuments)
     return StepResult(replace(documents, summary=replace(summary, content=without_the_pair)), dropped=dropped)
 
 
+def _is_a_battery_round_trip(owner: type, key: str) -> bool:
+    """Whether *key* of a stored object of *owner* is a BatteryConfig's efficiency, _BATTERY_ROUND_TRIP."""
+    return (owner, key) == (BatteryConfig, _BATTERY_ROUND_TRIP)
+
+
+def _battery_round_trips_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v7's step: *documents* without each stored BatteryConfig's efficiency, wherever the battery is, and each dropped value that is not null.
+
+    The charge_efficiency and discharge_efficiency it was derived from are kept, and so is every
+    other key, a document that is not an object, and every other document.
+    """
+    return _unknown_keys_dropped(run_type, documents, _is_a_battery_round_trip)
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -1154,6 +1199,12 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "Drop each stored fleet summary's total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, "
         "a second copy of its total_export_revenue_gbp",
         _fleet_seg_revenue_dropped,
+    ),
+    RunDocumentStep(
+        7,
+        "Drop each stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency "
+        "were derived from, which BatteryConfig no longer has",
+        _battery_round_trips_dropped,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

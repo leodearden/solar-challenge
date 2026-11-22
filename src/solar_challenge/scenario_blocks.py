@@ -5,7 +5,7 @@ The component tables it reads blocks by also carry each key's fleet row and each
 writer, which the fleet grammar and scenario_writer read, so a field's key is declared once.
 """
 
-from dataclasses import MISSING, asdict, dataclass, fields
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -178,14 +178,33 @@ def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
 
 
 _Component = TypeVar("_Component", bound=DataclassInstance)
+_Value = TypeVar("_Value")
+
+
+@dataclass(frozen=True)
+class ReaderOnlyKey(Generic[_Component]):
+    """A key of a component's block that no field holds: the block's reader applies it to the component it builds.
+
+    *apply* gives the component with the key's value applied, setting the fields *sets* names;
+    a block may set the key or those fields, not both. *subject* and *form* name, in the
+    refusal of a block setting both, what the key and the fields are two forms of and the
+    key's form of it. tests/unit/config/test_component_blocks.py holds each one to be a key of
+    its block and no field of the dataclass (T1).
+    """
+
+    sets: tuple[str, ...]
+    apply: Callable[[_Component, Any], _Component]
+    subject: str
+    form: str
 
 
 @dataclass(frozen=True)
 class ComponentBlock(Generic[_Component]):
     """A component's block in the scenario grammar, stated against the dataclass it builds.
 
-    *config_type* is the dataclass. *keys* are the block's keys, the fields it carries, in field
-    order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
+    *config_type* is the dataclass. *keys* are the block's keys: the fields it carries, in field
+    order, and its reader-only keys; *outside_grammar* maps each other field to the reason no key
+    carries it. *sub_blocks*
     holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
     reads as, for each key where that is not the dataclass's declared default.
 
@@ -194,7 +213,12 @@ class ComponentBlock(Generic[_Component]):
     reason the fleet grammar does not carry it. *presence* is the fleet field whose null draw
     means the home has no such component, and *asks_for_component* says whether its non-null
     draw, at its path, asks for one.
-    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields (T1).
+
+    *reader_only* holds the keys no field holds, each with its ReaderOnlyKey: every builder
+    of the component builds it from the other keys, then applies each reader-only key set
+    non-null, and refuses a block setting one beside a field it sets; a writer writes none.
+    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields,
+    its reader-only keys among its keys and none of them a field (T1).
     """
 
     config_type: type[_Component]
@@ -206,6 +230,35 @@ class ComponentBlock(Generic[_Component]):
     not_in_fleet: Mapping[str, str]
     presence: Optional[str] = None
     asks_for_component: Callable[[object, str], bool] = _any_draw_asks_for_it
+    reader_only: Mapping[str, ReaderOnlyKey[_Component]] = field(default_factory=lambda: MappingProxyType({}))
+
+    def refuse_both_forms(self, keys: Collection[str], block_path: str) -> None:
+        """Refuse the block at *block_path* if *keys*, the keys it sets, hold a reader-only key beside a field it sets, naming the block and each key."""
+        for key, reader_only in self.reader_only.items():
+            present = [name for name in reader_only.sets if name in keys]
+            if key in keys and present:
+                raise refusal(
+                    block_path,
+                    f"sets both forms of {reader_only.subject}: {key} and {' and '.join(present)}; "
+                    f"set {key}, {reader_only.form}, or {' and '.join(reader_only.sets)}, not both",
+                )
+
+    def without_reader_only_keys(self, values: Mapping[str, _Value]) -> dict[str, _Value]:
+        """*values*, by key, without the reader-only keys: the values the dataclass is built from."""
+        return {key: value for key, value in values.items() if key not in self.reader_only}
+
+    def with_reader_only_keys(self, component: _Component, values: Mapping[str, object], block_path: str) -> _Component:
+        """*component* with each reader-only key *values* sets non-null applied, in key order.
+
+        Raises:
+            ConfigurationError: As a key's apply refuses its value, naming the key by its path
+                under *block_path*, the block's; "" names the key alone.
+        """
+        for key in self.keys:
+            value = values.get(key)
+            if key in self.reader_only and value is not None:
+                component = constructed(child_path(block_path, key), self.reader_only[key].apply, component, value)
+        return component
 
     def value_when_omitted(self, name: str) -> object:
         """The value field *name* is built with when a block does not set it, as no block sets a field outside the grammar.
@@ -259,10 +312,10 @@ def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
     )
 
 
-def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -> _Built:
-    """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
+def constructed(block_path: str, cls: Callable[..., _Built], /, *args: Any, **values: Any) -> _Built:
+    """cls(*args, **values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
-        return cls(**values)
+        return cls(*args, **values)
     except (ConfigurationError, TypeError) as exc:
         raise refusal(block_path, str(exc)) from exc
 
@@ -273,20 +326,30 @@ def _built_component(
     """The config the block at *block_path* describes, built from the keys it sets.
 
     Each sub-block it sets is read first, in the table's order; then the dataclass is built once
-    from the set values, as written, over the table's when-omitted values.
+    from the set values of its fields, as written, over the table's when-omitted values; then
+    each reader-only key it sets is applied.
 
     Raises:
-        ConfigurationError: naming the block and each key it leaves out that has neither a
-            declared default nor a when-omitted value; or as its dataclass refuses the values,
-            prefixed by the block's path.
+        ConfigurationError: for a block setting a reader-only key beside a field it sets, as
+            refuse_both_forms refuses it; naming the block and each key it leaves out that has
+            neither a declared default nor a when-omitted value; as its dataclass refuses the
+            values, prefixed by the block's path; or as a reader-only key's apply refuses its
+            value, prefixed by the key's path.
     """
-    require_keys(block_path, set_keys, [key for key in block.keys if block.value_when_omitted(key) is MISSING])
+    block.refuse_both_forms(set_keys, block_path)
+    require_keys(
+        block_path,
+        set_keys,
+        [key for key in block.keys if key not in block.reader_only and block.value_when_omitted(key) is MISSING],
+    )
     sub_block_configs = {
         key: sub_block.read(set_keys[key], block_path=child_path(block_path, key))
         for key, sub_block in block.sub_blocks.items()
         if key in set_keys
     }
-    return constructed(block_path, block.config_type, **{**block.when_omitted, **set_keys, **sub_block_configs})
+    field_values = block.without_reader_only_keys(set_keys)
+    built = constructed(block_path, block.config_type, **{**block.when_omitted, **field_values, **sub_block_configs})
+    return block.with_reader_only_keys(built, set_keys, block_path)
 
 
 def _read_component_block(
@@ -361,45 +424,14 @@ def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
     return {"target_soc_fraction": grid_charging.target_soc_fraction, "forecast": grid_charging.forecast}
 
 
-_PER_DIRECTION_EFFICIENCY_KEYS: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")
-"""The battery: block's per-direction efficiency keys, in BATTERY_BLOCK's order, which a block setting efficiency, the round trip, may not set."""
-
-
-def _refuse_both_efficiency_forms(block_path: str, set_keys: Mapping[str, Any]) -> None:
-    """Refuse the battery: block at *block_path* if *set_keys*, the keys it sets, hold a per-direction efficiency beside efficiency, naming the block and each key."""
-    per_direction = [key for key in _PER_DIRECTION_EFFICIENCY_KEYS if key in set_keys]
-    if per_direction:
-        raise refusal(
-            block_path,
-            "sets both forms of a battery's efficiency: efficiency and "
-            f"{' and '.join(per_direction)}; set efficiency, the round trip, or charge_efficiency "
-            "and discharge_efficiency, not both",
-        )
-
-
 def _parse_battery_config(
     data: Optional[dict[str, Any]], *, block_path: str
 ) -> Optional[BatteryConfig]:
-    """Parse a battery: block into a BatteryConfig by BATTERY_BLOCK, its efficiency the round trip BatteryConfig.with_round_trip reads; a null block is no battery.
+    """Parse a battery: block into a BatteryConfig, as _read_component_block reads BATTERY_BLOCK; a null block is no battery.
 
-    Raises:
-        ConfigurationError: as _read_component_block refuses a block; for one setting
-            efficiency beside charge_efficiency or discharge_efficiency, naming the block and
-            each key; or as with_round_trip refuses the efficiency it sets, naming that key by
-            its path.
+    Its efficiency is the round trip BatteryConfig.with_round_trip splits, a reader-only key.
     """
-    if data is None:
-        return None
-    set_keys = _set_keys(BATTERY_BLOCK, data, block_path)
-    round_trip = set_keys.get("efficiency")
-    if round_trip is None:
-        return _built_component(BATTERY_BLOCK, set_keys, block_path)
-    _refuse_both_efficiency_forms(block_path, set_keys)
-    other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
-    battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
-    return constructed(
-        child_path(block_path, "efficiency"), battery.with_round_trip, round_trip_efficiency=round_trip
-    )
+    return None if data is None else _read_component_block(BATTERY_BLOCK, data, block_path=block_path)
 
 
 def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
@@ -549,6 +581,14 @@ BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
     not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
     presence="capacity_kwh",
     asks_for_component=has_battery,
+    reader_only=MappingProxyType({
+        "efficiency": ReaderOnlyKey(
+            sets=("charge_efficiency", "discharge_efficiency"),
+            apply=BatteryConfig.with_round_trip,
+            subject="a battery's efficiency",
+            form="the round trip",
+        ),
+    }),
 )
 
 LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(

@@ -647,7 +647,6 @@ class TestParseHomeConfigBatteryEfficiency:
         )
         battery = home_config.battery_config
         assert battery is not None
-        assert battery.efficiency is None
         assert battery.charge_efficiency == battery.discharge_efficiency == math.sqrt(round_trip)
         assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
         assert battery.charge_efficiency * battery.discharge_efficiency == pytest.approx(round_trip)

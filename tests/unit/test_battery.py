@@ -30,15 +30,6 @@ _SOC_ORDER_REFUSAL = (
     "got min_soc_fraction={min_soc_fraction!r} and max_soc_fraction={max_soc_fraction!r}"
 )
 
-_ROUND_TRIP_0_81 = BatteryConfig(capacity_kwh=5.0, efficiency=0.81)
-"""A battery built with round-trip efficiency 0.81, so its per-direction pair is 0.9 and 0.9."""
-
-_CONTRADICTED_ROUND_TRIP_REFUSAL = (
-    "efficiency=0.81 makes charge_efficiency and discharge_efficiency each its square root, 0.9, "
-    "but got {contradictions}; use BatteryConfig.with_round_trip(0.81), "
-    "or pass charge_efficiency and discharge_efficiency without efficiency"
-)
-
 _NUMBER_FIELDS = (
     "capacity_kwh",
     "max_charge_kw",
@@ -47,7 +38,6 @@ _NUMBER_FIELDS = (
     "max_soc_fraction",
     "charge_efficiency",
     "discharge_efficiency",
-    "efficiency",
     "system_age_years",
     "calendar_fade_rate_per_year",
     "cycle_fade_per_equivalent_full_cycle",
@@ -318,68 +308,20 @@ class TestBatteryAnswersItsGridChargeTarget:
 
 
 class TestBatteryConfigRoundTripEfficiency:
-    """Test BatteryConfig round-trip efficiency split via sqrt."""
+    """A battery's round-trip efficiency is no field of BatteryConfig: with_round_trip sets the pair it splits into."""
 
-    def test_efficiency_splits_into_sqrt(self) -> None:
-        """efficiency=0.9 -> charge_efficiency==sqrt(0.9), discharge_efficiency==sqrt(0.9)."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        assert cfg.charge_efficiency == pytest.approx(math.sqrt(0.9))
-        assert cfg.discharge_efficiency == pytest.approx(math.sqrt(0.9))
+    def test_a_round_trip_efficiency_argument_is_refused_naming_it(self) -> None:
+        with pytest.raises(TypeError) as exc_info:
+            BatteryConfig(capacity_kwh=5, efficiency=0.9)
+        assert "'efficiency'" in str(exc_info.value)
 
-    def test_efficiency_retained_as_raw(self) -> None:
-        """efficiency field retains the original round-trip value."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        assert cfg.efficiency == 0.9
+    def test_a_battery_given_a_round_trip_pickles_to_an_equal_one(self) -> None:
+        battery = BatteryConfig(capacity_kwh=5.0).with_round_trip(0.9)
 
-    def test_explicit_per_direction_efficiencies_contradicting_it_are_refused(self) -> None:
-        """A round-trip efficiency beside per-direction efficiencies it contradicts is refused, naming each."""
-        with pytest.raises(ConfigurationError) as exc_info:
-            BatteryConfig(
-                capacity_kwh=5.0,
-                efficiency=0.81,
-                charge_efficiency=0.99,
-                discharge_efficiency=0.99,
-            )
-        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
-            contradictions="charge_efficiency=0.99 and discharge_efficiency=0.99"
-        )
+        restored = pickle.loads(pickle.dumps(battery))
 
-    @pytest.mark.parametrize("field", ["charge_efficiency", "discharge_efficiency"])
-    def test_a_per_direction_efficiency_out_of_range_is_refused_before_the_round_trip_is_checked(
-        self, field: str
-    ) -> None:
-        with pytest.raises(ConfigurationError) as exc_info:
-            BatteryConfig(capacity_kwh=5.0, efficiency=0.9, **{field: 0})
-        assert str(exc_info.value) == f"{field} must be greater than 0 and at most 1, got 0"
-
-    def test_efficiency_zero_raises(self) -> None:
-        """efficiency == 0 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=0.0)
-
-    def test_efficiency_greater_than_one_raises(self) -> None:
-        """efficiency > 1 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=1.5)
-
-    def test_efficiency_negative_raises(self) -> None:
-        """efficiency < 0 raises ValueError."""
-        with pytest.raises(ValueError, match="efficiency"):
-            BatteryConfig(capacity_kwh=5.0, efficiency=-0.5)
-
-    def test_efficiency_one_is_valid(self) -> None:
-        """efficiency == 1 is valid (100% round-trip)."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=1.0)
-        assert cfg.charge_efficiency == pytest.approx(1.0)
-        assert cfg.discharge_efficiency == pytest.approx(1.0)
-
-    def test_efficiency_pickles_idempotently(self) -> None:
-        """BatteryConfig with efficiency round-trips through pickle correctly."""
-        cfg = BatteryConfig(capacity_kwh=5.0, efficiency=0.9)
-        restored = pickle.loads(pickle.dumps(cfg))
-        assert restored == cfg
-        # After pickle, charge_efficiency should still equal sqrt(0.9)
-        assert restored.charge_efficiency == pytest.approx(math.sqrt(0.9))
+        assert restored == battery
+        assert restored.charge_efficiency == math.sqrt(0.9)
 
 
 class TestBatteryConfigWithRoundTrip:
@@ -392,22 +334,6 @@ class TestBatteryConfigWithRoundTrip:
 
         assert with_round_trip == dataclasses.replace(
             battery, charge_efficiency=math.sqrt(0.95), discharge_efficiency=math.sqrt(0.95)
-        )
-        assert with_round_trip.efficiency is None
-
-    def test_it_clears_a_round_trip_efficiency_the_battery_was_built_with(self) -> None:
-        battery = BatteryConfig(capacity_kwh=5.0, efficiency=0.81).with_round_trip(0.64)
-
-        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.8, 0.8)
-
-    @pytest.mark.parametrize("round_trip", [1e-9, 0.5, 0.81, 0.95, 1.0])
-    def test_it_splits_a_round_trip_as_the_efficiency_field_does(self, round_trip: float) -> None:
-        from_method = BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
-        from_field = BatteryConfig(capacity_kwh=5.0, efficiency=round_trip)
-
-        assert (from_method.charge_efficiency, from_method.discharge_efficiency) == (
-            from_field.charge_efficiency,
-            from_field.discharge_efficiency,
         )
 
     @pytest.mark.parametrize("round_trip", [0.0, 1.5, -0.5])
@@ -429,31 +355,6 @@ class TestBatteryConfigWithRoundTrip:
 
         assert (battery.charge_efficiency, battery.discharge_efficiency) == (1.0, 1.0)
 
-
-class TestBatteryConfigRefusesAContradictedRoundTrip:
-    """A round-trip efficiency is refused beside a per-direction efficiency that is neither its square root nor that field's default."""
-
-    def test_replacing_the_charge_efficiency_is_refused_naming_it_and_the_round_trip(self) -> None:
-        with pytest.raises(ConfigurationError) as exc_info:
-            dataclasses.replace(_ROUND_TRIP_0_81, charge_efficiency=0.99)
-        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
-            contradictions="charge_efficiency=0.99"
-        )
-
-    def test_both_per_direction_efficiencies_contradicting_it_are_refused_naming_each(self) -> None:
-        with pytest.raises(ConfigurationError) as exc_info:
-            BatteryConfig(capacity_kwh=5.0, efficiency=0.81, charge_efficiency=0.99, discharge_efficiency=0.7)
-        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
-            contradictions="charge_efficiency=0.99 and discharge_efficiency=0.7"
-        )
-
-    def test_a_discharge_efficiency_contradicting_it_is_refused_naming_only_that_field(self) -> None:
-        with pytest.raises(ConfigurationError) as exc_info:
-            dataclasses.replace(_ROUND_TRIP_0_81, discharge_efficiency=0.7)
-        assert str(exc_info.value) == _CONTRADICTED_ROUND_TRIP_REFUSAL.format(
-            contradictions="discharge_efficiency=0.7"
-        )
-
     @pytest.mark.parametrize(
         "changes",
         [
@@ -461,22 +362,10 @@ class TestBatteryConfigRefusesAContradictedRoundTrip:
             pytest.param({"capacity_kwh": 10.0}, id="optimize-install"),
         ],
     )
-    def test_replacing_another_field_keeps_the_pair_the_round_trip_derives(
+    def test_replacing_another_field_keeps_the_pair_the_round_trip_set(
         self, changes: dict[str, float]
     ) -> None:
-        battery = dataclasses.replace(_ROUND_TRIP_0_81, **changes)
-
-        assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.9)
-
-    def test_clearing_the_round_trip_lets_a_replace_set_the_pair(self) -> None:
-        battery = dataclasses.replace(
-            _ROUND_TRIP_0_81, efficiency=None, charge_efficiency=0.99, discharge_efficiency=0.7
-        )
-
-        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.99, 0.7)
-
-    def test_a_per_direction_efficiency_at_its_default_gives_way_to_the_round_trip(self) -> None:
-        battery = BatteryConfig(capacity_kwh=5.0, efficiency=0.81, charge_efficiency=0.975)
+        battery = dataclasses.replace(BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81), **changes)
 
         assert (battery.charge_efficiency, battery.discharge_efficiency) == (0.9, 0.9)
 
@@ -604,11 +493,6 @@ class TestBatteryConfigSOCEfficiencyFields:
         cfg = BatteryConfig(capacity_kwh=5.0)
         assert cfg.discharge_efficiency == 0.975
 
-    def test_default_efficiency_is_none(self) -> None:
-        """BatteryConfig default efficiency (round-trip) is None."""
-        cfg = BatteryConfig(capacity_kwh=5.0)
-        assert cfg.efficiency is None
-
     def test_custom_soc_fractions(self) -> None:
         """Custom SOC fractions are stored correctly."""
         cfg = BatteryConfig(capacity_kwh=5.0, min_soc_fraction=0.2, max_soc_fraction=0.8)
@@ -702,8 +586,8 @@ class TestBatteryReadsSOCEffFromConfig:
         assert battery.discharge_efficiency == 0.6
 
     def test_battery_uses_config_efficiency_for_charging(self) -> None:
-        """Battery built from config with efficiency=0.9 charges with sqrt(0.9)."""
-        cfg = BatteryConfig(capacity_kwh=10.0, efficiency=0.9)
+        """Battery built from a config given round-trip efficiency 0.9 charges with sqrt(0.9)."""
+        cfg = BatteryConfig(capacity_kwh=10.0).with_round_trip(0.9)
         battery = Battery(cfg, initial_soc_kwh=cfg.capacity_kwh * cfg.min_soc_fraction + 1.0)
         initial_soc = battery.soc_kwh
         # Charge 1 kW for 1 hour

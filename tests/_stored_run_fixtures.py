@@ -37,6 +37,16 @@ total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, which the stored-run fo
 drops, and each home summary a non-null seg_revenue_gbp, which the field's retirement at the
 program's surface bump will drop.
 
+pre_867_round_trip_home is a run that the code of main at commit 14e44124 ("Merge task/975 into
+main"), the base of task 867, saved in format 6, while a battery still had a round-trip efficiency
+field. A one-off script, which is not committed, built one day of synthetic SimulationResults at
+1-minute resolution, with no simulation and no network; it summarised them with that tree's
+calculate_summary, so its summary holds a window; it saved them through that tree's
+RunStorage.save_home_run into a temporary store, then marked the run completed; and the
+format.json that save wrote was deleted. Its battery holds efficiency 0.81 beside the pair it
+derived, charge_efficiency and discharge_efficiency 0.9, which the stored-run format's v7 step
+keeps when it drops the efficiency.
+
 Each fixture holds:
 
 - run/: the run's directory as that save wrote it, without a format.json. A home run's
@@ -73,6 +83,8 @@ The fixtures, in STORED_RUN_FIXTURES' order:
 - pre_975_seg_fleet: a fleet run of two homes on a 15 p SEG and no tariff, "SEG home 1" with a
   5 kWh battery that names no dispatch strategy and "SEG home 2" with no battery. Its summary's
   total_seg_revenue_gbp equals its total_export_revenue_gbp, as every export earned the SEG rate.
+- pre_867_round_trip_home: a home run, "Round Trip Row", with no tariff and a 5 kWh battery built
+  with round-trip efficiency 0.81, so its charge_efficiency and discharge_efficiency are 0.9.
 
 PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
 docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
@@ -116,6 +128,7 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
     "pre_787_dispatch_fleet",
     "pre_839_flat_grid_charging_fleet",
     "pre_975_seg_fleet",
+    "pre_867_round_trip_home",
 )
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
 
