@@ -98,7 +98,7 @@ def arms(home: HomeConfig) -> Iterator[Arm]:
             battery, grid_charging=None, dispatch_strategy=SelfConsumptionStrategyConfig()
         ),
     )
-    yield Arm("C", "greedy, no grid charging", no_grid_charging, None)
+    yield Arm("C", "self-consumption, no grid charging", no_grid_charging, None)
     yield Arm("D", "windows over self-consumption", home, ScheduledChargeStrategy(SelfConsumptionStrategy(), WINDOWS, tz))
 
 
