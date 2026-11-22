@@ -905,19 +905,12 @@ def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
 
 
 def test_a_pinned_class_that_gains_match_args_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
-    scratch_edit.setattr(
-        solar_challenge.Battery,
-        "__match_args__",
-        (
-            "config",
-            "initial_soc_kwh",
-            "min_soc_fraction",
-            "max_soc_fraction",
-            "charge_efficiency",
-            "discharge_efficiency",
-        ),
-        raising=False,
+    positional = tuple(
+        name
+        for name, parameter in inspect.signature(solar_challenge.Battery).parameters.items()
+        if parameter.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     )
+    scratch_edit.setattr(solar_challenge.Battery, "__match_args__", positional, raising=False)
 
     message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
 

@@ -576,7 +576,7 @@ def test_a_class_whose_instances_hold_a_dict_but_take_no_weakref_raises_a_type_e
         def __new__(cls, low: float, high: float):
             return super().__new__(cls, (low, high))
 
-    with pytest.raises(TypeError, match=r"<locals>\.Band\b"):
+    with pytest.raises(TypeError, match=r"<locals>\.Band\b.*\b__dict__.*\bweakref\b"):
         surface_form(Band)
 
 
