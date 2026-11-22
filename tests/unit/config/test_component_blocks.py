@@ -318,7 +318,9 @@ def test_choices_belong_to_a_choice_field_alone(kind: FieldKind, choices: tuple[
             id="dispatch_strategy-peak_shaving",
         ),
         pytest.param(
-            "grid_charging", GridChargeConfig(target_soc_fraction=0.8), id="grid_charging"
+            "grid_charging",
+            GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
+            id="grid_charging",
         ),
     ],
 )
@@ -327,6 +329,24 @@ def test_each_battery_sub_block_reads_back_what_it_writes(key: str, value: objec
     sub_block = BATTERY_BLOCK.sub_blocks[key]
 
     assert sub_block.read(sub_block.write(value), block_path=f"home.battery.{key}") == value
+
+
+@pytest.mark.parametrize(
+    ("block", "target", "forecast"),
+    [
+        pytest.param(
+            {"target_soc_fraction": 0.9, "forecast": "trailing_14_days"}, 0.9, "trailing_14_days", id="forecast-set"
+        ),
+        pytest.param({"target_soc_fraction": 0.9}, 0.9, "pv_blind", id="forecast-omitted"),
+    ],
+)
+def test_a_grid_charging_block_reads_its_forecast_and_an_omitted_one_is_pv_blind(
+    block: dict[str, Any], target: float, forecast: str
+) -> None:
+    """The grid_charging: block sets the forecast that sizes the battery's grid charge; without one it is PV-blind."""
+    config = BATTERY_BLOCK.sub_blocks["grid_charging"].read(block, block_path="home.battery.grid_charging")
+
+    assert (config.target_soc_fraction, config.forecast) == (target, forecast)
 
 
 @pytest.mark.parametrize(
