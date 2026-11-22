@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SweepSpec, the one sweep value generator, and its SweepMode, how a sweep spaces its points from min to max."""
 
+import math
+import sys
 from typing import Any
 
 import pytest
+import yaml
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
@@ -13,6 +16,7 @@ from solar_challenge.fleet_distribution import (
     parse_fleet_distribution_config,
 )
 from tests._names_as_a_word import names_as_a_word
+from tests._repository_paths import SCENARIOS_DIR
 
 _MULTIPLIER_PATH = "fleet_distribution.battery.capacity_kwh.multiplier"
 
@@ -22,6 +26,13 @@ _NOT_A_MODE = [
     pytest.param("GEOMETRIC", id="a-members-name"),
     pytest.param(None, id="null"),
     pytest.param(1, id="a-number"),
+]
+
+#: Finite ends whose points are not all finite: an infinite ratio, an infinite step, and a power past the largest float.
+_ENDS_WITH_POINTS_NOT_ALL_FINITE = [
+    pytest.param(1e-300, 1e300, 3, "geometric", id="geometric-whose-ratio-overflows"),
+    pytest.param(-1e308, 1e308, 3, "linear", id="linear-whose-step-overflows"),
+    pytest.param(1.0, sys.float_info.max, 5, "geometric", id="geometric-whose-power-overflows"),
 ]
 
 
@@ -106,6 +117,32 @@ class TestThePoints:
 
     def test_a_linear_sweeps_points_grow_by_a_constant_step(self) -> None:
         assert SweepSpec(1, 4, 3, "linear").get_values() == (1.0, 2.5, 4.0)
+
+
+class TestFinitePoints:
+    """A spec is refused unless every one of its points is finite, naming both its ends, so no sweep reaches a home as an infinite or undefined value."""
+
+    @pytest.mark.parametrize(("low", "high", "steps", "mode"), _ENDS_WITH_POINTS_NOT_ALL_FINITE)
+    def test_a_spec_whose_points_are_not_all_finite_is_refused_naming_its_ends(
+        self, low: float, high: float, steps: int, mode: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            SweepSpec(low, high, steps, mode)
+
+        assert _words_not_named(str(refusal.value), "min", "max", low, high) == []
+
+    def test_a_spec_ending_at_the_largest_float_builds_when_its_points_are_finite(self) -> None:
+        assert math.isfinite(SweepSpec(1.0, sys.float_info.max, 3).get_values()[-1])
+
+    def test_a_yaml_sweep_whose_points_are_not_all_finite_is_refused_naming_the_multiplier_and_its_ends(self) -> None:
+        """The shipped proportional battery sweep, its geometric multiplier from 1e-300 to 1e300 in 3 steps."""
+        document = yaml.safe_load((SCENARIOS_DIR / "bristol-phase1-proportional-battery-sweep.yaml").read_text())
+        document["fleet_distribution"]["battery"]["capacity_kwh"]["multiplier"].update(min=1.0e-300, max=1.0e300, steps=3)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config(document["fleet_distribution"])
+
+        assert _words_not_named(str(refusal.value), _MULTIPLIER_PATH, "min", "max") == []
 
 
 class TestTheKeptChecks:
