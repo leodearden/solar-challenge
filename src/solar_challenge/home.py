@@ -3,7 +3,7 @@
 
 import datetime
 import warnings
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
@@ -12,7 +12,6 @@ from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
-    GRID_CHARGE_FORECASTS,
     DispatchStrategy,
     DispatchStrategyConfig,
     GridChargeForecast,
@@ -504,16 +503,6 @@ class SummaryStatistics:
     def total_grid_to_demand_kwh(self) -> float:
         """Grid import that met demand, in kWh: the total import less the part the battery drew."""
         return self.total_grid_import_kwh - self.total_grid_charge_kwh
-
-
-def grid_charge_forecasts_of(summaries: Iterable[SummaryStatistics]) -> tuple[GridChargeForecast, ...]:
-    """The distinct forecasts that sized some summary's grid charge, in GRID_CHARGE_FORECASTS order: () when none grid-charged.
-
-    The one derivation every aggregate of summaries discloses, FleetSummary's and
-    BillDistribution's alike.
-    """
-    sized_by = {summary.grid_charge_forecast for summary in summaries}
-    return tuple(forecast for forecast in GRID_CHARGE_FORECASTS if forecast in sized_by)
 
 
 def self_consumption_ratio(*, self_consumption_kwh: float, generation_kwh: float) -> float:

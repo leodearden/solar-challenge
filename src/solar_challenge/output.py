@@ -12,12 +12,11 @@ import pandas as pd
 from solar_challenge.home import (
     SimulationResults,
     calculate_summary,
-    grid_charge_forecasts_of,
     grid_dependency_ratio,
     heat_pump_load_ratio,
     self_consumption_ratio,
 )
-from solar_challenge.dispatch import GridChargeForecast
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.timebase import SimulationWindow
 
@@ -107,7 +106,7 @@ def generate_summary_report(
     summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
-    notice = _grid_charge_forecast_notice(grid_charge_forecasts_of([summary]))
+    notice = _grid_charge_forecast_notice(distinct_grid_charge_forecasts([summary.grid_charge_forecast]))
 
     report = f"""{title}
 
@@ -409,13 +408,20 @@ def generate_community_report(
             append as a separate section.
 
     Returns:
-        Formatted markdown report string.
+        Formatted markdown report string. When forecasts sized the grid charge
+        of the fleet's homes, whose grid flows it nets, it opens, under its
+        title, with a notice naming each, and what it is.
     """
     m = compute_community_metrics(community_results)
+    notice = _grid_charge_forecast_notice(
+        distinct_grid_charge_forecasts(
+            home.grid_charge_forecast for home in community_results.fleet_results.per_home_results
+        )
+    )
 
     report = f"""# Community Energy Sharing Report
 
-## Sharing Mode
+{notice}## Sharing Mode
 {m.sharing_mode}
 
 ## Community vs Unshared Grid Flows (kWh)

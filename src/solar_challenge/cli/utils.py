@@ -50,8 +50,8 @@ from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
-from solar_challenge.dispatch import GridChargeForecast
-from solar_challenge.home import SummaryStatistics, grid_charge_forecasts_of
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
+from solar_challenge.home import SummaryStatistics
 from solar_challenge.location import parse_location
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.weather import WeatherDataError
@@ -232,7 +232,7 @@ def home_summary_rows(summary: SummaryStatistics) -> tuple[tuple[str, str], ...]
             net_cost_gbp=summary.net_cost_gbp,
             seg_revenue_gbp=summary.seg_revenue_gbp,
         ),
-        *_grid_charge_forecast_rows(grid_charge_forecasts_of([summary])),
+        *_grid_charge_forecast_rows(distinct_grid_charge_forecasts([summary.grid_charge_forecast])),
     )
 
 

@@ -11,7 +11,7 @@ build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -332,8 +332,23 @@ TARGET_SOC_FRACTION: Final = FRACTION
 GridChargeForecast: TypeAlias = Literal["pv_blind", "trailing_14_days", "perfect_foresight"]
 """The forecasts that may size a battery's grid charge in cheap periods; GridChargeConfig.forecast says what each does."""
 
-GRID_CHARGE_FORECASTS: Final = get_args(GridChargeForecast)
+GRID_CHARGE_FORECASTS: Final[tuple[GridChargeForecast, ...]] = get_args(GridChargeForecast)
 """Every GridChargeForecast, in its declared order."""
+
+ANALYSIS_ONLY_FORECASTS: Final[frozenset[GridChargeForecast]] = frozenset({"perfect_foresight"})
+"""The forecasts that read a run's own future PV and demand: upper bounds for analysis, which no board figure may use."""
+
+
+def distinct_grid_charge_forecasts(
+    forecasts: Iterable[Optional[GridChargeForecast]],
+) -> tuple[GridChargeForecast, ...]:
+    """The distinct forecasts among *forecasts*, each a run's, None for a run that did not grid-charge, in GRID_CHARGE_FORECASTS order: () when none is set.
+
+    The one derivation of the forecasts that sized an aggregate's grid charge, which every
+    fleet summary, bill distribution and report discloses.
+    """
+    sized_by = set(forecasts)
+    return tuple(forecast for forecast in GRID_CHARGE_FORECASTS if forecast in sized_by)
 
 
 def _refuse_unknown_forecast(forecast: object) -> None:
@@ -359,9 +374,9 @@ class GridChargeConfig:
             defaults to 'pv_blind'. 'pv_blind' fills to the target whatever PV the day
             brings. 'trailing_14_days' caps the fill at the forecast useful-charge
             ceiling, the charge the PV after it is not forecast to strand
-            (docs/grid-charge-forecast.md). 'perfect_foresight' is an upper-bound
-            analysis mode: it reads the run's own future PV and demand, and is never
-            used for board figures.
+            (docs/grid-charge-forecast.md). 'perfect_foresight', one of
+            ANALYSIS_ONLY_FORECASTS, is an upper-bound analysis mode: it reads the run's
+            own future PV and demand, and is never used for board figures.
 
     Raises:
         ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or

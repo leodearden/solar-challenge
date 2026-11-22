@@ -22,6 +22,7 @@ from solar_challenge.output import (
     calculate_seasonal_metrics,
     compute_community_metrics,
     export_to_csv,
+    generate_community_report,
     generate_config_ranking_report,
     generate_finance_report,
     generate_summary_report,
@@ -533,6 +534,28 @@ class TestGridChargeForecastNotice:
         sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
 
         assert generate_config_ranking_report(sweep).startswith("## Cost-Recovery Rank\n\n| Config")
+
+    def test_a_community_report_names_its_homes_forecasts_under_its_title(self, sample_results: SimulationResults) -> None:
+        """Its baseline is the homes' own grid flows, which their forecasts sized."""
+        fleet = make_fleet_results_of(
+            [replace(sample_results, grid_charge_forecast=each) for each in ("trailing_14_days", None, "pv_blind")]
+        )
+
+        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+
+        assert report.startswith(
+            "# Community Energy Sharing Report\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
+        )
+
+    def test_a_community_report_whose_homes_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
+    ) -> None:
+        fleet = make_fleet_results_of([sample_results, sample_results])
+
+        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+
+        assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
+        assert "sized by" not in report
 
 
 class TestExtrapolationNotice:
