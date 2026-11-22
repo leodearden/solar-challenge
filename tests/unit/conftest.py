@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The dashboard's Flask test app, the factory of the job manager its jobs run on, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app; and new_job_manager, which builds a JobManager the test's teardown shuts down.
+"""The dashboard's Flask test app, the factory of the job manager its jobs run on, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app; build_app, which builds more such apps; and new_job_manager, which builds a JobManager. The test's teardown closes each app and shuts down each manager.
 
 The app's jobs run on the JobManager the jobs fixture builds, tests/_web_app.py's
 jobs_in_this_process. A test module, class or package conftest whose tests need another
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from tests._server_drawn_badges import dashboard_macros_of
-from tests._web_app import jobs_in_this_process, run_storage_of
+from tests._web_app import app_builder, jobs_in_this_process, run_storage_of
 
 if TYPE_CHECKING:
     from flask import Flask
@@ -31,6 +31,15 @@ if TYPE_CHECKING:
     from solar_challenge.web.storage import RunStorage
     from tests._web_app import BuildApp
     from tests._web_job_runner import NewJobManager
+
+
+@pytest.fixture
+def build_app(closes_at_teardown: ExitStack) -> BuildApp:
+    """Build the dashboard app as tests/_web_app.py's build_test_app(data_dir, ...) does, and close it at the test's teardown: dashboard_of(app).close() drops its queued jobs, waits for its running ones, then releases its store's lock.
+
+    It is app_builder(closes_at_teardown). The web package is imported at the first build, not when this conftest loads.
+    """
+    return app_builder(closes_at_teardown)
 
 
 @pytest.fixture

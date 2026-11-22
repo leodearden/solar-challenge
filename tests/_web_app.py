@@ -8,7 +8,10 @@ the factory anew.
 
 An app holds its store's lock until dashboard_of(app).close(), which drops its queued jobs and
 waits for its running ones first. A test that builds an app with build_test_app closes it
-itself; tests/conftest.py's build_app fixture builds one that the test's teardown closes.
+itself; app_builder(closes_at_teardown), which tests/unit/conftest.py's build_app fixture is,
+builds apps that the test's teardown closes. No conftest above tests/unit holds that fixture:
+the offline lane's jobs that install the dev extra alone load those conftests, and
+tests/_declared_dependencies.py refuses them any import of the web package, at any scope.
 
 Usage::
 
@@ -24,14 +27,18 @@ Usage::
 
     dashboard_of(app).close()
     rebuilt = build_test_app(tmp_path, jobs=jobs_running(simulation))
+
+    closed_at_teardown = app_builder(closes_at_teardown)(tmp_path / "other")
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from contextlib import ExitStack
+
     from flask import Flask
 
     from solar_challenge.web.dashboard import JobManagerFactory
@@ -41,11 +48,28 @@ if TYPE_CHECKING:
 
 
 class BuildApp(Protocol):
-    """tests/conftest.py's build_app fixture: build_test_app(*data_dir*, ...), whose app the test's teardown closes."""
+    """What app_builder returns, and so tests/unit/conftest.py's build_app fixture: build_test_app(*data_dir*, ...), whose app a closing stack closes."""
 
     def __call__(
         self, data_dir: Path, /, *, jobs: JobManagerFactory | None = ..., secret_key: str | None = ...
     ) -> Flask: ...
+
+
+def app_builder(closes: ExitStack) -> BuildApp:
+    """Return a BuildApp that builds each app as build_test_app does and registers its dashboard_of(app).close() on *closes*.
+
+    A build that raises registers nothing. Given the closes_at_teardown fixture, each app closes
+    at the test's teardown, after every gate the test's other fixtures hold is released.
+    """
+
+    def build(data_dir: Path, /, **options: Any) -> Flask:
+        from solar_challenge.web.dashboard import dashboard_of
+
+        app = build_test_app(data_dir, **options)
+        closes.callback(dashboard_of(app).close)
+        return app
+
+    return build
 
 
 def build_test_app(

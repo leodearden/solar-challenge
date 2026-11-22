@@ -8,13 +8,14 @@ on SHORT_WINDOW_START, where a ``days`` window starts, as Bristol's TMY, so the
 job runs offline.
 """
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
-from tests._web_app import BuildApp
+from tests._web_app import app_builder
 from tests._web_job_days import web_job_days
 
 
@@ -60,7 +61,7 @@ class TestFleetFromDistributionE2E:
     """End-to-end: a real 3-home distribution fleet runs to completion."""
 
     def test_distribution_fleet_completes_and_lands_in_history(
-        self, build_app: BuildApp, tmp_path: Path
+        self, closes_at_teardown: ExitStack, tmp_path: Path
     ) -> None:
         """Submit a 3-home distribution fleet, poll to completion, assert history entry.
 
@@ -70,7 +71,7 @@ class TestFleetFromDistributionE2E:
         3. Assert status == "completed".
         4. Assert the run appears in history with n_homes == 3.
         """
-        client = build_app(tmp_path).test_client()
+        client = app_builder(closes_at_teardown)(tmp_path).test_client()
 
         # 1. Submit
         submit_resp = client.post(

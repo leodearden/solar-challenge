@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app over the job manager a factory builds, names the database file it gives that app, and finds the Database it keeps its tables in and the RunStorage it keeps its runs in; for tests/conftest.py's build_app fixture, which builds an app the test's teardown closes; and for the app, client and storage fixtures tests/unit/conftest.py builds with it."""
+"""Unit tests for tests/_web_app.py, which builds the web tests' Flask app over the job manager a factory builds, names the database file it gives that app, and finds the Database it keeps its tables in and the RunStorage it keeps its runs in; for tests/unit/conftest.py's build_app fixture, app_builder(closes_at_teardown), which builds an app the test's teardown closes; and for the app, client and storage fixtures that conftest builds with it."""
 
 from contextlib import ExitStack
 from pathlib import Path

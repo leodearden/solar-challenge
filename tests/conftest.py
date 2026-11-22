@@ -24,10 +24,7 @@ from tests._repository_paths import REPOSITORY_ROOT
 from tests._uv_env import SharedUvEnvironments, isolated_uv_env
 
 if TYPE_CHECKING:
-    from flask import Flask
-
     from solar_challenge.weather import WeatherCache
-    from tests._web_app import BuildApp
 
 pytest_plugins = ["pytester"]
 
@@ -300,7 +297,7 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
 
 @pytest.fixture(autouse=True)
 def closes_at_teardown() -> Iterator[ExitStack]:
-    """The test's closing stack: each close a builder fixture registers on it runs at the test's teardown, the last registered first.
+    """The test's closing stack: each close a builder registers on it, such as tests/_web_app.py's app_builder or tests/unit/conftest.py's build_app and new_job_manager, runs at the test's teardown, the last registered first.
 
     Autouse fixtures are set up before, and torn down after, the other fixtures of their own
     scope, so every gate the test's fixtures hold, such as blocking_simulation, is released
@@ -308,24 +305,6 @@ def closes_at_teardown() -> Iterator[ExitStack]:
     """
     with ExitStack() as closes:
         yield closes
-
-
-@pytest.fixture
-def build_app(closes_at_teardown: ExitStack) -> BuildApp:
-    """Build the dashboard app as tests/_web_app.py's build_test_app(data_dir, ...) does, and close it at the test's teardown: dashboard_of(app).close() drops its queued jobs, waits for its running ones, then releases its store's lock.
-
-    A build that raises registers nothing. The web package is imported at the first build, not when this conftest loads.
-    """
-
-    def build(data_dir: Path, /, **options: Any) -> Flask:
-        from solar_challenge.web.dashboard import dashboard_of
-        from tests._web_app import build_test_app
-
-        app = build_test_app(data_dir, **options)
-        closes_at_teardown.callback(dashboard_of(app).close)
-        return app
-
-    return build
 
 
 def _live_job_managers() -> frozenset[Any]:

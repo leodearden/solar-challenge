@@ -142,9 +142,11 @@ SUBMITS_A_HOME_JOB = """
 
     pytest.importorskip("flask")
 
+    from tests._web_app import app_builder
 
-    def test_submits_a_home_job_and_ends(build_app, tmp_path):
-        client = build_app(tmp_path).test_client()
+
+    def test_submits_a_home_job_and_ends(closes_at_teardown, tmp_path):
+        client = app_builder(closes_at_teardown)(tmp_path).test_client()
 
         assert client.post("/api/simulate/home", json={"days": 1}).status_code == 201
     """
