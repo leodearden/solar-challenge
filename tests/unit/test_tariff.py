@@ -40,8 +40,8 @@ REPEATED_OFF_PEAK_TARIFF = TariffConfig(
 )
 
 
-def _derived_values(tariff: TariffConfig) -> tuple[float, float, frozenset[int]]:
-    return tariff.peak_rate, tariff.mean_period_rate, tariff.cheap_minutes_of_day
+def _derived_values(tariff: TariffConfig) -> tuple[float, frozenset[int]]:
+    return tariff.peak_rate, tariff.cheap_minutes_of_day
 
 
 class TestTariffPeriodBasics:
@@ -736,21 +736,19 @@ class TestTariffConfigEconomy10:
         assert "Peak (morning)" in period_names
 
 
-class TestTariffConfigPeakAndMeanPeriodRate:
-    """The peak is the highest period rate; the mean counts each period once."""
+class TestTariffConfigPeakRate:
+    """The peak is the highest period rate."""
 
-    def test_flat_rate_has_its_one_rate_as_both_peak_and_mean(self) -> None:
+    def test_flat_rate_has_its_one_rate_as_its_peak(self) -> None:
         tariff = TariffConfig.flat_rate(0.25)
 
         assert tariff.peak_rate == 0.25
-        assert tariff.mean_period_rate == 0.25
 
     @pytest.mark.parametrize(
         ("tariff", "expected_peak"),
         [
             pytest.param(TariffConfig.economy_7(), _E7.peak_rate, id="economy_7"),
             pytest.param(TariffConfig.economy_10(), _E10.peak_rate, id="economy_10"),
-            # Its float mean is 0.10000000000000002; only an exact peak shows no spread.
             pytest.param(
                 TariffConfig.economy_10(off_peak_rate=0.1, peak_rate=0.1),
                 0.1,
@@ -763,15 +761,6 @@ class TestTariffConfigPeakAndMeanPeriodRate:
         self, tariff: TariffConfig, expected_peak: float
     ) -> None:
         assert tariff.peak_rate == expected_peak
-
-    def test_mean_period_rate_counts_each_period_once_whatever_its_length(self) -> None:
-        """Economy 7 is 7 h at 0.09 and 17 h at 0.25; weighting by hours would give 0.2033."""
-        tariff = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
-        assert tariff.mean_period_rate == pytest.approx(0.17)
-
-    def test_mean_period_rate_counts_a_repeated_rate_once_per_period(self) -> None:
-        """Averaging the distinct rates would give 0.25, and weighting by hours 0.2125."""
-        assert REPEATED_OFF_PEAK_TARIFF.mean_period_rate == pytest.approx(0.20)
 
 
 class TestTariffConfigCheapMinutes:
@@ -918,12 +907,12 @@ class TestTariffConfigDerivedRatesStayOutOfIdentity:
 
     def test_replace_derives_the_replacement_periods_rates(self) -> None:
         tariff = TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
-        peak, mean, cheap_minutes = _derived_values(tariff)
+        peak, cheap_minutes = _derived_values(tariff)
 
         replaced = dataclasses.replace(tariff, periods=TariffConfig.flat_rate(0.30).periods)
 
-        assert _derived_values(replaced) == (0.30, 0.30, frozenset())
-        assert (peak, mean) == pytest.approx((0.25, 0.17))
+        assert _derived_values(replaced) == (0.30, frozenset())
+        assert peak == 0.25
         assert cheap_minutes == frozenset(range(30, 450))
 
 

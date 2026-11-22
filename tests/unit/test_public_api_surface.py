@@ -371,7 +371,6 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     # --- tariff (tariff.py) ---
     "TariffConfig": {
         "peak_rate": "cached_property (self) -> float",
-        "mean_period_rate": "cached_property (self) -> float",
         "cheap_minutes_of_day": "cached_property (self) -> frozenset[int]",
         "get_rate": "(self, timestamp: datetime) -> float",
         "rates_for": "(self, index: DatetimeIndex) -> ndarray",
