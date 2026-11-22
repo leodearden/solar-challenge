@@ -139,8 +139,8 @@ def create_app(test_config: Mapping[str, Any] | None = None, *, jobs: JobManager
             database, naming it; the file is left as it was, and the
             store's lock is released.
         Whatever *jobs* raises, the store's lock then released; and
-        whatever failing the interrupted runs raises, the app's Dashboard
-        then closed.
+        whatever reading the persisted secret key or failing the
+        interrupted runs raises, the app's Dashboard then closed.
     """
     app = Flask(
         __name__,
@@ -180,10 +180,10 @@ def create_app(test_config: Mapping[str, Any] | None = None, *, jobs: JobManager
 
     dashboard = _open_dashboard(app.config, jobs)
     attach_dashboard(app, dashboard)
-    # Consult the persisted key only when no config source supplied one; a build refused its store never does
-    if app.secret_key is None:
-        app.secret_key = _get_secret_key(default_location.data_dir)
     try:
+        # Consult the persisted key only when no config source supplied one; a build refused its store never does
+        if app.secret_key is None:
+            app.secret_key = _get_secret_key(default_location.data_dir)
         _fail_interrupted_runs(dashboard.storage)
     except BaseException:
         dashboard.close()

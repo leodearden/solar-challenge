@@ -169,6 +169,20 @@ def test_without_a_supplied_secret_key_the_app_keeps_one_under_the_home_director
     assert first.secret_key == second.secret_key == key_file.read_text()
 
 
+def test_a_build_whose_persisted_secret_key_cannot_be_read_fails_with_the_lookups_error_and_releases_its_store(
+    home: Path, tmp_path: Path
+) -> None:
+    """A key file of bytes no UTF-8 decoder reads makes the key lookup raise UnicodeDecodeError, which it does not catch."""
+    key_file = home / ".solar-challenge" / ".secret_key"
+    key_file.parent.mkdir()
+    key_file.write_bytes(b"\xff\xfe not a key")
+
+    with pytest.raises(UnicodeDecodeError):
+        build_test_app(tmp_path / "data", secret_key=None)
+
+    assert store_lock_is_free(tmp_path / "data")
+
+
 @pytest.mark.parametrize("flask_debug", ["0", "1"], ids=["debug_off", "debug_on"])
 def test_the_session_cookie_is_not_marked_secure(
     flask_debug: str, build_app: BuildApp, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
