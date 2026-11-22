@@ -14,6 +14,7 @@ import pytest
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import (
     DISTRIBUTION_TYPES,
+    DRAWN_KIND_RULES,
     DistributionSpec,
     DistributionType,
     NormalDistribution,
@@ -24,6 +25,7 @@ from solar_challenge.fleet_distribution import (
     SweepSpec,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    editor_types,
     parse_fleet_distribution_config,
     write_distribution_spec,
 )
@@ -303,3 +305,33 @@ class TestTheWriterIsTheParsersInverse:
 
         assert repr(not_a_spec) in str(refusal.value)
         assert [name for name in DISTRIBUTION_TYPES if name not in str(refusal.value)] == []
+
+
+class TestEditorTypes:
+    """editor_types offers a field's kind the editable types its kind rule draws: never the scalar form, the editor's own Fixed Value option, nor a type with unheld keys."""
+
+    @pytest.mark.parametrize(
+        ("kind", "names"),
+        [
+            pytest.param(FieldKind.NUMBER, ["weighted_discrete", "normal", "uniform", "shuffled_pool"], id="number"),
+            pytest.param(FieldKind.COUNT, ["weighted_discrete", "normal", "uniform", "shuffled_pool"], id="count"),
+            pytest.param(FieldKind.CHOICE, ["weighted_discrete", "shuffled_pool"], id="choice"),
+        ],
+    )
+    def test_editor_types_offers_a_drawn_kind_the_editable_types_its_rule_draws_in_table_order(
+        self, kind: FieldKind, names: list[str]
+    ) -> None:
+        offered = editor_types(kind)
+
+        assert [distribution_type.name for distribution_type in offered] == names
+        assert [
+            distribution_type.name
+            for distribution_type in offered
+            if distribution_type is not DISTRIBUTION_TYPES[distribution_type.name]
+        ] == []
+
+    @pytest.mark.parametrize(
+        "kind", [pytest.param(kind, id=kind.value) for kind in FieldKind if kind not in DRAWN_KIND_RULES]
+    )
+    def test_editor_types_offers_a_kind_no_home_draws_no_type(self, kind: FieldKind) -> None:
+        assert editor_types(kind) == ()

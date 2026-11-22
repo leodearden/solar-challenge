@@ -19,11 +19,13 @@ from solar_challenge.fleet_distribution import (
     ShuffledPoolDistribution,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    editor_types,
     generate_homes_from_distribution,
     parse_fleet_distribution_config,
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
+from solar_challenge.scenario_blocks import FieldKind
 from tests._non_booleans import NON_BOOLEANS
 from tests._proportional_source_refusals import proportional_source_refusal
 
@@ -919,6 +921,37 @@ class TestASpecIsOneItsFieldsKindDraws:
             FleetDistributionConfig(n_homes=1, **{"pv": ComponentDistribution({"capacity_kw": 4.0}), **components})
 
         assert str(construction_refusal.value) == refusal
+
+
+class TestAFieldOfEachDrawnKindParsesEveryTypeTheEditorOffersIt:
+    """Each type editor_types offers a drawn kind, filled from its record alone, parses at a field of that kind: every parameter given 1, and its rows one value of the kind weighted or counted 1."""
+
+    @pytest.mark.parametrize(
+        ("kind", "component", "key", "value"),
+        [
+            pytest.param(FieldKind.NUMBER, "battery", "capacity_kwh", 1.0, id="number"),
+            pytest.param(FieldKind.COUNT, "load", "household_occupants", 1.0, id="count"),
+            pytest.param(FieldKind.CHOICE, "heat_pump", "heat_pump_type", "ASHP", id="choice"),
+        ],
+    )
+    def test_each_type_the_editor_offers_filled_from_its_record_parses_as_its_spec_type(
+        self, kind: FieldKind, component: str, key: str, value: object
+    ) -> None:
+        offered = editor_types(kind)
+        assert offered
+
+        for distribution_type in offered:
+            spec: dict[str, Any] = {
+                "type": distribution_type.name,
+                **{parameter.key: 1.0 for parameter in distribution_type.parameters},
+            }
+            if distribution_type.rows is not None:
+                spec.update(zip(distribution_type.rows.keys, ([value], [1]), strict=True))
+
+            fleet = _parsed_fleet_distribution(n_homes=1, pv={"capacity_kw": 4.0}, **{component: {key: spec}})
+
+            drawn = getattr(fleet, component).draws[key]
+            assert isinstance(drawn, distribution_type.spec_type), distribution_type.name
 
 
 class TestAProportionalToSourceIsDrawnEarlierForEveryHomeThatDrawsIt:
