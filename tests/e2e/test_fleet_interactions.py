@@ -32,6 +32,7 @@ from tests.e2e._economy_rates import (
     ECONOMY_7_AT_THE_TYPED_PEAK_RATE,
     type_a_peak_rate_under_economy_7_then_visit_economy_10,
 )
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES
 from tests.e2e._job_requests import a_job_state, job_state_frame
 
 
@@ -690,49 +691,89 @@ def fleet_submissions(page: Page) -> list[Any]:
     return submissions
 
 
-def test_fleet_run_of_an_imported_fleet_over_the_pages_size_limit_shows_the_refusal(
-    page: Page,
-    live_server: str,
-    tmp_path: Path,
-    fleet_submissions: list[Any],
-    page_errors: list[str],
-) -> None:
-    """Run of a fleet imported with more homes than the page runs, 1500 against its 1000, shows the refusal and submits nothing."""
-    fleet_file = tmp_path / "fleet.yaml"
-    fleet_file.write_text(IMPORTED_FLEET.replace("n_homes: 100", "n_homes: 1500"))
-    page.goto(live_server + "/simulate/fleet")
-
-    with page.expect_file_chooser() as chooser:
-        page.get_by_role("button", name="Import YAML", exact=True).click()
-    chooser.value.set_files(fleet_file)
-    expect(page.get_by_label("Number of Homes", exact=True)).to_have_value("1500")
-
-    page.get_by_role("button", name="Run Fleet Simulation").click()
-
-    expect(page.get_by_role("alert")).to_have_text("Fleet size must be at most 1000")
-    assert fleet_submissions == []
-    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+def _set_every_card_to_a_fixed_value(page: Page) -> None:
+    """Set each component's card to Fixed Value, which holds its start value whatever the fleet's size."""
+    for component in FLEET_COMPONENTS.values():
+        page.get_by_role(
+            "combobox", name=f"{component.subject} Distribution Type", exact=True
+        ).select_option(label="Fixed Value")
 
 
-def test_fleet_run_shows_every_reason_it_refuses_the_form(
+def _fleet_run_fails(page: Page) -> Any:
+    """Wait, around the call it guards, for the fleet run the page submits to fail, as fleet_submissions aborts it."""
+    return page.expect_event(
+        "requestfailed", lambda request: request.url.endswith("/api/simulate/fleet-from-distribution")
+    )
+
+
+def test_fleet_run_posts_more_homes_than_the_slider_reaches_as_the_number_typed(
     page: Page, live_server: str, fleet_submissions: list[Any], page_errors: list[str]
 ) -> None:
-    """Run of a form with two faults, a normal PV distribution with a zero Std Dev and a Min clamp above its Max, shows both reasons in one alert and submits nothing."""
+    """Run of 2000 homes, past the slider's 500, posts n_homes 2000 as a number: the page leaves the fleet's size to the server."""
     page.goto(live_server + "/simulate/fleet")
-    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
-        label="Normal (Gaussian)"
-    )
-    page.get_by_role("spinbutton", name="PV Capacity Std Dev", exact=True).fill("0")
-    page.get_by_role("spinbutton", name="PV Capacity Min (clamp)", exact=True).fill("8")
-    page.get_by_role("spinbutton", name="PV Capacity Max (clamp)", exact=True).fill("2")
+    page.get_by_label("Number of Homes", exact=True).fill("2000")
+    _set_every_card_to_a_fixed_value(page)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+    with _fleet_run_fails(page):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (sent,) = fleet_submissions
+    assert sent["n_homes"] == 2000
+    assert isinstance(sent["n_homes"], int)
+
+
+def test_fleet_run_of_more_homes_than_the_server_holds_shows_its_refusal(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Run of one home more than MAX_FLEET_HOMES reaches the live server, and the page shows the server's refusal; a 400 queues no job."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_label("Number of Homes", exact=True).fill(str(MAX_FLEET_HOMES + 1))
+    _set_every_card_to_a_fixed_value(page)
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
     page.get_by_role("button", name="Run Fleet Simulation").click()
 
     expect(page.get_by_role("alert")).to_have_text(
-        "PV std deviation must be positive; PV min must be less than max"
+        f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
     )
-    assert fleet_submissions == []
+
+
+def test_fleet_run_of_a_pv_distribution_beyond_its_range_shows_the_servers_refusal(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """Run of a normal PV distribution around 50 kW, clamped to 40-60, reaches the live server, which refuses its first home; the page shows the reason."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
+        label="Normal (Gaussian)"
+    )
+    for parameter, value in (("Mean", "50"), ("Std Dev", "1"), ("Min (clamp)", "40"), ("Max (clamp)", "60")):
+        page.get_by_role("spinbutton", name=f"PV Capacity {parameter}", exact=True).fill(value)
     assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+
+    page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    expect(page.get_by_role("alert")).to_contain_text(
+        f"pv.capacity_kw must be {FLEET_COMPONENTS['pv'].value_range} for every home, got "
+    )
+
+
+def test_fleet_run_posts_the_days_and_the_peak_hours_as_numbers(
+    page: Page, live_server: str, fleet_submissions: list[Any]
+) -> None:
+    """The day choice and the peak window go as the numbers the form holds."""
+    page.goto(live_server + "/simulate/fleet")
+    page.get_by_role("button", name="14 days", exact=True).click()
+    page.get_by_role("combobox", name="Dispatch Strategy", exact=True).select_option(
+        label="Time-of-Use Optimised"
+    )
+
+    with _fleet_run_fails(page):
+        page.get_by_role("button", name="Run Fleet Simulation").click()
+
+    (sent,) = fleet_submissions
+    assert sent["days"] == 14
+    assert sent["dispatch_strategy"]["peak_hours"] == [[16, 19]]
 
 
 COMPLETED_RUN_ID = "run-1"
@@ -740,18 +781,25 @@ COMPLETED_RUN_ID = "run-1"
 
 @pytest.fixture
 def fleet_runs_complete_at_once(page: Page) -> None:
-    """Answer each fleet run the page submits as a job that completes at once as COMPLETED_RUN_ID, with the results_url the server answers for it, so no job reaches the live server's JobManager."""
-    page.route(
-        "**/api/simulate/fleet-from-distribution",
-        lambda route: route.fulfill(
+    """Answer each fleet run the page submits as a job that completes at once as COMPLETED_RUN_ID, with the results_url the server answers for it, so no job reaches the live server's JobManager.
+
+    A run of more homes than MAX_FLEET_HOMES continues to the live server, whose refusal queues no job.
+    """
+
+    def _complete_at_once(route: Route) -> None:
+        if route.request.post_data_json["n_homes"] > MAX_FLEET_HOMES:
+            route.continue_()
+            return
+        route.fulfill(
             status=201,
             json={
                 "job_id": "job-1",
                 "run_id": COMPLETED_RUN_ID,
                 "results_url": f"/results/{COMPLETED_RUN_ID}",
             },
-        ),
-    )
+        )
+
+    page.route("**/api/simulate/fleet-from-distribution", _complete_at_once)
     completion = job_state_frame(a_job_state("job-1", COMPLETED_RUN_ID, "completed"), version=5)
     page.route(
         "**/api/jobs/job-1/progress",
@@ -763,22 +811,22 @@ def fleet_runs_complete_at_once(page: Page) -> None:
 def test_fleet_run_that_refuses_the_form_leaves_the_earlier_runs_results_link(
     page: Page, live_server: str, page_errors: list[str]
 ) -> None:
-    """Run of a form the page refuses, after a run that completed, shows the refusal and leaves that run's View Results link: a refusal is no submission to replace it."""
+    """Run of a form the server refuses, after a run that completed, shows the refusal and leaves that run's View Results link: a refusal is no run to replace it."""
     earlier_results = f"/results/{COMPLETED_RUN_ID}"
     page.goto(live_server + "/simulate/fleet")
     page.get_by_role("button", name="Run Fleet Simulation").click()
     results_link = page.get_by_role("link", name="View Results", exact=True)
     expect(results_link).to_have_attribute("href", earlier_results)
 
-    page.get_by_role("combobox", name="PV Capacity Distribution Type", exact=True).select_option(
-        label="Normal (Gaussian)"
-    )
-    page.get_by_role("spinbutton", name="PV Capacity Std Dev", exact=True).fill("0")
+    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
+    page.get_by_label("Number of Homes", exact=True).fill(str(MAX_FLEET_HOMES + 1))
+    _set_every_card_to_a_fixed_value(page)
     page.get_by_role("button", name="Run Fleet Simulation").click()
 
-    expect(page.get_by_role("alert")).to_have_text("PV std deviation must be positive")
+    expect(page.get_by_role("alert")).to_have_text(
+        f"n_homes must be between 1 and {MAX_FLEET_HOMES}, got {MAX_FLEET_HOMES + 1}"
+    )
     expect(results_link).to_have_attribute("href", earlier_results)
-    assert page_errors == [], f"Errors on /simulate/fleet: {page_errors}"
 
 
 # -- Period selector -------------------------------------------------------

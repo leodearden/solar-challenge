@@ -1,19 +1,26 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Invariant 11's window half: the CLI's window defaults are timebase's.
+"""Invariant 11's window half: the CLI's and the dashboard's window defaults are timebase's.
 
 Every --start and --end option of the CLI defaults to the ISO string of timebase.DEFAULT_FIRST_DAY or
 DEFAULT_LAST_DAY, or to None, as optimize configs' options do: an option left unset reads the scenario's period, or
 that default window when the scenario sets no period. config template home and config template scenario write that
 window as their period. No module of src/solar_challenge outside timebase.py holds a string that is exactly an ISO
 date, so no window default is restated as a literal (docs/prds/dashboard-limits-and-distribution-table.md §4.2).
+
+The dashboard's pages read their windows from #page-limits, which web/fleet_components.page_limits() writes from
+timebase: each page's default window and short window start are timebase's, and its custom range and its Full Year,
+1 Month and 1 Week presets are the windows the server runs for the days they stand for. No template or script of the
+dashboard holds an ISO date in its text.
 """
 
 import ast
+import importlib.util
+import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import date
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import pandas as pd
 import pytest
@@ -23,8 +30,12 @@ import yaml
 from typer.testing import CliRunner
 
 import solar_challenge.cli
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli
+from tests._html_page import script_text_by_id
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 _WINDOW_OPTION_DEFAULTS = {
     "--start": DEFAULT_FIRST_DAY.isoformat(),
@@ -36,6 +47,14 @@ _COMMANDS_WITH_A_WINDOW = frozenset({"home run", "fleet run", "fleet sweep", "fi
 """The commands that take --start and --end, each named by its path from the CLI's root."""
 
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
+_ISO_DATE_WORD = re.compile(rf"\b{_ISO_DATE.pattern}\b", re.ASCII)
+
+_PAGES_WITH_A_WINDOW = ("/simulate/home", "/simulate/fleet", "/scenarios/builder")
+"""The dashboard's pages whose forms set a simulation window."""
+
+_NEEDS_THE_WEB_EXTRA = pytest.mark.skipif(
+    importlib.util.find_spec("flask") is None, reason="the dashboard's pages need flask, from the web extra"
+)
 
 
 def _window_options() -> Iterator[tuple[str, str, object]]:
@@ -69,6 +88,41 @@ def _iso_date_literals(package_dir: Path, *, skipping: Path) -> list[tuple[str, 
         for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"), filename=str(module)))
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and _ISO_DATE.fullmatch(node.value)
     )
+
+
+def _dashboard_sources(web_dir: Path) -> list[Path]:
+    """The dashboard's own templates and scripts under web_dir: each .html under templates and each .js under static/js, not the vendored static/vendor or the built static/dist."""
+    return sorted([*(web_dir / "templates").rglob("*.html"), *(web_dir / "static" / "js").rglob("*.js")])
+
+
+def _iso_dates_in_text(paths: Iterable[Path], *, root: Path) -> list[tuple[str, int, str]]:
+    """(path relative to root, line, date) of the first ISO date on each line of the text of paths, as "2024-06-01" in "start: '2024-06-01'", in path and line order.
+
+    A date is a word of its own: "12024-06-011" holds none.
+    """
+    return sorted(
+        (path.relative_to(root).as_posix(), number, match.group())
+        for path in paths
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if (match := _ISO_DATE_WORD.search(line)) is not None
+    )
+
+
+def _page_limits_on(client: "FlaskClient", path: str) -> dict[str, Any]:
+    """The #page-limits of the page at path, as its scripts read it."""
+    limits: dict[str, Any] = json.loads(script_text_by_id(client.get(path).get_data(as_text=True), "page-limits"))
+    return limits
+
+
+def _window_the_server_runs(days: int) -> list[str]:
+    """The (first, last) days, as ISO text, of the window the server runs for a body sending days.
+
+    Imported here, not at the module's top, since simulation_params needs the web extra and this module's CLI tests
+    do not.
+    """
+    from solar_challenge.web.simulation_params import parse_date_range
+
+    return list(parse_date_range({"days": days}))
 
 
 def test_every_start_and_end_option_defaults_to_the_default_window_or_to_none() -> None:
@@ -156,3 +210,56 @@ def test_no_module_outside_timebase_holds_an_iso_date_string(project_root: Path)
         "Modules of src/solar_challenge that restate a date as an ISO string, in place of reading it from "
         "timebase: " + "; ".join(f"{path}:{line}: {value!r}" for path, line, value in literals)
     )
+
+
+def test_the_date_text_scan_names_each_line_of_a_template_or_script_holding_an_iso_date(tmp_path: Path) -> None:
+    """The scan names the seeded script's and template's dates with their lines, and passes over digits a date only runs into."""
+    script = tmp_path / "seeded.js"
+    script.write_text("const form = {\n    start: '2024-03-01',\n};\n", encoding="utf-8")
+    template = tmp_path / "seeded.html"
+    template.write_text(
+        '<input id="run-12024-03-011">\n<input type="date" value="2024-06-30">\n', encoding="utf-8"
+    )
+
+    assert _iso_dates_in_text([script, template], root=tmp_path) == [
+        ("seeded.html", 2, "2024-06-30"),
+        ("seeded.js", 2, "2024-03-01"),
+    ]
+
+
+def test_no_dashboard_template_or_script_holds_an_iso_date(project_root: Path) -> None:
+    """A page's window is read from its #page-limits, which page_limits() writes from timebase."""
+    web_dir = project_root / "src" / "solar_challenge" / "web"
+
+    dates = _iso_dates_in_text(_dashboard_sources(web_dir), root=web_dir)
+
+    assert dates == [], (
+        "Templates and scripts of the dashboard that restate a date as ISO text, in place of reading it from "
+        "#page-limits: " + "; ".join(f"{path}:{line}: {value!r}" for path, line, value in dates)
+    )
+
+
+@_NEEDS_THE_WEB_EXTRA
+@pytest.mark.parametrize("path", _PAGES_WITH_A_WINDOW)
+class TestThePagesWindowDefaultsAreTheServers:
+    """Each page's window defaults, read from its #page-limits, are timebase's days and the windows the server runs for the days they stand for."""
+
+    def test_the_default_window_and_the_short_window_start_are_timebases(
+        self, client: "FlaskClient", path: str
+    ) -> None:
+        limits = _page_limits_on(client, path)
+        assert limits["default_window"] == [DEFAULT_FIRST_DAY.isoformat(), DEFAULT_LAST_DAY.isoformat()]
+        assert limits["short_window_start"] == SHORT_WINDOW_START.isoformat()
+
+    def test_the_custom_range_starts_at_the_window_the_default_days_run(self, client: "FlaskClient", path: str) -> None:
+        limits = _page_limits_on(client, path)
+        assert limits["custom_range_default"] == _window_the_server_runs(limits["default_days"])
+
+    def test_the_full_year_month_and_week_presets_are_the_windows_the_server_runs(
+        self, client: "FlaskClient", path: str
+    ) -> None:
+        limits = _page_limits_on(client, path)
+        presets = limits["period_presets"]
+        assert presets["Full Year"] == limits["default_window"]
+        assert presets["1 Month"] == _window_the_server_runs(30)
+        assert presets["1 Week"] == _window_the_server_runs(7)

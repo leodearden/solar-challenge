@@ -23,7 +23,7 @@ import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
 from solar_challenge.seg import SEG_PRESETS
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, page_limits
 from tests.e2e._home_form import (
     FIRST_DAY,
     SECOND_DAY,
@@ -230,20 +230,14 @@ def test_submit_button_exists(page: Page, live_server: str) -> None:
 
 
 def test_form_validation_pv_range(page: Page, live_server: str) -> None:
-    """The PV capacity input enforces min/max constraints via HTML attributes."""
+    """The PV capacity slider spans the pv component's value_range, as page_limits() gives it."""
     page.goto(live_server + "/simulate/home")
+    value_range = page_limits().components["pv"].value_range
 
     pv_input = page.locator("#pv_kw")
     expect(pv_input).to_be_visible()
-
-    # Check that the range input has min/max constraints
-    min_val = pv_input.get_attribute("min")
-    max_val = pv_input.get_attribute("max")
-
-    assert min_val is not None, "PV input should have a 'min' attribute"
-    assert max_val is not None, "PV input should have a 'max' attribute"
-    assert float(min_val) >= 0.5, f"PV min should be >= 0.5, got {min_val}"
-    assert float(max_val) <= 20, f"PV max should be <= 20, got {max_val}"
+    expect(pv_input).to_have_attribute("min", str(value_range.low))
+    expect(pv_input).to_have_attribute("max", str(value_range.high))
 
 
 # ── Form validation (annual consumption range) ──────────────────────
@@ -266,6 +260,28 @@ def _validation_errors(page: Page) -> Locator:
     """The items of the list the page shows under "Please fix the following errors:"."""
     heading = page.get_by_text("Please fix the following errors:", exact=True)
     return heading.locator("xpath=..").get_by_role("listitem")
+
+
+def test_a_battery_beyond_the_battery_range_is_listed_as_an_error_and_never_sent(
+    page: Page, live_server: str, home_run_submissions: list[Any]
+) -> None:
+    """A preset's 500 kWh battery, past the slider's end, is an error naming both ends of the battery component's value_range, and Run Simulation sends nothing."""
+    value_range = page_limits().components["battery"].value_range
+    page.route(
+        "**/api/presets",
+        lambda route: route.fulfill(
+            json=[{"name": "Big battery", "pv_kw": 4.0, "battery_kwh": 500, "consumption_kwh": 3500}]
+        ),
+    )
+    page.goto(live_server + "/simulate/home")
+    page.get_by_label("Preset", exact=True).select_option("Big battery")
+
+    page.get_by_role("button", name="Run Simulation").click()
+
+    expect(_validation_errors(page).filter(has_text="Battery")).to_have_text(
+        [f"Battery capacity must be between {value_range.low:g} and {value_range.high:g} kWh"]
+    )
+    assert home_run_submissions == []
 
 
 @pytest.mark.parametrize("beyond", ["below", "above"])
