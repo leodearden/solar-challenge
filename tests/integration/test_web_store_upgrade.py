@@ -15,9 +15,9 @@ run, but render and export only the stored ones.
 
 `web start` refuses the store until `web migrate` has migrated it, and then serves it.
 Flask.run is replaced by a recorder, so `web start` hands its dashboard over without serving
-it, and each test drives that dashboard through its test client. cli/web.py's _serve shuts
-every job manager down once its server stops (shutdown_all_managers), so no test submits a
-job.
+it, and each test drives that dashboard through its test client. cli/web.py's _serve, the
+root that built the dashboard, closes it once its server stops (dashboard_of(app).close()),
+shutting its job manager down, so no test submits a job.
 """
 
 import io
@@ -38,6 +38,7 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.web.app import default_store_location
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.database import Database
 from solar_challenge.web.schema import SCHEMA_VERSION
 from solar_challenge.web.stored_runs import RunType
@@ -50,7 +51,7 @@ from tests._stored_run_fixtures import (
     install_stored_run_fixture,
     stored_run_fixture_dir,
 )
-from tests._web_app import release_store_lock, run_storage_of
+from tests._web_app import run_storage_of
 
 _MINUTES_OF_THE_FIXTURES_DAY = 24 * 60
 """The rows of each stored run's time series: one day at 1-minute resolution (tests/_stored_run_fixtures.py)."""
@@ -106,7 +107,7 @@ def legacy_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _LegacyStor
 
 @pytest.fixture
 def served_dashboards(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Flask]]:
-    """Each dashboard `web start` hands to Flask.run, which records it rather than serving it; each one's store lock is released at teardown."""
+    """Each dashboard `web start` hands to Flask.run, which records it rather than serving it; each one is closed at teardown."""
     served: list[Flask] = []
 
     def record(self: Flask, *args: Any, **kwargs: Any) -> None:
@@ -115,7 +116,7 @@ def served_dashboards(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Flask]]:
     monkeypatch.setattr(Flask, "run", record)
     yield served
     for dashboard in served:
-        release_store_lock(dashboard)
+        dashboard_of(dashboard).close()
 
 
 @pytest.fixture

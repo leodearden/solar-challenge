@@ -21,20 +21,22 @@ pytest.importorskip("flask")
 from flask import Flask
 from flask.testing import FlaskClient
 
+from solar_challenge.fleet import HomeSimulator
 from solar_challenge.weather import WeatherCache
-from solar_challenge.web.jobs import HomeSimulator, JobManager, JobState
+from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.jobs import JobManager, JobState
 from solar_challenge.web.sse import HEARTBEAT, JobStreamPolicy, job_progress_frames
 from tests._finance_builders import make_home_config, make_sim_results
 from tests._fleet_form import valid_distribution_form
 from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._sse import SseFrame, parse_sse_events
-from tests._web_app import build_test_app, database_of, release_store_lock, run_storage_of
+from tests._web_app import BuildApp, run_storage_of
+from tests._web_job_runner import jobs_running, runner_of
 from tests._web_runs import store_home_run
 from tests.unit.web_jobs._app_client import (
     A_HOME_JOB_DAYS,
     A_HOME_JOB_REQUEST,
-    client_using,
     serve_job_streams_under,
 )
 from tests.unit.web_jobs._fakes import (
@@ -44,19 +46,15 @@ from tests.unit.web_jobs._fakes import (
     RunStorageRefusingCompletion,
     RunStorageWithGatedHomeSaves,
     SaveGate,
+    SteppedSimulation,
     a_failing_simulation,
 )
 
 
-def _client_whose_jobs_run(app: Flask, simulation: HomeSimulator) -> FlaskClient:
-    """Install a JobManager that runs *simulation* as the app's job manager, and return a client of the app."""
-    return client_using(app, JobManager(run_storage_of(app), simulate_home=simulation))
-
-
 @pytest.fixture
-def client(app: Flask) -> FlaskClient:
-    """A client whose jobs run a fake simulation that returns at once, so the teardown drain has nothing to wait for."""
-    return _client_whose_jobs_run(app, RecordingSimulation())
+def client(build_app: BuildApp, tmp_path: Path) -> FlaskClient:
+    """A client whose jobs run a fake simulation that returns at once, so the teardown close has nothing to wait for."""
+    return build_app(tmp_path, jobs=jobs_running(RecordingSimulation())).test_client()
 
 
 @pytest.fixture
@@ -71,9 +69,9 @@ def real_simulation_client(app: Flask, weather_cache: WeatherCache) -> FlaskClie
 
 
 @pytest.fixture
-def blocking_client(app: Flask, blocking_simulation: BlockingSimulation) -> FlaskClient:
+def blocking_client(build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation) -> FlaskClient:
     """A client whose jobs wait inside blocking_simulation until it is released."""
-    return _client_whose_jobs_run(app, blocking_simulation)
+    return build_app(tmp_path, jobs=jobs_running(blocking_simulation)).test_client()
 
 
 class TestSimulateHomeEndpoint:
@@ -112,38 +110,41 @@ class TestSimulateHomeEndpoint:
 
 
 def _a_finished_job(
-    app: Flask, simulation: HomeSimulator, endpoint: str, request_body: dict[str, Any]
+    build_app: BuildApp, data_dir: Path, simulation: HomeSimulator, endpoint: str, request_body: dict[str, Any]
 ) -> tuple[JobManager, FlaskClient]:
-    """Submit *request_body* to *endpoint* through *app* for a new JobManager to run through *simulation* to its end; return the manager and a client of the app.
+    """Build an app over *data_dir* whose jobs run through *simulation*, submit *request_body* to *endpoint* and let the job run to its end; return the app's JobManager and a client of the app.
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    manager = JobManager(run_storage_of(app), simulate_home=simulation, new_id=CountingIds())
-    client = client_using(app, manager)
+    app = build_app(data_dir, jobs=jobs_running(simulation, new_id=CountingIds()))
+    client = app.test_client()
     assert client.post(endpoint, json=request_body).status_code == 201
+    manager = dashboard_of(app).jobs
     assert manager.wait_until_idle(timeout=30)
     return manager, client
 
 
-def _client_of_a_finished_job(app: Flask, simulation: HomeSimulator) -> FlaskClient:
-    """Return a client of *app* whose JobManager has run one home job through *simulation* to its end.
+def _client_of_a_finished_job(build_app: BuildApp, data_dir: Path, simulation: HomeSimulator) -> FlaskClient:
+    """Return a client of an app over *data_dir* whose JobManager has run one home job through *simulation* to its end.
 
     The job's id is "id-1" and its run's id is "id-2".
     """
-    _, client = _a_finished_job(app, simulation, "/api/simulate/home", A_HOME_JOB_REQUEST)
+    _, client = _a_finished_job(build_app, data_dir, simulation, "/api/simulate/home", A_HOME_JOB_REQUEST)
     return client
 
 
-def _a_held_job(app: Flask, blocking_simulation: BlockingSimulation) -> tuple[JobManager, FlaskClient]:
-    """Submit a home job through *app* to a new JobManager of one worker and hold it inside *blocking_simulation*; return the manager and a client of the app.
+def _a_held_job(
+    build_app: BuildApp, data_dir: Path, blocking_simulation: BlockingSimulation
+) -> tuple[JobManager, FlaskClient]:
+    """Build an app over *data_dir* whose JobManager has one worker, submit a home job and hold it inside *blocking_simulation*; return the manager and a client of the app.
 
     The job's id is "id-1" and its run's id is "id-2". A job submitted after it waits in the queue.
     """
-    manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds())
-    client = client_using(app, manager)
+    app = build_app(data_dir, jobs=jobs_running(blocking_simulation, max_workers=1, new_id=CountingIds()))
+    client = app.test_client()
     assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
     blocking_simulation.wait_until_started()
-    return manager, client
+    return dashboard_of(app).jobs, client
 
 
 def _version_of(manager: JobManager, job_id: str) -> int:
@@ -209,17 +210,15 @@ class _LiveStream:
 class TestGetJobStatusEndpoint:
     """Tests for GET /api/jobs/<id>."""
 
-    def test_after_a_restart_an_earlier_job_is_not_found_although_its_run_remains(self, tmp_path: Path) -> None:
-        before_restart = build_test_app(tmp_path)
-        submitted = (
-            _client_whose_jobs_run(before_restart, RecordingSimulation())
-            .post("/api/simulate/home", json=A_HOME_JOB_REQUEST)
-            .get_json()
-        )
-        assert before_restart.extensions["job_manager"].wait_until_idle(timeout=30)
+    def test_after_a_restart_an_earlier_job_is_not_found_although_its_run_remains(
+        self, build_app: BuildApp, tmp_path: Path
+    ) -> None:
+        before_restart = build_app(tmp_path, jobs=jobs_running(RecordingSimulation()))
+        submitted = before_restart.test_client().post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
+        assert dashboard_of(before_restart).jobs.wait_until_idle(timeout=30)
 
-        release_store_lock(before_restart)
-        after_restart = build_test_app(tmp_path).test_client()
+        dashboard_of(before_restart).close()
+        after_restart = build_app(tmp_path).test_client()
 
         assert after_restart.get(f"/api/jobs/{submitted['job_id']}").status_code == 404
         run = after_restart.get(f"/api/history/runs/{submitted['run_id']}")
@@ -251,9 +250,9 @@ class TestGetJobStatusEndpoint:
         ids=["completed", "failed"],
     )
     def test_a_finished_jobs_status_answers_its_ids_its_last_state_and_its_runs_creation_time(
-        self, app: Flask, simulation: HomeSimulator, last_state: dict[str, Any]
+        self, build_app: BuildApp, tmp_path: Path, simulation: HomeSimulator, last_state: dict[str, Any]
     ) -> None:
-        client = _client_of_a_finished_job(app, simulation)
+        client = _client_of_a_finished_job(build_app, tmp_path, simulation)
 
         response = client.get("/api/jobs/id-1")
 
@@ -267,11 +266,15 @@ class TestGetJobStatusEndpoint:
 
 
 def _status_and_name_while_running_and_once_completed(
-    app: Flask, blocking_simulation: BlockingSimulation, endpoint: str, request_body: dict[str, Any]
+    build_app: BuildApp,
+    data_dir: Path,
+    blocking_simulation: BlockingSimulation,
+    endpoint: str,
+    request_body: dict[str, Any],
 ) -> list[tuple[str, str]]:
     """The status and name Run History reads for the run *request_body*'s POST to *endpoint* submits, while its job is held in *blocking_simulation*, then once it completes."""
-    manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
-    client = client_using(app, manager)
+    app = build_app(data_dir, jobs=jobs_running(blocking_simulation))
+    client = app.test_client()
 
     response = client.post(endpoint, json=request_body)
     assert response.status_code == 201
@@ -279,7 +282,7 @@ def _status_and_name_while_running_and_once_completed(
     blocking_simulation.wait_until_started()
     running = client.get(f"/api/history/runs/{run_id}").get_json()
     blocking_simulation.release()
-    assert manager.wait_until_idle(timeout=30)
+    assert dashboard_of(app).jobs.wait_until_idle(timeout=30)
     completed = client.get(f"/api/history/runs/{run_id}").get_json()
     return [(running["status"], running["name"]), (completed["status"], completed["name"])]
 
@@ -302,12 +305,15 @@ class TestASubmittedJobsRunInRunHistory:
     )
     def test_a_submitted_jobs_run_reads_running_then_completed_under_the_submits_name(
         self,
-        app: Flask,
+        build_app: BuildApp,
+        tmp_path: Path,
         blocking_simulation: BlockingSimulation,
         endpoint: str,
         request_body: dict[str, Any],
     ) -> None:
-        assert _status_and_name_while_running_and_once_completed(app, blocking_simulation, endpoint, request_body) == [
+        assert _status_and_name_while_running_and_once_completed(
+            build_app, tmp_path, blocking_simulation, endpoint, request_body
+        ) == [
             ("running", request_body["name"]),
             ("completed", request_body["name"]),
         ]
@@ -322,50 +328,59 @@ class TestASubmittedJobsRunInRunHistory:
     )
     def test_a_job_submitted_without_a_name_runs_under_its_run_kinds_default_name(
         self,
-        app: Flask,
+        build_app: BuildApp,
+        tmp_path: Path,
         blocking_simulation: BlockingSimulation,
         endpoint: str,
         request_body: dict[str, Any],
         default_name: str,
     ) -> None:
         """The run lists under the name its kind gives a run created with none (RunKind.default_name)."""
-        assert _status_and_name_while_running_and_once_completed(app, blocking_simulation, endpoint, request_body) == [
+        assert _status_and_name_while_running_and_once_completed(
+            build_app, tmp_path, blocking_simulation, endpoint, request_body
+        ) == [
             ("running", default_name),
             ("completed", default_name),
         ]
 
     @pytest.mark.parametrize("name_sent", [{}, {"name": ""}], ids=["no-name", "an-empty-name"])
     def test_a_fleet_form_submitted_without_a_name_runs_as_fleet_simulation(
-        self, app: Flask, name_sent: dict[str, str]
+        self, build_app: BuildApp, tmp_path: Path, name_sent: dict[str, str]
     ) -> None:
         """The run lists under the fleet kind's default name (RunKind.default_name)."""
-        manager = JobManager(run_storage_of(app), simulate_home=RecordingSimulation())
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(RecordingSimulation()))
+        client = app.test_client()
 
         response = client.post(
             "/api/simulate/fleet-from-distribution", json={**valid_distribution_form(), "days": 1, **name_sent}
         )
         assert response.status_code == 201, response.get_json()
-        assert manager.wait_until_idle(timeout=30)
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=30)
         run = client.get(f"/api/history/runs/{response.get_json()['run_id']}").get_json()
 
         assert (run["status"], run["name"]) == ("completed", "Fleet Simulation")
 
-    def test_a_failed_jobs_run_reads_failed_with_the_jobs_message(self, app: Flask) -> None:
-        client = _client_of_a_finished_job(app, a_failing_simulation)
+    def test_a_failed_jobs_run_reads_failed_with_the_jobs_message(self, build_app: BuildApp, tmp_path: Path) -> None:
+        client = _client_of_a_finished_job(build_app, tmp_path, a_failing_simulation)
 
         run = client.get("/api/history/runs/id-2").get_json()
 
         assert (run["status"], run["error_message"]) == ("failed", "the simulation failed")
 
     def test_a_job_whose_run_the_database_refuses_to_complete_reports_failed_and_its_run_reads_failed_never_completed(
-        self, app: Flask
+        self, build_app: BuildApp, tmp_path: Path
     ) -> None:
-        storage = RunStorageRefusingCompletion(database_of(app), run_storage_of(app).data_dir)
-        manager = JobManager(storage, simulate_home=RecordingSimulation(), new_id=CountingIds())
-        client = client_using(app, manager)
+        app = build_app(
+            tmp_path,
+            jobs=lambda storage: JobManager(
+                RunStorageRefusingCompletion(storage.database, storage.data_dir),
+                runner=runner_of(RecordingSimulation()),
+                new_id=CountingIds(),
+            ),
+        )
+        client = app.test_client()
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
-        assert manager.wait_until_idle(timeout=30)
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=30)
 
         job = client.get("/api/jobs/id-1").get_json()
         assert (job["status"], job["message"]) == ("failed", "the database refuses to complete runs")
@@ -378,12 +393,11 @@ class TestASubmittedJobsRunInRunHistory:
         assert statuses[-1:] == ["failed"]
 
     def test_a_job_shutdown_drops_from_the_queue_reports_failed_naming_the_shutdown_and_its_run_reads_failed(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(
-            run_storage_of(app), max_workers=1, simulate_home=blocking_simulation, new_id=CountingIds()
-        )
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, max_workers=1, new_id=CountingIds()))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
@@ -408,18 +422,18 @@ class TestASubmittedJobsRunInRunHistory:
         ]
 
     def test_a_run_no_job_finished_reads_failed_as_interrupted_once_the_app_is_rebuilt_on_its_store(
-        self, tmp_path: Path
+        self, build_app: BuildApp, tmp_path: Path
     ) -> None:
         """create_run's row, with no job left to finish it, is the row a server stopped mid-job leaves."""
-        before_restart = build_test_app(tmp_path)
+        before_restart = build_app(tmp_path)
         storage = run_storage_of(before_restart)
         storage.create_run(
             "left-running", run_type="home", name="North Roof", n_homes=1, created_at="2026-10-20T09:00:00+00:00"
         )
         store_home_run(storage, "completed-run", make_home_config(), make_sim_results(days=1))
 
-        release_store_lock(before_restart)
-        after_restart = build_test_app(tmp_path).test_client()
+        dashboard_of(before_restart).close()
+        after_restart = build_app(tmp_path).test_client()
 
         interrupted = after_restart.get("/api/history/runs/left-running").get_json()
         assert (interrupted["status"], interrupted["error_message"]) == ("failed", "Interrupted by server restart")
@@ -431,10 +445,11 @@ class TestDeletingARunCancelsItsJob:
     """DELETE /api/history/runs/<id> of a run whose job is queued or running cancels the job, which saves nothing: contract C8."""
 
     def test_a_run_deleted_while_its_home_job_simulates_stays_deleted_and_its_job_reports_cancelled(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation, new_id=CountingIds())
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, new_id=CountingIds()))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         assert client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
         running = client.get("/api/jobs/id-1").get_json()
@@ -461,10 +476,11 @@ class TestDeletingARunCancelsItsJob:
         ]
 
     def test_a_run_deleted_while_its_job_waits_in_the_queue_is_never_simulated(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), max_workers=1, simulate_home=blocking_simulation)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, max_workers=1))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         ahead = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         blocking_simulation.wait_until_started()
         queued = client.post("/api/simulate/home", json={**A_HOME_JOB_REQUEST, "pv_kw": 3.0}).get_json()
@@ -484,10 +500,11 @@ class TestDeletingARunCancelsItsJob:
         assert client.get(f"/api/history/runs/{ahead['run_id']}").get_json()["status"] == "completed"
 
     def test_a_fleet_run_deleted_while_its_first_home_simulates_never_simulates_the_others_and_saves_nothing(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager = JobManager(run_storage_of(app), simulate_home=blocking_simulation)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         submitted = client.post(
             "/api/simulate/fleet",
             json={
@@ -510,16 +527,22 @@ class TestDeletingARunCancelsItsJob:
         job = client.get(f"/api/jobs/{submitted['job_id']}").get_json()
         assert (job["status"], job["current_step"], job["message"]) == (
             "cancelled",
-            "Home 1/3",
+            "Homes 0/3",
             "Cancelled: its run was deleted",
         )
 
     def test_a_delete_that_comes_while_the_jobs_final_save_runs_waits_for_the_save_then_removes_the_saved_run(
-        self, app: Flask, save_gate: SaveGate
+        self, build_app: BuildApp, tmp_path: Path, save_gate: SaveGate
     ) -> None:
-        storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
-        manager = JobManager(storage, simulate_home=RecordingSimulation())
-        client = client_using(app, manager)
+        app = build_app(
+            tmp_path,
+            jobs=lambda storage: JobManager(
+                RunStorageWithGatedHomeSaves(storage.database, storage.data_dir, save_gate),
+                runner=runner_of(RecordingSimulation()),
+            ),
+        )
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         save_gate.wait_until_a_save_waits()
         answers: list[int] = []
@@ -573,14 +596,15 @@ class TestJobProgressEndpoint:
     @pytest.mark.parametrize(("simulation", "endpoint", "request_body", "event", "message"), _FINISHED_JOBS)
     def test_a_finished_jobs_stream_sends_only_its_final_state_named_by_its_status_with_its_version_as_id_and_the_retry(
         self,
-        app: Flask,
+        build_app: BuildApp,
+        tmp_path: Path,
         simulation: HomeSimulator,
         endpoint: str,
         request_body: dict[str, Any],
         event: str,
         message: str,
     ) -> None:
-        manager, client = _a_finished_job(app, simulation, endpoint, request_body)
+        manager, client = _a_finished_job(build_app, tmp_path, simulation, endpoint, request_body)
 
         frames = parse_sse_events(client.get("/api/jobs/id-1/progress").get_data(as_text=True))
 
@@ -593,9 +617,9 @@ class TestJobProgressEndpoint:
         assert list(frames[0].data) == _JOB_STATE_KEYS
 
     def test_two_streams_open_at_once_on_a_running_job_each_get_its_current_state_first(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
 
         with _progress_stream(client, "id-1") as first, _progress_stream(client, "id-1") as second:
             first_chunks = [next(first), next(second)]
@@ -607,11 +631,18 @@ class TestJobProgressEndpoint:
         assert first_chunks[0] == first_chunks[1]
 
     def test_two_live_streams_on_one_job_each_send_every_state_it_holds_at_a_poll(
-        self, app: Flask, blocking_simulation: BlockingSimulation, save_gate: SaveGate
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation, save_gate: SaveGate
     ) -> None:
-        storage = RunStorageWithGatedHomeSaves(database_of(app), run_storage_of(app).data_dir, save_gate)
-        manager = JobManager(storage, simulate_home=blocking_simulation, new_id=CountingIds())
-        assert client_using(app, manager).post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
+        app = build_app(
+            tmp_path,
+            jobs=lambda storage: JobManager(
+                RunStorageWithGatedHomeSaves(storage.database, storage.data_dir, save_gate),
+                runner=runner_of(blocking_simulation),
+                new_id=CountingIds(),
+            ),
+        )
+        manager = dashboard_of(app).jobs
+        assert app.test_client().post("/api/simulate/home", json=A_HOME_JOB_REQUEST).status_code == 201
         blocking_simulation.wait_until_started()
         first, second = _LiveStream(manager, "id-1"), _LiveStream(manager, "id-1")
 
@@ -637,9 +668,9 @@ class TestJobProgressEndpoint:
         assert [list(frame.data) for frame in frames] == [_JOB_STATE_KEYS] * 3
 
     def test_a_stream_opened_once_a_job_has_finished_sends_exactly_the_final_frame_a_live_stream_sent(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
         live = _LiveStream(manager, "id-1")
         live.poll()
         blocking_simulation.release()
@@ -650,9 +681,9 @@ class TestJobProgressEndpoint:
         assert client.get("/api/jobs/id-1/progress").get_data(as_text=True) == live.sent[-1]
 
     def test_a_stream_reopened_at_a_running_jobs_version_sends_a_heartbeat_first_not_its_state(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
 
         assert _first_chunk(client, "id-1", last_event_id=str(_version_of(manager, "id-1"))) == HEARTBEAT
 
@@ -663,11 +694,12 @@ class TestJobProgressEndpoint:
     )
     def test_a_stream_opened_without_the_jobs_version_as_its_last_event_id_sends_the_jobs_current_state_first(
         self,
-        app: Flask,
+        build_app: BuildApp,
+        tmp_path: Path,
         blocking_simulation: BlockingSimulation,
         last_event_id_at: Callable[[int], str | None],
     ) -> None:
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
         version = _version_of(manager, "id-1")
 
         first = _first_chunk(client, "id-1", last_event_id=last_event_id_at(version))
@@ -677,9 +709,11 @@ class TestJobProgressEndpoint:
         ]
 
     def test_a_finished_jobs_stream_reopened_at_its_final_version_sends_the_same_single_final_frame(
-        self, app: Flask
+        self, build_app: BuildApp, tmp_path: Path
     ) -> None:
-        manager, client = _a_finished_job(app, RecordingSimulation(), "/api/simulate/home", A_HOME_JOB_REQUEST)
+        manager, client = _a_finished_job(
+            build_app, tmp_path, RecordingSimulation(), "/api/simulate/home", A_HOME_JOB_REQUEST
+        )
         opened = client.get("/api/jobs/id-1/progress").get_data(as_text=True)
 
         reopened = client.get(
@@ -690,14 +724,14 @@ class TestJobProgressEndpoint:
         assert [frame.event for frame in parse_sse_events(reopened)] == ["completed"]
 
     def test_a_held_jobs_stream_sends_its_completed_frame_as_soon_as_the_job_ends_not_at_its_next_heartbeat(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         """A stream that slept out its 600 s heartbeat would still be asleep when the reader gives up, 30 s on.
 
         The rest of the stream is read in a daemon thread, so such a stream fails the test instead of holding it up.
         """
-        manager, client = _a_held_job(app, blocking_simulation)
-        serve_job_streams_under(app, JobStreamPolicy(heartbeat_seconds=600.0))
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
+        serve_job_streams_under(client.application, JobStreamPolicy(heartbeat_seconds=600.0))
         rest: list[str] = []
 
         with _progress_stream(client, "id-1") as chunks:
@@ -724,7 +758,7 @@ class TestJobProgressEndpoint:
         )
 
     def test_a_running_jobs_stream_open_past_its_policys_limit_ends_with_the_timeout_naming_the_limit_and_the_job_runs_on(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         """Task 564's ten-minute test, with no real waiting: the test moves the stream's clock past the limit after its first poll.
 
@@ -732,11 +766,11 @@ class TestJobProgressEndpoint:
         until its job ends never ends while the job is held. A heartbeat of 0 s ends each of
         the stream's waits for the job to move at once.
         """
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
         running = client.get("/api/jobs/id-1").get_json()
         clock = ManualClock()
         serve_job_streams_under(
-            app, JobStreamPolicy(limit_seconds=30.0, heartbeat_seconds=0.0, retry_ms=1500, clock=clock)
+            client.application, JobStreamPolicy(limit_seconds=30.0, heartbeat_seconds=0.0, retry_ms=1500, clock=clock)
         )
 
         with _progress_stream(client, "id-1") as chunks:
@@ -755,9 +789,9 @@ class TestJobProgressEndpoint:
         assert after == running
 
     def test_a_stream_on_a_job_queued_behind_a_running_one_sends_its_queued_state_at_once(
-        self, app: Flask, blocking_simulation: BlockingSimulation
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
-        manager, client = _a_held_job(app, blocking_simulation)
+        manager, client = _a_held_job(build_app, tmp_path, blocking_simulation)
         queued = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
 
         first = _first_chunk(client, queued)
@@ -786,8 +820,10 @@ class TestJobResultsEndpoint:
         assert results_resp.status_code == 409
         assert results_resp.get_json() == {"error": "Job not yet completed", "status": "running", "progress_pct": 20.0}
 
-    def test_a_failed_jobs_results_answer_409_with_its_status_and_its_last_progress(self, app: Flask) -> None:
-        client = _client_of_a_finished_job(app, a_failing_simulation)
+    def test_a_failed_jobs_results_answer_409_with_its_status_and_its_last_progress(
+        self, build_app: BuildApp, tmp_path: Path
+    ) -> None:
+        client = _client_of_a_finished_job(build_app, tmp_path, a_failing_simulation)
 
         response = client.get("/api/jobs/id-1/results")
 
@@ -806,7 +842,7 @@ class TestJobCompletion:
         job_id = submit_resp.get_json()["job_id"]
         run_id = submit_resp.get_json()["run_id"]
 
-        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=120)
 
         status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
         assert status_resp.status_code == 200
@@ -829,7 +865,7 @@ class TestJobCompletion:
         assert submit_resp.status_code == 201
         job_id = submit_resp.get_json()["job_id"]
 
-        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=120)
 
         status_resp = real_simulation_client.get(f"/api/jobs/{job_id}")
         assert status_resp.status_code == 200
@@ -850,7 +886,7 @@ class TestJobCompletion:
         job_id = submit_resp.get_json()["job_id"]
         run_id = submit_resp.get_json()["run_id"]
 
-        assert app.extensions["job_manager"].wait_until_idle(timeout=120)
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=120)
 
         results_resp = real_simulation_client.get(f"/api/jobs/{job_id}/results")
         assert results_resp.status_code == 200
@@ -880,6 +916,37 @@ class TestSimulateFleetEndpoint:
         assert "job_id" in data
         assert "run_id" in data
 
+    def test_a_fleet_jobs_progress_stream_reports_how_many_of_its_homes_have_finished_as_each_finishes(
+        self, build_app: BuildApp, tmp_path: Path
+    ) -> None:
+        """B11: the frame a fleet job's progress stream sends first, opened through the endpoint while each home simulates."""
+        simulation = SteppedSimulation()
+        app = build_app(tmp_path, jobs=jobs_running(simulation))
+        client = app.test_client()
+        submitted = client.post(
+            "/api/simulate/fleet",
+            json={
+                "homes": [
+                    A_HOME_JOB_REQUEST,
+                    {**A_HOME_JOB_REQUEST, "pv_kw": 3.0},
+                    {**A_HOME_JOB_REQUEST, "pv_kw": 5.0},
+                ]
+            },
+        ).get_json()
+        reported: list[tuple[str, str]] = []
+
+        for finished in range(3):
+            simulation.wait_until_entered(finished + 1)
+            [frame] = parse_sse_events(_first_chunk(client, submitted["job_id"]))
+            reported.append((frame.event, frame.data["current_step"]))
+            simulation.allow_one()
+
+        assert reported == [("progress", "Homes 0/3"), ("progress", "Homes 1/3"), ("progress", "Homes 2/3")]
+        assert dashboard_of(app).jobs.wait_until_idle(timeout=30)
+        assert client.get(f"/api/jobs/{submitted['job_id']}").get_json()["status"] == "completed"
+        assert len(simulation.calls) == 3
+        assert client.get(f"/api/history/runs/{submitted['run_id']}").get_json()["status"] == "completed"
+
     def test_submit_fleet_job_empty_homes_returns_400(self, client: FlaskClient) -> None:
         """Test POST /api/simulate/fleet with empty homes returns 400."""
         response = client.post(
@@ -893,14 +960,13 @@ class TestSimulateFleetEndpoint:
 
 
 class TestAppJobManager:
-    """Tests for the JobManager create_app registers as the app's job_manager extension."""
+    """Tests for the JobManager the app's Dashboard holds."""
 
     def test_job_manager_exists_on_app(self, app: Flask) -> None:
-        """Test that JobManager is registered as an app extension."""
-        assert "job_manager" in app.extensions
-        assert isinstance(app.extensions["job_manager"], JobManager)
+        """Test that the app's Dashboard holds a JobManager."""
+        assert isinstance(dashboard_of(app).jobs, JobManager)
 
     def test_job_state_returns_none_for_unknown(self, app: Flask) -> None:
         """Test that job_state returns None for unknown job IDs."""
-        jm = app.extensions["job_manager"]
+        jm = dashboard_of(app).jobs
         assert jm.job_state("nonexistent") is None

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
-import weakref
 from collections.abc import Callable, Generator, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from pathlib import Path
@@ -295,32 +293,13 @@ def weather_cache(request: pytest.FixtureRequest) -> WeatherCache:
     return window.weather_cache
 
 
-def _live_job_managers() -> frozenset[Any]:
-    jobs_mod: Any = sys.modules.get("solar_challenge.web.jobs")
-    if jobs_mod is None:
-        return frozenset()
-    return jobs_mod.live_managers()
-
-
 @pytest.fixture(autouse=True)
-def _shutdown_job_managers() -> Generator[None, None, None]:
-    """At teardown, shut down the JobManagers created during the test, waiting for their in-flight simulations.
+def closes_at_teardown() -> Iterator[ExitStack]:
+    """The test's closing stack: each close a builder registers on it, such as tests/_web_app.py's app_builder or tests/unit/conftest.py's build_app and new_job_manager, runs at the test's teardown, the last registered first.
 
-    Abandoned workers would otherwise hold up interpreter exit. The test's
-    teardown runs in its offline window, so the jobs it waits for still run
-    offline and finish before the window checks what the test reached.
-
-    Autouse fixtures are set up after every broader-scoped fixture and before
-    the other fixtures of their own scope. So a manager owned by a
-    broader-scoped fixture (e.g. tests/e2e/conftest.py::_e2e_job_manager)
-    already exists at setup and stays running for later tests; the fixture
-    that owns it must shut it down in its own teardown.
-
-    The web jobs module is looked up in sys.modules, never imported, so runs
-    that never touch the web stack never load it.
+    Autouse fixtures are set up before, and torn down after, the other fixtures of their own
+    scope, so every gate the test's fixtures hold, such as blocking_simulation, is released
+    before a close waits for the jobs it held.
     """
-    preexisting = weakref.WeakSet(_live_job_managers())
-    yield
-    for manager in _live_job_managers():
-        if manager not in preexisting:
-            manager.shutdown(wait=True)
+    with ExitStack() as closes:
+        yield closes

@@ -40,6 +40,7 @@ from tests._fleet_runner import (
     ProcessEndingHomeSimulator,
     finish_marker,
     finished,
+    marked_in_this_process,
     start_marker,
     started,
     wait_until_started,
@@ -668,15 +669,42 @@ bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 @pytest.fixture
 def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
-    """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+    """Make request.param the start method of the default multiprocessing context until the test ends: the fleet's worker pool uses that start method unless it is fork, which it replaces with forkserver."""
     previous = multiprocessing.get_start_method(allow_none=True)
     multiprocessing.set_start_method(request.param, force=True)
     yield request.param
     multiprocessing.set_start_method(previous, force=True)
 
 
+_START_METHODS = [
+    pytest.param(
+        method,
+        marks=pytest.mark.skipif(
+            method not in multiprocessing.get_all_start_methods(), reason=f"{method} is not a start method here"
+        ),
+    )
+    for method in ("fork", "forkserver", "spawn")
+]
+
+
 class TestFleetRunnerPolicy:
-    """A FleetRunner's worker count is None or a whole number of at least 1, and default_runner() runs simulate_home in parallel over default_weather()."""
+    """A FleetRunner's worker count is None or a whole number of at least 1, its pool's workers never start as a fork of the calling process, and default_runner() runs simulate_home in parallel over default_weather()."""
+
+    @pytest.mark.parametrize("worker_start_method", _START_METHODS, indirect=True)
+    def test_a_parallel_calls_homes_start_in_workers_holding_none_of_the_callers_memory_whatever_the_default_start_method(
+        self, tmp_path: Path, worker_start_method: str
+    ) -> None:
+        fleet = FleetConfig(homes=[_home("Home 1", 2.0), _home("Home 2", 3.0)], name="Two")
+        runner = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=True, max_workers=2
+        )
+
+        with marked_in_this_process("caller"):
+            runner.simulate(fleet, *_JUNE_DAYS.window())
+
+        assert {
+            name: (start.pid != os.getpid(), start.process_marks) for name, start in started(tmp_path).items()
+        } == {"Home 1": (True, ()), "Home 2": (True, ())}
 
     @pytest.mark.parametrize("max_workers", [0, -1, 1.5, True])
     def test_a_worker_count_other_than_a_whole_number_of_at_least_one_is_refused_naming_it(

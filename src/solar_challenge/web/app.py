@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import functools
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, render_template
+from flask import Config, Flask, render_template
 
-from solar_challenge.home import simulate_home
-from solar_challenge.weather import default_weather
+from solar_challenge.fleet import default_runner
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
+from solar_challenge.web.dashboard import Dashboard, JobManagerFactory, attach_dashboard
 from solar_challenge.web.fleet_components import PageLimits, page_limits
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager
@@ -81,7 +81,12 @@ def _packaged_folder(name: str) -> Path:
     return folder
 
 
-def create_app(test_config: dict[str, Any] | None = None) -> Flask:
+def default_jobs(storage: RunStorage) -> JobManager:
+    """The JobManager over *storage* whose jobs run through default_runner() as it resolves at this call, each fleet's homes in parallel: the jobs factory solar_challenge.web.create_app() builds its app with."""
+    return JobManager(storage, runner=default_runner())
+
+
+def create_app(test_config: Mapping[str, Any] | None = None, *, jobs: JobManagerFactory) -> Flask:
     """Create and configure the Flask web dashboard application.
 
     Uses the application factory pattern to allow multiple instances
@@ -90,8 +95,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     .. note::
         One process per store: create_app takes the lock on DATA_DIR's
         dashboard.lock before it opens the database or fails interrupted
-        runs, and keeps it on ``app.extensions['store_lock']`` until
-        ``StoreLock.release()`` or the end of the process. A second
+        runs, and the app's Dashboard holds it until
+        ``dashboard_of(app).close()``, which the root that built the app
+        calls once it stops, or the end of the process. A second
         create_app on the store, in this process or another, raises
         StoreLocked naming the lock file and the holder's pid.
         The server must still run single-worker: a process forked after
@@ -99,20 +105,22 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         built app (e.g. ``gunicorn --preload -w 2``) gets past it, and a
         job, whose state is in memory, goes missing from the workers that
         did not create it.
-        A host other than ``solar-challenge web start`` must call
-        ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
     .. note::
-        Its jobs simulate on ``default_weather()`` as resolved when create_app
-        runs, so a weather cache installed, or SOLAR_CHALLENGE_WEATHER_CACHE_DIR
-        set, after it does not reach them. The dashboard's fleet job still
-        reads that provider once per home; S16 brings it prefetch.
+        *jobs* is called once, when create_app runs, after the store is
+        open and before the runs an earlier server left running are
+        failed. So default_jobs resolves default_runner(), and the weather
+        it simulates on, then: a weather cache installed, or
+        SOLAR_CHALLENGE_WEATHER_CACHE_DIR set, after it does not reach the
+        app's jobs.
 
     Args:
-        test_config: Optional configuration dict to override defaults.
+        test_config: Optional configuration mapping to override defaults.
             Useful for testing.  A ``SECRET_KEY`` given here is used as is,
             and the key persisted under ``~/.solar-challenge`` is then
             neither read nor written.
+        jobs: Builds the JobManager the app's jobs run on, over the app's
+            RunStorage; default_jobs is production's.
 
     Returns:
         Flask: The configured Flask application instance.
@@ -130,6 +138,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         StoreUnreadable: If the store's database file cannot be read as a
             database, naming it; the file is left as it was, and the
             store's lock is released.
+        Whatever *jobs* raises, the store's lock then released; and
+        whatever reading the persisted secret key or failing the
+        interrupted runs raises, the app's Dashboard then closed.
     """
     app = Flask(
         __name__,
@@ -167,34 +178,33 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
 
     app.extensions["job_stream_policy"] = JobStreamPolicy()
 
-    store_lock = acquire_store_lock(Path(app.config["DATA_DIR"]))
+    dashboard = _open_dashboard(app.config, jobs)
+    attach_dashboard(app, dashboard)
     try:
-        _open_store(app, default_location.data_dir)
+        # Consult the persisted key only when no config source supplied one; a build refused its store never does
+        if app.secret_key is None:
+            app.secret_key = _get_secret_key(default_location.data_dir)
+        _fail_interrupted_runs(dashboard.storage)
     except BaseException:
-        store_lock.release()
+        dashboard.close()
         raise
-    app.extensions["store_lock"] = store_lock
     return app
 
 
-def _open_store(app: Flask, default_data_dir: Path) -> None:
-    """Set *app* up on its store, which this process holds the lock on: the secret key, which may be persisted under *default_data_dir*, the database, the RunStorage and JobManager over it, and the failure of the runs an earlier server left running."""
-    # Consult the persisted key only when no config source supplied one
-    if app.secret_key is None:
-        app.secret_key = _get_secret_key(default_data_dir)
+def _open_dashboard(config: Config, jobs: JobManagerFactory) -> Dashboard:
+    """The Dashboard of the store *config* names: the lock on its DATA_DIR, which this process then holds, the database at its DATABASE, the RunStorage over it, and the JobManager *jobs* builds over that storage; a failure once the lock is taken releases it."""
+    lock = acquire_store_lock(Path(config["DATA_DIR"]))
+    try:
+        database = open_database(Path(config["DATABASE"]))
+        storage = RunStorage(database, config["DATA_DIR"])
+        return Dashboard(storage=storage, jobs=jobs(storage), database=database, lock=lock)
+    except BaseException:
+        lock.release()
+        raise
 
-    database = open_database(Path(app.config["DATABASE"]))
-    app.extensions["database"] = database
 
-    # Initialize RunStorage singleton
-    storage = RunStorage(database, app.config["DATA_DIR"])
-    app.extensions["storage"] = storage
-
-    # Initialize JobManager for background simulation execution, recording its jobs' runs in the app's storage
-    job_manager = JobManager(storage, simulate_home=functools.partial(simulate_home, weather=default_weather()))
-    app.extensions["job_manager"] = job_manager
-
-    # Fail the runs whose jobs an earlier server left running when it stopped
+def _fail_interrupted_runs(storage: RunStorage) -> None:
+    """Fail the runs in *storage* whose jobs an earlier server left running when it stopped."""
     interrupted = storage.fail_interrupted_runs()
     if interrupted:
         logger.info("Marked %d runs interrupted by a server restart failed on startup", interrupted)

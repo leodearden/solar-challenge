@@ -18,6 +18,8 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.home import HomeConfig
+from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.simulation_params import parse_home_config
 from tests._html_page import element_attributes
 
@@ -42,13 +44,20 @@ class _RecordingJobManager:
         n = len(self.submitted_homes)
         return f"job-{n}", f"run-{n}"
 
+    def shutdown(self, wait: bool = False) -> None:
+        """Stop nothing: the double runs no job."""
+
 
 @pytest.fixture
-def recording_job_manager(app: Flask) -> _RecordingJobManager:
-    """Install a recording double as the app's job manager and return it."""
-    job_manager = _RecordingJobManager()
-    app.extensions["job_manager"] = job_manager
-    return job_manager
+def recording_job_manager() -> _RecordingJobManager:
+    """The recording double the app's jobs run on."""
+    return _RecordingJobManager()
+
+
+@pytest.fixture
+def jobs(recording_job_manager: _RecordingJobManager) -> Callable[[RunStorage], Any]:
+    """Build this module's apps on the recording double."""
+    return lambda storage: recording_job_manager
 
 
 @pytest.fixture
@@ -65,12 +74,9 @@ def _call_shape(method: Callable[..., object]) -> list[tuple[str, object, object
 class TestRecordingJobManager:
     """The recording double stays in step with the real JobManager it stands in for."""
 
-    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self, app: Flask) -> None:
+    def test_submit_home_job_takes_the_parameters_the_real_one_takes(self) -> None:
         """A change to the real submit_home_job's parameters fails here, instead of passing silently behind the double."""
-        real_job_manager = app.extensions["job_manager"]
-        double = _RecordingJobManager()
-
-        assert _call_shape(double.submit_home_job) == _call_shape(real_job_manager.submit_home_job)
+        assert _call_shape(_RecordingJobManager.submit_home_job) == _call_shape(JobManager.submit_home_job)
 
 
 def _steps_the_sweep_page_offers(client: FlaskClient) -> tuple[int, int]:

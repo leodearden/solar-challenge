@@ -23,6 +23,7 @@ from tests._fleet_runner import (
     ProcessEndingHomeSimulator,
     finish_marker,
     finished,
+    marked_in_this_process,
     start_marker,
     started,
     wait_until_started,
@@ -157,6 +158,21 @@ def test_wait_until_started_raises_timeout_error_naming_the_homes_asked_for_and_
         wait_until_started(tmp_path, at_least=2, within=0.05)
 
     assert str(caught.value) == f"2 homes had not started in {tmp_path} within 0.05 s; those started: ['Held']"
+
+
+def test_a_home_started_in_this_process_inside_marked_in_this_process_records_the_mark_and_one_after_it_none(
+    tmp_path: Path,
+) -> None:
+    inside, after = tmp_path / "inside", tmp_path / "after"
+    inside.mkdir()
+    after.mkdir()
+
+    with marked_in_this_process("caller"):
+        _mark_each(MarkingHomeSimulator(inside), [_HELD])
+    _mark_each(MarkingHomeSimulator(after), [_HELD])
+
+    assert started(inside) == {"Held": HomeStart(pid=os.getpid(), locations=("Bristol, UK",), process_marks=("caller",))}
+    assert started(after) == {"Held": HomeStart(pid=os.getpid(), locations=("Bristol, UK",), process_marks=())}
 
 
 def test_a_refused_home_raises_value_error_naming_it_and_is_marked_finished(tmp_path: Path) -> None:

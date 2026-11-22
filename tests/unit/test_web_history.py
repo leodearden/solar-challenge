@@ -47,11 +47,10 @@ from tests._run_summaries import JUNE_WEEK_WINDOW, fleet_summary, home_summary, 
 from tests._sinusoidal_sim_results import make_sinusoidal_sim_results
 from tests._stored_run_fixtures import pre_dispatch_union_home_config
 from tests._web_app import (
-    build_test_app,
+    BuildApp,
     database_of,
     database_path_in,
     point_store_config_at_a_missing_directory,
-    release_store_lock,
 )
 from tests._web_runs import store_fleet_run, store_home_run
 
@@ -904,7 +903,7 @@ class TestExportAPI:
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_run_stored_before_the_dispatch_union_answers_its_variant_once_migrated(
-        self, tmp_path: Path, strategy: object
+        self, build_app: BuildApp, tmp_path: Path, strategy: object
     ) -> None:
         """Such a run stores all three strategy keys, the ones its strategy does not read null.
 
@@ -922,11 +921,7 @@ class TestExportAPI:
             )
         migrate_store(database, store)
 
-        app = build_test_app(store)
-        try:
-            response = app.test_client().get("/api/history/runs/pre-union/export/yaml")
-        finally:
-            release_store_lock(app)
+        response = build_app(store).test_client().get("/api/history/runs/pre-union/export/yaml")
 
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
