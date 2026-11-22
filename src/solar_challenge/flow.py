@@ -14,7 +14,6 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     SelfConsumptionStrategy,
     StepLimits,
-    TOUOptimizedStrategy,
     require_valid_step_powers,
 )
 from solar_challenge.tariff import TariffConfig
@@ -360,42 +359,6 @@ def simulate_timestep(
 
     exchange = _execute(decision, battery, timestep_minutes)
     return _settle(step, exchange, battery.soc_kwh)
-
-
-def simulate_timestep_tou(
-    generation_kw: float,
-    demand_kw: float,
-    battery: Optional[Battery],
-    timestamp: pd.Timestamp,
-    tariff: TariffConfig,
-    timestep_minutes: float,
-) -> EnergyFlowResult:
-    """Simulate energy flow for a single timestep, the battery dispatched by TOUOptimizedStrategy on the tariff's clock through simulate_timestep.
-
-    It is retired at the next release. Call what it returns instead:
-    ``simulate_timestep(generation_kw, demand_kw, battery, timestep_minutes, timestamp,
-    TOUOptimizedStrategy(tariff=tariff), tariff=tariff)``.
-
-    Args:
-        generation_kw: PV generation power in kW
-        demand_kw: Demand power in kW
-        battery: Battery object (or None for no battery)
-        timestamp: Current timestamp for tariff rate lookup
-        tariff: Tariff configuration with rate periods
-        timestep_minutes: Duration of timestep in minutes
-
-    Returns:
-        EnergyFlowResult with all energy flows in kWh
-
-    Raises:
-        ValueError: As simulate_timestep raises: if timestep_minutes is not positive and finite,
-            naming it; then if generation_kw or demand_kw is not finite and at least 0, naming it;
-            then for a decision StepLimits refuses, which TOUOptimizedStrategy never makes. Each
-            check runs before any battery moves energy.
-    """
-    return simulate_timestep(
-        generation_kw, demand_kw, battery, timestep_minutes, timestamp, TOUOptimizedStrategy(tariff=tariff), tariff=tariff
-    )
 
 
 def validate_energy_balance(

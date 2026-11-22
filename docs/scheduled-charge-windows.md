@@ -109,7 +109,7 @@ results = simulate_home(home, start, end, weather=weather, strategy=strategy)
 
 | Arm | Dispatch |
 |---|---|
-| A | The home as configured: `tou_optimized` on the tariff's clock (`simulate_timestep_tou`), grid-charging to `GridChargeConfig(0.9)` in the cheap period |
+| A | The home as configured: `tou_optimized` on the tariff's clock (`TOUOptimizedStrategy(tariff=...)` through `simulate_timestep`), grid-charging to `GridChargeConfig(0.9)` in the cheap period |
 | B | `ScheduledChargeStrategy` over `TOUOptimizedStrategy([(0, 1), (7, 24)])` |
 | C | The battery's `SelfConsumptionStrategyConfig()` with `grid_charging=None`: self-consumption only |
 | D | `ScheduledChargeStrategy` over `SelfConsumptionStrategy()` |
