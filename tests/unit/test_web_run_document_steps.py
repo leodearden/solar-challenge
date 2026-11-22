@@ -87,6 +87,7 @@ from solar_challenge.web.stored_runs import (
 from tests._every_field_shape import home_of_every_field_shape
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results
 from tests._stored_run_fixtures import (
+    PRE_975_FLEET_SEG_REVENUE_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
     fixture_runs_row,
@@ -1066,13 +1067,9 @@ def test_v5_changes_none_of_its_input_documents() -> None:
     assert documents == before
 
 
-_FLEET_SEG_REVENUE_PAIR = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
-"""The SEG revenue total and per-home mean a FleetSummary stored before format 6 holds, which v6 drops."""
-
-
 def _without_the_seg_revenue_pair(documents: StoredRunDocuments, document: str) -> StoredRunDocuments:
-    """*documents*, with the one named *document* lacking both keys of _FLEET_SEG_REVENUE_PAIR at its root."""
-    for key in _FLEET_SEG_REVENUE_PAIR:
+    """*documents*, with the one named *document* lacking both keys of PRE_975_FLEET_SEG_REVENUE_KEYS at its root."""
+    for key in PRE_975_FLEET_SEG_REVENUE_KEYS:
         documents = _without(documents, document, key)
     return documents
 
@@ -1087,7 +1084,7 @@ def test_v6_drops_the_seg_revenue_pair_from_pre_975_s_fleet_summary_reporting_ea
 
     assert result.documents == _without_the_seg_revenue_pair(documents, "summary.json")
     assert result.dropped == tuple(
-        DroppedValue("pre_975_seg_fleet", "summary.json", key, stored[key]) for key in _FLEET_SEG_REVENUE_PAIR
+        DroppedValue("pre_975_seg_fleet", "summary.json", key, stored[key]) for key in PRE_975_FLEET_SEG_REVENUE_KEYS
     )
     assert result.rewritten == ()
     assert stored["total_seg_revenue_gbp"] == pytest.approx(
@@ -1104,7 +1101,7 @@ def test_v6_drops_the_seg_revenue_pair_from_pre_975_s_runs_row_summary_reporting
 
     assert result.documents == _without_the_seg_revenue_pair(documents, "runs.summary_json")
     assert result.dropped == tuple(
-        DroppedValue("pre_975_seg_fleet", "runs.summary_json", key, stored[key]) for key in _FLEET_SEG_REVENUE_PAIR
+        DroppedValue("pre_975_seg_fleet", "runs.summary_json", key, stored[key]) for key in PRE_975_FLEET_SEG_REVENUE_KEYS
     )
     assert result.rewritten == ()
 
@@ -1170,7 +1167,7 @@ def test_v2_keeps_a_fleet_summary_s_seg_revenue_pair_for_v6_reporting_none(name:
 
     result = _V2.apply("fleet", documents)
 
-    assert {key: result.documents.summary.content[key] for key in _FLEET_SEG_REVENUE_PAIR} == {
-        key: documents.summary.content[key] for key in _FLEET_SEG_REVENUE_PAIR
+    assert {key: result.documents.summary.content[key] for key in PRE_975_FLEET_SEG_REVENUE_KEYS} == {
+        key: documents.summary.content[key] for key in PRE_975_FLEET_SEG_REVENUE_KEYS
     }
-    assert [each for each in result.dropped if each.field in _FLEET_SEG_REVENUE_PAIR] == []
+    assert [each for each in result.dropped if each.field in PRE_975_FLEET_SEG_REVENUE_KEYS] == []

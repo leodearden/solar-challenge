@@ -48,6 +48,7 @@ from tests._fleet_runner import (
     wait_until_started,
 )
 from tests._seeded_tmy import ClearJuneDays
+from tests._stored_run_fixtures import PRE_975_FLEET_SEG_REVENUE_KEYS
 from tests._synthetic_weather import synthetic_june_weather
 
 _ONE_JUNE_DAY = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), ONE_MINUTE, "Europe/London")
@@ -475,9 +476,7 @@ class TestFleetSummary:
 
     def test_a_fleet_summary_has_no_seg_revenue_pair(self):
         """A fleet's export revenue is total_export_revenue_gbp: it has no second, SEG revenue total or mean."""
-        assert {field.name for field in dataclasses.fields(FleetSummary)}.isdisjoint(
-            {"total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp"}
-        )
+        assert {field.name for field in dataclasses.fields(FleetSummary)}.isdisjoint(PRE_975_FLEET_SEG_REVENUE_KEYS)
 
     def test_aggregates_financial_totals(self):
         """Fleet aggregates per-home financial totals correctly (P6ε §3.6/§10)."""

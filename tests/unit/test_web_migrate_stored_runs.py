@@ -101,7 +101,7 @@ from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
-from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
+from tests._stored_run_fixtures import PRE_975_FLEET_SEG_REVENUE_KEYS, STORED_RUN_FIXTURES, install_stored_run_fixture
 from tests._web_runs import store_home_run
 
 _NEEDS_PYARROW = pytest.mark.skipif(
@@ -352,25 +352,20 @@ def _values_v4_changes_in_the_pre_839_fleet(run_id: str) -> tuple[RewrittenValue
     )
 
 
-_PRE_975_FLEET_SEG_REVENUE_PAIR = tuple(
+_PRE_975_FLEET_SEG_REVENUE_VALUES = tuple(
     (key, json.loads((STORED_RUN_FIXTURES_DIR / "pre_975_seg_fleet" / "run" / "summary.json").read_text())[key])
-    for key in ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+    for key in PRE_975_FLEET_SEG_REVENUE_KEYS
 )
 """The SEG revenue total and per-home mean pre_975_seg_fleet's FleetSummary holds, in its files and its runs row alike, each with its value, which v6 drops."""
 
 
-def _values_v6_drops_in_the_pre_975_fleet(run_id: str) -> tuple[DroppedValue, ...]:
-    """The values migrate_store reports v6 dropped from pre_975_seg_fleet, installed as run *run_id*: its summary.json's, then its runs row's."""
+def _values_v6_drops(run_ids: Mapping[str, str]) -> tuple[DroppedValue, ...]:
+    """The values migrate_store reports v6 dropped from the legacy runs installed as *run_ids*, by fixture name: pre_975_seg_fleet's summary.json's, then its runs row's."""
     return tuple(
-        DroppedValue(run_id, document, field, value)
+        DroppedValue(run_ids["pre_975_seg_fleet"], document, field, value)
         for document in ("summary.json", "runs.summary_json")
-        for field, value in _PRE_975_FLEET_SEG_REVENUE_PAIR
+        for field, value in _PRE_975_FLEET_SEG_REVENUE_VALUES
     )
-
-
-def _values_the_steps_after_version_1_drop(run_ids: Mapping[str, str]) -> tuple[DroppedValue, ...]:
-    """The values migrate_store reports the steps after schema version 1 dropped from the legacy runs installed as *run_ids*, by fixture name: v6's in the pre-975 fleet."""
-    return _values_v6_drops_in_the_pre_975_fleet(run_ids["pre_975_seg_fleet"])
 
 
 def _values_the_steps_after_version_1_rewrite(run_ids: Mapping[str, str]) -> tuple[RewrittenValue, ...]:
@@ -403,7 +398,7 @@ def test_migrate_store_brings_an_older_store_to_the_schema_version_by_the_steps_
         from_version=older_store.version,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[older_store.version :],
-        dropped_values=_values_v6_drops_in_the_pre_975_fleet(older_store.run_ids["pre_975_seg_fleet"]),
+        dropped_values=_values_v6_drops(older_store.run_ids),
         rewritten_values=(*rewritten_by_v3, *rewritten_by_v4),
     )
     assert user_version_of(older_store.path) == SCHEMA_VERSION
@@ -1145,7 +1140,7 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     assert json.loads(row_after["summary_json"]) == {
         key: value
         for key, value in json.loads(row_before["summary_json"]).items()
-        if key not in {"total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp"}
+        if key not in PRE_975_FLEET_SEG_REVENUE_KEYS
     }
 
 
@@ -1205,7 +1200,7 @@ def test_migrate_store_refuses_a_step_that_cannot_write_a_run_s_file_and_run_aga
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        dropped_values=_values_the_steps_after_version_1_drop(legacy_run_ids),
+        dropped_values=_values_v6_drops(legacy_run_ids),
         rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
     storage = _storage_of(store_at_version_1)
@@ -1254,7 +1249,7 @@ def test_migrate_store_refused_by_a_run_s_file_it_cannot_write_carries_the_runs_
         applied_steps=MIGRATIONS[1:],
         dropped_values=(
             DroppedValue(retired, "runs.summary_json", "retired_figure", 12.5),
-            *_values_the_steps_after_version_1_drop(legacy_run_ids),
+            *_values_v6_drops(legacy_run_ids),
         ),
         rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
@@ -1299,7 +1294,7 @@ def test_migrate_store_refused_by_a_run_s_format_json_it_cannot_write_carries_th
         applied_steps=MIGRATIONS[1:],
         dropped_values=(
             DroppedValue(unwritable, "runs.summary_json", "retired_figure", 12.5),
-            *_values_the_steps_after_version_1_drop(legacy_run_ids),
+            *_values_v6_drops(legacy_run_ids),
         ),
         rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
@@ -1416,7 +1411,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         from_version=1,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[1:],
-        dropped_values=_values_the_steps_after_version_1_drop(legacy_run_ids),
+        dropped_values=_values_v6_drops(legacy_run_ids),
         rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
     rewritten_fleets = {legacy_run_ids["pre_787_dispatch_fleet"], legacy_run_ids["pre_839_flat_grid_charging_fleet"]}
@@ -1446,7 +1441,8 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
     carries those runs and v3's rewrites of the pre-787 fleet's config.json, in
     files_brought_forward. Run again, the migration goes on from version 2, leaves those files as
     they are, and so reports v3's rewrites of that fleet's runs row alone, then v4's of the pre-839
-    fleet's config.json and runs row.
+    fleet's config.json and runs row, and v6's drops of the pre-975 fleet's SEG revenue pair from
+    its summary.json and runs row.
     """
     run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
 
@@ -1486,7 +1482,7 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
         from_version=2,
         to_version=SCHEMA_VERSION,
         applied_steps=MIGRATIONS[2:],
-        dropped_values=_values_the_steps_after_version_1_drop(legacy_run_ids),
+        dropped_values=_values_v6_drops(legacy_run_ids),
         rewritten_values=(
             *(
                 each

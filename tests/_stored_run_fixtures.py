@@ -119,6 +119,10 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
 )
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
 
+PRE_975_FLEET_SEG_REVENUE_KEYS: tuple[str, ...] = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue pair a fleet summary held before task 975, which pre_975_seg_fleet's holds non-null
+and the stored-run format's v6 step drops, in the order that FleetSummary declared them."""
+
 
 def stored_run_fixture_dir(name: str) -> Path:
     """The run directory of fixture *name*, exactly as the old save wrote it.
