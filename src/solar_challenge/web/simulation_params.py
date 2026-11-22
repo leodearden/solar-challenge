@@ -246,7 +246,7 @@ def _read_efficiency(value: Any) -> float | None:
 
 
 def _parse_battery(params: Mapping[str, Any], capacity_kwh: float) -> BatteryConfig | None:
-    """Read the battery a home body describes: none when ``capacity_kwh`` is 0; a negative one is refused by has_battery, naming battery_kwh.
+    """Read the battery a home body describes, its ``capacity_kwh`` read within the battery component's value_range: none when that is 0.
 
     Each setting is read whatever ``capacity_kwh`` is, so a value a battery refuses is
     refused without one too; a null setting is unset, leaving BatteryConfig's default.
@@ -312,11 +312,10 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
             heat-pump number, and the value sent), if its days, start or
             end is one parse_date_range refuses, if location is one
             read_location refuses (the error is its own refusal), if
-            battery_kwh is negative
-            (the error names battery_kwh and the value sent), if a sent
-            consumption_kwh lies outside the fleet load component's
-            value_range (the error names consumption_kwh, the range and the
-            value sent), or if required fields are missing or invalid. The battery
+            pv_kw, battery_kwh or a sent consumption_kwh lies outside its
+            fleet component's value_range, PV's, the battery's or the load's
+            (the error names the field, the range and the value sent), or if
+            required fields are missing or invalid. The battery
             settings (max_charge_kw, max_discharge_kw, efficiency_pct and
             dispatch_strategy) are read, and refused, whatever battery_kwh
             is; a null setting reads as unset. A null system_losses also
@@ -329,7 +328,7 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
     data = require_json_object(data, _HOME_CONFIG)
     refuse_unrecognised_keys(data, _HOME_CONFIG_KEYS, _HOME_CONFIG)
     params = {**_HOME_CONFIG_DEFAULTS, **data}
-    pv_kw = as_finite_float(params["pv_kw"], "pv_kw")
+    pv_kw = as_finite_float(params["pv_kw"], "pv_kw", within=FLEET_COMPONENTS["pv"].value_range)
     azimuth = as_finite_float(params["azimuth"], "azimuth")
     tilt = as_finite_float(params["tilt"], "tilt")
     # Range validation for system_age_years, degradation_rate_per_year and
@@ -341,7 +340,9 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
         params["degradation_rate_per_year"], "degradation_rate_per_year"
     )
     system_losses_setting = _system_losses_setting(params["system_losses"])
-    battery_kwh_val = as_finite_float(params["battery_kwh"], "battery_kwh")
+    battery_kwh_val = as_finite_float(
+        params["battery_kwh"], "battery_kwh", within=FLEET_COMPONENTS["battery"].value_range
+    )
     consumption_kwh_raw = params["consumption_kwh"]
     occupants = as_whole_number(params["occupants"], "occupants")
     stochastic = bool(params["stochastic"])
@@ -350,10 +351,6 @@ def parse_home_config(data: object) -> tuple[HomeConfig, pd.Timestamp, pd.Timest
 
     # Parse date range using shared helper
     start, end = parse_date_range(data)
-
-    # Validate inputs
-    if not (0.5 <= pv_kw <= 20.0):
-        raise ValueError(f"PV capacity must be 0.5-20 kW, got {pv_kw}")
 
     loc = read_location(params["location"])
 
