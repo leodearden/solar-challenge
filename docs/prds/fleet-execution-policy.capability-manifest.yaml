@@ -325,10 +325,10 @@ tasks:
           paths: ["src/solar_challenge/__init__.py"]
           expect: present
       - name: "solve-default-retired"
-        binding: "grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE pins solve_cost_recovery_rate's simulate as Optional[...] = None"
+        binding: "grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE pins solve_cost_recovery_rate's simulate as Callable[...] | None = None (its spelling since task 924)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\"solve_cost_recovery_rate\": .*simulate: Optional"
+          pattern: "\"solve_cost_recovery_rate\": .*simulate: Callable.*None = None"
           paths: ["tests"]
           expect: absent

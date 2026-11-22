@@ -90,6 +90,6 @@ The YAML twin `fleet-execution-policy.capability-manifest.yaml` carries the mech
 | capability asserted | evidence | status |
 |---|---|---|
 | `project_multi_year` already requires its simulator | `producer:γ`, upstream | PASS |
-| The frozen form today | `grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE` pins `solve_cost_recovery_rate`'s `simulate: Optional[Callable[...]] = None` | PASS |
+| The frozen form today | `grep:tests/unit/test_public_api_surface.py::FROZEN_SURFACE` pins `solve_cost_recovery_rate`'s `simulate: Callable[...] \| None = None` | PASS |
 | `FleetRunner`'s frozen form is stable | `probe:` `surface_form` of a frozen dataclass whose field defaults to a function prints `<function … at 0x…>`; `home_simulator` has no default (decision 3), so the form prints no address | PASS |
 | Release window | S29 releases it (`x_seam_wait`); D4, D29 | PASS |

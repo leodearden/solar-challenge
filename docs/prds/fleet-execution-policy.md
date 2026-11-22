@@ -63,7 +63,7 @@ Findings (record `plans/review-all-solar_challenge-20261013.json`):
 3. **γ — finance and optimize require their simulator.** `project_multi_year`, `optimize.run_sweep` and `optimize.sensitivity_panel` take `simulate: FleetSimulate` as a required keyword, and their `if simulate is None` defaults go. `solve_cost_recovery_rate`'s frozen `simulate=None` resolves `default_runner().simulate` until ζ.
 4. **δ — the dashboard.** `create_app(test_config, *, jobs)` builds its job manager through the given factory, after S19's lock, database and store. The app's collaborators live in one typed `Dashboard` value with one `close()`, which the root that built the app calls. `JobManager` runs home jobs through `runner.simulate_home` and fleet jobs through `runner.simulate`, with per-home progress. The registry, `shutdown_all_managers` and the `atexit` hook go.
 5. **ε — the age-0 fleet once (L10).** `fleet.reusing(simulate, results, start, end)` answers a request for a fleet that simulates as `results`' fleet from `results`, re-paired with the asked homes. `cli/finance.run` wraps its runner's `simulate` with the bill run's results before the projection and the solve.
-6. **ζ — held for S29.** `solve_cost_recovery_rate`'s `simulate` becomes required, and `FleetRunner` and its protocols join `__all__`, so finance never imports fleet at runtime.
+6. **ζ — held for S29.** `solve_cost_recovery_rate`'s `simulate` becomes required, and `FleetRunner` and its protocols join `__all__`, so finance resolves no fleet runner at runtime: no finance function imports `default_runner` or `FleetRunner`. The function-local `FleetConfig` imports finance keeps, to build the fleets it hands its `simulate`, go with S8's move (δ, task 928).
 
 ## Resolved design decisions
 
@@ -195,7 +195,7 @@ class JobManager:
 | B15 | No registry, no writes | the tree after δ | no `extensions["job_manager"] =` in `tests`; no `_active_managers`, `live_managers`, `shutdown_all_managers` or `atexit` in `src/solar_challenge/web`; no `sys.modules` reach-in in `tests/conftest.py` | δ |
 | B16 | Age-0 fleet once (L10, user-facing) | an unaged 2-home seeded scenario; `invoke_cli(["finance", "run", "--project", "--cost-recovery", f], counting)`, where the counter answers with results that depend only on the asked homes | the counter is asked for the age-0 fleet (homes equal at starting SOH) once (today 4); the report renders the projection and the cost-recovery block | ε |
 | B17 | Reuse refuses what differs | `reusing(sim, results, s, e)` | equal homes, `soh` `None` against `1.0` at age 0: no call, and the same series objects come back paired with the asked homes; `soh=0.9` against `None`, a different `end`, an aged PV: each calls `sim` | ε |
-| B18 | Retired default (held) | after ζ | `solve_cost_recovery_rate(scenario, finance)` raises `TypeError` naming `simulate`; `solar_challenge.FleetRunner` resolves; the frozen-surface test pins the new forms; finance has no function-local `fleet` import | ζ |
+| B18 | Retired default (held) | after ζ | `solve_cost_recovery_rate(scenario, finance)` raises `TypeError` naming `simulate`; `solar_challenge.FleetRunner` resolves; the frozen-surface test pins the new forms; no finance function imports a fleet runner: finance's function-local imports from `fleet` bind only `FleetConfig`, which S8 δ (task 928; `docs/prds/finance-partition.md` B7) removes | ζ |
 
 ## Pre-conditions for activating
 
@@ -217,7 +217,7 @@ class JobManager:
 | S17 Web request boundary | shares `shared.py` | `get_storage`/`get_job_manager`/`get_database` read `dashboard_of(current_app)`'s fields (δ); S17 moves them beside `web/dashboard.py` | S16 holder; S17 location | order-agnostic |
 | S8 Finance partition | consumed by | the `project_multi_year`/solve move carries the required `simulate: FleetSimulate` (γ) and the solve's default (until ζ); optimize's and `finance run`'s duplicated projection at the same rate is S8's to remove | S8 | cross-reference |
 | S25 Board reports | consumed by | `cli/finance.run`'s restructure keeps ε's `reusing(…)` wrapper around the invocation's `simulate` | S25 | cross-reference |
-| S1 Errors leaf (775) | shrinks | α repoints finance's two function-local `simulate_fleet` imports to `default_runner`; γ deletes `project_multi_year`'s; ζ (or S8's move, if first) deletes the solve's. Each edits its allow-list entry if 775 has landed | each its own | order-agnostic |
+| S1 Errors leaf (775) | shrinks | α repoints finance's two function-local `simulate_fleet` imports to `default_runner`; γ deletes `project_multi_year`'s; ζ (or S8's move, if first) deletes the solve's. 775's allow-list holds one entry for the whole `(finance, fleet)` pair, not one per import. It is S8's (`_FINANCE_PARTITION`), and S8 δ (task 928) deletes it with finance's last `fleet` import, so no S16 leaf edits it | each its own | order-agnostic |
 | S23 Surface lock | file overlap | ζ edits the `FROZEN_*` tables | S23 module shape | parallel |
 | S29 Surface bump | consumes | ζ's retirement and exports; α's Unreleased line (fleet's iterator functions removed, never frozen) | S29 releases ζ | ζ held |
 | S5 Scenario grammar | file overlap | `config.run_parameter_sweep` points at `default_runner().simulate` in α if S5 has not deleted it | S5 deletion | order-agnostic |
@@ -251,8 +251,7 @@ Labels are the sidecar's. Every leaf carries `x_finding_run = review-all-solar_c
 - **γ. Finance and optimize require their simulator** (leaf). Files:
   - `finance.py` (`project_multi_year`: `simulate: FleetSimulate` required, its default and function-local import go; docstrings);
   - `optimize.py` (`run_sweep`, `sensitivity_panel`: required; `run_sweep`'s default, which α pointed at `default_runner()`, goes);
-  - the four calls that pass none: `test_finance_calibration.py`, `test_cost_recovery_calibration.py` ×2, `test_optimize_sweep.py`;
-  - `tests/unit/test_import_structure.py`'s entry, if 775 has landed.
+  - the four calls that pass none: `test_finance_calibration.py`, `test_cost_recovery_calibration.py` ×2, `test_optimize_sweep.py`.
 
   Signal: B10. `project_multi_year(scenario, finance)` raises `TypeError` naming `simulate`. Today it silently fans out on every CPU through a hidden import. The library consumer's projection is driven only by the simulator it passes.
 
@@ -284,7 +283,7 @@ G7 (advisory: this repo has no `docs/legibility/design-invariants.md`). The dark
 - `one-fact-one-home`: the policy lives in `FleetRunner`; the production runner in `default_runner()`; a battery's starting SOH in `Battery` (ε reads it, never restates it); the dashboard's collaborators in `Dashboard`.
 - `no-lockstep-duplication`: one fan-out loop, and one `FleetResults` assembly.
 - `holds-owned-and-bounded`: ζ is held with an owner (S29) and a stated window.
-- `exceptions-owned-or-ratified`: the solve's function-local `fleet` import stays a Transitional allow-list entry owned by ζ (or S8).
+- `exceptions-owned-or-ratified`: finance's function-local `fleet` imports stay under the `(finance, fleet)` Transitional allow-list entry owned by S8 (`_FINANCE_PARTITION` in `tests/unit/test_import_structure.py`). After ζ they bind only `FleetConfig`, and S8 δ (task 928) deletes them with the entry.
 - `guards-exercise-behaviour`: every grep `delivered_check` in the sidecar pairs with a behaviour row above.
 
 No waivers.
