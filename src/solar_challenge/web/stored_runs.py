@@ -89,7 +89,13 @@ from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
 from solar_challenge.timebase import SimulationWindow
-from solar_challenge.web.field_tree import FieldTreeRefused, field_tree, read_field_tree, without_unknown_keys
+from solar_challenge.web.field_tree import (
+    DropsUnknownKey,
+    FieldTreeRefused,
+    field_tree,
+    read_field_tree,
+    without_unknown_keys,
+)
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.stored_json import UndecodableJson, decoded_json
 
@@ -895,7 +901,7 @@ def _not_read_by_a_later_step(owner: type, key: str) -> bool:
 
 
 def _unknown_keys_dropped(
-    run_type: RunType, documents: StoredRunDocuments, drops: Callable[[type, str], bool]
+    run_type: RunType, documents: StoredRunDocuments, drops: DropsUnknownKey
 ) -> StepResult:
     """*documents* without each key their dataclasses do not have that *drops* holds for, and each dropped value that is not null.
 

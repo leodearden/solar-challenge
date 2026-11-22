@@ -32,7 +32,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import date, timedelta
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeAlias, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -120,18 +120,22 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
     return value
 
 
+DropsUnknownKey: TypeAlias = Callable[[type, str], bool]
+"""Whether without_unknown_keys drops a key no field has: asked with the dataclass whose object holds the key, and the key."""
+
+
 def _every_key(owner: type, key: str) -> bool:
     """The predicate that drops every unknown key, whichever dataclass's object holds it."""
     return True
 
 
 def without_unknown_keys(
-    content: Any, cls: type, *, drops: Callable[[type, str], bool] = _every_key
+    content: Any, cls: type, *, drops: DropsUnknownKey = _every_key
 ) -> tuple[Any, tuple[UnknownKey, ...]]:
     """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has that *drops* drops; and each dropped key, in the content's order.
 
-    *drops* is asked with the dataclass whose object holds the key, at any depth, and the key;
-    a key it spares is kept as it is, unreported. By default every such key is dropped. The
+    *drops* is asked of each such key at any depth; a key it spares is kept as it is,
+    unreported. By default every such key is dropped. The
     content is walked as read_field_tree reads it, and is not itself changed.
     """
     return _without_unknown_keys(content, cls, None, drops)
@@ -437,7 +441,7 @@ def _float_can_hold(number: int | float) -> bool:
 
 
 def _without_unknown_keys(
-    value: Any, annotation: Any, path: str | None, drops: Callable[[type, str], bool]
+    value: Any, annotation: Any, path: str | None, drops: DropsUnknownKey
 ) -> tuple[Any, tuple[UnknownKey, ...]]:
     """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has that *drops* drops; and each dropped key, an UnknownKey.
 
@@ -465,7 +469,7 @@ def _without_unknown_keys(
 
 
 def _dataclass_object_without_unknown_keys(
-    obj: _DataclassObject, drops: Callable[[type, str], bool]
+    obj: _DataclassObject, drops: DropsUnknownKey
 ) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
     """The object *obj* without each key no field of its dataclass has that *drops* drops, each field's value walked; and each dropped key, in the object's order."""
     kept: dict[str, Any] = {}
@@ -482,7 +486,7 @@ def _dataclass_object_without_unknown_keys(
 
 
 def _each_without_unknown_keys(
-    children: Iterable[_Child], drops: Callable[[type, str], bool]
+    children: Iterable[_Child], drops: DropsUnknownKey
 ) -> tuple[list[Any], tuple[UnknownKey, ...]]:
     """Each of *children*'s values without the keys no field has that *drops* drops, in order; and each key dropped within them, in order."""
     walked = [_without_unknown_keys(child.value, child.annotation, child.path, drops) for child in children]
