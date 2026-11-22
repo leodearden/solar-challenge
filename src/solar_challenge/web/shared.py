@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The accessors of the services the web application holds: its database, run storage, job manager and job stream policy."""
+"""The accessors of the services the web application holds: the database, run storage and job manager of its Dashboard, and its job stream policy."""
 
 from __future__ import annotations
 
 from flask import current_app
 
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.sse import JobStreamPolicy
@@ -12,25 +13,30 @@ from solar_challenge.web.storage import RunStorage
 
 
 def get_database() -> Database:
-    """Return the app's Database, the one create_app registers in the current Flask app's extensions.
+    """Return the Database the current app's Dashboard keeps its tables in.
 
     Raises:
-        TypeError: If the app's database extension is not a Database, naming the type it holds.
+        LookupError: If the current app holds no Dashboard, naming the app.
     """
-    database = current_app.extensions["database"]
-    if not isinstance(database, Database):
-        raise TypeError(f"the app's database extension must be a Database, got {type(database).__name__}")
-    return database
+    return dashboard_of(current_app).database
 
 
 def get_storage() -> RunStorage:
-    """Return the RunStorage singleton from current Flask app extensions."""
-    return current_app.extensions["storage"]  # type: ignore[no-any-return]
+    """Return the RunStorage the current app's Dashboard keeps its runs in.
+
+    Raises:
+        LookupError: If the current app holds no Dashboard, naming the app.
+    """
+    return dashboard_of(current_app).storage
 
 
 def get_job_manager() -> JobManager:
-    """Return the JobManager singleton from current Flask app extensions."""
-    return current_app.extensions["job_manager"]  # type: ignore[no-any-return]
+    """Return the JobManager the current app's Dashboard runs its jobs on.
+
+    Raises:
+        LookupError: If the current app holds no Dashboard, naming the app.
+    """
+    return dashboard_of(current_app).jobs
 
 
 def get_job_stream_policy() -> JobStreamPolicy:
