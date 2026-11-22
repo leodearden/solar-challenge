@@ -2,10 +2,11 @@
 
 Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a part of one:
 
-- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE and FROZEN_MEMBERS, the locks holding
-  the package to them, the member guards, which accept the writes to self that
-  REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned dataclass is
-  frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that freezes each.
+- The frozen forms: FROZEN_SURFACE, FROZEN_CLOSURE, FROZEN_MEMBERS and FROZEN_CALLS,
+  the locks holding the package to them, the member guards, which accept the writes to
+  self that REVIEWED_COMPUTED_NAME_WRITES lists, and the guard that every pinned
+  dataclass is frozen, but those UNFROZEN_PINNED_DATACLASSES lists with the task that
+  freezes each.
   A surface change edits the frozen tables' rows, and adds its release note,
   docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
@@ -548,6 +549,37 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
         is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
     )
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
+
+
+# ---------------------------------------------------------------------------
+# The __call__ each pinned class's own body defines, with its frozen form
+#
+# A consumer implements a callable Protocol such as HomeSimulator by its
+# __call__, which neither lock above spells: surface_form spells the Protocol
+# '(*args, **kwargs)', and member_forms skips dunders.  Keys are pinned-class
+# paths, in _pinned_classes order; each value is the __call__'s surface_form,
+# on one line.
+# ---------------------------------------------------------------------------
+FROZEN_CALLS: dict[str, str] = {
+    "HomeSimulator": "(self, config: HomeConfig, start_date: Timestamp, end_date: Timestamp, *, weather: WeatherProvider) -> SimulationResults",
+}
+
+
+def test_every_pinned_class_call_matches_frozen_calls() -> None:
+    """Every pinned class whose own body defines __call__ has the form FROZEN_CALLS pins for it.
+
+    Fails once, naming each drifted class path with its frozen and current __call__
+    forms, labelled additive or breaking; a pinned path whose class no longer defines a
+    __call__ of its own is listed last, breaking.
+    """
+    calls = {path: vars(cls)["__call__"] for path, cls in _pinned_classes().items() if "__call__" in vars(cls)}
+    drifted = _drifted(
+        FROZEN_CALLS,
+        {path: surface_form(call) for path, call in calls.items()},
+        absent="(no __call__ of its own)",
+        is_additive=lambda path, row: is_additive_change(row, calls[path]),
+    )
+    assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
 
 
 _STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic, BaseException, Exception, ValueError)
