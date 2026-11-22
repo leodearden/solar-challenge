@@ -85,6 +85,50 @@ def test_a_dataclass_whose_kind_gains_a_qualifier_is_breaking() -> None:
     assert not is_additive_change("dataclass[eq, frozen, match_args] (level: int) -> None", Rank)
 
 
+def test_a_class_whose_kind_gains_match_args_is_additive() -> None:
+    class Meter:
+        __match_args__ = ("site", "rate")
+
+        def __init__(self, site: str, rate: float = 0.0) -> None: ...
+
+    @dataclass(frozen=True)
+    class Reading:
+        kwh: float
+
+    assert is_additive_change("(site: str, rate: float = 0.0) -> None", Meter)
+    assert is_additive_change("dataclass[eq, frozen] (kwh: float) -> None", Reading)
+
+
+def test_a_dataclass_whose_kind_loses_match_args_is_breaking() -> None:
+    @dataclass(frozen=True, match_args=False)
+    class Reading:
+        kwh: float
+
+    assert not is_additive_change("dataclass[eq, frozen, match_args] (kwh: float) -> None", Reading)
+
+
+def test_a_class_whose_kind_gains_slots_is_breaking() -> None:
+    @dataclass(frozen=True, slots=True)
+    class Reading:
+        kwh: float
+
+    class Meter:
+        __slots__ = ("site",)
+
+        def __init__(self, site: str) -> None: ...
+
+    assert not is_additive_change("dataclass[eq, frozen, match_args] (kwh: float) -> None", Reading)
+    assert not is_additive_change("(site: str) -> None", Meter)
+
+
+def test_a_slotted_class_whose_kind_gains_weakref_slot_is_additive() -> None:
+    @dataclass(frozen=True, slots=True, weakref_slot=True)
+    class Reading:
+        kwh: float
+
+    assert is_additive_change("dataclass[eq, frozen, match_args, slots] (kwh: float) -> None", Reading)
+
+
 def test_a_mapping_constant_that_gains_a_key_is_additive() -> None:
     assert is_additive_change("dict {'a': float}", {"a": 1.0, "b": 2.0})
     assert is_additive_change("dict {'a': float, 'b': float}", {"a": 1.0, "m": 0.5, "b": 2.0})

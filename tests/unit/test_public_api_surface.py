@@ -903,6 +903,51 @@ def test_a_closure_class_whose_constructor_retypes_a_parameter_prints_breaking(
     ]
 
 
+def test_a_pinned_class_that_gains_match_args_prints_additive(scratch_edit: pytest.MonkeyPatch) -> None:
+    scratch_edit.setattr(
+        solar_challenge.Battery,
+        "__match_args__",
+        (
+            "config",
+            "initial_soc_kwh",
+            "min_soc_fraction",
+            "max_soc_fraction",
+            "charge_efficiency",
+            "discharge_efficiency",
+        ),
+        raising=False,
+    )
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "Battery") == [
+        "solar_challenge.Battery",
+        f"frozen:  {FROZEN_SURFACE['Battery']}",
+        f"current: class[match_args] {FROZEN_SURFACE['Battery']}",
+        "change:  additive",
+    ]
+
+
+def test_a_pinned_dataclass_whose_instances_lose_their_dict_prints_breaking(
+    scratch_edit: pytest.MonkeyPatch,
+) -> None:
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class SEGTariff:
+        name: str
+        rate_pence_per_kwh: float
+
+    scratch_edit.setattr(solar_challenge, "SEGTariff", SEGTariff)
+
+    message = _lock_failure(test_every_exported_signature_matches_frozen_surface)
+
+    assert _printed_entry(message, "SEGTariff") == [
+        "solar_challenge.SEGTariff",
+        f"frozen:  {FROZEN_SURFACE['SEGTariff']}",
+        f"current: {FROZEN_SURFACE['SEGTariff'].replace('match_args]', 'match_args, slots]')}",
+        "change:  breaking",
+    ]
+
+
 # ===========================================================================
 # Name resolution: what the package resolves each name to, and what dir() lists
 # ===========================================================================
