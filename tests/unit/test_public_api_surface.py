@@ -460,7 +460,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     "home.SimulationResults": {
         "window": "property (self) -> SimulationWindow",
-        "per_minute_amounts": "(self) -> DataFrame",
+        "per_step_amounts": "(self) -> DataFrame",
         "total_amounts": "(self) -> dict[str, float]",
         "to_dataframe": "(self) -> DataFrame",
         "from_dataframe": "classmethod (cls, frame: DataFrame, *, strategy_name: str, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> SimulationResults",

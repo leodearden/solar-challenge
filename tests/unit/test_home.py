@@ -437,14 +437,14 @@ class TestSimulationResultsHoldsNumbers:
         pd.testing.assert_series_equal(getattr(results, field), series, check_names=False)
 
 
-class TestPerMinuteAmounts:
-    """Test SimulationResults.per_minute_amounts, each row's energy and money, and total_amounts, their run totals."""
+class TestPerStepAmounts:
+    """Test SimulationResults.per_step_amounts, each row's energy and money, and total_amounts, their run totals."""
 
     def test_power_becomes_each_rows_kwh_and_money_stays_its_pounds(self):
         """Each kW series becomes its row's kWh, each £ series stays as it is, and a level has no column."""
         results = _results_with_every_series_set()
 
-        amounts = results.per_minute_amounts()
+        amounts = results.per_step_amounts()
 
         expected = pd.DataFrame(
             {
@@ -468,7 +468,7 @@ class TestPerMinuteAmounts:
         """An optional series left unset has no amount column."""
         amounts = dataclasses.replace(
             _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None, grid_charge=None
-        ).per_minute_amounts()
+        ).per_step_amounts()
 
         assert sorted(amounts.columns) == sorted(
             [
@@ -493,7 +493,7 @@ class TestPerMinuteAmounts:
         """Each run total is its row-amount column's sum, keyed by that column."""
         results = dataclasses.replace(_results_with_every_series_set(), **unset)
 
-        assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+        assert results.total_amounts() == pytest.approx(results.per_step_amounts().sum().to_dict())
 
 
 class TestSimulationResultsRefusesAnAmountMissingANumber:
@@ -589,7 +589,7 @@ class TestSimulationResultsRefusesAnAmountMissingANumber:
         "read",
         [
             pytest.param(SimulationResults.total_amounts, id="total_amounts"),
-            pytest.param(SimulationResults.per_minute_amounts, id="per_minute_amounts"),
+            pytest.param(lambda results: results.per_step_amounts(), id="per_step_amounts"),
             pytest.param(SimulationResults.to_dataframe, id="to_dataframe"),
             pytest.param(calculate_summary, id="calculate_summary"),
         ],
@@ -679,7 +679,7 @@ class TestResultsWindow:
         results = _steady_week(freq)
         hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
 
-        amounts = results.per_minute_amounts()
+        amounts = results.per_step_amounts()
 
         pd.testing.assert_series_equal(amounts["demand_kwh"], results.demand * hours, check_names=False)
         pd.testing.assert_series_equal(
@@ -691,7 +691,7 @@ class TestResultsWindow:
         twin = _steady_week("30min")
 
         pd.testing.assert_series_equal(
-            twin.per_minute_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
+            twin.per_step_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
         )
         assert twin.window.energy_kwh(twin.demand) == pytest.approx(
             twin.total_amounts()["demand_kwh"], rel=1e-12
