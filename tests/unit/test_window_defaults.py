@@ -2,17 +2,20 @@
 """Invariant 11's window half: the CLI's window defaults are timebase's.
 
 Every --start and --end option of the CLI defaults to the ISO string of timebase.DEFAULT_FIRST_DAY or
-DEFAULT_LAST_DAY, or to None, as the cli/utils option pair does, which falls back to them through the scenario's
-period. config template home and config template scenario write that window as their period. No module of
-src/solar_challenge outside timebase.py holds a string that is exactly an ISO date, so no window default is restated
-as a literal (docs/prds/dashboard-limits-and-distribution-table.md §4.2).
+DEFAULT_LAST_DAY, or to None, as optimize configs' options do: an option left unset reads the scenario's period, or
+that default window when the scenario sets no period. config template home and config template scenario write that
+window as their period. No module of src/solar_challenge outside timebase.py holds a string that is exactly an ISO
+date, so no window default is restated as a literal (docs/prds/dashboard-limits-and-distribution-table.md §4.2).
 """
 
 import ast
 import re
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
+from typing import NoReturn
 
+import pandas as pd
 import pytest
 import typer.core
 import typer.main
@@ -21,6 +24,7 @@ from typer.testing import CliRunner
 
 import solar_challenge.cli
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli
 
 _WINDOW_OPTION_DEFAULTS = {
     "--start": DEFAULT_FIRST_DAY.isoformat(),
@@ -68,7 +72,7 @@ def _iso_date_literals(package_dir: Path, *, skipping: Path) -> list[tuple[str, 
 
 
 def test_every_start_and_end_option_defaults_to_the_default_window_or_to_none() -> None:
-    """None is the default of the cli/utils option pair, which falls back to the default window through the scenario's period."""
+    """None is optimize configs' default for both options, which then read the scenario's period, or the default window when the scenario sets none (tests/unit/test_window_defaults.py::test_optimize_configs_given_no_window_simulates_the_default_window)."""
     options = list(_window_options())
 
     misdefaulted = [
@@ -81,6 +85,37 @@ def test_every_start_and_end_option_defaults_to_the_default_window_or_to_none() 
         f"{_WINDOW_OPTION_DEFAULTS['--end']!r} or None, timebase's default window: {'; '.join(misdefaulted)}"
     )
     assert _COMMANDS_WITH_A_WINDOW <= {command for command, _, _ in options}, options
+
+
+def test_optimize_configs_given_no_window_simulates_the_default_window(tmp_path: Path) -> None:
+    """Given neither --start nor --end, over a scenario that sets no period, the sweep simulates timebase's default window."""
+    scenario_file = tmp_path / "scenario.yaml"
+    scenario_file.write_text(
+        yaml.safe_dump(
+            {
+                "name": "No period",
+                "location": {"latitude": 51.45, "longitude": -2.58, "timezone": "Europe/London"},
+                "fleet_distribution": {
+                    "n_homes": 1,
+                    "seed": 42,
+                    "pv": {"capacity_kw": 4.0},
+                    "load": {"annual_consumption_kwh": 3500},
+                },
+                "finance": {"standing_charge_pence_per_day": 28.0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    asked_windows: list[tuple[date, date]] = []
+
+    def simulate(fleet: object, start: pd.Timestamp, end: pd.Timestamp) -> NoReturn:
+        asked_windows.append((start.date(), end.date()))
+        raise ReachedTheSweep
+
+    result = invoke_cli(["optimize", "configs", str(scenario_file)], answering(simulate))
+
+    assert isinstance(result.exception, ReachedTheSweep), result.output
+    assert asked_windows == [(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY)]
 
 
 @pytest.mark.parametrize("template_type", ["home", "scenario"])
