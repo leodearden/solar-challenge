@@ -4,7 +4,9 @@
 runner_of(home_simulator) runs each home through home_simulator in turn, in the test's own
 process, on weather that answers every location with an empty frame, which the fake home
 simulators ignore. jobs_running(home_simulator, **manager_options) builds a JobManager over a
-RunStorage with that runner, the factory create_app's jobs parameter takes.
+RunStorage with that runner, the factory create_app's jobs parameter takes. NewJobManager and
+NewJobManagerWithRunner are the types of tests/unit/conftest.py's new_job_manager and
+new_job_manager_with_runner fixtures.
 
 Importing this module needs no web extra: solar_challenge.web.jobs imports no Flask.
 
@@ -26,7 +28,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from solar_challenge.fleet import FleetRunner, HomeSimulator
+from solar_challenge.fleet import FleetRunner, FleetSimulator, HomeSimulator
 from solar_challenge.location import Location
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.storage import RunStorage
@@ -54,3 +56,9 @@ class NewJobManager(Protocol):
     """tests/unit/conftest.py's new_job_manager: a JobManager over *storage* whose jobs run through runner_of(*home_simulator*), built with *options* and shut down at the test's teardown."""
 
     def __call__(self, storage: RunStorage, home_simulator: HomeSimulator, /, **options: Any) -> JobManager: ...
+
+
+class NewJobManagerWithRunner(Protocol):
+    """tests/unit/conftest.py's new_job_manager_with_runner: a JobManager over *storage* whose jobs run through *runner*, built with *options* and shut down at the test's teardown."""
+
+    def __call__(self, storage: RunStorage, runner: FleetSimulator, /, **options: Any) -> JobManager: ...

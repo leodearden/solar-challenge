@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The dashboard's Flask test app, the factory of the job manager its jobs run on, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app; build_app, which builds more such apps; and new_job_manager, which builds a JobManager. The test's teardown closes each app and shuts down each manager.
+"""The dashboard's Flask test app, the factory of the job manager its jobs run on, a client of it, the RunStorage it keeps its runs in, and its template macros, for the unit tests that drive the app; build_app, which builds more such apps; and new_job_manager and new_job_manager_with_runner, which build a JobManager. The test's teardown closes each app and shuts down each manager.
 
 The app's jobs run on the JobManager the jobs fixture builds, tests/_web_app.py's
 jobs_in_this_process. A test module, class or package conftest whose tests need another
@@ -25,12 +25,12 @@ if TYPE_CHECKING:
     from flask import Flask
     from flask.testing import FlaskClient
 
-    from solar_challenge.fleet import HomeSimulator
+    from solar_challenge.fleet import FleetSimulator, HomeSimulator
     from solar_challenge.web.dashboard import JobManagerFactory
     from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.storage import RunStorage
     from tests._web_app import BuildApp
-    from tests._web_job_runner import NewJobManager
+    from tests._web_job_runner import NewJobManager, NewJobManagerWithRunner
 
 
 @pytest.fixture
@@ -67,18 +67,31 @@ def storage(app: Flask) -> RunStorage:
 
 
 @pytest.fixture
-def new_job_manager(closes_at_teardown: ExitStack) -> NewJobManager:
-    """Build a JobManager over a RunStorage whose jobs run through tests/_web_job_runner.py's runner_of(home_simulator), shut down at the test's teardown once its running jobs finish.
+def new_job_manager_with_runner(closes_at_teardown: ExitStack) -> NewJobManagerWithRunner:
+    """Build a JobManager over a RunStorage whose jobs run through a given runner, shut down at the test's teardown once its running jobs finish.
+
+    Called as new_job_manager_with_runner(storage, runner, **options), each option going to JobManager.
+    """
+    from solar_challenge.web.jobs import JobManager
+
+    def new(storage: RunStorage, runner: FleetSimulator, /, **options: Any) -> JobManager:
+        manager = JobManager(storage, runner=runner, **options)
+        closes_at_teardown.callback(manager.shutdown, wait=True)
+        return manager
+
+    return new
+
+
+@pytest.fixture
+def new_job_manager(new_job_manager_with_runner: NewJobManagerWithRunner) -> NewJobManager:
+    """Build a JobManager as new_job_manager_with_runner does, its jobs run through tests/_web_job_runner.py's runner_of(home_simulator).
 
     Called as new_job_manager(storage, home_simulator, **options), each option going to JobManager.
     """
-    from solar_challenge.web.jobs import JobManager
     from tests._web_job_runner import runner_of
 
     def new(storage: RunStorage, home_simulator: HomeSimulator, /, **options: Any) -> JobManager:
-        manager = JobManager(storage, runner=runner_of(home_simulator), **options)
-        closes_at_teardown.callback(manager.shutdown, wait=True)
-        return manager
+        return new_job_manager_with_runner(storage, runner_of(home_simulator), **options)
 
     return new
 

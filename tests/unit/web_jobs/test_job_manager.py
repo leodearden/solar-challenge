@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -29,7 +29,7 @@ from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
 from tests._web_app import BuildApp
-from tests._web_job_runner import NewJobManager, jobs_running, runner_of
+from tests._web_job_runner import NewJobManager, NewJobManagerWithRunner, jobs_running, runner_of
 from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
@@ -385,12 +385,6 @@ def _submit_fleet_job(manager: JobManager) -> str:
     return job_id
 
 
-def _shut_down_at_teardown(manager: JobManager, closes_at_teardown: ExitStack) -> JobManager:
-    """*manager*, which the test's teardown shuts down once its running jobs finish, as new_job_manager's are."""
-    closes_at_teardown.callback(manager.shutdown, wait=True)
-    return manager
-
-
 def _three_homes() -> list[HomeConfig]:
     """Three homes named Home 0, Home 1 and Home 2, of 4, 3 and 2 kW of PV."""
     return [
@@ -405,10 +399,10 @@ class TestJobManagerSimulation:
     """Tests for the simulation a JobManager runs through its runner."""
 
     def test_a_home_job_simulates_its_home_once_through_the_runner(
-        self, storage: RunStorage, closes_at_teardown: ExitStack
+        self, storage: RunStorage, new_job_manager_with_runner: NewJobManagerWithRunner
     ) -> None:
         runner = RecordingFleetSimulator()
-        manager = _shut_down_at_teardown(JobManager(storage, max_workers=1, runner=runner), closes_at_teardown)
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
 
         job_id, _ = manager.submit_home_job(config=_A_HOME, start_date=_JUNE_1, end_date=_JUNE_2)
 
@@ -416,10 +410,10 @@ class TestJobManagerSimulation:
         assert (runner.home_calls, runner.fleet_calls) == ([(_A_HOME, _JUNE_1, _JUNE_2)], [])
 
     def test_a_fleet_job_simulates_its_homes_as_one_fleet_named_as_its_run_and_saves_what_the_runner_returns(
-        self, storage: RunStorage, closes_at_teardown: ExitStack
+        self, storage: RunStorage, new_job_manager_with_runner: NewJobManagerWithRunner
     ) -> None:
         runner = RecordingFleetSimulator()
-        manager = _shut_down_at_teardown(JobManager(storage, max_workers=1, runner=runner), closes_at_teardown)
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
 
         job_id, run_id = manager.submit_fleet_job(
             configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2, name="Three Roofs"
@@ -478,13 +472,13 @@ class TestJobManagerSimulation:
         assert not stored_run_dir(storage, run_id).exists()
 
     def test_a_fleet_job_on_a_pool_whose_run_is_cancelled_while_its_first_home_simulates_never_starts_a_home_not_yet_handed_to_the_pool(
-        self, storage: RunStorage, tmp_path: Path, closes_at_teardown: ExitStack
+        self, storage: RunStorage, tmp_path: Path, new_job_manager_with_runner: NewJobManagerWithRunner
     ) -> None:
         markers, release = tmp_path / "markers", tmp_path / "release"
         markers.mkdir()
         held = MarkingHomeSimulator(markers, held_until=(("Home 0", release),), hold_limit_seconds=60.0)
         runner = replace(runner_of(held), parallel=True, max_workers=1)
-        manager = _shut_down_at_teardown(JobManager(storage, max_workers=1, runner=runner), closes_at_teardown)
+        manager = new_job_manager_with_runner(storage, runner, max_workers=1)
         job_id, run_id = manager.submit_fleet_job(configs=_three_homes(), start_date=_JUNE_1, end_date=_JUNE_2)
         wait_until_started(markers, at_least=1, within=60)
 
