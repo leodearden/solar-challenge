@@ -3,7 +3,8 @@
 
 is_runs_list_request picks those requests out; hold_requests holds each request a page makes that such a predicate
 matches, and HeldRequests.answer_each answers each request the page has made, however late Playwright hands it over.
-tests/e2e/test_run_history_requests.py holds the contract.
+tests/e2e/test_run_history_requests.py holds the contract with a page, and tests/unit/test_held_requests.py
+HeldRequests' own, without a browser.
 """
 
 from __future__ import annotations
@@ -24,32 +25,35 @@ def is_runs_list_request(url: str) -> bool:
 class HeldRequests:
     """The requests a page makes whose URL matches, each held unanswered until answer_each answers it.
 
-    Playwright hands each one to this process some time after the page makes it, so iterating yields only those handed
-    over so far, while answer_each also answers each one handed over later.
+    Playwright hands each one to this process some time after the page makes it, so iterating yields those handed over
+    so far and not yet answered, while answer_each also answers, as it arrives, each one handed over later.
     """
 
     def __init__(self) -> None:
-        self._handed_over: list[Route] = []
+        self._held: list[Route] = []
         self._answer: Callable[[Route], None] | None = None
 
     def receive(self, route: Route) -> None:
-        """Hold route, the page.route handler's argument, or answer it at once if answer_each has been called."""
-        self._handed_over.append(route)
-        if self._answer is not None:
+        """The page.route handler: answer route at once if answer_each has been called, else hold it."""
+        if self._answer is None:
+            self._held.append(route)
+        else:
             self._answer(route)
 
     def answer_each(self, answer: Callable[[Route], None]) -> None:
-        """Answer with answer each request held so far, and each one Playwright hands over from now on."""
-        held_so_far = tuple(self._handed_over)
+        """Answer with answer each request held now, and each one Playwright hands over from now on; raise RuntimeError if called before."""
+        if self._answer is not None:
+            raise RuntimeError("answer_each has already been called on this HeldRequests")
         self._answer = answer
-        for route in held_so_far:
+        held_now, self._held = self._held, []
+        for route in held_now:
             answer(route)
 
     def __len__(self) -> int:
-        return len(self._handed_over)
+        return len(self._held)
 
     def __iter__(self) -> Iterator[Route]:
-        return iter(tuple(self._handed_over))
+        return iter(tuple(self._held))
 
 
 def hold_requests(page: Page, matches: Callable[[str], bool]) -> HeldRequests:
