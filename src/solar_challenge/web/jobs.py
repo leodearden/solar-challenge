@@ -455,9 +455,9 @@ class JobManager:
 
         The job reports 'cancelled' and writes nothing to the RunStorage (contract C8, docs/prds/run-store-one-owner.md
         §3.7). A queued job is dropped from the queue and reports cancelled before cancel_run returns. A running job
-        stops at its next progress report: a home job once its simulation returns, a fleet job once a home finishes,
-        and the fleet's homes not yet started never start. Once the job's completion has started, cancel_run waits
-        for it to end.
+        stops at its next progress report: a home job once its simulation returns, a fleet job once one of its homes
+        finishes, after which its runner starts no home it has not yet begun or handed to a pool worker. Once the
+        job's completion has started, cancel_run waits for it to end.
 
         Args:
             run_id: The id of the run whose job to cancel.
@@ -820,7 +820,7 @@ class JobManager:
         time its submit recorded, which _run_job makes, then completes the
         run, under the job's lock. Each report is a checkpoint, so a
         cancelled job's _JobCancelled leaves the runner from its sink, and the
-        runner starts none of the homes it has not started yet.
+        runner starts no home it has not yet begun or handed to a pool worker.
 
         Args:
             job_id: Unique job identifier.
