@@ -336,19 +336,17 @@ class TestFleetResults:
             )
 
     def test_results_given_as_lists_are_held_as_tuples_of_the_same_objects_unaliased(self, sample_results):
-        homes = list(sample_results.per_home_results)
+        per_home_results = list(sample_results.per_home_results)
         configs = list(sample_results.home_configs)
 
-        results = FleetResults(per_home_results=homes, home_configs=configs)
+        results = FleetResults(per_home_results=per_home_results, home_configs=configs)
         configs.append(configs[0])
 
         assert type(results.per_home_results) is tuple
         assert type(results.home_configs) is tuple
-        assert all(held is given for held, given in zip(results.per_home_results, homes, strict=True))
+        assert all(held is given for held, given in zip(results.per_home_results, per_home_results, strict=True))
         assert all(held is given for held, given in zip(results.home_configs, configs[:2], strict=True))
         assert results.home_configs == tuple(configs[:2])
-        assert results.home_configs is not configs
-        assert len(results.home_configs) == 2
 
     @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(FleetResults)])
     def test_assigning_a_field_raises_frozen_instance_error(self, sample_results, field_name):
@@ -851,7 +849,6 @@ class TestFleetRunnerSimulates:
         ).simulate(fleet, *_JUNE_DAYS.window())
 
         assert type(results.home_configs) is tuple
-        assert results.home_configs is not homes
         assert results.home_configs == tuple(homes)
         assert type(results.per_home_results) is tuple
         with pytest.raises(AttributeError):
