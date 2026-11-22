@@ -468,19 +468,10 @@ class TestFleetSummary:
         assert summary.fleet_self_consumption_ratio == pytest.approx(self_consumption_ratio)
         assert summary.fleet_grid_dependency_ratio == pytest.approx(grid_dependency_ratio)
 
-    def test_SEG_aggregates_with_tariff(self, sample_results):
-        """SEG revenue totals and mean are computed when tariff is provided."""
-        # Per-home grid_export: [1.0, 2.0, 3.0] kW constant for 24 h
-        # Per-home export kWh: [24, 48, 72]
-        # At 15p/kWh: [3.60, 7.20, 10.80] GBP
-        # total = 21.60, mean = 7.20
-        summary = calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
-
-        assert summary.total_seg_revenue_gbp is not None
-        assert summary.total_seg_revenue_gbp == pytest.approx(21.60, rel=0.01)
-
-        assert summary.per_home_seg_revenue_mean_gbp is not None
-        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20, rel=0.01)
+    def test_calculate_fleet_summary_takes_no_seg_rate(self, sample_results):
+        """Each home's export revenue is priced when it is simulated, so the fleet's summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
     def test_SEG_aggregates_without_tariff(self, sample_results):
         """SEG revenue fields are None when no tariff is provided."""
@@ -571,15 +562,16 @@ class TestFleetSummary:
         assert summary.total_import_cost_gbp is None
         assert summary.total_export_revenue_gbp is None
 
-    @pytest.mark.parametrize("seg_tariff_pence_per_kwh", [None, 15.0], ids=["no-seg-tariff", "seg-tariff-15p"])
-    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(
-        self, sample_results, seg_tariff_pence_per_kwh
-    ):
-        """Each home's summary is the one calculate_summary derives from that home's results at the same SEG tariff, listed in per_home_results' order."""
-        assert calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh) == [
-            calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-            for results in sample_results.per_home_results
+    def test_each_homes_summary_is_calculate_summary_of_its_results_in_the_fleets_order(self, sample_results):
+        """Each home's summary is the one calculate_summary derives from that home's results, listed in per_home_results' order."""
+        assert calculate_home_summaries(sample_results) == [
+            calculate_summary(results) for results in sample_results.per_home_results
         ]
+
+    def test_calculate_home_summaries_takes_no_seg_rate(self, sample_results):
+        """Each home's export revenue is priced when it is simulated, so its summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
 
     def test_home_summaries_aggregate_into_the_fleets_totals_ratios_and_per_home_statistics(self):
         """The fleet's totals sum its homes', its ratios divide those totals, and its per-home statistics range over its homes' generation and self-consumption ratios."""
@@ -667,10 +659,10 @@ class TestFleetSummary:
 
     def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
         """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
-        first, second, third = calculate_home_summaries(sample_results, seg_tariff_pence_per_kwh=15.0)
-        assert [first.seg_revenue_gbp, second.seg_revenue_gbp, third.seg_revenue_gbp] == pytest.approx(
-            [3.60, 7.20, 10.80]
-        ), "premise: the homes export 24, 48 and 72 kWh, which earn 3.60, 7.20 and 10.80 GBP at 15p/kWh"
+        first, second, third = (
+            replace(summary, seg_revenue_gbp=seg_revenue_gbp)
+            for summary, seg_revenue_gbp in zip(calculate_home_summaries(sample_results), (3.60, 7.20, 10.80))
+        )
 
         summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
 

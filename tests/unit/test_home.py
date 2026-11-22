@@ -1232,20 +1232,14 @@ class TestCalculateSummary:
         ) == pytest.approx((60.0, 10.0, 8.0, 40.0))
         assert summary.heat_pump_load_ratio == pytest.approx(0.2)
 
-    def test_SEG_revenue_with_tariff(self, sample_results):
-        """SEG revenue is computed when tariff is provided."""
-        # total_grid_export_kwh = 0.5 kW * 24 h = 12 kWh
-        # seg_revenue_gbp = 12 * 15 / 100 = 1.80 GBP
-        summary = calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
+    def test_calculate_summary_takes_no_seg_rate(self, sample_results):
+        """A run's export revenue is priced when it is simulated, so its summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
-        assert summary.seg_revenue_gbp is not None
-        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
-
-    def test_SEG_revenue_without_tariff(self, sample_results):
-        """seg_revenue_gbp is None when no tariff is provided."""
-        summary = calculate_summary(sample_results)
-
-        assert summary.seg_revenue_gbp is None
+    def test_a_summary_s_seg_revenue_is_none(self, sample_results):
+        """calculate_summary never sets the retired seg_revenue_gbp."""
+        assert calculate_summary(sample_results).seg_revenue_gbp is None
 
     def test_calculates_financial_statistics(self):
         """Calculates financial statistics correctly."""
@@ -1277,41 +1271,10 @@ class TestCalculateSummary:
 
 
 class TestCalculateSummaryUnification:
-    """Test that calculate_summary uses calculate_seg_revenue (unified SEG math)."""
+    """calculate_summary's export revenue is the run's one SEG figure: its export at the SEG rate that priced it."""
 
-    @pytest.fixture
-    def export_results(self) -> SimulationResults:
-        """Hand-built results with 12 kWh daily export (0.5 kW * 24 h)."""
-        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
-        return SimulationResults(
-            generation=pd.Series([3.0] * 1440, index=index),
-            demand=pd.Series([2.0] * 1440, index=index),
-            self_consumption=pd.Series([2.0] * 1440, index=index),
-            battery_charge=pd.Series([0.5] * 1440, index=index),
-            battery_discharge=pd.Series([0.0] * 1440, index=index),
-            battery_soc=pd.Series([2.5] * 1440, index=index),
-            grid_import=pd.Series([0.0] * 1440, index=index),
-            grid_export=pd.Series([0.5] * 1440, index=index),  # 0.5 kW * 24h = 12 kWh
-            import_cost=pd.Series([0.0] * 1440, index=index),
-            export_revenue=pd.Series([0.0] * 1440, index=index),  # will be validated separately
-            tariff_rate=pd.Series([0.10] * 1440, index=index),
-        )
-
-    def test_seg_revenue_preserved(self, export_results):
-        """seg_revenue_gbp with 12 kWh export at 15 p/kWh == £1.80 (existing behaviour)."""
-        # total_export = 0.5 kW * 1440 min / 60 = 12 kWh
-        # seg_revenue = 12 * 15 / 100 = £1.80
-        summary = calculate_summary(export_results, seg_tariff_pence_per_kwh=15.0)
-        assert summary.seg_revenue_gbp is not None
-        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
-
-    def test_negative_seg_rate_raises_value_error(self, export_results):
-        """seg_tariff_pence_per_kwh < 0 now raises ValueError (via SEGTariff validation)."""
-        with pytest.raises(ValueError):
-            calculate_summary(export_results, seg_tariff_pence_per_kwh=-1.0)
-
-    def test_unification_identity(self):
-        """total_export_revenue_gbp == seg_revenue_gbp when export was SEG-priced at rate r."""
+    def test_a_seg_priced_run_s_export_revenue_is_its_export_at_the_seg_rate(self):
+        """A run whose export a 5 p SEG priced has calculate_seg_revenue of its export as its export revenue, and no second SEG figure."""
         rate_pence = 5.0  # p/kWh
         rate_pounds = rate_pence / 100.0
         index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
@@ -1334,12 +1297,13 @@ class TestCalculateSummaryUnification:
             export_revenue=pd.Series([export_rev_per_min] * 1440, index=index),
             tariff_rate=pd.Series([rate_pounds] * 1440, index=index),
         )
-        summary = calculate_summary(results, seg_tariff_pence_per_kwh=rate_pence)
+        summary = calculate_summary(results)
 
-        # total_export_revenue_gbp (from series) == seg_revenue_gbp (from unified calc)
         assert summary.total_export_revenue_gbp == pytest.approx(
-            summary.seg_revenue_gbp, rel=1e-6
+            calculate_seg_revenue(summary.total_grid_export_kwh, SEGTariff(name="", rate_pence_per_kwh=rate_pence)),
+            rel=1e-6,
         )
+        assert summary.seg_revenue_gbp is None
 
 
 class TestCalculateSummaryWindow:

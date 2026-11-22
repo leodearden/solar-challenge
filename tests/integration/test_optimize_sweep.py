@@ -370,15 +370,9 @@ class TestRunSweepSingleConfig:
         ranked = run_sweep(configs, simulate=simulate)
         cr = ranked.results[0]
 
-        sweep_scenario = configs[0][1]
-
         # The fake simulate answers every fleet, whatever its age, with fr's
         # per-home results, so the age-0 baseline simulation bills fr's results.
-        # Compute expected baseline_outlay directly using sweep_scenario's tariff.
-        summaries = [
-            calculate_summary(r, seg_tariff_pence_per_kwh=sweep_scenario.seg_tariff_pence_per_kwh)
-            for r in fr.per_home_results
-        ]
+        summaries = [calculate_summary(r) for r in fr.per_home_results]
         dist = bill_distribution(summaries, finance)
         expected_outlay = dist.representative.total_outlay_gbp
 
