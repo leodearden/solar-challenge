@@ -771,33 +771,59 @@ class TestParseHomeConfigNumberFields:
         )
 
 
-class TestParseHomeConfigConsumptionRange:
-    """A sent consumption_kwh is refused outside the fleet load component's value_range, either end included."""
+#: Each home body field a fleet component's value_range bounds, with that component's key.
+_RANGED_HOME_FIELDS = [
+    pytest.param("pv_kw", "pv", id="pv_kw"),
+    pytest.param("battery_kwh", "battery", id="battery_kwh"),
+    pytest.param("consumption_kwh", "load", id="consumption_kwh"),
+]
+
+
+@pytest.mark.parametrize(("field", "key"), _RANGED_HOME_FIELDS)
+class TestParseHomeConfigComponentRanges:
+    """A sent pv_kw, battery_kwh or consumption_kwh is refused outside its fleet component's value_range, either end included (L2)."""
 
     @pytest.mark.parametrize("beyond", ["below", "above"])
-    def test_consumption_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
-        self, beyond: str
+    def test_a_value_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, field: str, key: str, beyond: str
     ) -> None:
         """One float step beyond either end is refused."""
-        load_range = FLEET_COMPONENTS["load"].value_range
-        low, high = load_range.low, load_range.high
-        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
-        with pytest.raises(ValueError) as exc_info:
-            parse_home_config({**VALID_HOME_PAYLOAD, "consumption_kwh": value})
-        assert str(exc_info.value) == f"consumption_kwh must be between {low} and {high}, got {value!r}"
+        value_range = FLEET_COMPONENTS[key].value_range
+        value = (
+            math.nextafter(value_range.low, -math.inf)
+            if beyond == "below"
+            else math.nextafter(value_range.high, math.inf)
+        )
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert str(exc_info.value) == (
+            f"{field} must be between {value_range.low} and {value_range.high}, got {value!r}"
+        )
 
     @pytest.mark.parametrize("end", ["low", "high"])
-    def test_consumption_at_either_end_of_the_range_is_the_homes_annual_consumption(
-        self, end: str
+    def test_a_value_at_either_end_of_the_range_is_the_homes_value(
+        self, field: str, key: str, end: str
     ) -> None:
-        """Either end is accepted as the home's annual consumption."""
-        load_range = FLEET_COMPONENTS["load"].value_range
-        low, high = load_range.low, load_range.high
-        value = low if end == "low" else high
-        home_config, _start, _end, _name = parse_home_config(
-            {**VALID_HOME_PAYLOAD, "consumption_kwh": value}
-        )
-        assert home_config.load_config.annual_consumption_kwh == value
+        """Either end is accepted as the home's value; a battery of 0 kWh is no battery, whose value reads None."""
+        component = FLEET_COMPONENTS[key]
+        value = getattr(component.value_range, end)
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert component.value_of(home_config) == (value or None)
+
+
+class TestParseHomeConfigRangeRefusals:
+    """The refusals a value_range gives the home body's values the home page sends."""
+
+    def test_a_battery_of_500_kwh_is_refused_naming_battery_kwh_and_its_range(self) -> None:
+        """P1: a battery beyond any home's was accepted before the battery component's range bounded it."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 500})
+        assert str(exc_info.value) == "battery_kwh must be between 0 and 100, got 500"
+
+    def test_a_pv_capacity_of_50_kw_is_refused_naming_pv_kw_and_its_range(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "pv_kw": 50})
+        assert str(exc_info.value) == "pv_kw must be between 0.5 and 20, got 50"
 
 
 class TestParseHomeConfigPVAge:
