@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet distribution endpoints: POST /api/fleet/preview-distribution and POST /api/simulate/fleet-from-distribution."""
 
+import re
 from collections.abc import Callable
 from unittest.mock import NonCallableMagicMock
 
@@ -293,6 +294,66 @@ class TestFleetFromDistribution:
         # Homes were sampled from distributions — not all identical
         pv_caps = {round(c.pv_config.capacity_kw, 3) for c in configs}
         assert len(pv_caps) > 1, f"Expected distinct PV capacities but got {pv_caps}"
+
+    def test_a_fixed_value_outside_its_components_range_returns_400_naming_it_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """P3: a PV fixed at 50 kW, which no home may hold, is a 400 naming pv.capacity_kw, its range, the value and the home."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "pv": {"capacity_kw": 50}},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1"
+        }
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_a_drawn_value_outside_its_components_range_returns_400_naming_the_home_and_queues_nothing(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """P15: a normal around 50 kW draws PV no home may hold, a 400 naming pv.capacity_kw, its range and the home."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "pv": {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}}},
+        )
+        assert resp.status_code == 400
+        assert re.fullmatch(
+            r"pv\.capacity_kw must be between 0\.5 and 20 for every home, got \d+\.\d+ for home \d+",
+            resp.get_json()["error"],
+        ), resp.get_json()
+        mock_job_manager.submit_fleet_job.assert_not_called()
+
+    def test_the_export_of_a_fixed_value_outside_its_components_range_returns_400_naming_it(
+        self, client: FlaskClient
+    ) -> None:
+        resp = client.post("/api/fleet/export-yaml", json={**self._VALID_BODY, "pv": {"capacity_kw": 50}})
+        assert resp.status_code == 400
+        assert resp.get_json() == {
+            "error": "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1"
+        }
+
+    def test_a_fleet_of_2000_homes_returns_201_queueing_every_home(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """L5, P11: the fleet size is the server's to bound, 1 to MAX_FLEET_HOMES, so a fleet larger than the page's slider is queued."""
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "n_homes": 2000, "pv": {"capacity_kw": 4.0}},
+        )
+        assert resp.status_code == 201, resp.get_data(as_text=True)
+        assert len(mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]) == 2000
+
+    def test_a_fleet_above_max_fleet_homes_returns_400_naming_n_homes_its_range_and_the_value(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        resp = client.post(
+            "/api/simulate/fleet-from-distribution",
+            json={**self._VALID_BODY, "n_homes": MAX_FLEET_HOMES + 1},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "n_homes must be between 1 and 10000, got 10001"}
+        mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize(
         ("data", "content_type"),
