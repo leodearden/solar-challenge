@@ -830,7 +830,10 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                     },
                     "battery_kwh": {
                         "type": "number",
-                        "description": "Battery capacity in kWh (0 = no battery).",
+                        "description": (
+                            "Battery capacity in kWh "
+                            f"({_range_text(FLEET_COMPONENTS['battery'].value_range)}; 0 = no battery)."
+                        ),
                     },
                     "consumption_kwh": {
                         "type": "number",
@@ -874,7 +877,10 @@ _TOOL_TABLE: tuple[_Tool, ...] = (
                     },
                     "battery_kwh": {
                         "type": "number",
-                        "description": "Battery capacity per home in kWh (0 = no battery).",
+                        "description": (
+                            "Battery capacity per home in kWh "
+                            f"({_range_text(FLEET_COMPONENTS['battery'].value_range)}; 0 = no battery)."
+                        ),
                     },
                     "location": _TRIGGER_TOOL_LOCATION_PROPERTY,
                     **_TRIGGER_TOOL_WINDOW_PROPERTIES,
