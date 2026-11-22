@@ -26,6 +26,17 @@ that tree's calculate_home_summaries and calculate_fleet_summary; it saved them 
 tree's RunStorage.save_fleet_run into a temporary store; and the format.json that save wrote was
 deleted.
 
+pre_975_seg_fleet is a run that the code of main at commit b0fb49ae ("Merge task/892 into main"),
+the base of task 975, saved, while a fleet's summary still recomputed its homes' export revenue at
+a SEG rate it was given. A one-off script, which is not committed, simulated each home for one
+day, 2024-06-21, offline with that tree's synthetic_june_weather; it summarised them with that
+tree's calculate_home_summaries at a 15 p SEG rate and aggregate_home_summaries; it saved them
+through that tree's RunStorage.save_fleet_run into a temporary store, then marked the run
+completed; and the format.json that save wrote was deleted. Its FleetSummary holds a non-null
+total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, which the stored-run format's v6 step
+drops, and each home summary a non-null seg_revenue_gbp, which the field's retirement at the
+program's surface bump will drop.
+
 Each fixture holds:
 
 - run/: the run's directory as that save wrote it, without a format.json. A home run's
@@ -59,6 +70,9 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   dispatches tou_optimized with peak_hours [[16, 19]]; homes[1]'s dispatches peak_shaving with
   import_limit_kw 3.0; homes[2] has home dispatch_strategy "tou_optimized" and a battery that
   names no dispatch strategy, so it ran the tariff's rates.
+- pre_975_seg_fleet: a fleet run of two homes on a 15 p SEG and no tariff, "SEG home 1" with a
+  5 kWh battery that names no dispatch strategy and "SEG home 2" with no battery. Its summary's
+  total_seg_revenue_gbp equals its total_export_revenue_gbp, as every export earned the SEG rate.
 
 PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
 docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
@@ -101,8 +115,13 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
     "pre_786_dispatch_home",
     "pre_787_dispatch_fleet",
     "pre_839_flat_grid_charging_fleet",
+    "pre_975_seg_fleet",
 )
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
+
+PRE_975_FLEET_SEG_REVENUE_KEYS: tuple[str, ...] = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue pair a fleet summary held before task 975, which pre_975_seg_fleet's holds non-null
+and the stored-run format's v6 step drops, in the order that FleetSummary declared them."""
 
 
 def stored_run_fixture_dir(name: str) -> Path:

@@ -12,7 +12,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community
 from solar_challenge.finance import BillDistribution
 from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
-from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
+from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.optimize import RankedSweep
 from solar_challenge.output import (
     CommunityMetrics,
@@ -29,7 +29,7 @@ from solar_challenge.output import (
 )
 from solar_challenge.timebase import SimulationWindow
 from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
-from tests._finance_builders import make_fleet_results_of, make_home_config, make_window
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results, make_window
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -201,6 +201,48 @@ class TestGenerateSummaryReport:
         assert "Grid Import Cost" in report
         assert "Grid Export Revenue" in report
         assert "Net Cost" in report
+
+    def test_a_seg_priced_run_names_its_seg_rate_after_its_grid_export_revenue(self):
+        """The Financial table of a run whose export a SEG priced names that rate on the row after Grid Export Revenue."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=15.0))
+
+        lines = generate_summary_report(results, "Home").splitlines()
+
+        financial_table = lines[lines.index("## Financial (£)") :]
+        export_revenue_at = next(i for i, line in enumerate(financial_table) if line.startswith("| Grid Export Revenue |"))
+        assert financial_table[export_revenue_at + 1] == "| SEG Rate | 15.0 p/kWh |"
+        assert not any(line.startswith("## ") for line in financial_table[1:export_revenue_at])
+
+    def test_a_run_a_seg_priced_at_nothing_names_its_zero_rate(self):
+        """A SEG rate of 0.0 p priced the run, so the report names it."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=0.0))
+
+        assert "| SEG Rate | 0.0 p/kWh |" in generate_summary_report(results, "Home").splitlines()
+
+    @pytest.mark.parametrize(
+        "pricing",
+        [RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=None), None],
+        ids=["no-seg-rate", "no-pricing"],
+    )
+    def test_a_run_no_seg_priced_names_no_seg_rate(self, pricing):
+        """A run whose export no SEG priced, or whose pricing is not recorded, has no SEG Rate row."""
+        report = generate_summary_report(make_sim_results(pricing=pricing), "Home")
+
+        assert "SEG Rate" not in report
+
+    @pytest.mark.parametrize("seg_rate_pence_per_kwh", [15.0, 0.0, None])
+    def test_no_report_has_a_second_seg_revenue_section(self, seg_rate_pence_per_kwh):
+        """The run's export revenue is its one SEG figure: no report repeats it in a SEG Revenue section."""
+        results = make_sim_results(
+            pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=seg_rate_pence_per_kwh)
+        )
+
+        assert "## SEG Revenue" not in generate_summary_report(results, "Home")
+
+    def test_generate_summary_report_takes_no_seg_rate(self):
+        """The rate the report names is the one the run was priced at, so it takes none from its caller."""
+        with pytest.raises(TypeError):
+            generate_summary_report(make_sim_results(), "Home", seg_tariff_pence_per_kwh=15.0)
 
 
 class TestSeasonalBreakdowns:

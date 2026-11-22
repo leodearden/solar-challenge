@@ -445,6 +445,10 @@ class SummaryStatistics:
     total_export_revenue_gbp: float  # total revenue from grid exports in £
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
+    # calculate_summary leaves it None, and no src module reads it; a summary stored before
+    # format 6 may still hold the retired figure. The run's export revenue is
+    # total_export_revenue_gbp. Retired at the program's surface bump
+    # (docs/prds/board-reports-sections-by-mode.md §5.6, ζ).
     seg_revenue_gbp: Optional[float] = None
     total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
     peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
@@ -903,48 +907,16 @@ def simulate_home(
     )
 
 
-def calculate_summary(
-    results: SimulationResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> SummaryStatistics:
+def calculate_summary(results: SimulationResults) -> SummaryStatistics:
     """Calculate summary statistics from simulation results.
 
     Args:
         results: Simulation results with time series
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, ``seg_revenue_gbp`` is computed from total grid export
-            via ``calculate_seg_revenue``.  Must be >= 0; negative values raise
-            ``ValueError`` (enforced by ``SEGTariff`` validation — a behaviour
-            change from the previous inline formula that silently returned a
-            negative number).
 
     Returns:
         SummaryStatistics with totals and ratios, carrying the window its results
         cover, whose calendar days are its simulation_days, the results' pricing and
         the forecast that sized their grid charge
-
-    Notes:
-        **Two-path SEG design** — ``total_export_revenue_gbp`` and
-        ``seg_revenue_gbp`` are independent figures that can legitimately differ:
-
-        * ``total_export_revenue_gbp`` is always ``results.export_revenue.sum()``.
-          When ``simulate_home`` was called with ``HomeConfig.seg_tariff`` set,
-          every export timestep was already priced at that SEG rate, so
-          ``total_export_revenue_gbp`` already reflects SEG pricing and is the
-          authoritative revenue figure for that simulation.
-
-        * ``seg_revenue_gbp`` is an *additional*, independent recalculation
-          driven by ``seg_tariff_pence_per_kwh``.  This path exists for callers
-          (``fleet.py``, ``output.py``) that build ``SimulationResults`` by hand
-          and need a standalone SEG revenue figure without access to a
-          ``HomeConfig``.
-
-        **Recommended usage when** ``HomeConfig.seg_tariff`` **was set:**
-        read ``total_export_revenue_gbp`` for the authoritative revenue and do
-        *not* pass ``seg_tariff_pence_per_kwh`` — or pass the same rate as a
-        consistency cross-check.  Passing a *different* rate will produce
-        ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
-        but may mislead callers that compare the two.
     """
     totals = results.total_amounts()
     total_gen = totals["generation_kwh"]
@@ -962,16 +934,6 @@ def calculate_summary(
     total_import_cost = totals["import_cost_gbp"]
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
-
-    # Calculate SEG revenue if tariff is provided.
-    # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
-    # SEGTariff validates rate >= 0; negative values raise ValueError here.
-    seg_revenue_gbp: Optional[float] = None
-    if seg_tariff_pence_per_kwh is not None:
-        seg_revenue_gbp = calculate_seg_revenue(
-            total_export,
-            SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
-        )
 
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
     total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
@@ -1004,7 +966,6 @@ def calculate_summary(
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
-        seg_revenue_gbp=seg_revenue_gbp,
         total_heat_pump_load_kwh=total_heat_pump_kwh,
         peak_heat_pump_load_kw=peak_heat_pump_kw,
         heat_pump_load_ratio=heat_pump_ratio,

@@ -154,12 +154,6 @@ def run(
         location_str=location,
         system_losses=system_losses,
     )
-    seg_rate = (
-        home_config.seg_tariff.rate_pence_per_kwh
-        if home_config.seg_tariff is not None
-        else None
-    )
-
     # Parse dates
     start_date = pd.Timestamp(start, tz=home_config.location.timezone)
     end_date = pd.Timestamp(end, tz=home_config.location.timezone)
@@ -175,12 +169,8 @@ def run(
         progress.update(task, completed=True)
 
     if report:
-        print_report(
-            generate_summary_report(results, home_config.name, seg_tariff_pence_per_kwh=seg_rate)
-        )
+        print_report(generate_summary_report(results, home_config.name))
     else:
-        # Why this summary gets no SEG rate:
-        # tests/unit/test_cli_summary_tables.py::TestPrintedSummaryTables::test_home_run_prints_a_seg_blocks_export_income_once
         summary = calculate_summary(results)
         console.print(
             create_summary_table(home_summary_rows(summary), title=f"Simulation Results: {home_config.name}")

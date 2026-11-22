@@ -25,12 +25,11 @@ _FLEET_MONEY_FIELDS_AND_METRICS = [
     ("total_import_cost_gbp", "Grid Import Cost"),
     ("total_export_revenue_gbp", "Grid Export Revenue"),
     ("total_net_cost_gbp", "Net Cost"),
-    ("total_seg_revenue_gbp", "SEG Revenue"),
 ]
 
 
 def _home_summary(**changes: float | None) -> SummaryStatistics:
-    """A one-day home summary with its SEG revenue set, and with changes applied."""
+    """A one-day home summary with changes applied, carrying the retired seg_revenue_gbp as a stored summary still can."""
     return dataclasses.replace(
         SummaryStatistics(
             total_generation_kwh=10.0,
@@ -84,8 +83,6 @@ def _fleet_summary(**changes: float | None) -> FleetSummary:
     """
     every_field_set = dataclasses.replace(
         _fleet_summary_without_money_figures(),
-        total_seg_revenue_gbp=0.47,
-        per_home_seg_revenue_mean_gbp=0.16,
         total_net_cost_gbp=0.9,
         total_import_cost_gbp=1.68,
         total_export_revenue_gbp=0.78,
@@ -123,7 +120,7 @@ class TestHomeSummaryRows:
     """Tests of home_summary_rows, the rows `home run` and `home quick` print."""
 
     def test_a_home_summary_gives_its_energy_ratio_day_and_money_rows(self) -> None:
-        """The rows are the home's five energy totals, its two ratios, its days and its four money figures, in that order."""
+        """The rows are the home's five energy totals, its two ratios, its days and its three money figures, in that order."""
         assert home_summary_rows(_home_summary()) == (
             ("Total Generation", "10.0 kWh"),
             ("Total Demand", "8.0 kWh"),
@@ -136,16 +133,11 @@ class TestHomeSummaryRows:
             ("Grid Import Cost", "£0.56"),
             ("Grid Export Revenue", "£0.24"),
             ("Net Cost", "£0.32"),
-            ("SEG Revenue", "£1.23"),
         )
 
-    def test_a_home_summary_without_seg_revenue_has_no_seg_revenue_row(self) -> None:
-        """A home summary with no SEG revenue gives the same rows less the SEG Revenue row."""
-        full_rows = home_summary_rows(_home_summary())
-
-        rows = home_summary_rows(_home_summary(seg_revenue_gbp=None))
-
-        assert rows == tuple(row for row in full_rows if row != ("SEG Revenue", "£1.23"))
+    def test_a_home_summary_carrying_a_seg_revenue_prints_the_rows_of_one_without(self) -> None:
+        """A home summary's retired seg_revenue_gbp prints no row: its rows are those of the same summary without it."""
+        assert home_summary_rows(_home_summary()) == home_summary_rows(_home_summary(seg_revenue_gbp=None))
 
 
 class TestFleetSummaryRows:
@@ -166,7 +158,6 @@ class TestFleetSummaryRows:
             ("Grid Import Cost", "£1.68"),
             ("Grid Export Revenue", "£0.78"),
             ("Net Cost", "£0.90"),
-            ("SEG Revenue", "£0.47"),
             ("", ""),
             ("Per-Home Generation (min/max)", "8.0 / 12.0 kWh"),
             ("Per-Home Generation (mean)", "10.0 kWh"),
@@ -219,10 +210,7 @@ class TestPrintedSummaryTables:
     """Tests of the metrics each simulate command's summary table prints on stdout, read row by row."""
 
     def test_fleet_run_prints_the_fleets_ratios_and_net_cost(self) -> None:
-        """`fleet run` prints the fleet's own ratios and net cost among its totals, then, after a blank row, its homes' spread, each row once.
-
-        It prints no SEG Revenue row, since `fleet run` gives the fleet's summary no SEG rate.
-        """
+        """`fleet run` prints the fleet's own ratios and net cost among its totals, then, after a blank row, its homes' spread, each row once."""
         Path("scenario.yaml").write_text(yaml.safe_dump({"name": "Bristol", "homes": [_HOME]}))
 
         result = CliRunner().invoke(
@@ -284,7 +272,7 @@ class TestPrintedSummaryTables:
     def test_home_run_prints_a_seg_blocks_export_income_once(self) -> None:
         """`home run` on a home with a seg: block prints its export income once, as Grid Export Revenue: its export at the SEG rate, to the table's rounding.
 
-        simulate_home prices every export at the SEG rate, so a SEG Revenue row would repeat that income.
+        Grid Export Revenue is the one export income: simulate_home prices every export at the SEG rate.
         """
         rate_pence_per_kwh = 15.0
         Path("home.yaml").write_text(

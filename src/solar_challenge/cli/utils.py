@@ -230,7 +230,6 @@ def home_summary_rows(summary: SummaryStatistics) -> tuple[tuple[str, str], ...]
             import_cost_gbp=summary.total_import_cost_gbp,
             export_revenue_gbp=summary.total_export_revenue_gbp,
             net_cost_gbp=summary.net_cost_gbp,
-            seg_revenue_gbp=summary.seg_revenue_gbp,
         ),
         *_grid_charge_forecast_rows(distinct_grid_charge_forecasts([summary.grid_charge_forecast])),
     )
@@ -248,7 +247,6 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
             import_cost_gbp=summary.total_import_cost_gbp,
             export_revenue_gbp=summary.total_export_revenue_gbp,
             net_cost_gbp=summary.total_net_cost_gbp,
-            seg_revenue_gbp=summary.total_seg_revenue_gbp,
         ),
         *_grid_charge_forecast_rows(summary.grid_charge_forecasts),
         ("", ""),
@@ -292,14 +290,12 @@ def _money_rows(
     import_cost_gbp: float | None,
     export_revenue_gbp: float | None,
     net_cost_gbp: float | None,
-    seg_revenue_gbp: float | None,
 ) -> tuple[tuple[str, str], ...]:
-    """The Grid Import Cost, Grid Export Revenue, Net Cost and SEG Revenue rows, each only when its amount is not None."""
+    """The Grid Import Cost, Grid Export Revenue and Net Cost rows, each only when its amount is not None."""
     amounts = (
         ("Grid Import Cost", import_cost_gbp),
         ("Grid Export Revenue", export_revenue_gbp),
         ("Net Cost", net_cost_gbp),
-        ("SEG Revenue", seg_revenue_gbp),
     )
     return tuple((metric, f"£{amount:.2f}") for metric, amount in amounts if amount is not None)
 

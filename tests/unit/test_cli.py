@@ -866,7 +866,7 @@ home:
         return result, recorder
 
     def test_home_run_threads_tariff_and_seg(self, tmp_path: Path) -> None:
-        """home run passes tariff + seg to the home it simulates and reports SEG Revenue."""
+        """home run passes tariff + seg to the home it simulates, and its report has no second, SEG Revenue section."""
         result, recorder = self._run_home(tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n")
 
         assert result.exit_code == 0, f"CLI failed: {result.stdout}"
@@ -883,10 +883,7 @@ home:
         )
         assert home_cfg.seg_tariff.rate_pence_per_kwh == 15.0
 
-        # SEG Revenue section must appear in the --report output
-        assert "SEG Revenue" in result.stdout, (
-            "generate_summary_report must include a SEG Revenue section"
-        )
+        assert "## SEG Revenue" not in result.stdout
 
     def test_home_run_resolves_seg_preset(self, tmp_path: Path) -> None:
         """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
@@ -896,7 +893,7 @@ home:
         (home_cfg,) = recorder.homes
         assert home_cfg.seg_tariff is not None
         assert home_cfg.seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
-        assert "SEG Revenue" in result.stdout
+        assert "## SEG Revenue" not in result.stdout
 
     def test_home_run_rejects_unknown_seg_preset(self, tmp_path: Path) -> None:
         """An unknown SEG preset is refused with exit 1 before anything is simulated."""
@@ -992,6 +989,44 @@ def _run_optimize_configs() -> Result:
         ],
         catch_exceptions=False,
     )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestHomeRunReportPricesExportOnce:
+    """`home run --report` on a home with a seg: block prints one export revenue, and the SEG rate that priced it."""
+
+    def test_home_run_report_shows_the_seg_rate_beside_the_one_export_revenue(self) -> None:
+        """The report's Grid Export Revenue is the run's export at the SEG rate it names, and no SEG Revenue section repeats it."""
+        rate_pence_per_kwh = 15.0
+        Path("home.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "home": {
+                        "name": "Bristol",
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    },
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY, "--report"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        lines = result.stdout.splitlines()
+        cells = {
+            row[1].strip(): row[2].strip()
+            for row in (line.split("|") for line in lines if line.startswith("| "))
+        }
+        assert "| SEG Rate | 15.0 p/kWh |" in lines
+        export_kwh = float(cells["Grid Export"])
+        assert export_kwh > 0
+        # The report rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(cells["Grid Export Revenue"]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
+        assert "## SEG Revenue" not in result.stdout
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")

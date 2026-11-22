@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Uni
 import pandas as pd
 
 from solar_challenge.home import (
+    RunPricing,
     SimulationResults,
     calculate_summary,
     grid_dependency_ratio,
@@ -65,6 +66,13 @@ def _grid_charge_forecast_notice(forecasts: Sequence[GridChargeForecast]) -> str
     return f"*Battery grid charging in cheap periods was sized by {sized_by}.*\n\n"
 
 
+def _seg_rate_row(pricing: RunPricing | None) -> str:
+    """The Financial table's SEG Rate row, ending in a newline, naming the SEG rate that priced a run's export; empty when no SEG priced it."""
+    if pricing is None or pricing.seg_rate_pence_per_kwh is None:
+        return ""
+    return f"| SEG Rate | {pricing.seg_rate_pence_per_kwh:.1f} p/kWh |\n"
+
+
 def export_to_csv(
     results: SimulationResults,
     filepath: Union[str, Path],
@@ -89,21 +97,20 @@ def export_to_csv(
 def generate_summary_report(
     results: SimulationResults,
     home_name: Optional[str] = None,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
 ) -> str:
     """Generate a text summary report of simulation results.
 
     Args:
         results: Simulation results
         home_name: Optional name for the home
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, a SEG Revenue section is included in the report.
 
     Returns:
         Formatted markdown text report. When a forecast sized the run's grid
         charge, it opens, under its title, with a notice naming the forecast.
+        When a SEG rate priced the run's export, its Financial table names
+        that rate, after the Grid Export Revenue it earned.
     """
-    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+    summary = calculate_summary(results)
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
     notice = _grid_charge_forecast_notice(distinct_grid_charge_forecasts([summary.grid_charge_forecast]))
@@ -210,17 +217,7 @@ def generate_summary_report(
 |--------|-------|
 | Grid Import Cost | {summary.total_import_cost_gbp:.2f} |
 | Grid Export Revenue | {summary.total_export_revenue_gbp:.2f} |
-| Net Cost | {summary.net_cost_gbp:.2f} |
-"""
-
-    if summary.seg_revenue_gbp is not None:
-        report += f"""
-## SEG Revenue
-| Metric | Value |
-|--------|-------|
-| Tariff Rate | {seg_tariff_pence_per_kwh:.1f} p/kWh |
-| Total Export | {summary.total_grid_export_kwh:.1f} kWh |
-| SEG Revenue | £{summary.seg_revenue_gbp:.2f} |
+{_seg_rate_row(summary.pricing)}| Net Cost | {summary.net_cost_gbp:.2f} |
 """
 
     return report
