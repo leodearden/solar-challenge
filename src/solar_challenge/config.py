@@ -53,8 +53,8 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
     parse_tariff_config,
     refusal,
-    refuse_missing_keys,
     refuse_unrecognised_keys,
+    require_keys,
     require_list,
     require_mapping,
 )
@@ -317,7 +317,7 @@ _PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
 def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
     """Parse the simulation period at *block_path* from config data, refusing it unless it gives both days, naming each it leaves out."""
     refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
-    refuse_missing_keys(block_path, [key for key in ("start_date", "end_date") if key not in data])
+    require_keys(block_path, data, ["start_date", "end_date"])
     return SimulationPeriod(
         start_date=data["start_date"],
         end_date=data["end_date"],
@@ -350,7 +350,7 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
 def _parse_scenario(data: object, *, block_path: str) -> ScenarioConfig:
     """Parse the scenario at *block_path* from config data, refusing first any key no scenario reads, then a scenario leaving out its name or period, naming each, or giving neither home nor homes; its homes must be a list."""
     scenario = _refuse_keys_no_scenario_reads(data, block_path=block_path)
-    refuse_missing_keys(block_path, [key for key in ("name", "period") if key not in scenario])
+    require_keys(block_path, scenario, ["name", "period"])
 
     location = parse_location_block(
         scenario.get("location"), block_path=child_path(block_path, "location")
@@ -580,7 +580,8 @@ def load_config_json(path: Union[str, Path]) -> dict[str, Any]:
         Parsed configuration dictionary
 
     Raises:
-        ConfigurationError: If file cannot be read or parsed
+        ConfigurationError: If file cannot be read or parsed, naming the file; or if its
+            document is not a mapping, naming the top level and the document's type
     """
     path = Path(path)
     if not path.exists():
@@ -709,7 +710,7 @@ def _read_fleet_distribution_file(
     return distribution, _FleetFileSettings(location=location, tariff=tariff)
 
 
-def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
+def parse_fleet_config(document: object) -> FleetConfig:
     """Parse a fleet file's document, already loaded or variable-substituted.
 
     Supports two formats:
@@ -717,7 +718,7 @@ def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
     - Distribution-based generation: `fleet_distribution: {...}`
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         FleetConfig object
@@ -761,11 +762,11 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     return parse_fleet_config(load_config(path))
 
 
-def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
+def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
@@ -781,7 +782,7 @@ def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
     return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
 
 
-def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, FleetConfig]]:
+def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
     The sweep is the fleet_distribution: block's battery.capacity_kwh multiplier. Every
@@ -789,7 +790,7 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
     once for the whole file.
 
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         (sweep value, FleetConfig named after it) for each sweep point, in sweep order
@@ -800,7 +801,7 @@ def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, 
             invalid
     """
     document = require_mapping("", document)
-    refuse_missing_keys("", [key for key in ("fleet_distribution",) if key not in document])
+    require_keys("", document, ["fleet_distribution"])
     distribution, settings = _read_fleet_distribution_file(document)
     return [
         (value, FleetConfig(homes=tuple(settings.generate_homes(point)), name=f"multiplier={value:.4f}"))

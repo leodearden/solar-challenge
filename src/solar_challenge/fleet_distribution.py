@@ -12,7 +12,6 @@ from types import MappingProxyType
 from typing import (
     Any,
     Callable,
-    Collection,
     Iterator,
     Mapping,
     Optional,
@@ -57,8 +56,9 @@ from solar_challenge.scenario_blocks import (
     dispatch_strategy_argument,
     read_dispatch_strategy_key,
     refusal,
-    refuse_missing_keys,
     refuse_unrecognised_keys,
+    require_held_keys,
+    require_keys,
 )
 from solar_challenge.tariff import TariffConfig
 
@@ -655,9 +655,11 @@ def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str,
     return spec
 
 
-def _refuse_required_fleet_keys_left_out(block: ComponentBlock[Any], given: Collection[str], block_path: str) -> None:
-    """Refuse the fleet's component block at *block_path* if *given*, the keys it gives, leaves out a key *block*'s fleet rows require, naming each by its path."""
-    refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in given])
+def _refuse_required_fleet_keys_left_out(
+    block: ComponentBlock[Any], given: Mapping[str, Any], block_path: str
+) -> None:
+    """Refuse the fleet's component block at *block_path* if *given*, its specs by key, leaves out a key *block*'s fleet rows require, naming the block and each key it leaves out; a null spec is given."""
+    require_held_keys(block_path, given, [key for key, row in block.fleet.items() if row.required])
 
 
 def _components_by_name(
@@ -809,7 +811,7 @@ def _build_weighted_discrete_spec(
     data: dict[str, Any], block_path: str
 ) -> WeightedDiscreteDistribution:
     """Build the weighted_discrete distribution a spec names, refusing it unless it gives values and weights."""
-    refuse_missing_keys(block_path, [key for key in ("values", "weights") if key not in data])
+    require_keys(block_path, data, ["values", "weights"])
     return constructed(
         block_path, WeightedDiscreteDistribution, values=data["values"], weights=data["weights"]
     )
@@ -817,14 +819,14 @@ def _build_weighted_discrete_spec(
 
 def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
     """Build the normal distribution a spec names, refusing it unless it gives a mean and a std; a min or max it leaves out is NormalDistribution's default."""
-    refuse_missing_keys(block_path, [key for key in ("mean", "std") if key not in data])
+    require_keys(block_path, data, ["mean", "std"])
     bounds = {key: data[key] for key in ("min", "max") if key in data}
     return constructed(block_path, NormalDistribution, mean=data["mean"], std=data["std"], **bounds)
 
 
 def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
     """Build the uniform distribution a spec names, refusing it unless it gives a min and a max."""
-    refuse_missing_keys(block_path, [key for key in ("min", "max") if key not in data])
+    require_keys(block_path, data, ["min", "max"])
     return constructed(block_path, UniformDistribution, min=data["min"], max=data["max"])
 
 
@@ -832,10 +834,11 @@ def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
     """Build the fixed value the spec at *block_path*, the parameter's path, names: null, or its value read as a finite number, as the scalar it stands for is read.
 
     Raises:
-        ConfigurationError: If the spec gives no value, or one that is not a finite number,
-            text included, naming *block_path*.
+        ConfigurationError: If the spec gives no value, a null one being the null spec, naming
+            *block_path* and the key; or one that is not a finite number, text included, naming
+            *block_path*.
     """
-    refuse_missing_keys(block_path, [key for key in ("value",) if key not in data])
+    require_held_keys(block_path, data, ["value"])
     value = data["value"]
     return None if value is None else as_finite_real(value, block_path)
 
@@ -844,19 +847,19 @@ def _build_shuffled_pool_spec(
     data: dict[str, Any], block_path: str
 ) -> ShuffledPoolDistribution:
     """Build the shuffled_pool distribution a spec names, refusing it unless it gives values and counts."""
-    refuse_missing_keys(block_path, [key for key in ("values", "counts") if key not in data])
+    require_keys(block_path, data, ["values", "counts"])
     return constructed(block_path, ShuffledPoolDistribution, values=data["values"], counts=data["counts"])
 
 
 def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
-    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path, refusing one that leaves out its min, max or steps, naming each by its path."""
+    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path, refusing one that leaves out its min, max or steps, naming the multiplier's path and each key it leaves out."""
     if not isinstance(data, dict):
         return data
     multiplier_path = child_path(block_path, "multiplier")
     if data.get("type") != "sweep":
         raise refusal(multiplier_path, f"a mapping multiplier must have type 'sweep', got {data.get('type')!r}")
     refuse_unrecognised_keys(multiplier_path, data, _SWEEP_SPEC_KEYS)
-    refuse_missing_keys(multiplier_path, [key for key in ("min", "max", "steps") if key not in data])
+    require_keys(multiplier_path, data, ["min", "max", "steps"])
     return constructed(multiplier_path, SweepSpec, **{key: value for key, value in data.items() if key != "type"})
 
 
@@ -864,7 +867,7 @@ def _build_proportional_to_spec(
     data: dict[str, Any], block_path: str
 ) -> ProportionalDistribution:
     """Build the proportional_to distribution a spec names, refusing it unless it gives a source; a multiplier or offset it leaves out is ProportionalDistribution's default."""
-    refuse_missing_keys(block_path, [key for key in ("source",) if key not in data])
+    require_keys(block_path, data, ["source"])
     given: dict[str, object] = {key: data[key] for key in ("offset",) if key in data}
     if "multiplier" in data:
         given["multiplier"] = _parse_proportional_to_multiplier(data["multiplier"], block_path)
@@ -976,9 +979,8 @@ def _parse_distribution_spec(data: Any, block_path: str) -> DistributionSpec:
     if not isinstance(data, dict):
         return as_finite_real(data, block_path)
 
-    dist_type = data.get("type")
-    if dist_type is None:
-        refuse_missing_keys(block_path, ["type"])
+    require_keys(block_path, data, ["type"])
+    dist_type = data["type"]
     distribution_type = DISTRIBUTION_TYPES.get(dist_type) if isinstance(dist_type, str) else None
     if distribution_type is None:
         raise refusal(
@@ -1033,8 +1035,8 @@ def _parse_component_distribution(
 ) -> ComponentDistribution:
     """Read a fleet_distribution: component block by *block*'s fleet rows.
 
-    A key outside the rows is refused, and so is a required key left out, naming its path. A
-    SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
+    A key outside the rows is refused, naming its path, and so is a block leaving out a key the
+    rows require, naming the block and the key. A SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
     false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
     even when null, as _parse_drawn_spec reads it.
     """
@@ -1076,7 +1078,7 @@ def parse_fleet_distribution_config(
     draws the dependent name the key under *block_path*.
     """
     refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
-    refuse_missing_keys(block_path, [key for key in ("n_homes", "pv") if key not in data])
+    require_keys(block_path, data, ["n_homes", "pv"])
 
     pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=child_path(block_path, "pv"))
     load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=child_path(block_path, "load"))
@@ -1150,9 +1152,9 @@ def _nearest_whole_number(value: float) -> float:
 
 
 def _refuse_unless_finite(value: SpecValue, path: str) -> None:
-    """Refuse *value*, a proportional_to's computed count of the field at *path*, relative to the fleet, if it is an infinity or a NaN, to which no whole number is nearest, naming the field's spec path and the value; a multiplier overflow makes an infinity."""
-    if isinstance(value, float) and not math.isfinite(value):
-        raise refusal(child_path(_FLEET_DISTRIBUTION_PATH, path), f"must be a finite number, got {value!r}")
+    """Refuse *value*, a proportional_to's computed count of the field at *path*, relative to the fleet, if it is an infinity or a NaN, to which no whole number is nearest, as number_fields refuses every number of the grammar, naming the field's spec path and the value; a multiplier overflow makes an infinity."""
+    if isinstance(value, float):
+        as_finite_float(value, child_path(_FLEET_DISTRIBUTION_PATH, path))
 
 
 def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:

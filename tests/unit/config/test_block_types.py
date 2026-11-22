@@ -170,6 +170,13 @@ _DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
         )
         for spec in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
     ),
+    *(
+        pytest.param({**spec, key: None}, f"{_SPEC_PATH}: requires {key!r}", id=f"{spec['type']}-null-{key}")
+        for spec in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
+        if spec["type"] != "fixed"
+        for key in spec
+        if key != "type"
+    ),
 ]
 
 _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP = [
@@ -259,7 +266,7 @@ class TestDistributionSpecTypes:
     def test_spec_lacking_a_required_key_is_refused_naming_the_key(
         self, spec: dict[str, Any], message: str
     ) -> None:
-        """A spec lacking keys its type requires is refused, naming the path and each key it lacks in its type's order."""
+        """A spec lacking keys its type requires, or giving one as null, which reads as absent, is refused, naming the path and each key it lacks in its type's order; a fixed's null value is the null spec, not a key it lacks."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(spec)
         assert str(refusal.value) == message

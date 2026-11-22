@@ -11,6 +11,8 @@ from solar_challenge.scenario_blocks import (
     refusal,
     refuse_missing_keys,
     refuse_unrecognised_keys,
+    require_held_keys,
+    require_keys,
     require_list,
     require_mapping,
 )
@@ -115,6 +117,32 @@ class TestRefuseMissingKeys:
             refuse_missing_keys("home.tariff.periods[0]", ["end_time", "rate_per_kwh"])
 
         assert str(refused.value) == "home.tariff.periods[0]: requires 'end_time', 'rate_per_kwh'"
+
+
+class TestRequireKeys:
+    """require_keys refuses a block that does not set each key it needs, a null key reading as absent."""
+
+    def test_a_block_setting_every_key_is_no_refusal(self) -> None:
+        assert require_keys("home.tariff", {"type": "flat_rate", "rate_per_kwh": 0.2}, ["type", "rate_per_kwh"]) is None
+
+    def test_an_absent_or_null_key_is_named_in_the_order_given(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            require_keys("home.tariff", {"type": "flat_rate", "rate_per_kwh": None}, ["name", "rate_per_kwh", "type"])
+
+        assert str(refused.value) == "home.tariff: requires 'name', 'rate_per_kwh'"
+
+
+class TestRequireHeldKeys:
+    """require_held_keys refuses a block that does not hold each key it needs, a null key held as a value."""
+
+    def test_a_null_key_is_held(self) -> None:
+        assert require_held_keys("fleet_distribution.battery", {"capacity_kwh": None}, ["capacity_kwh"]) is None
+
+    def test_an_absent_key_is_named_in_the_order_given(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            require_held_keys("finance", {"loan_term_years": None}, ["standing_charge_pence_per_day", "loan_term_years"])
+
+        assert str(refused.value) == "finance: requires 'standing_charge_pence_per_day'"
 
 
 def test_a_construction_refusal_keeps_the_types_refusal_as_its_cause() -> None:

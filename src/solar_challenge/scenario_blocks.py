@@ -13,6 +13,7 @@ from typing import (
     Callable,
     Collection,
     Generic,
+    Iterable,
     Mapping,
     Optional,
     Protocol,
@@ -235,6 +236,20 @@ def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
         raise refusal(block_path, f"requires {', '.join(repr(key) for key in missing_keys)}")
 
 
+def require_keys(block_path: str, block: Mapping[str, Any], keys: Iterable[str]) -> None:
+    """Refuse the block at *block_path* unless it sets each of *keys*, a null key reading as absent, naming each it leaves out in the order given."""
+    refuse_missing_keys(block_path, [key for key in keys if block.get(key) is None])
+
+
+def require_held_keys(block_path: str, block: Mapping[str, Any], keys: Iterable[str]) -> None:
+    """Refuse the block at *block_path* unless it holds each of *keys*, null or not, naming each it leaves out in the order given.
+
+    It is require_keys for a block whose null is a value: a fleet's null spec, or a null the
+    block's type refuses as it refuses any value.
+    """
+    refuse_missing_keys(block_path, [key for key in keys if key not in block])
+
+
 def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
     """The keys a block building *config_type* must set: its init fields with neither a default nor a default factory, in field order."""
     return tuple(
@@ -265,10 +280,7 @@ def _built_component(
             declared default nor a when-omitted value; or as its dataclass refuses the values,
             prefixed by the block's path.
     """
-    refuse_missing_keys(
-        block_path,
-        [key for key in block.keys if key not in set_keys and block.value_when_omitted(key) is MISSING],
-    )
+    require_keys(block_path, set_keys, [key for key in block.keys if block.value_when_omitted(key) is MISSING])
     sub_block_configs = {
         key: sub_block.read(set_keys[key], block_path=child_path(block_path, key))
         for key, sub_block in block.sub_blocks.items()
@@ -284,8 +296,8 @@ def _read_component_block(
 
     A key outside the table's keys is refused, null or not; a null key reads as absent; an
     omitted key takes the table's when-omitted value, else the dataclass's declared default; a
-    key with neither is refused by its path; and a value the dataclass refuses is refused as it
-    refuses it, prefixed by the block's path.
+    block leaving out a key with neither is refused, naming the block and each key it leaves out;
+    and a value the dataclass refuses is refused as it refuses it, prefixed by the block's path.
     """
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 
@@ -296,8 +308,9 @@ def parse_location_block(
     """Parse a ``location:`` block into a Location, as LOCATION_BLOCK reads it.
 
     A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise it
-    must set latitude and longitude: a block that leaves either out is refused, naming it by its
-    path. An omitted timezone or altitude takes Bristol's, and an omitted name stays empty.
+    must set latitude and longitude: a block that leaves either out is refused, naming the block
+    and each it leaves out. An omitted timezone or altitude takes Bristol's, and an omitted name
+    stays empty.
     """
     if data is None:
         return Location.bristol()
@@ -421,9 +434,8 @@ def _strategy_variant(block: Mapping[str, Any], block_path: str) -> type[Dispatc
         ConfigurationError: for a strategy_type that is missing or null, naming the block; for
             one that names no variant, naming its path, its value and the variants' tags.
     """
-    tag = block.get("strategy_type")
-    if tag is None:
-        refuse_missing_keys(block_path, ["strategy_type"])
+    require_keys(block_path, block, ["strategy_type"])
+    tag = block["strategy_type"]
     variant = STRATEGY_CONFIG_BY_TYPE.get(tag) if isinstance(tag, str) else None
     if variant is None:
         raise refusal(
@@ -459,7 +471,7 @@ def parse_dispatch_strategy_config(
         {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
         {"strategy_type", *(each.name for each in variant_fields)},
     )
-    refuse_missing_keys(block_path, [key for key in _required_keys(variant) if key not in set_keys])
+    require_keys(block_path, set_keys, _required_keys(variant))
     values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
     build_variant: Callable[..., DispatchStrategyConfig] = variant
     return constructed(block_path, build_variant, **values)
@@ -619,11 +631,12 @@ _PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset(each.name for each in field
 
 def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
-    rate = data.get("rate_per_kwh")
-    if rate is None:
-        refuse_missing_keys(block_path, ["rate_per_kwh"])
+    require_keys(block_path, data, ["rate_per_kwh"])
     return constructed(
-        block_path, TariffConfig.flat_rate, rate_per_kwh=rate, name=_read_name(data, block_path=block_path)
+        block_path,
+        TariffConfig.flat_rate,
+        rate_per_kwh=data["rate_per_kwh"],
+        name=_read_name(data, block_path=block_path),
     )
 
 
@@ -660,7 +673,7 @@ def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffCon
 def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
     """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate, and as TariffPeriod refuses it, prefixed by its path."""
     period = refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
-    refuse_missing_keys(block_path, [key for key in ("start_time", "end_time", "rate_per_kwh") if key not in period])
+    require_keys(block_path, period, ["start_time", "end_time", "rate_per_kwh"])
     return constructed(
         block_path,
         TariffPeriod,
@@ -673,8 +686,7 @@ def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
 
 def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
     """Build the custom tariff a block names from its periods, refusing it unless it gives a list of some, and as TariffConfig refuses its periods, prefixed by the block's path."""
-    if data.get("periods") is None:
-        refuse_missing_keys(block_path, ["periods"])
+    require_keys(block_path, data, ["periods"])
 
     periods_path = child_path(block_path, "periods")
     periods_data = require_list(periods_path, data["periods"])
@@ -737,9 +749,8 @@ def parse_tariff_config(
         return None
     require_mapping(block_path, data)
 
-    tariff_type = data.get("type")
-    if tariff_type is None:
-        refuse_missing_keys(block_path, ["type"])
+    require_keys(block_path, data, ["type"])
+    tariff_type = data["type"]
     block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
     if block_type is None:
         raise refusal(
@@ -875,7 +886,7 @@ def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow,
     for i, ew_dict in enumerate(require_list(block_path, data)):
         window_path = f"{block_path}[{i}]"
         window = refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_KEYS)
-        refuse_missing_keys(window_path, [key for key in _required_keys(EventWindow) if key not in window])
+        require_keys(window_path, window, _required_keys(EventWindow))
         parsed_windows.append(constructed(window_path, EventWindow, **window))
     return tuple(parsed_windows)
 
@@ -929,8 +940,7 @@ def parse_finance_config(
     if data is None:
         return None
     refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
-    if "standing_charge_pence_per_day" not in data:
-        refuse_missing_keys(block_path, ["standing_charge_pence_per_day"])
+    require_held_keys(block_path, data, ["standing_charge_pence_per_day"])
 
     grid_services_events = _parse_grid_services_events_config(
         data.get("grid_services_events"),

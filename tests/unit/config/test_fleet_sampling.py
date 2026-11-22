@@ -536,7 +536,7 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == f"fleet_distribution.{component}.{key}: must be a finite number, got {4.0 * multiplier!r}"
+        assert str(refusal.value) == f"fleet_distribution.{component}.{key} must be a finite number, got {4.0 * multiplier!r}"
 
     def test_a_count_that_is_nan_is_refused_naming_its_path(self) -> None:
         """No finite source, multiplier and offset make a NaN, but 0 times a listed infinite consumption does, and no whole number is nearest it, so occupants proportional_to it are refused naming their path and NaN."""
@@ -556,4 +556,4 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == "fleet_distribution.load.household_occupants: must be a finite number, got nan"
+        assert str(refusal.value) == "fleet_distribution.load.household_occupants must be a finite number, got nan"
