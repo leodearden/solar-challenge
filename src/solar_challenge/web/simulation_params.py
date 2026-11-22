@@ -21,6 +21,7 @@ from solar_challenge.scenario_blocks import (
     parse_tariff_config,
 )
 from solar_challenge.seg import SEGTariff
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START, covered_days
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     refuse_unencodable_text,
@@ -31,22 +32,14 @@ from solar_challenge.web.request_boundary import (
 
 _HOME_CONFIG = "Home config"
 
-#: The first day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date a start
-#: that is not sent reads as.
-FULL_YEAR_START = date(2024, 1, 1)
-#: The last day of the full year that days=FULL_YEAR_DAYS_SENTINEL runs, and the date an end
-#: that is not sent reads as.
-FULL_YEAR_END = date(2024, 12, 31)
-#: The days value that runs FULL_YEAR_START to FULL_YEAR_END, all MAX_WINDOW_DAYS days of the
-#: year, rather than that many days from DAYS_WINDOW_START.
+#: The days value that runs DEFAULT_FIRST_DAY to DEFAULT_LAST_DAY, all MAX_WINDOW_DAYS days of
+#: the year, rather than that many days from SHORT_WINDOW_START.
 FULL_YEAR_DAYS_SENTINEL: int = 365
-#: The first day of the window a days value other than FULL_YEAR_DAYS_SENTINEL runs.
-DAYS_WINDOW_START = date(2024, 6, 1)
 
-#: The most days a simulation window may span: the full 2024 calendar year that
-#: days=FULL_YEAR_DAYS_SENTINEL and a request without dates run; rationale in
-#: docs/web-ui-design.md (Simulation window).
-MAX_WINDOW_DAYS: int = (FULL_YEAR_END - FULL_YEAR_START).days + 1
+#: The most days a simulation window may span: the full year, DEFAULT_FIRST_DAY to
+#: DEFAULT_LAST_DAY, that days=FULL_YEAR_DAYS_SENTINEL and a request without dates run;
+#: rationale in docs/web-ui-design.md (Simulation window).
+MAX_WINDOW_DAYS: int = covered_days(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY)
 #: The most days a body may send: FULL_YEAR_DAYS_SENTINEL, so the full year is the one
 #: year-long window days runs; rationale in docs/web-ui-design.md (Simulation window).
 MAX_DAYS: int = FULL_YEAR_DAYS_SENTINEL
@@ -113,10 +106,10 @@ def _read_date(value: Any, field: str, default: date) -> date:
 
 
 def _days_window(days: int) -> tuple[date, date]:
-    """The window a ``days`` request runs: FULL_YEAR_START to FULL_YEAR_END for FULL_YEAR_DAYS_SENTINEL, else *days* days from DAYS_WINDOW_START."""
+    """The window a ``days`` request runs: DEFAULT_FIRST_DAY to DEFAULT_LAST_DAY for FULL_YEAR_DAYS_SENTINEL, else *days* days from SHORT_WINDOW_START."""
     if days == FULL_YEAR_DAYS_SENTINEL:
-        return FULL_YEAR_START, FULL_YEAR_END
-    return DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=days - 1)
+        return DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+    return SHORT_WINDOW_START, SHORT_WINDOW_START + timedelta(days=days - 1)
 
 
 def refuse_reversed_or_overlong_window(
@@ -162,11 +155,11 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
 
     - ``days``: a whole number from 1 to :data:`MAX_DAYS`.
       :data:`FULL_YEAR_DAYS_SENTINEL`, the largest, is the sentinel for the
-      full year, :data:`FULL_YEAR_START` to :data:`FULL_YEAR_END`. Any other
-      runs that many days from :data:`DAYS_WINDOW_START`, on past
-      :data:`FULL_YEAR_END` when it is longer than the rest of that year.
+      full year, :data:`DEFAULT_FIRST_DAY` to :data:`DEFAULT_LAST_DAY`. Any
+      other runs that many days from :data:`SHORT_WINDOW_START`, on past
+      :data:`DEFAULT_LAST_DAY` when it is longer than the rest of that year.
     - ``start`` / ``end``: ISO 8601 dates (``YYYY-MM-DD``); one not sent reads
-      as :data:`FULL_YEAR_START` / :data:`FULL_YEAR_END`.
+      as :data:`DEFAULT_FIRST_DAY` / :data:`DEFAULT_LAST_DAY`.
 
     A null ``days``, and an empty or null ``start`` or ``end``, read as not sent.
 
@@ -193,8 +186,8 @@ def parse_date_range(data: Mapping[str, Any]) -> tuple[str, str]:
     if days is not None:
         start, end = _days_window(as_whole_number(days, "days", within=Interval(1, MAX_DAYS)))
     else:
-        start = _read_date(sent.get("start"), "start", FULL_YEAR_START)
-        end = _read_date(sent.get("end"), "end", FULL_YEAR_END)
+        start = _read_date(sent.get("start"), "start", DEFAULT_FIRST_DAY)
+        end = _read_date(sent.get("end"), "end", DEFAULT_LAST_DAY)
     refuse_reversed_or_overlong_window(start, end, start_field="start", end_field="end")
     return start.isoformat(), end.isoformat()
 

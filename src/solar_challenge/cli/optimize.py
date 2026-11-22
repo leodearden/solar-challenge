@@ -35,7 +35,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
 )
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -226,7 +226,7 @@ def configs(
             "--start",
             help=(
                 "Simulation start date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                "block if present; defaults to the scenario period start or 2024-01-01."
+                f"block if present; defaults to the scenario period start or {DEFAULT_FIRST_DAY.isoformat()}."
             ),
         ),
     ] = None,
@@ -236,7 +236,7 @@ def configs(
             "--end",
             help=(
                 "Simulation end date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                "block if present; defaults to the scenario period end or 2024-12-31."
+                f"block if present; defaults to the scenario period end or {DEFAULT_LAST_DAY.isoformat()}."
             ),
         ),
     ] = None,
@@ -307,11 +307,11 @@ def configs(
         fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
 
     # ---- Resolve start/end: CLI args override scenario period; fall back to
-    #      2024-01-01 / 2024-12-31 when neither is present. ---------------
+    #      timebase's default window when neither is present. ------------
     loc = fleet_config.homes[0].location
     _scenario_period: dict[str, str] = raw.get("period", {}) or {}
-    _start_str = start or _scenario_period.get("start_date", "2024-01-01")
-    _end_str = end or _scenario_period.get("end_date", "2024-12-31")
+    _start_str = start or _scenario_period.get("start_date", DEFAULT_FIRST_DAY.isoformat())
+    _end_str = end or _scenario_period.get("end_date", DEFAULT_LAST_DAY.isoformat())
     start_date = pd.Timestamp(_start_str, tz=loc.timezone)
     end_date = pd.Timestamp(_end_str, tz=loc.timezone)
     days = covered_days(start_date.date(), end_date.date())

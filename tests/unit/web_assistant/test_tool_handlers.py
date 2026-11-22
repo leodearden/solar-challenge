@@ -1099,7 +1099,7 @@ bristol_june_tmy = _REAL_JOB_DAYS.bristol_tmy_fixture()
 class TestRunHomeSimulationWithRealJobManager:
     """A real 1-day Bristol home simulation through the app's JobManager: the end-to-end proof that run_home_simulation's job completes and that get_run_results reads it.
 
-    Its one day is the clear June day on DAYS_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
+    Its one day is the clear June day on SHORT_WINDOW_START that bristol_june_tmy seeds as Bristol's TMY.
     """
 
     def test_run_home_simulation_real_job_lands_in_runs(self, app: Flask) -> None:

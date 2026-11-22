@@ -17,6 +17,7 @@ from solar_challenge.timebase import (
     MINUTES_PER_DAY,
     MINUTES_PER_HOUR,
     ONE_MINUTE,
+    SHORT_WINDOW_START,
     LocalDay,
     SimulationWindow,
     covered_days,
@@ -176,6 +177,15 @@ def test_the_default_window_is_the_whole_calendar_year_2024_at_one_minute() -> N
 
     assert window.days == 366
     assert window.extrapolated is False
+
+
+def test_the_short_window_starts_on_1_june_2024_and_is_exactly_a_date() -> None:
+    """A one-day window built from it constructs, which proves it is exactly a date, the kind a window's days and pd.Timestamp(day, tz=zone) both take."""
+    assert SHORT_WINDOW_START == date(2024, 6, 1)
+
+    window = SimulationWindow(SHORT_WINDOW_START, SHORT_WINDOW_START, ONE_MINUTE, "Europe/London")
+
+    assert window.days == 1
 
 
 @pytest.mark.parametrize("quantity", ["Timestep", "Charge duration"])

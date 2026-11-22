@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""`home quick` runs to completion from 1 June 2024 and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
+"""`home quick` runs to completion from timebase.SHORT_WINDOW_START and simulates the default home, reading its weather from the test's own cache, or, run as its own process, from the directory CACHE_DIR_VARIABLE names; its help names that home's consumption."""
 
-import datetime
 import os
 import re
 import subprocess
@@ -15,16 +14,14 @@ from typer.testing import CliRunner
 from solar_challenge.cli.main import app
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
-from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from solar_challenge.timebase import ONE_MINUTE, SHORT_WINDOW_START, SimulationWindow
 from solar_challenge.weather import CACHE_DIR_VARIABLE, DEFAULT_CACHE_DIR, WeatherCache
 from tests._network_guard import refusing_network
 from tests._seeded_tmy import ClearJuneDays
 
 runner = CliRunner()
 
-_DAY = "2024-06-01"
-
-_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(_DAY), count=1)
+_JUNE_DAYS = ClearJuneDays(first_day=pd.Timestamp(SHORT_WINDOW_START), count=1)
 bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 pytestmark = pytest.mark.usefixtures("bristol_june_tmy")
@@ -57,11 +54,11 @@ def test_home_quick_runs_to_completion_and_prints_the_summary() -> None:
     assert "Quick Simulation Results" in result.stdout
 
 
-def test_home_quick_saves_the_minutes_from_midnight_on_1_june_2024(tmp_path: Path) -> None:
-    """`--output` saves the simulated minutes, the first at midnight on 1 June 2024."""
+def test_home_quick_saves_the_minutes_from_midnight_on_the_short_window_start(tmp_path: Path) -> None:
+    """`--output` saves the simulated minutes, the first at midnight on timebase.SHORT_WINDOW_START."""
     saved = _saved_minutes(tmp_path)
 
-    assert saved.index[0] == pd.Timestamp(_DAY, tz=Location.bristol().timezone)
+    assert saved.index[0] == pd.Timestamp(SHORT_WINDOW_START, tz=Location.bristol().timezone)
 
 
 @pytest.mark.parametrize(
@@ -81,9 +78,9 @@ def test_home_quick_demand_is_the_days_share_of_the_annual_consumption(
     """The saved day's demand sums to the expected load's day, which the annual consumption fixes whatever the random profile."""
     saved = _saved_minutes(tmp_path, *consumption_options)
 
-    day = datetime.date.fromisoformat(_DAY)
     expected_demand = generate_load_profile(
-        expected_load, SimulationWindow(day, day, ONE_MINUTE, Location.bristol().timezone)
+        expected_load,
+        SimulationWindow(SHORT_WINDOW_START, SHORT_WINDOW_START, ONE_MINUTE, Location.bristol().timezone),
     )
     assert saved["demand_kw"].sum() == pytest.approx(expected_demand.sum())
 
