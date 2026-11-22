@@ -225,6 +225,9 @@ class SweepMode(StrEnum):
 class SweepSpec:
     """Sweep specification for parameter exploration.
 
+    A spec whose points are not all finite, its ratio, its step or a point overflowing a float,
+    is refused naming its min and max.
+
     Attributes:
         min: Minimum value, read as a finite float
         max: Maximum value, read as a finite float
@@ -250,6 +253,18 @@ class SweepSpec:
             raise ConfigurationError(
                 "SweepSpec: max must be greater than min"
             )
+        if not self._points_are_finite():
+            raise ConfigurationError(
+                f"SweepSpec: every point of a {self.steps}-step {self.mode} sweep from min {self.min!r} "
+                f"to max {self.max!r} must be finite"
+            )
+
+    def _points_are_finite(self) -> bool:
+        """Whether every point get_values gives is finite; a power too large for a float, which raises OverflowError, gives none."""
+        try:
+            return all(math.isfinite(point) for point in self.get_values())
+        except OverflowError:
+            return False
 
     def get_values(self) -> tuple[float, ...]:
         """The steps points from min to max, as a tuple, spaced as the mode says."""
