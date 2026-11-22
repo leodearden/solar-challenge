@@ -7,6 +7,7 @@ It reads each component's keys by that component's table in solar_challenge.scen
 import math
 import random
 from dataclasses import dataclass, field, fields, is_dataclass, replace
+from enum import StrEnum
 from types import MappingProxyType
 from typing import (
     Any,
@@ -199,6 +200,27 @@ class ShuffledPoolDistribution:
         return pool
 
 
+class SweepMode(StrEnum):
+    """How a sweep spaces its points from min to max: by a constant step, or by a constant ratio."""
+
+    LINEAR = "linear"
+    GEOMETRIC = "geometric"
+
+    @classmethod
+    def parse(cls, value: object) -> "SweepMode":
+        """Return the mode *value* names: a member's value, exactly, or a member itself.
+
+        Raises:
+            ConfigurationError: If *value* is anything else, naming mode, every mode and *value*.
+        """
+        if isinstance(value, str):
+            try:
+                return cls(value)
+            except ValueError:
+                pass
+        raise ConfigurationError.must_be("mode", " or ".join(member.value for member in cls), got=value)
+
+
 @dataclass(frozen=True)
 class SweepSpec:
     """Sweep specification for parameter exploration.
@@ -207,19 +229,20 @@ class SweepSpec:
         min: Minimum value, read as a finite float
         max: Maximum value, read as a finite float
         steps: Number of steps, read as a whole number of at least 2
-        mode: "geometric" or "linear" (default: geometric)
+        mode: A SweepMode, a string naming one read as it (default: geometric)
     """
 
     min: float
     max: float
     steps: int
-    mode: str = "geometric"
+    mode: SweepMode = SweepMode.GEOMETRIC
 
     def __post_init__(self) -> None:
         read_field(self, "min", as_finite_float)
         read_field(self, "max", as_finite_float)
         read_field(self, "steps", as_whole_number, Interval(2, math.inf))
-        if self.min <= 0 and self.mode == "geometric":
+        object.__setattr__(self, "mode", SweepMode.parse(self.mode))
+        if self.min <= 0 and self.mode is SweepMode.GEOMETRIC:
             raise ConfigurationError(
                 "SweepSpec: geometric mode requires min > 0"
             )
@@ -227,14 +250,10 @@ class SweepSpec:
             raise ConfigurationError(
                 "SweepSpec: max must be greater than min"
             )
-        if self.mode not in ("geometric", "linear"):
-            raise ConfigurationError(
-                f"SweepSpec: mode must be 'geometric' or 'linear', got '{self.mode}'"
-            )
 
     def get_values(self) -> list[float]:
         """Generate the sweep values."""
-        if self.mode == "geometric":
+        if self.mode is SweepMode.GEOMETRIC:
             ratio = (self.max / self.min) ** (1 / (self.steps - 1))
             return [self.min * (ratio ** i) for i in range(self.steps)]
         else:

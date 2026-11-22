@@ -42,7 +42,7 @@ from solar_challenge.fleet import (
     HomesDone,
     calculate_fleet_summary,
 )
-from solar_challenge.fleet_distribution import SweepSpec
+from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 
@@ -382,7 +382,7 @@ def _param_sweep(
     """The name of the sweep, param, its spec, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
-    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
     return param, sweep_spec, [
         (
             value,
