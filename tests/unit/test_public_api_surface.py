@@ -84,6 +84,12 @@ FROZEN_SURFACE: dict[str, str] = {
     "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationPeriod, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, output: OutputConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, tariff_config: TariffConfig | None = None, finance: FinanceConfig | None = None) -> None",
     "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
     "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": "dataclass[eq, frozen, match_args] (weather: WeatherProvider, home_simulator: HomeSimulator, parallel: bool = True, max_workers: int | None = None) -> None",
+    "FleetSimulator": "(*args, **kwargs)",
+    "HomeSimulator": "(*args, **kwargs)",
+    "FleetSimulate": "_CallableGenericAlias",
+    "HomesDone": "_CallableGenericAlias",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": "()",
     "DispatchDecision": "dataclass[eq, frozen, match_args] (charge_kw: float, discharge_kw: float, grid_charge_kw: float = 0.0) -> None",
@@ -323,6 +329,17 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "total_grid_export": "property (self) -> Series",
         "total_self_consumption": "property (self) -> Series",
         "to_aggregate_dataframe": "(self) -> DataFrame",
+    },
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
+    },
+    "FleetSimulator": {
+        "simulate": "(self, fleet: FleetConfig, start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> FleetResults",
+        "simulate_each": "(self, fleets: Sequence[FleetConfig], start_date: Timestamp, end_date: Timestamp, *, progress: Callable[[int, int], None] | None = None) -> Iterator[tuple[int, FleetResults]]",
+        "simulate_home": "(self, home: HomeConfig, start_date: Timestamp, end_date: Timestamp) -> SimulationResults",
     },
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy": {
@@ -1057,6 +1074,8 @@ EXPECTED_KIND: dict[str, str] = {
     "FlatRateTariff": "function",           # GOTCHA: CamelCase factory, NOT a class
     "GRID_SERVICES_RATE_BANDS": "constant", # GOTCHA: frozen-dataclass instance, NOT a class
     "DispatchTariffPeriod": "class",        # Enum alias — verifies clean class re-export
+    "FleetSimulate": "constant",            # GOTCHA: Callable type alias, NOT a class
+    "HomesDone": "constant",                # GOTCHA: Callable type alias, NOT a class
 }
 
 
