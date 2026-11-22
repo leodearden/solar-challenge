@@ -2,7 +2,8 @@
 """Background job manager for running simulations asynchronously.
 
 Provides a JobManager class that uses a ThreadPoolExecutor to run home and
-fleet simulations in background threads. A job's progress is held in memory
+fleet simulations in background threads, through the FleetSimulator it is
+given as its runner. A job's progress is held in memory
 as a versioned JobSnapshot, which its progress streams read; its run is
 recorded through the manager's RunStorage, running from its submit until the
 job completes it, once its save has written the run's results, or its failure
@@ -31,15 +32,13 @@ from concurrent.futures import Future, ThreadPoolExecutor
 import pandas as pd
 
 from solar_challenge.error_text import error_text_with_notes
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.fleet import FleetConfig, FleetSimulator
+from solar_challenge.home import HomeConfig
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.storage import RunRecord, RunStorage
 from solar_challenge.web.stored_runs import RUN_KINDS, RunType
 
 logger = logging.getLogger(__name__)
-
-HomeSimulator: TypeAlias = Callable[[HomeConfig, pd.Timestamp, pd.Timestamp], SimulationResults]
 
 # Reports a running job's progress: its percentage, its step and its message.
 _ProgressReport: TypeAlias = Callable[[float, str, str], None]
@@ -265,7 +264,7 @@ class JobManager:
         storage: RunStorage,
         max_workers: int = 2,
         *,
-        simulate_home: HomeSimulator,
+        runner: FleetSimulator,
         new_id: Callable[[], str] = _random_id,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -275,9 +274,9 @@ class JobManager:
             storage: The RunStorage each job's run is recorded in, from the
                 job's submit to its outcome; create_app passes the app's.
             max_workers: Maximum number of concurrent simulation threads.
-            simulate_home: Simulates one home over a date range, on the weather
-                it is bound to; create_app binds solar_challenge.home.simulate_home
-                to default_weather().
+            runner: Simulates each job's homes: a home job's one home through
+                simulate_home, a fleet job's homes as one fleet through
+                simulate, which tells the job as each home finishes.
             new_id: Returns a new, unique id on each call; each job and each run
                 takes one. Defaults to a random UUID.
             clock: Returns the time in seconds on a clock that never goes
@@ -286,7 +285,7 @@ class JobManager:
         """
         self._storage = storage
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._simulate_home = simulate_home
+        self._runner = runner
         self._new_id = new_id
         self._clock = clock
         self._lock = threading.Lock()
@@ -456,8 +455,9 @@ class JobManager:
 
         The job reports 'cancelled' and writes nothing to the RunStorage (contract C8, docs/prds/run-store-one-owner.md
         §3.7). A queued job is dropped from the queue and reports cancelled before cancel_run returns. A running job
-        stops at its runner's next progress report: a home job once its current simulation returns, a fleet job before
-        its next home. Once the job's completion has started, cancel_run waits for it to end.
+        stops at its next progress report: a home job once its simulation returns, a fleet job once a home finishes,
+        and the fleet's homes not yet started never start. Once the job's completion has started, cancel_run waits
+        for it to end.
 
         Args:
             run_id: The id of the run whose job to cancel.
@@ -766,8 +766,8 @@ class JobManager:
         """Worker function that runs a home simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
-        simulation-specific logic: running the simulation, then returning the
-        save of the run from its results through
+        simulation-specific logic: simulating the home through the runner's
+        simulate_home, then returning the save of the run from its results through
         RunStorage.save_home_run_from_results, under the name and creation
         time its submit recorded, which _run_job makes, then completes the
         run, under the job's lock.
@@ -783,7 +783,7 @@ class JobManager:
 
         def simulate(progress: _ProgressReport) -> _RunSave:
             progress(20.0, "Simulating", "Running home simulation...")
-            results = self._simulate_home(config, start_date, end_date)
+            results = self._runner.simulate_home(config, start_date, end_date)
 
             progress(90.0, "Saving", "Persisting results to storage...")
 
@@ -812,11 +812,15 @@ class JobManager:
         """Worker function that runs a fleet simulation in a background thread.
 
         Delegates lifecycle management to ``_run_job`` and focuses on the
-        fleet-specific logic: simulating each home, then returning the save of
-        the run from the fleet's results through
+        fleet-specific logic: simulating the homes as one fleet, named as the
+        run, through the runner's simulate, whose progress sink reports how
+        many homes have finished as each finishes, then returning the save of
+        the run from the runner's FleetResults through
         RunStorage.save_fleet_run_from_results, under the name and creation
         time its submit recorded, which _run_job makes, then completes the
-        run, under the job's lock.
+        run, under the job's lock. Each report is a checkpoint, so a
+        cancelled job's _JobCancelled leaves the runner from its sink, and the
+        runner starts none of the homes it has not started yet.
 
         Args:
             job_id: Unique job identifier.
@@ -828,20 +832,22 @@ class JobManager:
         start_ref = time.monotonic()
 
         def simulate(progress: _ProgressReport) -> _RunSave:
-            total = len(configs)
-            per_home_results: list[SimulationResults] = []
+            homes = len(configs)
+            progress(5.0, f"Homes 0/{homes}", f"Simulating {homes} homes...")
 
-            for i, home_config in enumerate(configs):
-                pct = (i / total) * 90.0 + 5.0  # 5% to 95%
-                progress(pct, f"Home {i + 1}/{total}", f"Simulating home {i + 1} of {total}...")
-                per_home_results.append(self._simulate_home(home_config, start_date, end_date))
+            def homes_done(done: int, total: int) -> None:
+                progress(5.0 + 90.0 * done / total, f"Homes {done}/{total}", f"Simulated {done} of {total} homes")
+
+            results = self._runner.simulate(
+                FleetConfig(homes=list(configs), name=run.name), start_date, end_date, progress=homes_done
+            )
 
             progress(97.0, "Saving", "Persisting fleet results...")
 
             def save() -> None:
                 self._storage.save_fleet_run_from_results(
                     run_id=run.id,
-                    fleet_results=FleetResults(per_home_results=per_home_results, home_configs=configs),
+                    fleet_results=results,
                     name=run.name,
                     duration_seconds=time.monotonic() - start_ref,
                     created_at=run.created_at,

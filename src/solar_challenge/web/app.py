@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Flask application factory for the Solar Challenge web dashboard."""
 
-import functools
 import logging
 import os
 from dataclasses import dataclass
@@ -10,8 +9,7 @@ from typing import Any
 
 from flask import Flask, render_template
 
-from solar_challenge.home import simulate_home
-from solar_challenge.weather import default_weather
+from solar_challenge.fleet import default_runner
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
 from solar_challenge.web.history import bp as history_bp
@@ -102,10 +100,10 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         ``solar_challenge.web.jobs.shutdown_all_managers()`` when it stops.
 
     .. note::
-        Its jobs simulate on ``default_weather()`` as resolved when create_app
-        runs, so a weather cache installed, or SOLAR_CHALLENGE_WEATHER_CACHE_DIR
-        set, after it does not reach them. The dashboard's fleet job still
-        reads that provider once per home; S16 brings it prefetch.
+        Its jobs run through ``default_runner()`` as resolved when create_app
+        runs, so they simulate on ``default_weather()`` as it was then: a
+        weather cache installed, or SOLAR_CHALLENGE_WEATHER_CACHE_DIR set,
+        after it does not reach them.
 
     Args:
         test_config: Optional configuration dict to override defaults.
@@ -189,7 +187,7 @@ def _open_store(app: Flask, default_data_dir: Path) -> None:
     app.extensions["storage"] = storage
 
     # Initialize JobManager for background simulation execution, recording its jobs' runs in the app's storage
-    job_manager = JobManager(storage, simulate_home=functools.partial(simulate_home, weather=default_weather()))
+    job_manager = JobManager(storage, runner=default_runner())
     app.extensions["job_manager"] = job_manager
 
     # Fail the runs whose jobs an earlier server left running when it stopped

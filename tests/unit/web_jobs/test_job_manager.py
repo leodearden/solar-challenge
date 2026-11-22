@@ -897,9 +897,23 @@ class TestJobManagerRuns:
         assert manager.wait_until_idle(timeout=30)
         assert _status_of(manager, job_id) == "completed"
 
-    @pytest.mark.parametrize("submit_job", [_submit_home_job, _submit_fleet_job], ids=["home", "fleet"])
+    @pytest.mark.parametrize(
+        ("submit_job", "message"),
+        [
+            pytest.param(_submit_home_job, "the simulation failed", id="home"),
+            pytest.param(
+                _submit_fleet_job,
+                "the simulation failed\nsimulating home 0 ('') of fleet 0 ('Fleet Simulation')",
+                id="fleet, with the runner's note naming the home that failed",
+            ),
+        ],
+    )
     def test_a_failed_jobs_run_is_failed_with_the_jobs_error_and_a_completion_time(
-        self, submit_job: Callable[[JobManager], str], storage: RunStorage, new_job_manager: NewJobManager
+        self,
+        submit_job: Callable[[JobManager], str],
+        message: str,
+        storage: RunStorage,
+        new_job_manager: NewJobManager,
     ) -> None:
         manager = new_job_manager(storage, a_failing_simulation, max_workers=1)
         job_id = submit_job(manager)
@@ -907,7 +921,7 @@ class TestJobManagerRuns:
 
         run = _run_of_job(manager, job_id, storage)
 
-        assert (run.status, run.error_message) == ("failed", "the simulation failed")
+        assert (run.status, run.error_message) == ("failed", message)
         assert run.completed_at is not None
 
 
