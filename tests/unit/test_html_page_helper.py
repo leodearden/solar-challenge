@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts and the figure each chart container carries.
+"""Unit tests for tests/_html_page.py, the reader of a rendered page's doctype, elements, attributes, ids, texts, headings, script texts, the text of the script carrying an id and the figure each chart container carries.
 
 Each test pins one reading rule, so an edit that weakens the reader fails here instead of
 letting a page test that uses it pass vacuously.
@@ -15,6 +15,7 @@ from tests._html_page import (
     element_count,
     element_ids,
     headings,
+    script_text_by_id,
     script_texts,
     texts,
     texts_after,
@@ -330,6 +331,40 @@ def test_style_text_is_not_a_script_text() -> None:
     page = "<script>draw();</script><style>.chart { min-height: 400px; }</style>"
 
     assert script_texts(page) == ["draw();"]
+
+
+def test_script_text_by_id_reads_the_text_of_the_script_carrying_the_id() -> None:
+    page = (
+        '<script src="/static/js/fleet-simulator.js"></script>'
+        '<script type="application/json" id="page-limits">{"fleet_size": {"low": 1}}</script>'
+        '<script id="other">draw();</script>'
+    )
+
+    assert script_text_by_id(page, "page-limits") == '{"fleet_size": {"low": 1}}'
+
+
+@pytest.mark.parametrize(
+    ("page", "found"),
+    [
+        pytest.param("<script>draw();</script>", "found 0", id="no-script-carries-it"),
+        pytest.param('<div id="page-limits">{}</div>', "found 0", id="only-another-element-carries-it"),
+        pytest.param(
+            "<script>panel.innerHTML = '<script id=\"page-limits\">{}</script>';</script>",
+            "found 0",
+            id="only-a-script-inside-script-text-carries-it",
+        ),
+        pytest.param(
+            '<script id="page-limits">{}</script><script id="page-limits">[]</script>',
+            "found 2",
+            id="two-scripts-carry-it",
+        ),
+    ],
+)
+def test_script_text_by_id_raises_unless_exactly_one_script_carries_the_id(
+    page: str, found: str
+) -> None:
+    with pytest.raises(ValueError, match=f"script element with id 'page-limits' on the page; {found}"):
+        script_text_by_id(page, "page-limits")
 
 
 def test_chart_figures_reads_the_figure_each_chart_container_carries_keyed_by_its_id() -> (

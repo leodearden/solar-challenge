@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests of solar_challenge.web.fleet_components, what the dashboard's forms accept and start at, and of the two fleet pages that render each component's card from it."""
+"""Tests of solar_challenge.web.fleet_components, what the dashboard's forms accept and start at, of the two fleet pages that render each component's card from it, and of the form pages that render their bounds and starting values from page_limits()."""
 
 import dataclasses
 import json
@@ -12,6 +12,7 @@ import pytest
 
 pytest.importorskip("flask")
 
+from flask import Flask, render_template_string
 from flask.testing import FlaskClient
 
 from solar_challenge.errors import ConfigurationError
@@ -39,7 +40,17 @@ from solar_challenge.web.fleet_components import (
     refuse_homes_outside_ranges,
 )
 from tests._css_classes import names_palette
-from tests._html_page import counts_of, element_attributes, headings
+from tests._html_page import (
+    counts_of,
+    element_attributes,
+    element_count,
+    headings,
+    script_text_by_id,
+    texts_after,
+)
+
+#: The pages whose forms render their bounds and starting values from page_limits().
+_FORM_PAGES = ("/simulate/home", "/simulate/fleet", "/scenarios/builder", "/scenarios/sweep")
 
 #: The fleet_distribution: blocks of a fleet whose every home holds a value inside each component's range.
 _HOMES_INSIDE_EVERY_RANGE: Mapping[str, Mapping[str, object]] = {
@@ -65,6 +76,28 @@ def _number_inputs(page: str, model: str) -> list[Mapping[str, str | None]]:
         for attributes in element_attributes(page, "input")
         if attributes.get("x-model.number") == model
     ]
+
+
+def _bounds_of_input(page: str, element_id: str) -> tuple[str | None, str | None]:
+    """The (min, max) of the one input of *page* whose id is *element_id*."""
+    (attributes,) = [
+        attributes for attributes in element_attributes(page, "input") if attributes.get("id") == element_id
+    ]
+    return attributes.get("min"), attributes.get("max")
+
+
+def _click_handlers(page: str, prefix: str) -> list[str | None]:
+    """The @click of each button of *page* whose @click starts with *prefix*, in page order."""
+    return [
+        attributes.get("@click")
+        for attributes in element_attributes(page, "button")
+        if (attributes.get("@click") or "").startswith(prefix)
+    ]
+
+
+def _day_choice_captions(limits: PageLimits) -> list[str]:
+    """The caption of each of *limits*' day choices: '1 year' for the full year, else '<days> days'."""
+    return ["1 year" if days == limits.full_year_days else f"{days} days" for days in limits.day_choices]
 
 
 def _fleet_homes(n_homes: int = 3, **blocks: object) -> list[HomeConfig]:
@@ -467,6 +500,20 @@ class TestPagesRenderEachComponentFromTheTable:
             for component in FLEET_COMPONENTS.values()
         ]
 
+    def test_each_std_dev_is_bounded_below_at_0_and_no_other_parameter_is_bounded(
+        self, client: FlaskClient, path: str, dists: tuple[str, ...]
+    ) -> None:
+        """Std Dev's lower bound is the grammar's own rule; Mean, Normal's clamps and Uniform's Min and Max take any number."""
+        page = client.get(path).get_data(as_text=True)
+        assert [
+            (attributes.get("min"), attributes.get("max")) for attributes in _number_inputs(page, "dist.std")
+        ] == [("0", None)] * len(FLEET_COMPONENTS)
+        assert {
+            (attributes.get("min"), attributes.get("max"))
+            for model in ("dist.mean", "dist.min", "dist.max")
+            for attributes in _number_inputs(page, model)
+        } == {(None, None)}
+
     def test_each_row_value_steps_as_its_component(
         self, client: FlaskClient, path: str, dists: tuple[str, ...]
     ) -> None:
@@ -514,3 +561,81 @@ class TestTheFleetPageColoursEachCardByItsComponent:
             f"dark:bg-component-{key}-900/20",
             f"bg-component-{key}-500",
         }
+
+
+class TestPagesRenderPageLimits:
+    """Every form page renders its bounds and starting values from page_limits(), through one channel (L1).
+
+    A context processor gives every template page_limits, and base.html writes its as_json()
+    once into each page as the #page-limits element, which the pages' scripts read.
+    """
+
+    @pytest.mark.parametrize("path", _FORM_PAGES)
+    def test_each_form_page_writes_page_limits_once_into_its_page_limits_element(
+        self, client: FlaskClient, path: str
+    ) -> None:
+        page = client.get(path).get_data(as_text=True)
+        assert element_count(page, "script", {"type": "application/json", "id": "page-limits"}) == 1
+        assert json.loads(script_text_by_id(page, "page-limits")) == page_limits().as_json()
+
+    def test_every_template_is_given_page_limits(self, app: Flask) -> None:
+        with app.test_request_context():
+            rendered = render_template_string("{{ page_limits.fleet_size.high }}")
+        assert rendered == str(page_limits().fleet_size.high)
+
+    def test_the_fleet_pages_number_of_homes_admits_the_fleet_size(self, client: FlaskClient) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        fleet_size = page_limits().fleet_size
+        assert _bounds_of_input(page, "n_homes") == (str(fleet_size.low), str(fleet_size.high))
+
+    def test_the_fleet_pages_size_slider_and_its_captions_are_the_fleet_size_slider(
+        self, client: FlaskClient
+    ) -> None:
+        page = client.get("/simulate/fleet").get_data(as_text=True)
+        low, high, step = page_limits().fleet_size_slider
+        (slider,) = [
+            attributes
+            for attributes in element_attributes(page, "input")
+            if attributes.get("id") == "n_homes_range"
+        ]
+        assert (slider.get("min"), slider.get("max"), slider.get("step")) == (str(low), str(high), str(step))
+        assert texts_after(page, "Number of Homes", 2) == [str(low), str(high)]
+
+    @pytest.mark.parametrize(
+        ("path", "days_variable"),
+        [
+            pytest.param("/simulate/home", "formData.period_days", id="home"),
+            pytest.param("/simulate/fleet", "periodDays", id="fleet"),
+        ],
+    )
+    def test_the_period_buttons_offer_each_day_choice_the_full_year_captioned_1_year(
+        self, client: FlaskClient, path: str, days_variable: str
+    ) -> None:
+        """One button per day choice, in order, each choosing its days; the buttons follow the Custom range option."""
+        page = client.get(path).get_data(as_text=True)
+        limits = page_limits()
+        assert texts_after(page, "Custom range", len(limits.day_choices)) == _day_choice_captions(limits)
+        assert _click_handlers(page, f"{days_variable} = ") == [
+            f"{days_variable} = {days}" for days in limits.day_choices
+        ]
+
+    def test_the_builders_number_of_homes_admits_the_fleet_size(self, client: FlaskClient) -> None:
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        fleet_size = page_limits().fleet_size
+        assert _bounds_of_input(page, "builder_n_homes") == (str(fleet_size.low), str(fleet_size.high))
+
+    def test_the_builders_period_buttons_are_the_period_presets_each_setting_the_period_its_title_names(
+        self, client: FlaskClient
+    ) -> None:
+        """The buttons follow the Period section's title, in period_presets order."""
+        page = client.get("/scenarios/builder").get_data(as_text=True)
+        titles = list(page_limits().period_presets)
+        assert texts_after(page, "Period", len(titles)) == titles
+        assert _click_handlers(page, "setPeriod(") == [f"setPeriod({json.dumps(title)})" for title in titles]
+
+    def test_the_home_pages_pv_capacity_slider_spans_the_pv_components_value_range(
+        self, client: FlaskClient
+    ) -> None:
+        page = client.get("/simulate/home").get_data(as_text=True)
+        value_range = page_limits().components["pv"].value_range
+        assert _bounds_of_input(page, "pv_kw") == (str(value_range.low), str(value_range.high))

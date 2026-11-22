@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured read access to a rendered HTML page: the document type it declares, its
 elements with the attributes and ids they carry, the texts it shows, its headings and the
-text of its scripts, in document order, the figure each of its chart containers carries,
-and how many times each of some given texts occurs among them.
+text of its scripts, in document order, the text of the script carrying an id, the figure
+each of its chart containers carries, and how many times each of some given texts occurs
+among them.
 
 A text is one run of character data between two tags, outside script and style elements,
 with character references decoded and whitespace collapsed. Blank runs are dropped, and an
@@ -14,7 +15,7 @@ Usage::
 
     from tests._html_page import (
         chart_figures, counts_of, doctype, element_attributes, element_count, element_ids,
-        headings, script_texts, texts, texts_after,
+        headings, script_text_by_id, script_texts, texts, texts_after,
     )
 
     page = response.get_data(as_text=True)
@@ -28,6 +29,7 @@ Usage::
     subjects = ("PV Capacity", "Battery Capacity")
     assert counts_of(headings(page), subjects) == dict.fromkeys(subjects, 1)
     inline_scripts = [text for text in script_texts(page) if text]
+    limits = json.loads(script_text_by_id(page, "page-limits"))
     figure = chart_figures(page)["chart-battery-soc"]
 """
 
@@ -174,6 +176,28 @@ def counts_of(items: Sequence[str], keys: tuple[str, ...]) -> dict[str, int]:
 def script_texts(page: str) -> list[str]:
     """The text of each script element of *page*, in document order; an external script's text is ''."""
     return _read(page).script_texts
+
+
+def script_text_by_id(page: str, element_id: str) -> str:
+    """The text of the one script element of *page* whose id is *element_id*, such as a JSON data block's.
+
+    Raises ValueError, rather than pick one or read none, unless exactly one script element
+    carries the id; another element carrying it does not count, nor does a script inside
+    script text.
+    """
+    reader = _read(page)
+    scripts = [carried for name, carried in reader.elements if name == "script"]
+    carrying_the_id = [
+        text
+        for carried, text in zip(scripts, reader.script_texts, strict=True)
+        if carried.get("id") == element_id
+    ]
+    if len(carrying_the_id) != 1:
+        raise ValueError(
+            f"Expected exactly one script element with id {element_id!r} on the page;"
+            f" found {len(carrying_the_id)}"
+        )
+    return carrying_the_id[0]
 
 
 def chart_figures(page: str) -> dict[str, str]:
