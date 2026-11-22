@@ -190,7 +190,6 @@ class TestFleetSummaryRows:
         assert [metric for metric, _value in rows if metric in money_metrics] == []
 
 
-@pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestGridChargeForecastRows:
     """Each summary table says which forecasts sized its grid charge, and has no such row when nothing grid-charged."""
 
@@ -214,6 +213,7 @@ class TestGridChargeForecastRows:
         assert "Grid-charge forecast" not in metrics
 
 
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestPrintedSummaryTables:
     """Tests of the metrics each simulate command's summary table prints on stdout, read row by row."""
 
