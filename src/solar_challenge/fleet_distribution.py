@@ -20,7 +20,7 @@ from typing import (
 )
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.boolean_fields import as_boolean
+from solar_challenge.boolean_fields import as_boolean, is_boolean
 from solar_challenge.dataclass_instance import DataclassInstance
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
@@ -516,7 +516,7 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
         if component is None or block.presence is None:
             continue
         spec = component.draws.get(block.presence)
-        if isinstance(spec, (int, float, str)):
+        if isinstance(spec, (*_NUMBER_TYPES, str)):
             block.asks_for_component(spec, f"{name}.{block.presence}")
 
 
@@ -532,6 +532,9 @@ _GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKin
 
 #: The kinds whose draws are numbers: a count is drawn as a number is, then converted.
 _NUMBER_KINDS: frozenset[FieldKind] = frozenset({FieldKind.NUMBER, FieldKind.COUNT})
+
+#: The Python types of a number: the scalar form's spec, which gives it every home, and a value a home draws.
+_NUMBER_TYPES: tuple[type[int], type[float]] = (int, float)
 
 
 @dataclass(frozen=True)
@@ -553,7 +556,7 @@ class DrawnKindRule:
 #: A number or count field's rule. A value it lists is no string; the home's type reads it as a number.
 _NUMBER_KIND_RULE = DrawnKindRule(
     spec_types=(
-        int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
+        *_NUMBER_TYPES, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
         ShuffledPoolDistribution, ProportionalDistribution,
     ),
     admits=lambda value, row: not isinstance(value, str),
@@ -738,16 +741,21 @@ class DistributionType:
         Raises:
             ConfigurationError: If *spec* is not of the type, naming the type and *spec*: a
                 dataclass type's spec is an instance of its spec_type, the scalar form's a null
-                or a number.
+                or a number, as _is_a_number_spec says.
         """
         if self.is_scalar_form:
-            of_the_type = spec is None or isinstance(spec, (int, float))
+            of_the_type = spec is None or _is_a_number_spec(spec)
         else:
             of_the_type = isinstance(spec, self.spec_type)
         if not of_the_type:
             raise ConfigurationError(f"DistributionType {self.name!r} cannot write {spec!r}, which is no spec of its type")
         held = (spec,) if self.is_scalar_form else tuple(getattr(spec, key) for key in self.spec_keys)
         return {"type": self.name, **{key: _written_value(value) for key, value in zip(self.spec_keys, held, strict=True)}}
+
+
+def _is_a_number_spec(spec: object) -> bool:
+    """Whether *spec* is a number, the scalar form's spec: of _NUMBER_TYPES but no bool, an int that the grammar refuses as a number."""
+    return isinstance(spec, _NUMBER_TYPES) and not is_boolean(spec)
 
 
 def _written_value(value: object) -> object:
@@ -909,7 +917,7 @@ def write_distribution_spec(spec: DistributionSpec) -> object:
     Raises:
         ConfigurationError: If no record writes *spec*, naming it and the table's types.
     """
-    if spec is None or isinstance(spec, (int, float, str)):
+    if spec is None or isinstance(spec, str) or _is_a_number_spec(spec):
         return spec
     for distribution_type in DISTRIBUTION_TYPES.values():
         if isinstance(spec, distribution_type.spec_type):
@@ -1150,11 +1158,11 @@ def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> Spe
             and the value; or as _nearest_count does, for a normal or uniform distribution with
             no whole number from its min to its max.
     """
-    if isinstance(spec, (int, float)):
+    if isinstance(spec, _NUMBER_TYPES):
         return spec
-    if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
+    if isinstance(value, _NUMBER_TYPES) and isinstance(spec, (NormalDistribution, UniformDistribution)):
         return _nearest_count(value, spec, path)
-    if isinstance(value, (int, float)) and isinstance(spec, ProportionalDistribution):
+    if isinstance(value, _NUMBER_TYPES) and isinstance(spec, ProportionalDistribution):
         _refuse_unless_finite(value, path)
         return _nearest_whole_number(value)
     return value
@@ -1266,7 +1274,7 @@ class _DistributionSampler:
     def _next_value(self, spec: DistributionSpec, setting: str) -> SpecValue:
         if setting in self._drawn_ahead:
             return self._next_value_drawn_ahead(setting)
-        if spec is None or isinstance(spec, (str, int, float)):
+        if spec is None or isinstance(spec, (str, *_NUMBER_TYPES)):
             return spec
         if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
             return spec.draw(self._rng)

@@ -305,20 +305,24 @@ class TestTheWriterIsTheParsersInverse:
             pytest.param("uniform", NormalDistribution(mean=5.0, std=1.0, min=2.0, max=8.0), id="uniform-given-a-normal"),
             pytest.param("normal", UniformDistribution(min=2.0, max=8.0), id="normal-given-a-uniform"),
             pytest.param("fixed", "GSHP", id="fixed-given-a-choice"),
+            pytest.param("fixed", True, id="fixed-given-a-bool"),
             pytest.param("fixed", UniformDistribution(min=2.0, max=8.0), id="fixed-given-a-uniform"),
         ],
     )
     def test_a_type_refuses_to_write_a_spec_of_another_type_naming_both(self, name: str, spec: Any) -> None:
-        """A type writes only its own spec, the scalar form's a null or a number, else none build reads back as it."""
+        """A type writes only its own spec, the scalar form's a null or a number, never a bool, which build refuses as a number; else none build reads back as it."""
         with pytest.raises(ConfigurationError) as refusal:
             DISTRIBUTION_TYPES[name].write(spec)
 
         assert repr(name) in str(refusal.value)
         assert repr(spec) in str(refusal.value)
 
-    def test_a_value_that_is_no_spec_is_refused_naming_it(self) -> None:
-        not_a_spec: Any = SweepSpec(min=0.5, max=2.0, steps=3)
-
+    @pytest.mark.parametrize(
+        "not_a_spec",
+        [pytest.param(SweepSpec(min=0.5, max=2.0, steps=3), id="a-sweep"), pytest.param(True, id="a-bool")],
+    )
+    def test_a_value_that_is_no_spec_is_refused_naming_it(self, not_a_spec: Any) -> None:
+        """A sweep is a multiplier, not a spec, and a bool is an int the grammar refuses as a number."""
         with pytest.raises(ConfigurationError) as refusal:
             write_distribution_spec(not_a_spec)
 
