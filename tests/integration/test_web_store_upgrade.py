@@ -273,8 +273,8 @@ def test_a_fleet_run_stored_with_a_seg_revenue_pair_renders_without_it_once_migr
     """B15: pre_975_seg_fleet's summary, in its run directory and its runs row alike, loses the pair; its results page answers 200.
 
     The second `web migrate` finds the store at SCHEMA_VERSION and so applies no step: it checks
-    that a migrated store is left alone. v6's own idempotence is
-    tests/unit/test_web_run_document_steps.py's test_every_step_is_idempotent_on_the_fixture's.
+    that a migrated store is left alone. v6's own idempotence is checked by
+    tests/unit/test_web_run_document_steps.py::test_every_step_is_idempotent_on_the_fixture.
     """
     (run_id,) = [run_id for run_id, name in legacy_store.stored_runs.items() if name == "pre_975_seg_fleet"]
     rows = {row["id"]: row for row in _history_rows(dashboard.test_client())}
