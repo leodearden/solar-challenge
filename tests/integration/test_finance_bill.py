@@ -44,7 +44,7 @@ def _make_summary(
     total_import_cost_gbp: float = 276.0,   # 1200 kWh × 23 p/kWh
     total_export_revenue_gbp: float = 73.8,  # 1800 kWh × 4.1 p/kWh
     net_cost_gbp: float = 202.2,             # 276.0 - 73.8
-    simulation_days: int = 365,
+    days: int = 365,
     seg_revenue_gbp: Optional[float] = 73.8,
     pricing: Optional[RunPricing] = RunPricing(0.23, 4.1),
 ) -> SummaryStatistics:
@@ -65,12 +65,11 @@ def _make_summary(
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=simulation_days,
+        window=make_window(days=days),
         total_import_cost_gbp=total_import_cost_gbp,
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
         seg_revenue_gbp=seg_revenue_gbp,
-        window=make_window(days=simulation_days),
         pricing=pricing,
     )
 
@@ -380,7 +379,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
     def test_full_year_no_warning(self) -> None:
         """simulation_days=365 must not emit any warning."""
-        summary = _make_summary(simulation_days=365)
+        summary = _make_summary(days=365)
         finance = _make_finance()
 
         with warnings.catch_warnings():
@@ -409,7 +408,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         net_cost_30 = (276.0 - 73.8) / scale_factor
 
         summary_30 = _make_summary(
-            simulation_days=30,
+            days=30,
             total_generation_kwh=gen_30,
             total_demand_kwh=demand_30,
             total_self_consumption_kwh=sc_30,
@@ -421,7 +420,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
             seg_revenue_gbp=export_rev_30,
         )
 
-        summary_365 = _make_summary(simulation_days=365)
+        summary_365 = _make_summary(days=365)
         finance = _make_finance()
 
         bill_30 = householder_bill(
@@ -1034,7 +1033,7 @@ class TestHouseholderBillWrapperEquivalence:
         """
         finance = _make_finance(standing_charge_pence_per_day=60.0)
         summary = _make_summary(
-            simulation_days=30,
+            days=30,
             total_import_cost_gbp=22.68,
             total_export_revenue_gbp=6.07,
             net_cost_gbp=16.61,
@@ -1075,7 +1074,7 @@ class TestHouseholderBillWrapperEquivalence:
             retail_baseline_rate_pence_per_kwh=23.0,
         )
         summary = _make_summary(
-            simulation_days=365,
+            days=365,
             total_generation_kwh=4000.0,
             total_demand_kwh=3000.0,
             total_self_consumption_kwh=2400.0,

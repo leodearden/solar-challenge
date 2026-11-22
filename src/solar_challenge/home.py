@@ -439,7 +439,8 @@ class SummaryStatistics:
     self_consumption_ratio: float  # self_consumption / generation
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
-    simulation_days: int
+    # The window the totals were computed over, as calculate_summary takes it from the results.
+    window: SimulationWindow
     total_import_cost_gbp: float  # total cost of grid imports in £
     total_export_revenue_gbp: float  # total revenue from grid exports in £
     net_cost_gbp: float  # net cost (import - export) in £
@@ -454,8 +455,6 @@ class SummaryStatistics:
     # Energy the battery drew from the grid, before its charge losses: a part of both
     # total_battery_charge_kwh and total_grid_import_kwh.
     total_grid_charge_kwh: float = 0.0
-    # The window the totals were computed over, whose days simulation_days is.
-    window: Optional[SimulationWindow] = None
     # How the run's grid flows were priced, None when that is unknown.
     pricing: Optional[RunPricing] = None
     # The forecast that sized the run's grid charge in cheap periods; None when the run did
@@ -463,7 +462,12 @@ class SummaryStatistics:
     grid_charge_forecast: Optional[GridChargeForecast] = None
 
     def __post_init__(self) -> None:
-        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, and, when a window is set, a simulation_days other than its days."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and a total_battery_discharge_kwh above the self-consumption that counts it."""
+        if not isinstance(self.window, SimulationWindow):
+            raise ValueError(
+                "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
+                f"calculate_summary takes from the results: got window={self.window!r}"
+            )
         grid_charge = self.total_grid_charge_kwh
         if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
             raise ValueError(
@@ -481,13 +485,11 @@ class SummaryStatistics:
                 f"got total_battery_discharge_kwh={discharge!r}, "
                 f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}"
             )
-        window = self.window
-        if window is not None and self.simulation_days != window.days:
-            raise ValueError(
-                "SummaryStatistics' simulation_days is the number of calendar days its window covers: "
-                f"got simulation_days={self.simulation_days!r} for a window of {window.days} days, "
-                f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
-            )
+
+    @property
+    def simulation_days(self) -> int:
+        """The number of calendar days the summary's window covers."""
+        return self.window.days
 
     @property
     def total_pv_charge_kwh(self) -> float:
@@ -984,7 +986,6 @@ def calculate_summary(
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = heat_pump_load_ratio(heat_pump_load_kwh=total_heat_pump_kwh, demand_kwh=total_demand)
 
-    window = results.window
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -998,7 +999,7 @@ def calculate_summary(
         self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
         grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
         export_ratio=_share(total_export, total_gen),
-        simulation_days=window.days,
+        window=results.window,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
@@ -1009,7 +1010,6 @@ def calculate_summary(
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
-        window=window,
         pricing=results.pricing,
         grid_charge_forecast=results.grid_charge_forecast,
     )

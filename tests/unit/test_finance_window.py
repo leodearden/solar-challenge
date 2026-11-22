@@ -2,9 +2,10 @@
 """Finance bills a summary's totals over the window they cover (B6, D27 invariant 8).
 
 householder_bill and bill_distribution bill over their summaries' own day count and
-refuse any other, refuse a summary with no window and summaries over different
-windows, and householder_bill refuses an own-use outside 0 to the window's
-demand with the ledger's invariants, naming it as passed.
+refuse any other, and summaries over different windows, and householder_bill
+refuses an own-use outside 0 to the window's demand with the ledger's invariants,
+naming it as passed. A summary always carries its window: SummaryStatistics refuses
+one without (tests/unit/test_home.py).
 `finance run` bills the day count of the summaries its fleet simulator returns.
 
 A bill is the window's year, by one rule with no threshold and no warning: the
@@ -15,7 +16,6 @@ homes cover different windows.
 """
 from __future__ import annotations
 
-import dataclasses
 import math
 import warnings
 from collections.abc import Callable
@@ -109,22 +109,6 @@ class TestOneWindowPerDistribution:
 
         assert repr(january_2021.window) in str(refusal.value)
         assert repr(january_2024.window) in str(refusal.value)
-
-
-class TestWindowlessSummaryRefused:
-    """A summary with no window has no days to bill over: calculate_summary sets the window."""
-
-    def test_householder_bill_refuses_a_summary_with_no_window(self) -> None:
-        windowless = dataclasses.replace(_summary(days=365), window=None)
-
-        with pytest.raises(ValueError, match=r"window.*calculate_summary"):
-            _householder_bill(windowless, 365)
-
-    def test_bill_distribution_refuses_a_summary_with_no_window(self) -> None:
-        windowless = dataclasses.replace(_summary(days=365), window=None)
-
-        with pytest.raises(ValueError, match=r"window.*calculate_summary"):
-            bill_distribution([windowless], _finance(), 365)
 
 
 class TestOwnUseWithinTheWindowsDemand:

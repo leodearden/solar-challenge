@@ -87,12 +87,6 @@ class TestAnnualise:
 
         assert annualise(summary).scale == summary.window.annualisation_scale
 
-    def test_a_summary_with_no_window_is_refused_naming_calculate_summary(self) -> None:
-        windowless = dataclasses.replace(_thirty_day_summary(), window=None)
-
-        with pytest.raises(ValueError, match=r"window.*calculate_summary"):
-            annualise(windowless)
-
     def test_a_summary_with_no_pricing_is_refused_naming_calculate_summary(self) -> None:
         unpriced = dataclasses.replace(_thirty_day_summary(), pricing=None)
 

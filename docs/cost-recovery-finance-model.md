@@ -135,9 +135,9 @@ baseline makes `bill()`'s effective rate, `baseline_import_cost_gbp / demand_kwh
 the retail rate, which is why `self_consumption_saving_gbp` below is priced at retail.
 
 The window is the summary's own (`SummaryStatistics.window`, which `calculate_summary`
-sets).  `householder_bill` raises `ValueError` for a summary with no window, naming
-`calculate_summary`, and for a `simulation_days` other than the summary's own (INV-8),
-naming both.  `bill_distribution` also refuses
+sets, and without which `SummaryStatistics` refuses to be built, naming `calculate_summary`).
+`householder_bill` raises `ValueError` for a `simulation_days` other than the summary's
+own (INV-8), naming both.  `bill_distribution` also refuses
 summaries over different windows, naming the first position that differs and both
 windows, and names their one window in `BillDistribution.annualised_from`
 (`tests/unit/test_finance_window.py`).

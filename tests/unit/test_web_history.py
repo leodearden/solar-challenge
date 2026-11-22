@@ -355,7 +355,7 @@ class TestRunsAPI:
         ("damaged_summary_json", "field"),
         [
             pytest.param(
-                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
                 "retired_figure",
                 id="summary-holds-a-key-no-field-has",
             ),

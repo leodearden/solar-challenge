@@ -532,31 +532,14 @@ DEFAULT_SPREADSHEET_SELF_CONSUMPTION: float = 0.70
 # ---------------------------------------------------------------------------
 
 
-def _summary_window(summary: "SummaryStatistics") -> SimulationWindow:
-    """The window *summary*'s totals cover.
-
-    Raises:
-        ValueError: If its window is None, which only a hand-built summary has,
-            naming calculate_summary, which sets it.
-    """
-    window = summary.window
-    if window is None:
-        raise ValueError(
-            "finance bills a summary's totals over the window they cover, and this SummaryStatistics' "
-            "window is None: build it with calculate_summary, which sets its window, or set window "
-            f"to the SimulationWindow its {summary.simulation_days} days cover"
-        )
-    return window
-
-
 def _require_summary_days(simulation_days: int, summary: "SummaryStatistics") -> None:
     """Refuse a *simulation_days* other than the days *summary*'s window covers, the days its bill scales by (INV-8).
 
     Raises:
         ValueError: Naming both day counts and the first and last day of the
-            summary's window; or as :func:`_summary_window` does.
+            summary's window.
     """
-    window = _summary_window(summary)
+    window = summary.window
     if simulation_days != window.days:
         raise ValueError(
             "a bill is computed over its summary's own days (INV-8): "
@@ -570,10 +553,9 @@ def _one_window(summaries: Sequence["SummaryStatistics"]) -> SimulationWindow:
 
     Raises:
         ValueError: If a summary's window differs from the first's, naming the
-            first such position and both windows; or as :func:`_summary_window`
-            does.
+            first such position and both windows.
     """
-    windows = [_summary_window(summary) for summary in summaries]
+    windows = [summary.window for summary in summaries]
     first = windows[0]
     for position, window in enumerate(windows):
         if window != first:
@@ -690,9 +672,8 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
     annualisation_scale, year_days / days, whatever the window's length.
 
     Raises:
-        ValueError: If the summary has no window (:func:`_summary_window`) or
-            no pricing (:func:`_summary_pricing`), naming the missing field and
-            calculate_summary, which sets both.
+        ValueError: If the summary has no pricing (:func:`_summary_pricing`),
+            naming the missing field and calculate_summary, which sets it.
         ConfigurationError: If one of ANALYSIS_ONLY_FORECASTS, perfect_foresight,
             sized the summary's grid charge (:func:`_refuse_an_analysis_only_forecast`):
             it reads the run's own future, so no board figure may use it.
@@ -700,7 +681,7 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
     _refuse_an_analysis_only_forecast(
         summary.grid_charge_forecast, held_as="this SummaryStatistics' grid_charge_forecast"
     )
-    window = _summary_window(summary)
+    window = summary.window
     scale = window.annualisation_scale
     return AnnualPhysics(
         window=window,
@@ -1223,10 +1204,10 @@ def householder_bill(
         A fully computed, frozen BillBreakdown (delegated to :func:`bill`).
 
     Raises:
-        ValueError: If the summary has no window; if *simulation_days* is not
-            the summary's own day count (INV-8), naming both; if
-            *annual_self_consumption_kwh* is negative or not finite (L1), or
-            above the summary's ``total_demand_kwh`` (L2), on either basis,
+        ValueError: If *simulation_days* is not the summary's own day count
+            (INV-8), naming both; if *annual_self_consumption_kwh* is negative
+            or not finite (L1), or above the summary's ``total_demand_kwh``
+            (L2), on either basis,
             naming the invariant and the figures as passed; if the summary has
             no pricing, naming calculate_summary (:func:`_summary_pricing`); or
             if the home's ledger refuses its year, naming the invariant and its
@@ -1573,11 +1554,11 @@ def bill_distribution(
         homes' grid charge.
 
     Raises:
-        ValueError: If ``summaries`` is empty; if a summary has no window; if
-            the summaries cover different windows, naming the first position
-            whose window differs and both windows; if *simulation_days* is
-            not the summaries' own day count (INV-8), naming both; or if a
-            summary has no pricing, naming calculate_summary.
+        ValueError: If ``summaries`` is empty; if the summaries cover
+            different windows, naming the first position whose window differs
+            and both windows; if *simulation_days* is not the summaries' own
+            day count (INV-8), naming both; or if a summary has no pricing,
+            naming calculate_summary.
         ConfigurationError: If the perfect_foresight forecast sized a
             summary's grid charge, as :func:`annualise` refuses it.
     """

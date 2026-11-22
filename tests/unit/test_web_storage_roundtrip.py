@@ -64,6 +64,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -125,6 +126,10 @@ def _make_simulation_results(
     )
 
 
+_ONE_JUNE_DAY = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), timedelta(minutes=1), "Europe/London")
+"""The window of _make_simulation_results' rows: 1 June 2024 on a Europe/London minute clock."""
+
+
 def _make_summary(
     include_heat_pump: bool = False,
     strategy_name: str = "self_consumption",
@@ -143,7 +148,7 @@ def _make_summary(
         self_consumption_ratio=0.6,
         grid_dependency_ratio=0.25,
         export_ratio=0.4,
-        simulation_days=1,
+        window=_ONE_JUNE_DAY,
         total_import_cost_gbp=5.0,
         total_export_revenue_gbp=3.0,
         net_cost_gbp=2.0,
@@ -193,8 +198,8 @@ def _fleet_results_with_a_later_home_demand_made_nan(first_name: str, later_name
 
 
 def _json_field_tree(obj: Any) -> Any:
-    """Return a dataclass's field tree as JSON gives it back."""
-    return json.loads(json.dumps(dataclasses.asdict(obj)))
+    """Return a dataclass's field tree, as field_tree writes it, as JSON gives it back."""
+    return json.loads(json.dumps(field_tree(obj)))
 
 
 def _read_json(path: Path) -> Any:

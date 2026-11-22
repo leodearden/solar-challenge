@@ -41,7 +41,9 @@ dispatch ignores, and reports each value it rewrites, with the value it holds no
 battery's grid_charging that its run ignored on a tariff with no cheap period, one whose periods
 all charge the same rate, and reports each value it rewrites the same way. v5 sets each summary
 saved before summaries carried a window to the window of its run's stored time series, as
-calculate_summary took it from the same results' index, and reports none.
+calculate_summary took it from the same results' index, and drops each summary's simulation_days,
+reporting only a day count other than its window's days; v2 keeps a summary's simulation_days
+for it, as _RETIRED_KEYS_A_LATER_STEP_READS names.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -862,21 +864,34 @@ def _each_document(
     )
 
 
+_SIMULATION_DAYS = "simulation_days"
+"""The key of the day count a SummaryStatistics stored before format 5 holds, the days of its window; v5 drops it."""
+
+_RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
+    {SummaryStatistics: frozenset({_SIMULATION_DAYS})}
+)
+"""By dataclass, each key at the root of its stored object that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it."""
+
+
 def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
     """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
 
     Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys.
+    A key _RETIRED_KEYS_A_LATER_STEP_READS names for that dataclass is kept, unreported, for the
+    later step that reads it.
     """
     dropped: list[DroppedValue] = []
 
     def document_without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
         content, unknown_keys = without_unknown_keys(document.content, cls)
+        kept_keys = _RETIRED_KEYS_A_LATER_STEP_READS.get(cls, frozenset())
+        kept = {key.path: key.value for key in unknown_keys if key.path in kept_keys}
         dropped.extend(
             DroppedValue(document.run_id, document.name, key.path, key.value)
             for key in unknown_keys
-            if key.value is not None
+            if key.value is not None and key.path not in kept
         )
-        return replace(document, content=content)
+        return replace(document, content={**content, **kept} if kept else content)
 
     brought_forward = _each_document(run_type, documents, document_without_unknown_keys)
     return StepResult(documents=brought_forward, dropped=tuple(dropped))
@@ -1013,13 +1028,15 @@ def _periods_charge_one_rate(tariff: Any) -> bool:
 
 
 def _summary_windows_from_their_time_series(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """v5's step: *documents* with each SummaryStatistics document lacking a window given the window of the time series it summarises, and nothing reported.
+    """v5's step: *documents* with each SummaryStatistics document given a window and rid of its simulation_days, as _summary_at_format_5 brings it forward, and each day count it dropped that differs from its window's days.
 
     A home run's summary summarises its data.parquet, and a fleet run's home_summaries[i] its
     homes/home_i.parquet; each window is read through *documents*' time_series, so a summary
     holding one reads no series. calculate_summary took a summary's window from the index of the
-    same results its run stored, so the window is the one the run had. A fleet run's summary,
-    its FleetSummary, and every config are left as they are.
+    same results its run stored, so the window is the one the run had, and a stored day count
+    other than its days, such as one counted across the autumn clock change, is the one value
+    the run's page shows differently. A fleet run's summary, its FleetSummary with its
+    simulation_days, and every config are left as they are.
 
     Raises:
         StoredRunUnreadable: The time series of a summary lacking a window cannot be read, as
@@ -1027,11 +1044,45 @@ def _summary_windows_from_their_time_series(run_type: RunType, documents: Stored
     """
     time_series = documents.time_series
     if run_type == "home":
-        return StepResult(replace(documents, summary=_with_a_window(documents.summary, time_series, _HOME_TIME_SERIES)))
-    home_summaries = tuple(
-        _with_a_window(summary, time_series, _home_time_series(index)) for index, summary in enumerate(documents.home_summaries)
+        summary, dropped = _summary_at_format_5(documents.summary, time_series, _HOME_TIME_SERIES)
+        return StepResult(replace(documents, summary=summary), dropped=dropped)
+    brought_forward = [
+        _summary_at_format_5(summary, time_series, _home_time_series(index))
+        for index, summary in enumerate(documents.home_summaries)
+    ]
+    return StepResult(
+        replace(documents, home_summaries=tuple(summary for summary, _ in brought_forward)),
+        dropped=tuple(value for _, dropped in brought_forward for value in dropped),
     )
-    return StepResult(replace(documents, home_summaries=home_summaries))
+
+
+def _summary_at_format_5(
+    summary: StoredDocument, time_series: StoredTimeSeries, name: str
+) -> tuple[StoredDocument, tuple[DroppedValue, ...]]:
+    """*summary*, a stored SummaryStatistics object, given a window by _with_a_window and rid of its simulation_days; and the DroppedValue of that day count when it is not null and is not the window's days.
+
+    Any other content is left as it is.
+
+    Raises:
+        StoredRunUnreadable: As _with_a_window does.
+    """
+    summary = _with_a_window(summary, time_series, name)
+    content = summary.content
+    if not isinstance(content, dict) or _SIMULATION_DAYS not in content:
+        return summary, ()
+    days = content[_SIMULATION_DAYS]
+    without_days = replace(summary, content={key: value for key, value in content.items() if key != _SIMULATION_DAYS})
+    if days is None or days == _stored_window_days(content["window"]):
+        return without_days, ()
+    return without_days, (DroppedValue(summary.run_id, summary.name, _SIMULATION_DAYS, days),)
+
+
+def _stored_window_days(window: Any) -> int | None:
+    """The days of *window*, a stored SimulationWindow object, read as the strict reader reads it; None when it does not read as one."""
+    try:
+        return read_field_tree(window, SimulationWindow).days
+    except FieldTreeRefused:
+        return None
 
 
 def _with_a_window(summary: StoredDocument, time_series: StoredTimeSeries, name: str) -> StoredDocument:
@@ -1070,7 +1121,8 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     ),
     RunDocumentStep(
         5,
-        "Set each stored summary saved before summaries carried a window to the window of its run's stored time series",
+        "Set each stored summary saved before summaries carried a window to the window of its run's stored time "
+        "series, and drop each summary's simulation_days, its window's days",
         _summary_windows_from_their_time_series,
     ),
 )

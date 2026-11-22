@@ -209,7 +209,6 @@ def test_finance_report_renders_flex_value_block() -> None:
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=365,
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,

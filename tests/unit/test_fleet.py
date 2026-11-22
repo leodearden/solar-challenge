@@ -48,6 +48,9 @@ from tests._fleet_runner import (
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import synthetic_june_weather
 
+_ONE_JUNE_DAY = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), ONE_MINUTE, "Europe/London")
+"""A one-day window, 1 June 2024 on a Europe/London minute clock, for summaries built by hand."""
+
 
 class TestFleetConfigBasics:
     """Test FLEET-001: FleetConfig functionality."""
@@ -576,7 +579,7 @@ class TestFleetSummary:
             self_consumption_ratio=0.75,
             grid_dependency_ratio=0.5,
             export_ratio=0.25,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=0.75,
             total_export_revenue_gbp=0.125,
             net_cost_gbp=0.625,
@@ -595,7 +598,7 @@ class TestFleetSummary:
             self_consumption_ratio=0.125,
             grid_dependency_ratio=0.75,
             export_ratio=0.875,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=1.75,
             net_cost_gbp=-0.25,
@@ -614,7 +617,7 @@ class TestFleetSummary:
             self_consumption_ratio=0.25,
             grid_dependency_ratio=0.375,
             export_ratio=0.75,
-            simulation_days=1,
+            window=_ONE_JUNE_DAY,
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=3.75,
             net_cost_gbp=-2.25,

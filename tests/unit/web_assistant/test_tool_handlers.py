@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the AI assistant's tool handlers, called directly rather than from a chat turn."""
 
-import dataclasses
 import json
 import logging
 import time
@@ -607,7 +606,7 @@ class TestListRecentRuns:
         [
             pytest.param("{not json", id="summary-not-json"),
             pytest.param(
-                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
                 id="summary-with-a-key-no-field-has",
             ),
             pytest.param(
