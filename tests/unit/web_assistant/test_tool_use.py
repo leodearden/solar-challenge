@@ -14,6 +14,7 @@ from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
+from unittest.mock import NonCallableMagicMock
 
 import pytest
 
@@ -46,12 +47,14 @@ from solar_challenge.web.assistant import (
 )
 from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.storage import RunStorage
 
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._run_summaries import home_summary
 from tests._sse import SseFrame, parse_sse_events
-from tests._web_app import database_of, point_store_config_at_a_missing_directory
+from tests._web_app import BuildApp, database_of, point_store_config_at_a_missing_directory
 from tests.unit.web_assistant._fakes import (
     FakeAnthropic,
     install_fake_anthropic,
@@ -86,6 +89,12 @@ def tool_context(tmp_path: Path, **overrides: Any) -> ToolContext:
         results_url=_results_url_for_test,
     )
     return replace(defaults, **overrides)
+
+
+@pytest.fixture
+def jm() -> NonCallableMagicMock:
+    """The autospecced JobManager a class that overrides jobs builds its apps on; a test configures it before it posts."""
+    return autospecced_job_manager()
 
 
 @pytest.fixture
@@ -360,19 +369,19 @@ class TestToolUseLoop:
 
     def test_every_tool_call_a_capped_turn_runs_has_its_result_sent_to_the_model(
         self,
-        client: FlaskClient,
-        app: Flask,
+        build_app: BuildApp,
+        tmp_path: Path,
         anthropic_api: FakeAnthropic,
     ) -> None:
         """A model that calls a trigger tool on every reply has MAX_TOOL_ITERATIONS of the calls
         run, and each job's results URL is sent to the model. The call made after the last round
         runs nothing: no job, no tool frame, no invoked_tools entry."""
-        with client.session_transaction() as sess:
-            sess["assistant_session_id"] = "tool-cap-jobs-sid"
         scripted = MAX_TOOL_ITERATIONS + 10  # more than the cap
         jm = autospecced_job_manager()
         jm.submit_home_job.side_effect = [(f"job-{i}", f"run-{i}") for i in range(scripted)]
-        app.extensions["job_manager"] = jm
+        client = build_app(tmp_path, jobs=lambda storage: jm).test_client()
+        with client.session_transaction() as sess:
+            sess["assistant_session_id"] = "tool-cap-jobs-sid"
         anthropic_api.set_streams([
             make_tool_use_stream(f"toolu_cap_job_{i}", "run_home_simulation", {"pv_kw": 4, "days": 7})
             for i in range(scripted)
@@ -826,11 +835,16 @@ class TestSimulationToolSurface:
 class TestSimulationToolUseSignal:
     """E2E boundary tests: mock Anthropic + mock JobManager across the tool_result seam."""
 
+    @pytest.fixture
+    def jobs(self, jm: NonCallableMagicMock) -> Callable[[RunStorage], JobManager]:
+        """Build this class's apps on jm."""
+        return lambda storage: jm
+
     def test_run_home_simulation_tool_use_signal(
         self,
         client: FlaskClient,
-        app: Flask,
         anthropic_api: FakeAnthropic,
+        jm: NonCallableMagicMock,
     ) -> None:
         """run_home_simulation: tool SSE frame emitted; submit_home_job called with correct config;
         tool_result's results_url is the run's results page, /results/<run_id>."""
@@ -838,10 +852,7 @@ class TestSimulationToolUseSignal:
         JOB_ID = "job-home-001"
         TOOL_ID = "toolu_rhs_e2e_001"
 
-        # Install mock JobManager with submit_home_job return value
-        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = (JOB_ID, RUN_ID)
-        app.extensions["job_manager"] = jm
 
         anthropic_api.set_streams([
             make_tool_use_stream(
@@ -904,8 +915,8 @@ class TestSimulationToolUseSignal:
     def test_run_fleet_simulation_tool_use_signal(
         self,
         client: FlaskClient,
-        app: Flask,
         anthropic_api: FakeAnthropic,
+        jm: NonCallableMagicMock,
     ) -> None:
         """run_fleet_simulation: submit_fleet_job receives 3-home configs list; tool_result's
         results_url is the run's results page, /results/<run_id>."""
@@ -913,9 +924,7 @@ class TestSimulationToolUseSignal:
         JOB_ID = "job-fleet-001"
         TOOL_ID = "toolu_rfs_e2e_001"
 
-        jm = autospecced_job_manager()
         jm.submit_fleet_job.return_value = (JOB_ID, RUN_ID)
-        app.extensions["job_manager"] = jm
 
         anthropic_api.set_streams([
             make_tool_use_stream(
@@ -968,13 +977,12 @@ class TestSimulationToolUseSignal:
         client: FlaskClient,
         app: Flask,
         anthropic_api: FakeAnthropic,
+        jm: NonCallableMagicMock,
         tmp_path: Path,
     ) -> None:
         """A trigger tool submits its job to the app's JobManager, which records its run in the store create_app
         built, whatever the app's store config names afterwards: the submit carries no store location."""
-        jm = autospecced_job_manager()
         jm.submit_home_job.return_value = ("job-h", "run-h")
-        app.extensions["job_manager"] = jm
         anthropic_api.set_streams([
             make_tool_use_stream("toolu_rhs_moved_store_001", "run_home_simulation", {"pv_kw": 4, "days": 7}),
             make_end_turn_stream(["Started your run."]),
@@ -1003,16 +1011,13 @@ class TestSimulationToolUseSignal:
     def test_non_mapping_heat_pump_comes_back_as_a_tool_result_error(
         self,
         client: FlaskClient,
-        app: Flask,
         anthropic_api: FakeAnthropic,
+        jm: NonCallableMagicMock,
         tool_name: str,
         tool_input: dict[str, Any],
     ) -> None:
         """A heat_pump the model sends as a non-object reaches it as a tool_result error naming
         the block, and the turn goes on to its reply; nothing is submitted."""
-        jm = autospecced_job_manager()
-        app.extensions["job_manager"] = jm
-
         anthropic_api.set_streams([
             make_tool_use_stream("toolu_hp_not_mapping", tool_name, tool_input),
             make_end_turn_stream(["Let me fix that."]),
@@ -1045,6 +1050,11 @@ class TestSimulationToolUseSignal:
 
 class TestMalformedToolInput:
     """A tool input the model leaves a field out of, or sends a value its field's reader refuses, comes back to it as an error naming the field."""
+
+    @pytest.fixture
+    def jobs(self, jm: NonCallableMagicMock) -> Callable[[RunStorage], JobManager]:
+        """Build this class's apps on jm."""
+        return lambda storage: jm
 
     @pytest.mark.parametrize(
         ("tool_name", "tool_input", "field"),
@@ -1079,8 +1089,8 @@ class TestMalformedToolInput:
     def test_a_malformed_tool_input_comes_back_to_the_model_as_an_error_naming_the_field(
         self,
         client: FlaskClient,
-        app: Flask,
         anthropic_api: FakeAnthropic,
+        jm: NonCallableMagicMock,
         tool_name: str,
         tool_input: dict[str, Any],
         field: str,
@@ -1088,9 +1098,6 @@ class TestMalformedToolInput:
         """The model's next call receives a tool_result whose only key is an error naming the
         field, and the value it sent if it sent one; the turn goes on to its reply, and nothing
         is submitted."""
-        jm = autospecced_job_manager()
-        app.extensions["job_manager"] = jm
-
         anthropic_api.set_streams([
             make_tool_use_stream("toolu_malformed_input", tool_name, tool_input),
             make_end_turn_stream(["Let me fix that."]),

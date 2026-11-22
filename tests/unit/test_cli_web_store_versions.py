@@ -34,7 +34,8 @@ from flask import Flask
 from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
-from solar_challenge.web.app import create_app
+from solar_challenge.web.app import create_app, default_jobs
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
 from solar_challenge.web.storage import RunQuery
@@ -51,7 +52,7 @@ from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import run_storage_over
 from tests._stored_run_fixtures import STORED_RUN_FIXTURES, install_stored_run_fixture
-from tests._web_app import release_store_lock, run_storage_of
+from tests._web_app import run_storage_of
 
 
 @pytest.fixture(autouse=True)
@@ -141,11 +142,11 @@ def test_the_dashboard_builds_on_a_store_web_migrate_migrated_and_lists_its_runs
     assert _web(tmp_path, "migrate").exit_code == 0
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    dashboard = create_app()
+    dashboard = create_app(jobs=default_jobs)
     try:
         listed = run_storage_of(dashboard).page_runs(RunQuery()).records
     finally:
-        release_store_lock(dashboard)
+        dashboard_of(dashboard).close()
 
     assert {record.id for record in listed} == {
         "legacy-named-home",
@@ -434,12 +435,12 @@ def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads
     assert _web(tmp_path, "migrate").exit_code == 0
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    dashboard = create_app()
+    dashboard = create_app(jobs=default_jobs)
     try:
         response = dashboard.test_client().get(f"/results/{run_id}")
         loaded = run_storage_of(dashboard).load_run(run_id)
     finally:
-        release_store_lock(dashboard)
+        dashboard_of(dashboard).close()
 
     assert response.status_code == 200
     assert headings(response.get_data(as_text=True))[0] == "Elm Street"

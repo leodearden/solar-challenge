@@ -15,7 +15,6 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("flask")
-from flask import Flask
 
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.fleet import HomeSimulator
@@ -23,6 +22,7 @@ from solar_challenge.home import HomeConfig, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.weather import WeatherProvider
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.jobs import (
     JobManager,
     JobSnapshot,
@@ -35,9 +35,9 @@ from tests._fleet_runner import MarkingHomeSimulator, started, wait_until_starte
 from tests._manual_clock import ManualClock
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage
-from tests._web_app import run_storage_of
-from tests._web_job_runner import NewJobManager, runner_of
-from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST, client_using
+from tests._web_app import BuildApp
+from tests._web_job_runner import NewJobManager, jobs_running, runner_of
+from tests.unit.web_jobs._app_client import A_HOME_JOB_REQUEST
 from tests.unit.web_jobs._fakes import (
     BlockingSimulation,
     CountingIds,
@@ -787,11 +787,12 @@ class TestJobManagerAgeLimit:
         assert _status_of(manager, job_id) == "completed"
 
     def test_a_job_still_running_a_day_after_it_was_submitted_is_still_reported_after_a_later_submit(
-        self, app: Flask, blocking_simulation: BlockingSimulation, new_job_manager: NewJobManager
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = ManualClock()
-        manager = new_job_manager(run_storage_of(app), blocking_simulation, clock=clock)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, clock=clock))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         job_id = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()["job_id"]
         blocking_simulation.wait_until_started()
         clock.advance(_A_DAY)
@@ -804,11 +805,12 @@ class TestJobManagerAgeLimit:
         assert response.get_json()["status"] == "running"
 
     def test_the_progress_stream_of_a_job_that_ran_past_a_later_submit_a_day_on_ends_with_its_completion(
-        self, app: Flask, blocking_simulation: BlockingSimulation, new_job_manager: NewJobManager
+        self, build_app: BuildApp, tmp_path: Path, blocking_simulation: BlockingSimulation
     ) -> None:
         clock = ManualClock()
-        manager = new_job_manager(run_storage_of(app), blocking_simulation, clock=clock)
-        client = client_using(app, manager)
+        app = build_app(tmp_path, jobs=jobs_running(blocking_simulation, clock=clock))
+        manager = dashboard_of(app).jobs
+        client = app.test_client()
         submitted = client.post("/api/simulate/home", json=A_HOME_JOB_REQUEST).get_json()
         blocking_simulation.wait_until_started()
         clock.advance(_A_DAY)
