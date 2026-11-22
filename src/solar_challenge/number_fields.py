@@ -10,6 +10,10 @@ truncated or read as 1.
 
 A value its consumer keeps as given, rather than the float read from it, reads through
 as_finite_real, so text that float() reads as a number is refused, not read as that number.
+
+A list setting's shape is read by as_list_elements, through which as_finite_floats and
+as_whole_numbers read their lists, so a list whose elements are not numbers is held to the
+same shape.
 """
 
 import math
@@ -132,8 +136,9 @@ def as_finite_floats(values: object, field: str, within: Interval = Interval()) 
     """Return *values*, a list, as the tuple of its elements, each read by :func:`as_finite_float` under the name {field}[{i}].
 
     Raises:
-        ConfigurationError: If *values* is text, a mapping, a set or not iterable, naming
-            *field* and *values*; or if :func:`as_finite_float` refuses an element.
+        ConfigurationError: If *values* is not a list, as :func:`as_list_elements` reads
+            one, naming *field* and *values*; or if :func:`as_finite_float` refuses an
+            element.
     """
     return _read_each(as_finite_float, values, field, within, "finite numbers")
 
@@ -142,10 +147,25 @@ def as_whole_numbers(values: object, field: str, within: Interval = Interval()) 
     """Return *values*, a list, as the tuple of its elements, each read by :func:`as_whole_number` under the name {field}[{i}].
 
     Raises:
-        ConfigurationError: If *values* is text, a mapping, a set or not iterable, naming
-            *field* and *values*; or if :func:`as_whole_number` refuses an element.
+        ConfigurationError: If *values* is not a list, as :func:`as_list_elements` reads
+            one, naming *field* and *values*; or if :func:`as_whole_number` refuses an
+            element.
     """
     return _read_each(as_whole_number, values, field, within, "whole numbers")
+
+
+def as_list_elements(values: object, field: str, expected: str = "a list") -> tuple[object, ...]:
+    """Return the elements of *values*, a list setting, as a tuple, each as given and none read.
+
+    A list is iterable and is neither text, bytes, a mapping nor a set, whose order is
+    arbitrary.
+
+    Raises:
+        ConfigurationError: For any other value, naming *field*, *expected* and *values*.
+    """
+    if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
+        raise ConfigurationError.must_be(field, expected, got=values)
+    return tuple(values)
 
 
 def read_field(
@@ -170,10 +190,11 @@ def read_field(
 def _read_each(
     read: Callable[[Any, str, Interval], _Number], values: object, field: str, within: Interval, kind: str
 ) -> tuple[_Number, ...]:
-    """Return each element i of *values* read by *read* as {field}[{i}], refusing *values* unless it is a list of *kind*: iterable, and neither text, a mapping nor a set, whose order is arbitrary."""
-    if isinstance(values, (str, bytes, Mapping, Set)) or not isinstance(values, Iterable):
-        raise ConfigurationError.must_be(field, f"a list of {kind}", got=values)
-    return tuple(read(value, f"{field}[{index}]", within) for index, value in enumerate(values))
+    """Return each element i of *values*, a list as :func:`as_list_elements` reads one, read by *read* as {field}[{i}], refusing any other value as not a list of *kind*."""
+    return tuple(
+        read(value, f"{field}[{index}]", within)
+        for index, value in enumerate(as_list_elements(values, field, f"a list of {kind}"))
+    )
 
 
 def _admitted(number: _Number, within: Interval, field: str, value: Any) -> _Number:

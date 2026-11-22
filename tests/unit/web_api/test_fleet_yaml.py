@@ -190,7 +190,8 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"n_homes": 5},
-                "FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' must total n_homes",
+                "fleet_distribution: FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' "
+                "must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
             pytest.param(

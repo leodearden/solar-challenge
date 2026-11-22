@@ -753,7 +753,7 @@ class TestFleetFormFromScenario:
                         },
                     }
                 ),
-                "fleet_distribution.battery.capacity_kwh.counts[1] must be a whole number, got 2.5",
+                "fleet_distribution.battery.capacity_kwh: counts[1] must be a whole number, got 2.5",
                 id="fractional-count-in-a-battery-pool",
             ),
             pytest.param(

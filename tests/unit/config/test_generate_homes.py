@@ -15,6 +15,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import load_fleet_config
 from solar_challenge.dispatch import GridChargeConfig
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.ev import EVConfig
 from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     DistributionSpec,
@@ -31,6 +32,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, simulate_pv_output
 from solar_challenge.tariff import TariffConfig
+from tests._construction_refusals import prefixed_construction_refusal
 from tests._synthetic_weather import synthetic_june_weather
 
 
@@ -421,17 +423,40 @@ class TestGenerateHomesRefusesADrawThatIsNotFinite:
         assert all(1.0 <= capacity <= 10.0 for capacity in capacities)
 
 
+def _first_home_with_an_ev(block: dict) -> int:
+    """The number of the first home the fleet_distribution block *block* gives an EV."""
+    homes = generate_homes_from_distribution(parse_fleet_distribution_config(block), Location.bristol())
+    return next(number for number, home in enumerate(homes, start=1) if home.ev_config is not None)
+
+
+def _ev_config_refusal(field: str, hour: float) -> str:
+    """EVConfig's refusal of *hour* as its *field*, named by the EV component and the first home _EVERY_SETTING_DRAWN gives an EV."""
+    return prefixed_construction_refusal(
+        f"fleet_distribution.ev, home {_first_home_with_an_ev(_EVERY_SETTING_DRAWN)}",
+        lambda: EVConfig("7kW", **{field: hour}),
+    )
+
+
 class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
-    """generate_homes_from_distribution refuses an EV hour that is an infinity or a NaN, whichever spec gives it, naming its setting and the hour."""
+    """A fleet refuses an EV hour that is an infinity or a NaN, whichever spec gives it, naming its setting and the hour: a scalar or fixed one as the block is parsed, a listed one as EVConfig is built."""
 
     @pytest.mark.parametrize("hour", [math.inf, -math.inf, math.nan], ids=repr)
     @pytest.mark.parametrize(
-        "spec_holding",
+        ("spec_holding", "refusal_of"),
         [
-            pytest.param(lambda hour: hour, id="scalar"),
-            pytest.param(lambda hour: {"type": "fixed", "value": hour}, id="fixed"),
+            pytest.param(
+                lambda hour: hour,
+                lambda field, hour: f"fleet_distribution.ev.{field} must be a finite number, got {hour!r}",
+                id="scalar",
+            ),
+            pytest.param(
+                lambda hour: {"type": "fixed", "value": hour},
+                lambda field, hour: f"fleet_distribution.ev.{field} must be a finite number, got {hour!r}",
+                id="fixed",
+            ),
             pytest.param(
                 lambda hour: {"type": "weighted_discrete", "values": [hour], "weights": [1]},
+                _ev_config_refusal,
                 id="weighted_discrete",
             ),
             pytest.param(
@@ -440,20 +465,43 @@ class TestGenerateHomesRefusesAnEVHourThatIsNotFinite:
                     "values": [hour],
                     "counts": [_EVERY_SETTING_DRAWN["n_homes"]],
                 },
+                _ev_config_refusal,
                 id="shuffled_pool",
             ),
         ],
     )
     @pytest.mark.parametrize("field", ["arrival_hour", "departure_hour"])
     def test_an_hour_that_is_not_finite_is_refused_naming_its_setting_and_the_hour(
-        self, field: str, spec_holding: Callable[[float], object], hour: float
+        self,
+        field: str,
+        spec_holding: Callable[[float], object],
+        refusal_of: Callable[[str, float], str],
+        hour: float,
     ) -> None:
-        """An infinite or NaN hour given as a number, a fixed value, or a weighted_discrete or shuffled_pool outcome is refused naming its setting and the hour, never escaping as an OverflowError."""
+        """An infinite or NaN hour given as a number, a fixed value, or a weighted_discrete or shuffled_pool outcome is refused naming its setting and the hour, never escaping as an OverflowError: a number or fixed value every home is given as the block is parsed, naming its path, and a listed one by EVConfig, naming the component and the home."""
         block = {**_EVERY_SETTING_DRAWN, "ev": {**_EVERY_SETTING_DRAWN["ev"], field: spec_holding(hour)}}
 
         with pytest.raises(ConfigurationError) as exc_info:
             generate_homes_from_distribution(parse_fleet_distribution_config(block), Location.bristol())
-        assert str(exc_info.value) == f"ev.{field} must be a finite number, got {hour!r}"
+        assert str(exc_info.value) == refusal_of(field, hour)
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            pytest.param({"type": "weighted_discrete", "values": [18.5], "weights": [1]}, id="weighted_discrete"),
+            pytest.param(
+                {"type": "shuffled_pool", "values": [18.5], "counts": [_EVERY_SETTING_DRAWN["n_homes"]]},
+                id="shuffled_pool",
+            ),
+        ],
+    )
+    def test_a_listed_hour_with_a_fractional_part_is_refused_by_ev_config(self, spec: dict) -> None:
+        """A listed hour is returned as drawn, for EVConfig to read, so a fractional one is refused as a listed fractional occupant count is, never truncated."""
+        block = {**_EVERY_SETTING_DRAWN, "ev": {**_EVERY_SETTING_DRAWN["ev"], "arrival_hour": spec}}
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            generate_homes_from_distribution(parse_fleet_distribution_config(block), Location.bristol())
+        assert str(exc_info.value) == _ev_config_refusal("arrival_hour", 18.5)
 
 
 class TestHeatPumpDistribution:
@@ -935,25 +983,6 @@ class TestGenerateHomesHouseholdOccupants:
 
         assert [home.load_config.household_occupants for home in homes] == [count, count]
 
-    def test_an_infinite_min_or_max_bounds_nothing(self) -> None:
-        """A normal with an infinite min and an infinite max gives each home the whole number nearest its draw, 3 for draws near 3.0."""
-        household_occupants = NormalDistribution(mean=3.0, std=0.1, min=-math.inf, max=math.inf)
-
-        homes = generate_homes_from_distribution(self._fleet(household_occupants, n_homes=20), Location.bristol())
-
-        assert [home.load_config.household_occupants for home in homes] == [3] * 20
-
-    def test_a_nan_bound_is_refused_as_the_nan_draw_it_clamps_to(self) -> None:
-        """A NaN min clamps every draw to NaN, so the fleet is refused as drawing a sample that is not a finite number, not as a NaN bound."""
-        household_occupants = NormalDistribution(mean=3.0, std=1.0, min=math.nan)
-
-        with pytest.raises(ConfigurationError) as exc_info:
-            generate_homes_from_distribution(self._fleet(household_occupants), Location.bristol())
-
-        assert str(exc_info.value) == (
-            "load.household_occupants must draw samples that are finite numbers, got a sample of nan"
-        )
-
     #: Normal and uniform specs with no whole number from their min to their max, so no count can be drawn from them.
     _SPECS_WITH_NO_WHOLE_NUMBER = [
         pytest.param(UniformDistribution(min=2.3, max=2.45), id="uniform-within-one-unit"),
@@ -961,17 +990,42 @@ class TestGenerateHomesHouseholdOccupants:
         pytest.param(NormalDistribution(mean=2.4, std=0.1, min=2.3, max=2.45), id="normal-within-one-unit"),
     ]
 
-    @pytest.mark.parametrize("household_occupants", _SPECS_WITH_NO_WHOLE_NUMBER)
+    @staticmethod
+    def _fleet_with_ev_arrival_hour(arrival_hour: DistributionSpec) -> FleetDistributionConfig:
+        """A seeded fleet of 2 homes, each with a 7 kW charger, whose EV arrival hours are drawn from *arrival_hour*."""
+        return FleetDistributionConfig(
+            n_homes=2,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            ev=ComponentDistribution({"charger_type": "7kW", "arrival_hour": arrival_hour}),
+            seed=42,
+        )
+
+    @pytest.mark.parametrize(
+        ("path", "spec"),
+        [
+            *(
+                pytest.param("load.household_occupants", *each.values, id=f"load.household_occupants-{each.id}")
+                for each in _SPECS_WITH_NO_WHOLE_NUMBER
+            ),
+            pytest.param(
+                "ev.arrival_hour",
+                UniformDistribution(min=18.2, max=18.4),
+                id="ev.arrival_hour-uniform-within-one-unit",
+            ),
+        ],
+    )
     def test_a_spec_with_no_whole_number_from_its_min_to_its_max_is_refused_when_configured_naming_it(
-        self, household_occupants: Union[NormalDistribution, UniformDistribution]
+        self, path: str, spec: Union[NormalDistribution, UniformDistribution]
     ) -> None:
-        """No count a home could get lies from the spec's min to its max, so the fleet is refused when it is configured, naming the setting, the min and the max."""
+        """No count a home could get lies from the spec's min to its max, so the fleet is refused when it is configured, naming the setting, the min and the max; an EV hour is a count as occupants are."""
+        fleet_drawing = {"load.household_occupants": self._fleet, "ev.arrival_hour": self._fleet_with_ev_arrival_hour}[path]
+
         with pytest.raises(ConfigurationError) as exc_info:
-            self._fleet(household_occupants)
+            fleet_drawing(spec)
 
         assert str(exc_info.value) == (
-            "load.household_occupants is a count, so a whole number must lie from its min to its max, "
-            f"got a min of {household_occupants.min!r} and a max of {household_occupants.max!r}"
+            f"{path} is a count, so a whole number must lie from its min to its max, "
+            f"got a min of {spec.min!r} and a max of {spec.max!r}"
         )
 
     @pytest.mark.parametrize("household_occupants", _SPECS_WITH_NO_WHOLE_NUMBER)

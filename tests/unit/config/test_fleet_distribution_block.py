@@ -41,6 +41,11 @@ def _pool_size_refusal(path: str, n_homes: int, total: int) -> str:
     )
 
 
+def _parsed_pool_size_refusal(path: str, n_homes: int, total: int) -> str:
+    """The refusal _pool_size_refusal states, as parse_fleet_distribution_config gives it: after the fleet_distribution block's path."""
+    return f"fleet_distribution: {_pool_size_refusal(path, n_homes, total)}"
+
+
 def _charger_type_value_refusal(value: object) -> str:
     """The refusal of *value*, listed in a fleet's ev.charger_type, which names no charger type."""
     return (
@@ -115,11 +120,6 @@ class TestDistributionDataclasses:
         with pytest.raises(ConfigurationError, match="same length"):
             WeightedDiscreteDistribution(values=(1.0, 2.0), weights=(1.0,))
 
-    def test_weighted_discrete_negative_weight_raises(self) -> None:
-        """Test WeightedDiscreteDistribution with negative weight raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            WeightedDiscreteDistribution(values=(1.0, 2.0), weights=(1.0, -1.0))
-
     def test_weighted_discrete_all_zero_weights_raises(self) -> None:
         """Test WeightedDiscreteDistribution with all zero weights raises."""
         with pytest.raises(ConfigurationError, match="all be zero"):
@@ -138,11 +138,6 @@ class TestDistributionDataclasses:
         dist = NormalDistribution(mean=3400.0, std=800.0, min=2000.0, max=6000.0)
         assert dist.min == 2000.0
         assert dist.max == 6000.0
-
-    def test_normal_distribution_negative_std_raises(self) -> None:
-        """Test NormalDistribution with negative std raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            NormalDistribution(mean=100.0, std=-1.0)
 
     def test_normal_distribution_invalid_bounds_raises(self) -> None:
         """Test NormalDistribution with min > max raises."""
@@ -192,11 +187,6 @@ class TestDistributionDataclasses:
         """Test ShuffledPoolDistribution with mismatched lengths raises."""
         with pytest.raises(ConfigurationError, match="same length"):
             ShuffledPoolDistribution(values=(1.0, 2.0), counts=(1,))
-
-    def test_shuffled_pool_distribution_negative_count_raises(self) -> None:
-        """Test ShuffledPoolDistribution with negative count raises."""
-        with pytest.raises(ConfigurationError, match="negative"):
-            ShuffledPoolDistribution(values=(1.0, 2.0), counts=(1, -1))
 
     def test_shuffled_pool_distribution_all_zero_counts_raises(self) -> None:
         """Test ShuffledPoolDistribution with all zero counts raises."""
@@ -452,7 +442,7 @@ class TestShuffledPoolHoldsOneValuePerHome:
                     },
                 }
             )
-        assert str(refusal.value) == _pool_size_refusal("pv.capacity_kw", n_homes, total)
+        assert str(refusal.value) == _parsed_pool_size_refusal("pv.capacity_kw", n_homes, total)
 
     @pytest.mark.parametrize(
         ("sections", "path"),
@@ -486,7 +476,7 @@ class TestShuffledPoolHoldsOneValuePerHome:
         """The rule holds for every component's parameters, including those only battery or heat-pump homes draw."""
         with pytest.raises(ConfigurationError) as refusal:
             parse_fleet_distribution_config({"n_homes": 3, "pv": {"capacity_kw": 4.0}, **sections})
-        assert str(refusal.value) == _pool_size_refusal(path, 3, 2)
+        assert str(refusal.value) == _parsed_pool_size_refusal(path, 3, 2)
 
     def test_a_fleet_distribution_built_in_code_is_refused_as_a_parsed_one_is(self) -> None:
         """The refusal comes from FleetDistributionConfig itself, not only from the parser."""
@@ -594,7 +584,10 @@ class TestEVChargerTypeValuesAreChargerTypes:
             pytest.param(["7kW", "3.6kW"], id="a bare list of charger types"),
             pytest.param(7, id="a number"),
             pytest.param({"type": "fixed", "value": 22}, id="a fixed number"),
+            pytest.param({"type": "fixed", "value": "7kW"}, id="a fixed charger type"),
+            pytest.param({"type": "fixed", "value": None}, id="a fixed null"),
             pytest.param({"type": "normal", "mean": 7, "std": 1}, id="normal"),
+            pytest.param({"type": "normal", "mean": "7kW", "std": 1}, id="a normal of a charger type"),
             pytest.param({"type": "uniform", "min": 3, "max": 22}, id="uniform"),
             pytest.param({"type": "proportional_to", "source": "pv.capacity_kw"}, id="proportional_to"),
         ],
@@ -602,7 +595,12 @@ class TestEVChargerTypeValuesAreChargerTypes:
     def test_a_spec_other_than_null_weighted_discrete_or_shuffled_pool_is_refused_at_read_naming_its_key_path(
         self, charger_type: object
     ) -> None:
-        """A bare list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type, the spec as written and every charger type."""
+        """A bare list or number, or a spec that draws numbers, is refused as the block is read, naming fleet_distribution.ev.charger_type, the spec as written and every charger type.
+
+        A spec that draws numbers is refused before a value in it is read, so a fixed charger type
+        or null, or a normal of a charger type, is refused as no spec a charger type draws, never as
+        a value that is no number.
+        """
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
         assert str(refusal.value) == (

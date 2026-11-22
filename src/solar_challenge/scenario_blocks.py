@@ -277,11 +277,6 @@ def _read_component_block(
     return _built_component(block, _set_keys(block, data, block_path), block_path)
 
 
-def float_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* to a float, keeping a null as None."""
-    return None if value is None else float(value)
-
-
 def parse_location_block(
     data: Optional[dict[str, Any]], *, block_path: str = "location"
 ) -> Location:

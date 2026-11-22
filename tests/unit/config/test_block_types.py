@@ -223,13 +223,11 @@ class TestDistributionSpecTypes:
     """Tests for the distribution-spec types a distribution parameter can name."""
 
     @pytest.mark.parametrize("spec", _NON_MAPPING_DISTRIBUTION_SPECS)
-    def test_spec_that_is_no_number_null_or_mapping_is_refused(self, spec: object) -> None:
-        """A spec that is not a number, null or a mapping is refused, naming its path."""
+    def test_a_spec_that_is_no_mapping_is_read_as_a_number(self, spec: object) -> None:
+        """A spec that is neither null nor a mapping is read as a number, so one that is not a number is refused, naming its path and the spec."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(spec)
-        assert str(refusal.value) == (
-            f"Invalid distribution spec for '{_SPEC_PATH}': expected number, null, or dict"
-        )
+        assert str(refusal.value) == f"{_SPEC_PATH} must be a finite number, got {spec!r}"
 
     @pytest.mark.parametrize("spec", _DISTRIBUTION_SPECS_NAMING_NO_TYPE)
     def test_mapping_naming_no_type_is_refused(self, spec: dict[str, Any]) -> None:
@@ -270,6 +268,18 @@ class TestDistributionSpecTypes:
             )
         assert str(refusal.value) == (
             f"proportional_to multiplier dict for '{_SPEC_PATH}' must have type='sweep'"
+        )
+
+    @pytest.mark.parametrize("key", ["min", "max", "steps"])
+    def test_a_sweep_multiplier_lacking_a_required_key_is_refused_naming_the_key_by_its_path(self, key: str) -> None:
+        """A sweep lacking its min, max or steps is refused naming the key under the multiplier's path, as a block lacking a key it requires is."""
+        sweep = _spec_lacking({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}, key)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            _parsed_distribution_spec({"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep})
+
+        assert str(refusal.value) == (
+            f"Missing required keys in {_SPEC_PATH}.multiplier: {_SPEC_PATH}.multiplier.{key}"
         )
 
     @pytest.mark.parametrize(("value", "expected"), _FIXED_SPEC_VALUES)

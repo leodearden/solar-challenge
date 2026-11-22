@@ -29,6 +29,17 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
+from solar_challenge.number_fields import (
+    NON_NEGATIVE,
+    Interval,
+    as_finite_float,
+    as_finite_floats,
+    as_finite_real,
+    as_list_elements,
+    as_whole_number,
+    as_whole_numbers,
+    read_field,
+)
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     BATTERY_BLOCK,
@@ -42,8 +53,8 @@ from solar_challenge.scenario_blocks import (
     FleetField,
     SettingValue,
     child_path,
+    constructed,
     dispatch_strategy_argument,
-    float_or_none,
     read_dispatch_strategy_key,
     refuse_missing_keys,
     refuse_unrecognised_keys,
@@ -65,21 +76,20 @@ class WeightedDiscreteDistribution:
     Weights are auto-normalized (e.g., [2,4,3,1] == [20,40,30,10]).
 
     Attributes:
-        values: List of values to sample from (can include None)
-        weights: Corresponding weights (must be non-negative, sum > 0)
+        values: The values to sample from, held as given, none read as a number; the home's
+            type reads each (can include None)
+        weights: Corresponding weights, read as finite floats of at least 0 (sum > 0)
     """
 
     values: tuple[SpecValue, ...]
     weights: tuple[float, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "values", as_list_elements(self.values, "values"))
+        read_field(self, "weights", as_finite_floats, NON_NEGATIVE)
         if len(self.values) != len(self.weights):
             raise ConfigurationError(
                 "WeightedDiscreteDistribution: values and weights must have same length"
-            )
-        if any(w < 0 for w in self.weights):
-            raise ConfigurationError(
-                "WeightedDiscreteDistribution: weights cannot be negative"
             )
         if sum(self.weights) == 0:
             raise ConfigurationError(
@@ -95,11 +105,13 @@ class WeightedDiscreteDistribution:
 class NormalDistribution:
     """Normal (Gaussian) distribution with optional bounds.
 
+    Each number is read as a finite float.
+
     Attributes:
         mean: Mean of the distribution
-        std: Standard deviation
-        min: Optional minimum bound (values are clamped)
-        max: Optional maximum bound (values are clamped)
+        std: Standard deviation, at least 0
+        min: Optional least value; a draw below it is clamped to it
+        max: Optional greatest value; a draw above it is clamped to it
     """
 
     mean: float
@@ -108,8 +120,10 @@ class NormalDistribution:
     max: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.std < 0:
-            raise ConfigurationError("NormalDistribution: std cannot be negative")
+        read_field(self, "mean", as_finite_float)
+        read_field(self, "std", as_finite_float, NON_NEGATIVE)
+        read_field(self, "min", as_finite_float, optional=True)
+        read_field(self, "max", as_finite_float, optional=True)
         if self.min is not None and self.max is not None and self.min > self.max:
             raise ConfigurationError("NormalDistribution: min cannot be greater than max")
 
@@ -128,14 +142,16 @@ class UniformDistribution:
     """Uniform distribution between min and max.
 
     Attributes:
-        min: Minimum value (inclusive)
-        max: Maximum value (inclusive)
+        min: Minimum value (inclusive), read as a finite float
+        max: Maximum value (inclusive), read as a finite float
     """
 
     min: float
     max: float
 
     def __post_init__(self) -> None:
+        read_field(self, "min", as_finite_float)
+        read_field(self, "max", as_finite_float)
         if self.min > self.max:
             raise ConfigurationError("UniformDistribution: min cannot be greater than max")
 
@@ -153,23 +169,23 @@ class ShuffledPoolDistribution:
     then shuffling (like bristol-phase1).
 
     Attributes:
-        values: List of values (can include None)
-        counts: Number of each value in the pool.  In a fleet distribution they total
-            n_homes, one value per home, and FleetDistributionConfig refuses any other total;
-            a parameter only some homes draw leaves the other homes' values undrawn.
+        values: The values, held as given, none read as a number; the home's type reads each
+            (can include None)
+        counts: Number of each value in the pool, read as whole numbers of at least 0.  In a
+            fleet distribution they total n_homes, one value per home, and
+            FleetDistributionConfig refuses any other total; a parameter only some homes draw
+            leaves the other homes' values undrawn.
     """
 
     values: tuple[SpecValue, ...]
     counts: tuple[int, ...]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "values", as_list_elements(self.values, "values"))
+        read_field(self, "counts", as_whole_numbers, NON_NEGATIVE)
         if len(self.values) != len(self.counts):
             raise ConfigurationError(
                 "ShuffledPoolDistribution: values and counts must have same length"
-            )
-        if any(c < 0 for c in self.counts):
-            raise ConfigurationError(
-                "ShuffledPoolDistribution: counts cannot be negative"
             )
         if sum(self.counts) == 0:
             raise ConfigurationError(
@@ -189,9 +205,9 @@ class SweepSpec:
     """Sweep specification for parameter exploration.
 
     Attributes:
-        min: Minimum value
-        max: Maximum value
-        steps: Number of steps
+        min: Minimum value, read as a finite float
+        max: Maximum value, read as a finite float
+        steps: Number of steps, read as a whole number of at least 2
         mode: "geometric" or "linear" (default: geometric)
     """
 
@@ -201,6 +217,9 @@ class SweepSpec:
     mode: str = "geometric"
 
     def __post_init__(self) -> None:
+        read_field(self, "min", as_finite_float)
+        read_field(self, "max", as_finite_float)
+        read_field(self, "steps", as_whole_number, Interval(2, math.inf))
         if self.min <= 0 and self.mode == "geometric":
             raise ConfigurationError(
                 "SweepSpec: geometric mode requires min > 0"
@@ -208,10 +227,6 @@ class SweepSpec:
         if self.max <= self.min:
             raise ConfigurationError(
                 "SweepSpec: max must be greater than min"
-            )
-        if self.steps < 2:
-            raise ConfigurationError(
-                "SweepSpec: steps must be at least 2"
             )
         if self.mode not in ("geometric", "linear"):
             raise ConfigurationError(
@@ -237,13 +252,18 @@ class ProportionalDistribution:
 
     Attributes:
         source: Source field path (e.g., "pv.capacity_kw")
-        multiplier: Multiplication factor (float or SweepSpec)
-        offset: Additive offset (default 0.0)
+        multiplier: Multiplication factor: a SweepSpec, or a number read as a finite float
+        offset: Additive offset, read as a finite float (default 0.0)
     """
 
     source: str
     multiplier: Union[float, SweepSpec] = 1.0
     offset: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.multiplier, SweepSpec):
+            read_field(self, "multiplier", as_finite_float)
+        read_field(self, "offset", as_finite_float)
 
 
 # Type alias for distribution specifications; a bare string is one of a CHOICE field's choices.
@@ -295,14 +315,14 @@ class FleetDistributionConfig:
     as construction does.
 
     Attributes:
-        n_homes: Number of homes to generate
+        n_homes: Number of homes to generate, read as a whole number of at least 1
         pv: How each home draws its PV
         load: How each home draws its load; an empty one draws nothing, so every load takes
             LoadConfig's defaults
         battery: How each home draws its battery; None is no battery for any home
         heat_pump: How each home draws its heat pump; None is no heat pump for any home
         ev: How each home draws its EV; None is no EV for any home
-        seed: Random seed for reproducibility (optional)
+        seed: Random seed for reproducibility (optional), read as a whole number
         random_order: One of _RANDOM_ORDERS' keys, naming what is drawn ahead of the first
             home and in which order ("bristol_legacy" reproduces
             create_bristol_phase1_scenario's sequence)
@@ -322,9 +342,9 @@ class FleetDistributionConfig:
     dispatch_strategy: Optional[str] = None
 
     def __post_init__(self) -> None:
-        """Refuse a fleet no home of which could be drawn, as each check's helper states.
+        """Read n_homes and seed, then refuse a fleet no home of which could be drawn, as each check's helper states.
 
-        Past n_homes, random_order and dispatch_strategy it refuses, in this order: a component
+        Past n_homes, seed, random_order and dispatch_strategy it refuses, in this order: a component
         key outside its table's fleet rows, or held in the wrong one of its draws and settings
         (F1); a required key a component does not draw (F5); a spec its key's kind does not
         draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
@@ -333,8 +353,8 @@ class FleetDistributionConfig:
         table's presence rule refuses; and a rounded count with no whole number from its min
         to its max.
         """
-        if self.n_homes < 1:
-            raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
+        read_field(self, "n_homes", as_whole_number, Interval(1, math.inf))
+        read_field(self, "seed", as_whole_number, optional=True)
         if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
             raise ConfigurationError(
                 f"FleetDistributionConfig: random_order must be "
@@ -504,11 +524,7 @@ def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) 
 def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig) -> None:
     """Refuse *config* when a normal or uniform count that _converted_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
     for path, row, spec in _component_draws(config):
-        if (
-            row.kind is FieldKind.COUNT
-            and path not in _TRUNCATED_COUNTS
-            and isinstance(spec, (NormalDistribution, UniformDistribution))
-        ):
+        if row.kind is FieldKind.COUNT and isinstance(spec, (NormalDistribution, UniformDistribution)):
             _count_bounds(spec, path)
 
 
@@ -535,7 +551,7 @@ class _DrawnKindRule:
     describe_values: Callable[[FleetField], str]
 
 
-#: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
+#: A number or count field's rule. A value it lists is no string; the home's type reads it as a number.
 _NUMBER_KIND_RULE = _DrawnKindRule(
     spec_types=(
         int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
@@ -556,6 +572,10 @@ _CHOICE_KIND_RULE = _DrawnKindRule(
     ),
     describe_values=lambda row: f"null or one of {list(row.choices)}",
 )
+
+#: The distribution types a CHOICE key draws, by name: those that list their outcomes, the
+#: distributions among _CHOICE_KIND_RULE's spec types.
+_CHOICE_DISTRIBUTION_TYPES: frozenset[str] = frozenset({"weighted_discrete", "shuffled_pool"})
 
 #: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
 #: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
@@ -650,24 +670,19 @@ def _build_weighted_discrete_spec(
         raise ConfigurationError(
             f"weighted_discrete distribution for '{block_path}' requires 'values' and 'weights'"
         )
-    return WeightedDiscreteDistribution(
-        values=tuple(data["values"]),
-        weights=tuple(float(w) for w in data["weights"]),
+    return constructed(
+        block_path, WeightedDiscreteDistribution, values=data["values"], weights=data["weights"]
     )
 
 
 def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
-    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std."""
+    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std; a min or max it leaves out is NormalDistribution's default."""
     if "mean" not in data or "std" not in data:
         raise ConfigurationError(
             f"normal distribution for '{block_path}' requires 'mean' and 'std'"
         )
-    return NormalDistribution(
-        mean=float(data["mean"]),
-        std=float(data["std"]),
-        min=float_or_none(data.get("min")),
-        max=float_or_none(data.get("max")),
-    )
+    bounds = {key: data[key] for key in ("min", "max") if key in data}
+    return constructed(block_path, NormalDistribution, mean=data["mean"], std=data["std"], **bounds)
 
 
 def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
@@ -676,16 +691,22 @@ def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistrib
         raise ConfigurationError(
             f"uniform distribution for '{block_path}' requires 'min' and 'max'"
         )
-    return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
+    return constructed(block_path, UniformDistribution, min=data["min"], max=data["max"])
 
 
 def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
-    """Build the fixed value a spec names, refusing it unless it gives a value."""
+    """Build the fixed value the spec at *block_path*, the parameter's path, names: null, or its value read as a finite number, as the scalar it stands for is read.
+
+    Raises:
+        ConfigurationError: If the spec gives no value, or one that is not a finite number,
+            text included, naming *block_path*.
+    """
     if "value" not in data:
         raise ConfigurationError(
             f"fixed distribution for '{block_path}' requires 'value'"
         )
-    return float_or_none(data["value"])
+    value = data["value"]
+    return None if value is None else as_finite_real(value, block_path)
 
 
 def _build_shuffled_pool_spec(
@@ -696,42 +717,35 @@ def _build_shuffled_pool_spec(
         raise ConfigurationError(
             f"shuffled_pool distribution for '{block_path}' requires 'values' and 'counts'"
         )
-    return ShuffledPoolDistribution(
-        values=tuple(data["values"]),
-        counts=tuple(int(c) for c in data["counts"]),
-    )
+    return constructed(block_path, ShuffledPoolDistribution, values=data["values"], counts=data["counts"])
 
 
 def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
-    """Parse the multiplier of the spec at *block_path*: a number, or a sweep given as a mapping."""
+    """Parse the multiplier of the spec at *block_path*: a number, as written, for ProportionalDistribution to read, or a sweep given as a mapping, built at the multiplier's path, refusing one that leaves out its min, max or steps, naming each by its path."""
     if not isinstance(data, dict):
-        return float(data)
+        return data
     if data.get("type") != "sweep":
         raise ConfigurationError(
             f"proportional_to multiplier dict for '{block_path}' must have type='sweep'"
         )
-    refuse_unrecognised_keys(child_path(block_path, "multiplier"), data, _SWEEP_SPEC_KEYS)
-    return SweepSpec(
-        min=float(data["min"]),
-        max=float(data["max"]),
-        steps=int(data["steps"]),
-        mode=data.get("mode", "geometric"),
-    )
+    multiplier_path = child_path(block_path, "multiplier")
+    refuse_unrecognised_keys(multiplier_path, data, _SWEEP_SPEC_KEYS)
+    refuse_missing_keys(multiplier_path, [key for key in ("min", "max", "steps") if key not in data])
+    return constructed(multiplier_path, SweepSpec, **{key: value for key, value in data.items() if key != "type"})
 
 
 def _build_proportional_to_spec(
     data: dict[str, Any], block_path: str
 ) -> ProportionalDistribution:
-    """Build the proportional_to distribution a spec names, refusing it unless it gives a source."""
+    """Build the proportional_to distribution a spec names, refusing it unless it gives a source; a multiplier or offset it leaves out is ProportionalDistribution's default."""
     if "source" not in data:
         raise ConfigurationError(
             f"proportional_to distribution for '{block_path}' requires 'source'"
         )
-    return ProportionalDistribution(
-        source=data["source"],
-        multiplier=_parse_proportional_to_multiplier(data.get("multiplier", 1.0), block_path),
-        offset=float(data.get("offset", 0.0)),
-    )
+    given: dict[str, object] = {key: data[key] for key in ("offset",) if key in data}
+    if "multiplier" in data:
+        given["multiplier"] = _parse_proportional_to_multiplier(data["multiplier"], block_path)
+    return constructed(block_path, ProportionalDistribution, source=data["source"], **given)
 
 
 _DISTRIBUTION_SPEC_TYPES: Mapping[str, BlockType[DistributionSpec]] = MappingProxyType({
@@ -766,26 +780,22 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
     """Parse a distribution specification from config data.
 
     Args:
-        data: Raw data (scalar, None, or distribution dict)
+        data: Raw data: null, a distribution mapping, or any other value, read as the number
+            every home is given
         param_name: The parameter's path in its file, named in error messages
 
     Returns:
-        DistributionSpec (distribution object, scalar, or None)
+        DistributionSpec (distribution object, a finite float, or None)
 
     Raises:
-        ConfigurationError: If distribution specification is invalid
+        ConfigurationError: If distribution specification is invalid; a value that is
+            neither null nor a mapping and is not a finite number, text included, is
+            refused naming *param_name* and the value
     """
-    # Handle None and scalars
     if data is None:
         return None
-    if isinstance(data, (int, float)):
-        return float(data)
-
-    # Must be a dict with type key
     if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"Invalid distribution spec for '{param_name}': expected number, null, or dict"
-        )
+        return as_finite_real(data, param_name)
 
     dist_type = data.get("type")
     if dist_type is None:
@@ -805,12 +815,27 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
 def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
     """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
 
-    A CHOICE's value that is not a mapping is the spec as written; any other value is read as
-    _parse_distribution_spec reads it. A spec the row's kind does not draw is refused naming
-    *key_path* and the spec as written.
+    A CHOICE's value is the spec as written when _is_a_choice_spec_as_written says so; any other
+    value is read as _parse_distribution_spec reads it. A spec the row's kind does not draw is
+    refused naming *key_path* and the spec as written.
     """
-    spec = data if row.kind is FieldKind.CHOICE and not isinstance(data, dict) else _parse_distribution_spec(data, key_path)
+    spec = data if _is_a_choice_spec_as_written(row, data) else _parse_distribution_spec(data, key_path)
     return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
+
+
+def _is_a_choice_spec_as_written(row: FleetField, data: object) -> bool:
+    """Whether *data*, given the key whose fleet row is *row*, is a CHOICE's spec as written, never read as a distribution.
+
+    It is when it is no mapping, or a mapping naming a type of _DISTRIBUTION_SPEC_TYPES outside
+    _CHOICE_DISTRIBUTION_TYPES, which draws numbers, so the CHOICE refuses it as a spec it does
+    not draw before a number in it is read, a fixed one's value included.
+    """
+    if row.kind is not FieldKind.CHOICE:
+        return False
+    if not isinstance(data, dict):
+        return True
+    named = data.get("type")
+    return isinstance(named, str) and named in _DISTRIBUTION_SPEC_TYPES and named not in _CHOICE_DISTRIBUTION_TYPES
 
 
 def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
@@ -890,8 +915,10 @@ def parse_fleet_distribution_config(
     _refuse_proportional_sources_not_drawn_earlier(
         _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
     )
-    return FleetDistributionConfig(
-        n_homes=int(data["n_homes"]),
+    return constructed(
+        block_path,
+        FleetDistributionConfig,
+        n_homes=data["n_homes"],
         pv=pv,
         load=load,
         battery=battery,
@@ -946,36 +973,27 @@ def _nearest_whole_number(value: float) -> float:
     return float(whole + 1 if value - whole >= 0.5 else whole)
 
 
-#: The COUNT fields _converted_count truncates, as the generator did before it drew each field
-#: by its kind; every other count is rounded. Task 868 rounds these too and deletes the set
-#: (docs/prds/component-defaults-one-home.md §6 decisions 8 and 9).
-_TRUNCATED_COUNTS: frozenset[str] = frozenset({"ev.arrival_hour", "ev.departure_hour"})
-
-
 def _refuse_unless_finite(value: SpecValue, path: str) -> None:
-    """Refuse *value*, a count of the field at *path* to convert, if it is an infinity or a NaN, naming *path* and the value."""
+    """Refuse *value*, a proportional_to's computed count of the field at *path*, if it is an infinity or a NaN, to which no whole number is nearest, naming *path* and the value; a multiplier overflow makes an infinity."""
     if isinstance(value, float) and not math.isfinite(value):
         raise ConfigurationError.must_be(path, "a finite number", got=value)
 
 
 def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
-    """Return the count of the COUNT field at *path* for *value*, drawn from *spec*; this is the sampler's one count conversion.
+    """Return the count of the COUNT field at *path*, an occupant count or an EV hour alike, for *value*, drawn from *spec*; this is the sampler's one count conversion.
 
-    A count in _TRUNCATED_COUNTS is truncated to an int. For any other, a draw from a normal or
-    uniform distribution gives the whole number nearest it among those from the spec's min to
-    its max, as _nearest_count states, and a proportional_to's value the whole number nearest
-    it, a half rounding up either way. The whole number is returned as a float, so a refusal of
-    the count names it as drawn, 1e+300 rather than the 301-digit int it equals. A fixed value
-    is returned as the spec gives it, and any other value as drawn.
+    A draw from a normal or uniform distribution gives the whole number nearest it among those
+    from the spec's min to its max, as _nearest_count states, and a proportional_to's value the
+    whole number nearest it, a half rounding up either way. The whole number is returned as a
+    float, so a refusal of the count names it as drawn, 1e+300 rather than the 301-digit int it
+    equals. A fixed value is returned as the spec gives it, and a listed outcome as drawn, for
+    the component's type to read, so a fractional one is refused there.
 
     Raises:
-        ConfigurationError: If a count it truncates, or a proportional_to's value, is an
-            infinity or a NaN, naming *path* and the value; or as _nearest_count does, for a
-            normal or uniform distribution with no whole number from its min to its max.
+        ConfigurationError: If a proportional_to's value is an infinity or a NaN, naming *path*
+            and the value; or as _nearest_count does, for a normal or uniform distribution with
+            no whole number from its min to its max.
     """
-    if path in _TRUNCATED_COUNTS:
-        _refuse_unless_finite(value, path)
-        return None if value is None else int(value)
     if isinstance(spec, (int, float)):
         return spec
     if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
@@ -1063,8 +1081,8 @@ class _DistributionSampler:
         """Draw the next home's value of *setting* from *spec*.
 
         A setting drawn ahead hands out its next value. Any other is drawn afresh: None
-        gives None, a bare choice gives itself, a fixed number gives itself as a float, and
-        a weighted discrete, normal or uniform spec draws from the RNG.
+        gives None, a bare choice or number gives itself as given, for the home's type to
+        read, and a weighted discrete, normal or uniform spec draws from the RNG.
 
         Args:
             spec: The setting's distribution specification
@@ -1092,10 +1110,8 @@ class _DistributionSampler:
     def _next_value(self, spec: DistributionSpec, setting: str) -> SpecValue:
         if setting in self._drawn_ahead:
             return self._next_value_drawn_ahead(setting)
-        if spec is None or isinstance(spec, str):
+        if spec is None or isinstance(spec, (str, int, float)):
             return spec
-        if isinstance(spec, (int, float)):
-            return float(spec)
         if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
             return spec.draw(self._rng)
         raise ConfigurationError(f"{setting} cannot be drawn from {spec!r}")
@@ -1281,8 +1297,8 @@ def generate_homes_from_distribution(
     Raises:
         ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
             uniform draw that is not a finite number, a count with no whole number from its
-            spec's min to its max, an EV hour or a proportional_to's count that is an
-            infinity or a NaN); if a required field draws null, naming its path and the
+            spec's min to its max, a proportional_to's count that is an infinity or a
+            NaN); if a required field draws null, naming its path and the
             home; if a presence rule refuses a draw, as battery.has_battery refuses a
             negative or non-finite battery capacity; if the fleet gives a home no PV or no
             load, which every home needs, naming the component and the home; as a
