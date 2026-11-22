@@ -6,6 +6,7 @@ editor holds for it, the keys it holds none for, and its builder. The parser rea
 keys and builder, and the types an unknown one is refused naming, from the table.
 """
 
+import json
 from typing import Any
 
 import pytest
@@ -16,22 +17,31 @@ from solar_challenge.fleet_distribution import (
     DistributionSpec,
     DistributionType,
     NormalDistribution,
+    ProportionalDistribution,
+    ShuffledPoolDistribution,
     SpecParameter,
     SpecRows,
+    SweepSpec,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
     parse_fleet_distribution_config,
+    write_distribution_spec,
 )
 from solar_challenge.scenario_blocks import FieldKind
 
 _SPEC_PATH = "fleet_distribution.battery.capacity_kwh"
 
+#: The key a spec is parsed at, by its component: a NUMBER field, and a CHOICE field of ASHP and GSHP.
+_KEY_AT: dict[str, str] = {"battery": "capacity_kwh", "heat_pump": "heat_pump_type"}
 
-def _parsed_spec(spec: object, *, n_homes: int = 4) -> DistributionSpec:
-    """Parse *spec* as the battery capacity of a ``fleet_distribution:`` block of *n_homes* homes."""
-    fleet = parse_fleet_distribution_config(
-        {"n_homes": n_homes, "pv": {"capacity_kw": 4.0}, "battery": {"capacity_kwh": spec}}
-    )
-    assert fleet.battery is not None
-    return fleet.battery.draws["capacity_kwh"]
+
+def _parsed_spec(spec: object, *, at: str = "battery", n_homes: int = 4) -> DistributionSpec:
+    """Parse *spec* as the *at* component's key _KEY_AT names, in a ``fleet_distribution:`` block of *n_homes* homes."""
+    key = _KEY_AT[at]
+    fleet = parse_fleet_distribution_config({"n_homes": n_homes, "pv": {"capacity_kw": 4.0}, at: {key: spec}})
+    component = getattr(fleet, at)
+    assert component is not None
+    return component.draws[key]
 
 
 #: A spec of each table type, by its name, giving every key the type recognises; a pool's counts total 4 homes.
@@ -61,6 +71,40 @@ def _keys_an_editor_holds() -> list[Any]:
             for key, required in keys
         ]
     return held
+
+
+#: A spec of each table type, by its name, with the component it is parsed at; a pool's counts total 4 homes.
+_SAMPLE_BY_TYPE: dict[str, tuple[DistributionSpec, str]] = {
+    "weighted_discrete": (WeightedDiscreteDistribution(values=(None, 5.0, 10.0), weights=(2.0, 1.0, 1.0)), "battery"),
+    "normal": (NormalDistribution(mean=5.0, std=1.0, min=2.0), "battery"),
+    "uniform": (UniformDistribution(min=2.0, max=8.0), "battery"),
+    "fixed": (4.5, "battery"),
+    "shuffled_pool": (ShuffledPoolDistribution(values=(None, 5.0, 10.0), counts=(1, 2, 1)), "battery"),
+    "proportional_to": (
+        ProportionalDistribution(
+            source="pv.capacity_kw", multiplier=SweepSpec(min=0.5, max=2.0, steps=3, mode="linear")
+        ),
+        "battery",
+    ),
+}
+
+_SPECS = [
+    *(pytest.param(spec, at, id=name) for name, (spec, at) in _SAMPLE_BY_TYPE.items()),
+    pytest.param(
+        WeightedDiscreteDistribution(values=("ASHP", None), weights=(1.0, 3.0)), "heat_pump",
+        id="weighted_discrete-of-choices",
+    ),
+    pytest.param(NormalDistribution(mean=5.0, std=1.0), "battery", id="normal-unclamped"),
+    pytest.param(
+        ShuffledPoolDistribution(values=("ASHP", "GSHP"), counts=(3, 1)), "heat_pump", id="shuffled_pool-of-choices"
+    ),
+    pytest.param(
+        ProportionalDistribution(source="pv.capacity_kw", multiplier=1.5, offset=0.5), "battery",
+        id="proportional_to-a-number",
+    ),
+    pytest.param(None, "battery", id="null"),
+    pytest.param("GSHP", "heat_pump", id="a-choice"),
+]
 
 
 class TestTheTable:
@@ -212,3 +256,50 @@ class TestTheParserReadsTheTable:
                 _parsed_spec(spec)
         else:
             assert isinstance(_parsed_spec(spec), distribution_type.spec_type)
+
+
+class TestTheWriterIsTheParsersInverse:
+    """A spec is written as the mapping, or the scalar, that the grammar reads back as it (T1)."""
+
+    @pytest.mark.parametrize(("spec", "at"), _SPECS)
+    def test_a_spec_written_by_write_distribution_spec_parses_back_as_itself(
+        self, spec: DistributionSpec, at: str
+    ) -> None:
+        assert _parsed_spec(write_distribution_spec(spec), at=at) == spec
+
+    @pytest.mark.parametrize("scalar", [pytest.param(4.5, id="a-number"), pytest.param(None, id="null"), "GSHP"])
+    def test_the_scalar_forms_are_written_as_they_are(self, scalar: DistributionSpec) -> None:
+        written = write_distribution_spec(scalar)
+
+        assert (type(written), written) == (type(scalar), scalar)
+
+    @pytest.mark.parametrize("distribution_type", _TABLE_TYPES)
+    def test_each_types_write_parses_back_as_the_spec_it_wrote(self, distribution_type: DistributionType) -> None:
+        spec, at = _SAMPLE_BY_TYPE[distribution_type.name]
+
+        assert _parsed_spec(distribution_type.write(spec), at=at) == spec
+
+    def test_the_fixed_type_writes_null_as_a_value_that_parses_back_as_null(self) -> None:
+        assert _parsed_spec(DISTRIBUTION_TYPES["fixed"].write(None)) is None
+
+    @pytest.mark.parametrize("distribution_type", _TABLE_TYPES)
+    def test_a_written_spec_gives_its_type_and_every_recognised_key_as_plain_data(
+        self, distribution_type: DistributionType
+    ) -> None:
+        """A written spec holds lists, never tuples, and a sweep as its mapping: data a JSON body or a YAML file carries."""
+        spec, _ = _SAMPLE_BY_TYPE[distribution_type.name]
+
+        written = distribution_type.write(spec)
+
+        assert written["type"] == distribution_type.name
+        assert set(written) == distribution_type.recognised_keys
+        assert json.loads(json.dumps(written)) == written
+
+    def test_a_value_that_is_no_spec_is_refused_naming_it(self) -> None:
+        not_a_spec: Any = SweepSpec(min=0.5, max=2.0, steps=3)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            write_distribution_spec(not_a_spec)
+
+        assert repr(not_a_spec) in str(refusal.value)
+        assert [name for name in DISTRIBUTION_TYPES if name not in str(refusal.value)] == []
