@@ -23,6 +23,7 @@ from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.tariff import TariffConfig
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 
 def _assert_refused_naming_tou_optimized_and_the_tariff(read: Callable[[], object]) -> None:
@@ -403,11 +404,12 @@ fleet_distribution:
     capacity_kw: 4.0
   battery:
     capacity_kwh: 5.0
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.9
   load:
     annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
 tariff:
   type: economy_7
   off_peak_rate: 0.09
@@ -424,56 +426,40 @@ tariff:
             assert home.battery_config.grid_charging is not None, "grid_charging should be threaded"
             assert home.battery_config.grid_charging.target_soc_fraction == 0.9
 
-    def test_fleet_yaml_dispatch_strategy_threaded(self, tmp_path: Path) -> None:
-        """fleet_distribution.dispatch_strategy: tou_optimized threads to all homes via load_fleet_config, beside the tariff it dispatches by."""
-        yaml_content = """
-name: Dispatch Strategy Threading Test
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param("null", id="null"),
+            pytest.param("tou-optimised", id="misspelt"),
+        ],
+    )
+    def test_a_fleet_level_dispatch_strategy_is_refused_naming_the_batterys(
+        self, tmp_path: Path, dispatch_strategy: str
+    ) -> None:
+        """The dispatch strategy is the battery's own setting, so a fleet_distribution that sets one, of any value, is refused naming where it goes."""
+        path = tmp_path / "fleet.yaml"
+        path.write_text(f"""
+name: Retired Dispatch Strategy Test
 fleet_distribution:
-  n_homes: 4
-  seed: 11
+  n_homes: 2
+  seed: 42
   pv:
     capacity_kw: 4.0
   battery:
     capacity_kwh: 5.0
   load:
     annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
+  dispatch_strategy: {dispatch_strategy}
 tariff:
   type: economy_7
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
+""")
 
-        fleet = load_fleet_config(path)
-        assert len(fleet.homes) == 4
-        for home in fleet.homes:
-            assert home.dispatch_strategy == "tou_optimized", (
-                "dispatch_strategy should be threaded from YAML to every home"
-            )
-
-    def test_fleet_yaml_no_dispatch_strategy_defaults_greedy(self, tmp_path: Path) -> None:
-        """fleet YAML without dispatch_strategy key: all homes default to dispatch_strategy='greedy'."""
-        yaml_content = """
-name: Dispatch Strategy Default Guard
-fleet_distribution:
-  n_homes: 4
-  seed: 22
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        fleet = load_fleet_config(path)
-        assert len(fleet.homes) == 4
-        for home in fleet.homes:
-            assert home.dispatch_strategy == "greedy", (
-                "dispatch_strategy must default to 'greedy' when key is absent"
-            )
+        with pytest.raises(
+            ConfigurationError, match=retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy")
+        ):
+            load_fleet_config(path)
 
     def test_theta_calibration_regression_no_tariff_no_grid_charging(self, tmp_path: Path) -> None:
         """θ regression pin: fleet YAML without tariff: or grid_charging is bit-identical (both None).
@@ -516,52 +502,6 @@ finance:
             assert home.battery_config.grid_charging is None, (
                 "grid_charging must be None when no battery.grid_charging key is present"
             )
-
-    def test_fleet_yaml_invalid_dispatch_strategy_raises(self, tmp_path: Path) -> None:
-        """A typo in fleet_distribution.dispatch_strategy raises ConfigurationError.
-
-        Catches config errors early rather than silently falling back to
-        self-consumption at simulation time (e.g. 'tou-optimised' instead of
-        'tou_optimized').
-        """
-        yaml_content = """
-name: Invalid Strategy Test
-fleet_distribution:
-  n_homes: 2
-  seed: 42
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-  dispatch_strategy: tou-optimised
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        with pytest.raises(ConfigurationError, match="tou-optimised"):
-            load_fleet_config(path)
-
-    def test_dispatch_strategy_tou_without_tariff_is_refused(self, tmp_path: Path) -> None:
-        """tou_optimized dispatches each battery by the file's tariff, so a fleet of batteries without a tariff: block is refused."""
-        yaml_content = """
-name: TOU No Tariff Test
-fleet_distribution:
-  n_homes: 2
-  seed: 42
-  pv:
-    capacity_kw: 4.0
-  battery:
-    capacity_kwh: 5.0
-  load:
-    annual_consumption_kwh: 3400
-  dispatch_strategy: tou_optimized
-"""
-        path = tmp_path / "fleet.yaml"
-        path.write_text(yaml_content)
-
-        _assert_refused_naming_tou_optimized_and_the_tariff(lambda: load_fleet_config(path))
 
 
 class TestLoadFleetConfigBatteryDispatchStrategy:
@@ -751,15 +691,15 @@ def _proportional_to_pv(multiplier: object) -> dict[str, object]:
 
 
 def _fleet_file(capacity_kwh: object, **top_level_blocks: object) -> dict[str, Any]:
-    """A fleet file of two tou_optimized homes with _PV_KW of PV and a battery of *capacity_kwh* that grid-charges to 0.9, beside *top_level_blocks*."""
+    """A fleet file of two homes with _PV_KW of PV and a battery of *capacity_kwh* that dispatches tou_optimized on the tariff's clock and grid-charges to 0.9, beside *top_level_blocks*."""
     return {
         "fleet_distribution": {
             "n_homes": 2,
             "seed": 7,
             "pv": {"capacity_kw": _PV_KW},
             "load": {"annual_consumption_kwh": 3400},
-            "dispatch_strategy": "tou_optimized",
             "battery": {
+                "dispatch_strategy": {"strategy_type": "tou_optimized"},
                 "grid_charging": {"target_soc_fraction": 0.9},
                 "capacity_kwh": capacity_kwh,
             },
@@ -786,8 +726,8 @@ class TestParseSweepFleetConfigs:
         for _, fleet in points:
             for home in fleet.homes:
                 assert home.tariff_config == TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
-                assert home.dispatch_strategy == "tou_optimized"
                 assert home.battery_config is not None
+                assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
                 assert home.battery_config.grid_charging == GridChargeConfig(target_soc_fraction=0.9)
         for value, fleet in points:
             fixed_capacity_file = tmp_path / f"fleet-{value}.yaml"

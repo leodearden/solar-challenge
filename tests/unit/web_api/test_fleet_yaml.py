@@ -502,7 +502,7 @@ class TestFleetPresetEndpoint:
                     "fleet_distribution.battery.max_discharge_kw",
                     "fleet_distribution.battery.grid_charging",
                     "fleet_distribution.load.use_stochastic",
-                    "fleet_distribution.dispatch_strategy",
+                    "fleet_distribution.battery.dispatch_strategy",
                 ),
                 id="bristol-phase1-flex",
             ),

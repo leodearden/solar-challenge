@@ -13,7 +13,7 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import load_fleet_config
-from solar_challenge.dispatch import GridChargeConfig
+from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.fleet_distribution import (
@@ -1114,21 +1114,23 @@ class TestGenerateHomesHouseholdOccupants:
 
 
 class TestGenerateHomesFromDistributionFlex:
-    """How generate_homes_from_distribution gives every home the fleet's tariff and dispatch strategy, and every battery the fleet's grid charging."""
+    """How generate_homes_from_distribution gives every home the fleet's tariff, and every battery the fleet's dispatch strategy and grid charging."""
 
     def _base_config(
         self,
         *,
         grid_charging: Optional[GridChargeConfig] = None,
-        dispatch_strategy: Optional[str] = None,
+        battery_strategy: Optional[DispatchStrategyConfig] = None,
     ) -> FleetDistributionConfig:
-        """A small fixed fleet with a battery on every home, with the given battery grid charging and fleet dispatch strategy."""
+        """A small fixed fleet with a battery on every home, with the given battery grid charging and, unless None, battery dispatch strategy."""
+        strategy = {} if battery_strategy is None else {"dispatch_strategy": battery_strategy}
         return FleetDistributionConfig(
             n_homes=5,
             pv=ComponentDistribution({"capacity_kw": 4.0}),
-            battery=ComponentDistribution({"capacity_kwh": 5.0}, settings={"grid_charging": grid_charging}),
+            battery=ComponentDistribution(
+                {"capacity_kwh": 5.0}, settings={"grid_charging": grid_charging, **strategy}
+            ),
             seed=42,
-            dispatch_strategy=dispatch_strategy,
         )
 
     def test_fleet_tariff_threaded_to_all_homes(self) -> None:
@@ -1143,10 +1145,10 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.tariff_config == tariff
 
     def test_battery_grid_charging_reaches_every_battery(self) -> None:
-        """A battery's grid_charging setting is the grid charging of every generated battery, on homes that dispatch tou_optimized by a tariff."""
+        """A battery's grid_charging setting is the grid charging of every generated battery, each dispatching tou_optimized by its home's tariff."""
         gc = GridChargeConfig(target_soc_fraction=0.9)
         homes = generate_homes_from_distribution(
-            self._base_config(grid_charging=gc, dispatch_strategy="tou_optimized"),
+            self._base_config(grid_charging=gc, battery_strategy=TOUOptimizedStrategyConfig()),
             Location.bristol(),
             fleet_tariff=TariffConfig.economy_7(),
         )
@@ -1155,11 +1157,11 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.battery_config.grid_charging == gc
 
     def test_fleet_tariff_and_battery_grid_charging_both_reach_every_home(self) -> None:
-        """The fleet_tariff keyword and the battery's grid_charging reach every home together, on homes that dispatch tou_optimized by that tariff."""
+        """The fleet_tariff keyword and the battery's grid_charging reach every home together, each battery dispatching tou_optimized by that tariff."""
         tariff = TariffConfig.economy_7()
         gc = GridChargeConfig(target_soc_fraction=0.85)
         homes = generate_homes_from_distribution(
-            self._base_config(grid_charging=gc, dispatch_strategy="tou_optimized"),
+            self._base_config(grid_charging=gc, battery_strategy=TOUOptimizedStrategyConfig()),
             Location.bristol(),
             fleet_tariff=tariff,
         )
@@ -1177,26 +1179,21 @@ class TestGenerateHomesFromDistributionFlex:
             assert home.battery_config is not None
             assert home.battery_config.grid_charging is None
 
-    def test_config_dispatch_strategy_reaches_every_home(self) -> None:
-        """FleetDistributionConfig.dispatch_strategy='tou_optimized' is the dispatch strategy of every home, each given the tariff it dispatches by."""
+    def test_the_battery_blocks_dispatch_strategy_reaches_every_battery(self) -> None:
+        """The battery block's dispatch_strategy setting is the dispatch strategy of every generated battery, each given the tariff it dispatches by."""
         homes = generate_homes_from_distribution(
-            self._base_config(dispatch_strategy="tou_optimized"),
+            self._base_config(battery_strategy=TOUOptimizedStrategyConfig()),
             Location.bristol(),
             fleet_tariff=TariffConfig.economy_7(),
         )
         assert len(homes) == 5
         for home in homes:
-            assert home.dispatch_strategy == "tou_optimized"
-
-    def test_dispatch_strategy_defaults_to_greedy(self) -> None:
-        """A config without a dispatch_strategy: every home dispatches greedy."""
-        homes = generate_homes_from_distribution(self._base_config(), Location.bristol())
-        for home in homes:
-            assert home.dispatch_strategy == "greedy"
+            assert home.battery_config is not None
+            assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
 
     def test_tou_optimized_batteries_without_a_fleet_tariff_are_refused_as_home_config_refuses_them(self) -> None:
-        """A fleet that dispatches tou_optimized with no fleet_tariff is refused when its first home is built, in HomeConfig's own words, which name neither the home nor the fleet_distribution block (docs/prds/dispatch-configuration-below-config.md §5.3)."""
-        fleet = self._base_config(dispatch_strategy="tou_optimized")
+        """A fleet whose batteries dispatch tou_optimized on the tariff's clock with no fleet_tariff is refused when its first home is built, in HomeConfig's own words, which name neither the home nor the fleet_distribution block (docs/prds/dispatch-configuration-below-config.md §5.3)."""
+        fleet = self._base_config(battery_strategy=TOUOptimizedStrategyConfig())
 
         with pytest.raises(ConfigurationError) as generation_refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
@@ -1205,8 +1202,7 @@ class TestGenerateHomesFromDistributionFlex:
             HomeConfig(
                 pv_config=PVConfig(capacity_kw=4.0),
                 load_config=LoadConfig(),
-                battery_config=BatteryConfig(capacity_kwh=5.0),
-                dispatch_strategy="tou_optimized",
+                battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
             )
 
         assert str(generation_refusal.value) == str(construction_refusal.value)

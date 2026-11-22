@@ -1291,7 +1291,7 @@ _SWEEP_PATHS = (
 
 
 def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
-    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that dispatches tou_optimized on the tariff's clock, charges and discharges at 2.5 kW and grid-charges to 90%."""
     Path(file_name).write_text(
         yaml.safe_dump(
             {
@@ -1301,8 +1301,8 @@ def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, ob
                     "seed": 42,
                     "pv": {"capacity_kw": 4.0},
                     "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    "dispatch_strategy": "tou_optimized",
                     "battery": {
+                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
                         "max_charge_kw": 2.5,
                         "max_discharge_kw": 2.5,
                         "grid_charging": {"target_soc_fraction": 0.9},

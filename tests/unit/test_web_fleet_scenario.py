@@ -733,6 +733,24 @@ class TestFleetFormFromScenario:
             form=_FLEET_FORM, not_loaded=("tariff.off_peak_start",)
         )
 
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, id="peak-hours-absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="peak-hours-null"),
+        ],
+    )
+    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_is_not_loaded(
+        self, dispatch_strategy: dict[str, Any]
+    ) -> None:
+        """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
+
+        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedFleetForm(
+            form=_without(_FLEET_FORM, "dispatch_strategy"),
+            not_loaded=("fleet_distribution.battery.dispatch_strategy",),
+        )
+
     def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:
         """An Economy 10 tariff that sets no rate loads the rates the loaders charge it, its PRESET_RATES row."""
         imported = fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": {"type": "economy_10"}})

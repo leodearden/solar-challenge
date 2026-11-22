@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests of the `validate` command group: its help, `validate results` on a results CSV, and `validate config` on a config file."""
 
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +27,7 @@ from tests._construction_refusals import prefixed_construction_refusal
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 runner = CliRunner()
 
@@ -1118,14 +1120,15 @@ home:
                 "fleet_distribution:\n"
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0}\n"
-                "  battery: {capacity_kwh: 5.0}\n"
-                "  dispatch_strategy: tou_optimized\n",
+                "  battery: {capacity_kwh: 5.0, dispatch_strategy: {strategy_type: tou_optimized}}\n",
                 id="fleet-distribution",
             ),
-            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+            pytest.param(
+                _SWEEP_FLEET + "    dispatch_strategy: {strategy_type: tou_optimized}\n", id="fleet-sweep"
+            ),
         ],
     )
-    def test_a_tou_optimized_fleet_with_batteries_and_no_tariff_is_an_error_row(
+    def test_a_fleet_of_tou_optimized_batteries_and_no_tariff_is_an_error_row(
         self, tmp_path: Path, document: str
     ) -> None:
         result = self._validate_config(tmp_path, document)
@@ -1138,17 +1141,35 @@ home:
         assert "tariff" in error_row
         assert "WARNING" not in text
 
-    def test_a_tou_optimized_fleet_without_batteries_needs_no_tariff(
-        self, tmp_path: Path
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  battery: {capacity_kwh: 5.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-distribution",
+            ),
+            pytest.param(
+                "fleet_distribution:\n"
+                "  n_homes: 2\n"
+                "  pv: {capacity_kw: 4.0}\n"
+                "  dispatch_strategy: tou_optimized\n",
+                id="fleet-without-batteries",
+            ),
+            pytest.param(_SWEEP_FLEET + "  dispatch_strategy: tou_optimized\n", id="fleet-sweep"),
+        ],
+    )
+    def test_a_fleet_level_dispatch_strategy_is_an_error_row_naming_the_batterys(
+        self, tmp_path: Path, document: str
     ) -> None:
-        result = self._validate_config(
-            tmp_path,
-            "fleet_distribution:\n"
-            "  n_homes: 2\n"
-            "  pv: {capacity_kw: 4.0}\n"
-            "  dispatch_strategy: tou_optimized\n",
-        )
+        """The dispatch strategy is the battery's own setting, so `validate config` reports the retired fleet-level key, with or without batteries, naming where it goes."""
+        result = self._validate_config(tmp_path, document)
 
-        assert result.exit_code == 0
-        assert "OK Configuration is valid" in table_text(result.stdout)
-        assert "WARNING" not in table_text(result.stdout)
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert re.search(retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy"), error_row), error_row
