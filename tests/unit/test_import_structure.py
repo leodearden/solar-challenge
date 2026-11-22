@@ -520,18 +520,28 @@ def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
     )
 
 
-def test_finance_imports_no_fleet_runner_inside_a_function(
+def test_finance_functions_import_only_fleet_config_from_fleet(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
-    """Every name a finance function imports from fleet is FleetConfig: finance builds fleets for its caller's simulate and resolves no runner (fleet-execution-policy B18)."""
-    extra = [
-        (site, name)
+    """Every name a finance function imports from fleet is FleetConfig: finance builds fleets for its caller's simulate and resolves no runner (fleet-execution-policy B18), until no finance function imports from fleet and this guard goes."""
+    from_fleet = [
+        site
         for site in _function_local_package_imports(real_tree_imports)
         if site.importer == _FINANCE and site.imported == _FLEET
+    ]
+    assert from_fleet, (
+        f"no function of {_FINANCE} imports from {_FLEET} any more, so this test and "
+        "_FINANCE_FLEET_NAMES go from tests/unit/test_import_structure.py, in the change that "
+        f"drops the ({_FINANCE!r}, {_FLEET!r}) entry of ALLOWED_FUNCTION_LOCAL_IMPORTS; "
+        "test_every_function_local_package_import_is_allowed then refuses any such import"
+    )
+
+    extra = [
+        (site, name)
+        for site in from_fleet
         for name in site.names or (site.imported,)
         if name not in _FINANCE_FLEET_NAMES
     ]
-
     found = "\n".join(f"{site}: {name}" for site, name in extra)
     assert not extra, (
         f"these imports inside a function of {_FINANCE} bind names from {_FLEET} other than "
