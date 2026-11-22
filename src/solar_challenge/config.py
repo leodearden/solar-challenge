@@ -44,6 +44,7 @@ from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.scenario_blocks import (
     HOME_BLOCK_KEYS,
+    RETIRED_DISPATCH_STRATEGY_KEY,
     block_label,
     child_path,
     parse_community_config,
@@ -644,7 +645,7 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 
     if "home" in config:
         return parse_home_block(config["home"], location)
-    refuse_unrecognised_keys("", config, _FLAT_HOME_FILE_KEYS)
+    refuse_unrecognised_keys("", refuse_retired_keys("", config, RETIRED_DISPATCH_STRATEGY_KEY), _FLAT_HOME_FILE_KEYS)
     flat_home = {key: value for key, value in config.items() if key != "location"}
     return parse_home_block(flat_home, location, block_path="")
 

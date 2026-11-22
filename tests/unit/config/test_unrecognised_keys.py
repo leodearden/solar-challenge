@@ -332,6 +332,22 @@ class TestHomeBlockKeys:
             "battery, ev, heat_pump, load, location, name, pv, tariff"
         )
 
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_flat_home_files_dispatch_strategy_is_refused_naming_the_batterys(
+        self, tmp_path: Path, dispatch_strategy: object
+    ) -> None:
+        """A flat home file is itself a home block, so its retired dispatch_strategy key, of any value, is refused naming the battery's, not as an unrecognised key."""
+        path = _write(tmp_path, {"battery": {"capacity_kwh": 5.0}, "dispatch_strategy": dispatch_strategy})
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("dispatch_strategy")):
+            load_home_config(path)
+
     def test_flat_home_file_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
         """load_home_config reads a flat home file's location: block itself, beside the home keys."""
         location = {"latitude": 52.0, "longitude": -1.5, "name": "Midlands"}

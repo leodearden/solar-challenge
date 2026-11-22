@@ -1172,3 +1172,15 @@ home:
         assert "ERROR" in text
         error_row = text[text.index("ERROR"):]
         assert re.search(retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy"), error_row), error_row
+
+    def test_a_flat_home_files_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
+        """A flat home file is itself a home block, so `validate config` reports its retired dispatch_strategy key naming where it goes."""
+        result = self._validate_config(
+            tmp_path, "pv: {capacity_kw: 4.0}\nbattery: {capacity_kwh: 5.0}\ndispatch_strategy: tou_optimized\n"
+        )
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert re.search(retired_dispatch_strategy_refusal("dispatch_strategy"), error_row), error_row

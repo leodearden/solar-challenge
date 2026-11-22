@@ -357,7 +357,6 @@ class TestTheHomeFace:
         assert TOUOptimizedStrategyConfig(peak_hours=((16, 19),)) in strategies
 
 
-# The flows of a home's results the two dispatch routes must agree on.
 class TestGridChargingOnATariffWithNoCheapPeriod:
     def test_the_factory_refuses_it_naming_grid_charging_the_strategy_and_the_tariff(self) -> None:
         tariff = _flat_rate()
