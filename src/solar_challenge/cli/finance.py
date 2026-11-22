@@ -96,7 +96,7 @@ def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> Fl
     seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
     return dataclasses.replace(
         fleet_config,
-        homes=[dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes],
+        homes=tuple(dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes),
     )
 
 

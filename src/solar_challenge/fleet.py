@@ -9,7 +9,7 @@ import os
 import signal
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import tzinfo
 from multiprocessing.context import BaseContext
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
@@ -44,20 +44,21 @@ def fleet_home_seed(fleet_seed: int | None, index: int) -> int | None:
     return None if fleet_seed is None else fleet_seed + index
 
 
-@dataclass
+@dataclass(frozen=True)
 class FleetConfig:
     """Configuration for a fleet of homes.
 
     Attributes:
-        homes: List of HomeConfig objects for each home
+        homes: The HomeConfig of each home, held as a tuple whatever sequence is given
         name: Optional identifier for the fleet
     """
 
-    homes: list[HomeConfig] = field(default_factory=list)
+    homes: tuple[HomeConfig, ...] = ()
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate fleet configuration."""
+        """Hold homes as a tuple, then validate fleet configuration."""
+        object.__setattr__(self, "homes", tuple(self.homes))
         if not self.homes:
             raise ConfigurationError("Fleet must have at least one home")
 
@@ -105,7 +106,7 @@ class FleetConfig:
                 "None (pass the fleet's seed as seed=; home i then gets seed + i)",
                 got=load_config.seed,
             )
-        homes = [
+        homes = tuple(
             HomeConfig(
                 pv_config=pv_config,
                 load_config=replace(load_config, seed=fleet_home_seed(seed, i)),
@@ -114,7 +115,7 @@ class FleetConfig:
                 name=f"Home {i+1}",
             )
             for i in range(n_homes)
-        ]
+        )
         return cls(homes=homes, name=name)
 
     @classmethod
@@ -166,27 +167,26 @@ class FleetConfig:
                 )
             )
 
-        return cls(homes=homes, name=name)
+        return cls(homes=tuple(homes), name=name)
 
 
-@dataclass
+@dataclass(frozen=True)
 class FleetResults:
     """Results from a fleet simulation of at least one home, each home's SimulationResults paired with its HomeConfig.
 
     Attributes:
-        per_home_results: List of SimulationResults for each home
-        home_configs: The HomeConfig of each home, in per_home_results' order
+        per_home_results: The SimulationResults of each home, held as a tuple whatever sequence is given
+        home_configs: The HomeConfig of each home, in per_home_results' order, held as a tuple whatever
+            sequence is given
     """
 
-    per_home_results: list[SimulationResults]
-    home_configs: list[HomeConfig]
+    per_home_results: tuple[SimulationResults, ...]
+    home_configs: tuple[HomeConfig, ...]
 
     def __post_init__(self) -> None:
-        """Enforce _require_paired_homes at construction."""
-        self._require_paired_homes()
-
-    def _require_paired_homes(self) -> None:
-        """Raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        """Hold both fields as tuples; raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        object.__setattr__(self, "per_home_results", tuple(self.per_home_results))
+        object.__setattr__(self, "home_configs", tuple(self.home_configs))
         if not self.per_home_results:
             raise ValueError("FleetResults must have at least one home: per_home_results is empty")
         if len(self.home_configs) != len(self.per_home_results):
@@ -212,12 +212,7 @@ class FleetResults:
         Returns:
             Sum of the series across all homes, named as each home's series is: its
             SimulationResults column, which to_aggregate_dataframe relies on
-
-        Raises:
-            ValueError: If the fleet has no homes, or home_configs does not hold one
-                HomeConfig per home's results
         """
-        self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
 
@@ -427,7 +422,7 @@ def reusing(
         """results paired with fleet's homes for a request reusing matches, once each of results' homes is found to cover its run window; else simulate's answer."""
         if _instants_and_clocks(start, end) == held_window and _at_starting_soh(fleet.homes) == held_homes:
             _require_results_cover(results, start_date, end_date)
-            return FleetResults(per_home_results=list(results.per_home_results), home_configs=list(fleet.homes))
+            return FleetResults(per_home_results=results.per_home_results, home_configs=fleet.homes)
         return simulate(fleet, start, end)
 
     return simulate_reusing
@@ -599,7 +594,7 @@ def _simulate_fleets(
             fleet_finished[job.home_index] = results
             if len(fleet_finished) == len(job.fleet.homes):
                 yield job.fleet_index, FleetResults(
-                    per_home_results=[fleet_finished[home_index] for home_index in range(len(job.fleet.homes))],
+                    per_home_results=tuple(fleet_finished[home_index] for home_index in range(len(job.fleet.homes))),
                     home_configs=job.fleet.homes,
                 )
 
@@ -617,12 +612,7 @@ def calculate_home_summaries(
 
     Returns:
         calculate_summary of each home's results, in per_home_results' order
-
-    Raises:
-        ValueError: If results has no homes, or its home_configs does not hold one
-            HomeConfig per home's results
     """
-    results._require_paired_homes()
     return [
         calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
         for r in results.per_home_results
@@ -642,10 +632,6 @@ def calculate_fleet_summary(
 
     Returns:
         FleetSummary with totals and distribution statistics
-
-    Raises:
-        ValueError: If results has no homes, or its home_configs does not hold one
-            HomeConfig per home's results
     """
     return aggregate_home_summaries(calculate_home_summaries(results, seg_tariff_pence_per_kwh))
 

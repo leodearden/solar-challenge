@@ -86,8 +86,8 @@ class RecordingFleetSimulator:
         self.fleet_calls.append(FleetCall(fleet, start_date, end_date, progress))
         self.answers.append(
             FleetResults(
-                per_home_results=[_an_hour_at(home.pv_config.capacity_kw) for home in fleet.homes],
-                home_configs=list(fleet.homes),
+                per_home_results=tuple(_an_hour_at(home.pv_config.capacity_kw) for home in fleet.homes),
+                home_configs=fleet.homes,
             )
         )
         return self.answers[-1]

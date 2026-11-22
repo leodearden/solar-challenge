@@ -287,7 +287,7 @@ class StoredFleetRun:
 
     def config_document(self) -> dict[str, Any]:
         """The run's config.json document: each home's HomeConfig field tree, in the fleet's order, and their count."""
-        homes = tuple(self.fleet_results.home_configs)
+        homes = self.fleet_results.home_configs
         return field_tree(FleetRunConfig(homes=homes, n_homes=len(homes)))
 
     def summary_document(self) -> dict[str, Any]:
@@ -659,13 +659,13 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
     config = documents.config.read(FleetRunConfig)
     summary = documents.summary.read(FleetSummary)
     home_summaries = tuple(each.read(SummaryStatistics) for each in documents.home_summaries)
-    per_home_results = [
+    per_home_results = tuple(
         _time_series(run_dir, run_id, _home_time_series(index), home_summary)
         for index, home_summary in enumerate(home_summaries)
-    ]
+    )
     return StoredFleetRun(
         run_id=run_id,
-        fleet_results=FleetResults(per_home_results=per_home_results, home_configs=list(config.homes)),
+        fleet_results=FleetResults(per_home_results=per_home_results, home_configs=config.homes),
         summary=summary,
         home_summaries=home_summaries,
     )

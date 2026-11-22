@@ -95,7 +95,7 @@ def _json(value: object) -> str:
     return json.dumps(value, allow_nan=False)
 
 
-def _generated_points(document: Mapping[str, Any]) -> list[tuple[Optional[float], list[HomeConfig]]]:
+def _generated_points(document: Mapping[str, Any]) -> list[tuple[Optional[float], tuple[HomeConfig, ...]]]:
     if detect_fleet_sweep_spec(document) is None:
         return [(None, parse_fleet_config(document).homes)]
     return [(value, fleet_config.homes) for value, fleet_config in parse_sweep_fleet_configs(document)]
