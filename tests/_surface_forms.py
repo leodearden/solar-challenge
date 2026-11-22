@@ -444,12 +444,12 @@ class _DataclassParameter:
 
 @dataclasses.dataclass(frozen=True)
 class _InstanceAbility:
-    """Marks a part as an ability a class's kind names that its instances have, as match_args says a positional class pattern matches them in class[match_args]."""
+    """Marks a part as an ability a class's kind names that its instances have, as match_args says a positional class pattern matches them in class[match_args]; _ADDITIVE_PARTS's row for a class's match_args or weakref_slot qualifier recognises it, so a kind that gains one is an additive change."""
 
 
 @dataclasses.dataclass(frozen=True)
 class _InstanceRestriction:
-    """Marks a part as a restriction a class's kind names on its instances, as slots says they hold no __dict__ in class[slots]; no _ADDITIVE_PARTS row recognises it, so a kind that gains one changes breakingly."""
+    """Marks a part as a restriction a class's kind names on its instances, as slots says they hold no __dict__ in class[slots]; no _ADDITIVE_PARTS row recognises it, so a kind that gains one is a breaking change."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -575,6 +575,10 @@ _ADDITIVE_PARTS: tuple[_AdditivePart, ...] = (
     _AdditivePart(
         "a property's settable or deletable qualifier",
         lambda value: isinstance(value, _PropertyAbility),
+    ),
+    _AdditivePart(
+        "a class's match_args or weakref_slot qualifier",
+        lambda value: isinstance(value, _InstanceAbility),
     ),
 )
 """The parts whose drop from a form is additive, each kind in one row; a part no row recognises is never dropped, so a change is breaking unless dropping recognised parts alone undoes it."""
