@@ -10,6 +10,7 @@ from typing import Any, Optional
 import pytest
 
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.ev import EVConfig
 from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     FleetDistributionConfig,
@@ -22,6 +23,7 @@ from solar_challenge.fleet_distribution import (
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
+from tests._construction_refusals import prefixed_construction_refusal
 
 
 def _draws(
@@ -367,6 +369,16 @@ def _proportional_to_pv(**spec: float) -> dict[str, Any]:
     return {"type": "proportional_to", "source": "pv.capacity_kw", **spec}
 
 
+def _fleet_with_an_ev_hour(key: str, spec: NormalDistribution) -> FleetDistributionConfig:
+    """A seeded fleet of 1 home with 4 kW of PV and a 7 kW EV whose hour *key* draws from *spec*."""
+    return FleetDistributionConfig(
+        n_homes=1,
+        pv=ComponentDistribution({"capacity_kw": 4.0}),
+        ev=ComponentDistribution({"charger_type": "7kW", key: spec}),
+        seed=1,
+    )
+
+
 class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
     """A proportional_to on a count gives a whole number by the sampler's one count conversion: an occupant count and an EV hour alike are rounded, as a normal's draw is."""
 
@@ -413,6 +425,39 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         assert [home.ev_config.arrival_hour for home in homes if home.ev_config is not None] == [
             math.floor(draw + 0.5) for draw in _draws(spec, seed=17, n=8) if draw is not None
         ]
+
+    @pytest.mark.parametrize(
+        ("key", "spec", "hour"),
+        [
+            pytest.param("arrival_hour", NormalDistribution(mean=23.5, std=0.0), 24.0, id="a draw of 23.5"),
+            pytest.param("departure_hour", NormalDistribution(mean=-0.7, std=0.0), -1.0, id="a draw of -0.7"),
+        ],
+    )
+    def test_an_ev_hour_its_spec_leaves_unbounded_may_round_off_the_clock_and_is_refused_by_ev_config(
+        self, key: str, spec: NormalDistribution, hour: float
+    ) -> None:
+        """A draw from 23.5 up rounds to 24, and one between -1 and -0.5 to -1, where truncation made 23 and 0, so EVConfig refuses the hour, naming the component and the home."""
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(_fleet_with_an_ev_hour(key, spec), Location.bristol())
+
+        assert str(refusal.value) == prefixed_construction_refusal(
+            "fleet_distribution.ev, home 1", lambda: EVConfig("7kW", **{key: hour})
+        )
+
+    @pytest.mark.parametrize(
+        ("key", "spec", "hour"),
+        [
+            pytest.param("arrival_hour", NormalDistribution(mean=23.5, std=0.0, max=23.9), 23, id="a max below 24"),
+            pytest.param("departure_hour", NormalDistribution(mean=-0.7, std=0.0, min=-0.9), 0, id="a min above -1"),
+        ],
+    )
+    def test_an_ev_hour_is_rounded_to_a_whole_hour_its_specs_bounds_allow(
+        self, key: str, spec: NormalDistribution, hour: int
+    ) -> None:
+        """A rounded count is the nearest of the whole numbers from its spec's min to its max, so a spec bounded above -1 and below 24 keeps its EV hours from 0 to 23."""
+        homes = generate_homes_from_distribution(_fleet_with_an_ev_hour(key, spec), Location.bristol())
+
+        assert [getattr(home.ev_config, key) for home in homes if home.ev_config is not None] == [hour]
 
     @pytest.mark.parametrize(
         ("component", "key", "block"),
