@@ -154,7 +154,8 @@ class TestPageLimits:
             setattr(limits, name, getattr(limits, name))
 
     def test_as_json_round_trips_through_json(self) -> None:
-        assert json.loads(json.dumps(page_limits().as_json())) == page_limits().as_json()
+        """Strict JSON, with no NaN or Infinity, which a page script's JSON.parse would refuse."""
+        assert json.loads(json.dumps(page_limits().as_json(), allow_nan=False)) == page_limits().as_json()
 
     def test_a_fleet_holds_1_to_max_fleet_homes_homes_starting_at_100_and_the_slider_is_a_10_to_500_convenience(
         self,

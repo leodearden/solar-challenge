@@ -7,7 +7,7 @@
         { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...], fixed }
     component is the fleet component (FLEET_COMPONENTS in web/fleet_components.py) whose distribution it edits.
     An added row starts at its new_row_value, and every value but a weight or count steps by its step.
-    Type '' (Fixed Value) edits dist.fixed within its fixed_range.
+    Type '' (Fixed Value) edits dist.fixed within its value_range.
     subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
     caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
 
@@ -94,7 +94,7 @@
     </label>
 
     {% call _type_panel('!dist.type') %}
-        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.fixed_range[0], max=component.fixed_range[1]) }}
+        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.value_range.low, max=component.value_range.high) }}
     {% endcall %}
 
     {% call _type_panel("dist.type === 'normal'", 'grid grid-cols-2 gap-4') %}

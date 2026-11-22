@@ -15,7 +15,7 @@ from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
+from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
     ImportedFleetForm,
@@ -25,7 +25,7 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS, parse_seg_tariff
+from solar_challenge.web.simulation_params import parse_seg_tariff
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {

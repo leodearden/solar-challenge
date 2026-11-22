@@ -23,12 +23,8 @@ from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.scenario_writer import location_block, scenario_yaml
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import (
-    DISTRIBUTION_KEYS,
-    MAX_FLEET_HOMES,
-    distribution_grammar_spec,
-)
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
+from solar_challenge.web.fleet_config import DISTRIBUTION_KEYS, distribution_grammar_spec
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
     refuse_unrecognised_keys,
@@ -47,7 +43,7 @@ _FIELD_SUFFIX_OVERRIDES: Mapping[str, str] = {
 }
 
 
-def _distribution_fields(component: FleetComponent) -> dict[str, str]:
+def _distribution_fields(component: ComponentLimits) -> dict[str, str]:
     """Each key of the editor's distribution, mapped to the builder form field carrying it for *component*: the component's key, then the key or its suffix override."""
     return {
         key: f"{component.key}_{_FIELD_SUFFIX_OVERRIDES.get(key, key)}"
@@ -140,7 +136,7 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its fixed_range.
+    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its value_range.
 
     A value its number reader refuses is left to scenario_from_builder_form to report.
     """
@@ -151,10 +147,10 @@ def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
         errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
     for component in FLEET_COMPONENTS.values():
         fixed_value = _readable(fields, component.fixed_field, as_finite_float)
-        if fixed_value is not None and not component.admits_fixed_value(fixed_value):
-            low, high = component.fixed_range
+        if fixed_value is not None and not component.value_range.admits(fixed_value):
             errors.append(
-                f"{component.heading} must be between {low:g} and {high:g}, "
+                f"{component.heading} must be between {component.value_range.low:g} and "
+                f"{component.value_range.high:g}, "
                 f"got {fields[component.fixed_field]!r}."
             )
     return errors
@@ -251,7 +247,7 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
     return block
 
 
-def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
+def _component_block(fields: Mapping[str, Any], component: ComponentLimits) -> dict[str, Any]:
     """*component*'s block: the distribution the form sets a type for, written by the fleet form's reader, distribution_grammar_spec, else the form's fixed value.
 
     Raises:

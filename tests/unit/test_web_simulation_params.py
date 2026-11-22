@@ -17,15 +17,13 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
     read_location,
     require_encodable_text,
 )
 from solar_challenge.web.simulation_params import (
-    MAX_DAYS,
-    MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
     parse_seg_tariff,
@@ -774,14 +772,15 @@ class TestParseHomeConfigNumberFields:
 
 
 class TestParseHomeConfigConsumptionRange:
-    """A sent consumption_kwh is refused outside the fleet load component's fixed range, either end included."""
+    """A sent consumption_kwh is refused outside the fleet load component's value_range, either end included."""
 
     @pytest.mark.parametrize("beyond", ["below", "above"])
     def test_consumption_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
         self, beyond: str
     ) -> None:
         """One float step beyond either end is refused."""
-        low, high = FLEET_COMPONENTS["load"].fixed_range
+        load_range = FLEET_COMPONENTS["load"].value_range
+        low, high = load_range.low, load_range.high
         value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
         with pytest.raises(ValueError) as exc_info:
             parse_home_config({**VALID_HOME_PAYLOAD, "consumption_kwh": value})
@@ -792,7 +791,8 @@ class TestParseHomeConfigConsumptionRange:
         self, end: str
     ) -> None:
         """Either end is accepted as the home's annual consumption."""
-        low, high = FLEET_COMPONENTS["load"].fixed_range
+        load_range = FLEET_COMPONENTS["load"].value_range
+        low, high = load_range.low, load_range.high
         value = low if end == "low" else high
         home_config, _start, _end, _name = parse_home_config(
             {**VALID_HOME_PAYLOAD, "consumption_kwh": value}

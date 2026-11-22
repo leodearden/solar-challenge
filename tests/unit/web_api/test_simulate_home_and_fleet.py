@@ -15,7 +15,7 @@ from solar_challenge.location import parse_location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
-from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
+from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES

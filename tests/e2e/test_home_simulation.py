@@ -272,9 +272,9 @@ def _validation_errors(page: Page) -> Locator:
 def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
     page: Page, live_server: str, home_run_submissions: list[Any], beyond: str
 ) -> None:
-    """A consumption one step beyond either end of the load component's fixed range is an error naming both ends, and Run Simulation sends nothing."""
+    """A consumption one step beyond either end of the load component's value_range is an error naming both ends, and Run Simulation sends nothing."""
     load = FLEET_COMPONENTS["load"]
-    low, high = load.fixed_range
+    low, high = load.value_range.low, load.value_range.high
     value = low - load.step if beyond == "below" else high + load.step
     page.goto(live_server + "/simulate/home")
     open_tab(page, "Load")
@@ -293,9 +293,8 @@ def test_consumption_beyond_the_load_range_is_listed_as_an_error_and_never_sent(
 def test_consumption_at_either_end_of_the_load_range_is_sent_and_accepted(
     page: Page, live_server: str, end: str
 ) -> None:
-    """A consumption at either end of the load component's fixed range passes the page's check, and /api/simulate/home accepts what the form sends (201)."""
-    low, high = FLEET_COMPONENTS["load"].fixed_range
-    value = low if end == "low" else high
+    """A consumption at either end of the load component's value_range passes the page's check, and /api/simulate/home accepts what the form sends (201)."""
+    value = getattr(FLEET_COMPONENTS["load"].value_range, end)
     page.goto(live_server + "/simulate/home")
     open_tab(page, "Load")
     page.locator("#consumption_kwh").fill(f"{value:g}")

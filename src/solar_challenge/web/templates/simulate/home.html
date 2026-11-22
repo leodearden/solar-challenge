@@ -16,7 +16,7 @@ document.addEventListener('alpine:init', () => {
         submittedJob: null,
         errorMsg: '',
         presets: [],
-        consumptionRange: {{ fleet_components.load.fixed_range | tojson }},
+        consumptionRange: {{ [fleet_components.load.value_range.low, fleet_components.load.value_range.high] | tojson }},
         formData: {
             pv_kw: 4.0,
             azimuth: 180,

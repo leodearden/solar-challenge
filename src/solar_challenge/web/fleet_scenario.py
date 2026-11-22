@@ -34,12 +34,11 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig
+from solar_challenge.web.fleet_components import read_fleet_seed, read_fleet_size
 from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     distribution_form_spec,
     form_to_fleet_distribution_config,
-    read_fleet_seed,
-    read_fleet_size,
 )
 from solar_challenge.web.request_boundary import (
     read_location,

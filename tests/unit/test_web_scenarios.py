@@ -30,10 +30,8 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import ChartPanel, SweepMetric, SweepPoint, sweep_panels, sweep_parameter_chart
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_FLEET_HOMES
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.storage import RunStorage
 from tests._chart_absences import sweep_reason
 from tests._config_preset_rows import insert_saved_fleet_preset, saved_preset_names
@@ -103,7 +101,7 @@ class TestScenarioBuilderRoute:
                     "key": component.key,
                     "fixed_field": component.fixed_field,
                     "grammar_key": component.grammar_key,
-                    "dist": component.builder_default.editor_state(),
+                    "dist": component.start.editor_state(),
                 }
                 for component in FLEET_COMPONENTS.values()
             ]

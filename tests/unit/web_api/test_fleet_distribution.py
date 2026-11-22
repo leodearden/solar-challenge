@@ -17,14 +17,12 @@ from solar_challenge.fleet_distribution import (
 )
 from solar_challenge.home import HomeConfig
 from solar_challenge.scenario_blocks import parse_location_block
+from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_config import (
-    MAX_FLEET_HOMES,
-    MAX_FLEET_SEED,
     form_to_fleet_distribution_config,
     sample_distribution,
 )
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
 from tests._fleet_form import FLEET_FORM_BLOCKS
 from tests._home_payload import VALID_HOME_PAYLOAD
