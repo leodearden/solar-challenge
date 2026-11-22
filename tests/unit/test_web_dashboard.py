@@ -21,6 +21,7 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager, JobState
 from solar_challenge.web.storage import RunQuery, RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
+from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage
 from tests._web_app import store_lock_is_free
 from tests._web_job_runner import jobs_running
@@ -42,6 +43,10 @@ def _dashboard_over(
     manager = jobs(storage)
     closes_at_teardown.callback(manager.shutdown, wait=True)
     return Dashboard(storage=storage, jobs=manager, database=storage.database, lock=lock)
+
+
+class _ShutdownFailed(Exception):
+    """What a job manager whose shutdown fails raises."""
 
 
 def _wait_for_state(manager: JobManager, job_id: str, reached: Callable[[JobState], bool]) -> JobState:
@@ -125,6 +130,23 @@ class TestDashboardClose:
         dashboard.close()
 
         assert store_lock_is_free(tmp_path)
+
+    def test_a_close_whose_jobs_shutdown_raises_raises_its_error_and_keeps_the_stores_lock(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        """A shutdown that raised may have left a job running that can still write the store, so the lock is kept: StoreLock.release requires none can."""
+        storage = empty_run_storage(tmp_path)
+        lock = acquire_store_lock(tmp_path)
+        closes_at_teardown.callback(lock.release)
+        jobs = autospecced_job_manager()
+        jobs.shutdown.side_effect = _ShutdownFailed("the jobs did not shut down")
+        dashboard = Dashboard(storage=storage, jobs=jobs, database=storage.database, lock=lock)
+
+        with pytest.raises(_ShutdownFailed, match="did not shut down"):
+            dashboard.close()
+
+        jobs.shutdown.assert_called_once_with(wait=True)
+        assert not store_lock_is_free(tmp_path)
 
     def test_close_releases_the_store_only_once_the_running_job_has_finished(
         self, tmp_path: Path, closes_at_teardown: ExitStack
