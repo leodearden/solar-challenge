@@ -107,7 +107,7 @@ def bill_arm(arm: Arm, start: pd.Timestamp, end: pd.Timestamp, *, weather: Weath
     """arm's run from start to end on weather, billed at FINANCE against its demand priced at the run's tariff rates."""
     results = simulate_home(arm.home, start, end, weather=weather, strategy=arm.strategy)
     summary = calculate_summary(results)
-    baseline_import_cost_gbp = float((results.per_minute_amounts()["demand_kwh"] * results.tariff_rate).sum())
+    baseline_import_cost_gbp = float((results.per_step_amounts()["demand_kwh"] * results.tariff_rate).sum())
     breakdown = bill(
         period_days=summary.simulation_days,
         generation_kwh=summary.total_generation_kwh,

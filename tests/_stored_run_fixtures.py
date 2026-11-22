@@ -33,7 +33,11 @@ Each fixture holds:
   ({"homes": [...], "n_homes": N}), summary.json, and in homes/ each home's home_<i>.parquet
   and home_<i>_summary.json.
 - runs_row.json: every column of the runs row that save wrote, read back from its database,
-  with config_json and summary_json as their verbatim text.
+  with config_json and summary_json as their verbatim text, which fixture_runs_row reads.
+
+pre_469_home, legacy_fleet and pre_786_dispatch_home were saved before summaries carried a
+window, so none of their SummaryStatistics documents holds one; the stored-run format's v5 step
+derives each from the time series the summary's results stored.
 
 The fixtures, in STORED_RUN_FIXTURES' order:
 
@@ -119,7 +123,17 @@ def fixture_run_type(name: str) -> RunType:
     from solar_challenge.web.stored_runs import RUN_TYPES
     from solar_challenge.web.text_options import one_of
 
-    return one_of(_runs_row(name)["type"], RUN_TYPES, f"the type in {name}'s runs_row.json")
+    return one_of(fixture_runs_row(name)["type"], RUN_TYPES, f"the type in {name}'s runs_row.json")
+
+
+def fixture_runs_row(name: str) -> dict[str, Any]:
+    """Every column of the runs row of fixture *name*, by column name, as its runs_row.json holds it.
+
+    Raises:
+        ValueError: *name* is not one of STORED_RUN_FIXTURES.
+    """
+    row: dict[str, Any] = json.loads((_fixture_dir(name) / "runs_row.json").read_text())
+    return row
 
 
 def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *, run_id: str | None = None) -> str:
@@ -138,7 +152,7 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *,
 
     from tests._run_storage_layout import stored_run_dir
 
-    row = _runs_row(name)
+    row = fixture_runs_row(name)
     if run_id is not None:
         row["id"] = run_id
     columns = ", ".join(row)
@@ -174,9 +188,3 @@ def _fixture_dir(name: str) -> Path:
     if name not in STORED_RUN_FIXTURES:
         raise ValueError(f"{name!r} is not a stored-run fixture; the fixtures are {list(STORED_RUN_FIXTURES)}")
     return FIXTURES_DIR / name
-
-
-def _runs_row(name: str) -> dict[str, Any]:
-    """Every column of the runs row of fixture *name*, by column name, as its runs_row.json holds it."""
-    row: dict[str, Any] = json.loads((_fixture_dir(name) / "runs_row.json").read_text())
-    return row

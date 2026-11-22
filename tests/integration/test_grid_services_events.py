@@ -572,7 +572,6 @@ def _synthetic_bill_distribution() -> BillDistribution:
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=365,
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
@@ -584,7 +583,7 @@ def _synthetic_bill_distribution() -> BillDistribution:
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    return bill_distribution([summary], finance, 365)
+    return bill_distribution([summary], finance)
 
 
 def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:

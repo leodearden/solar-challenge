@@ -963,8 +963,7 @@ class TestArbitrageBasisCReconciliation:
 
         # Build bill distribution at the solved rate
         finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
-        sim_days = summaries[0].simulation_days
-        dist = bill_distribution(summaries, finance_solved, sim_days)
+        dist = bill_distribution(summaries, finance_solved)
         rep_bill = dist.representative
 
         # Find the summary that is the representative (median-outlay home)

@@ -646,11 +646,11 @@ class TestMeasureGridChargeForecast:
             summaries = [home.summary for home in arm.homes]
             if arm.forecast == "perfect_foresight":
                 with pytest.raises(ConfigurationError, match="perfect_foresight") as refusal:
-                    bill_distribution(summaries, finance, summaries[0].simulation_days)
+                    bill_distribution(summaries, finance)
                 assert arm.householder_bill == grid_charge_forecast.Refused(str(refusal.value))
             else:
                 assert arm.householder_bill == bill_distribution(
-                    summaries, finance, summaries[0].simulation_days
+                    summaries, finance
                 ).mean_gbp, arm.forecast
 
     @_QUIET_DIODE_SOLVER

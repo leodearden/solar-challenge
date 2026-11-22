@@ -253,13 +253,13 @@ class TestRunRecordSummaryTree:
     def test_a_summary_stored_without_a_field_that_has_a_default_answers_that_field_as_summary_reads_it(
         self, storage: RunStorage
     ) -> None:
-        tree_without_window = {key: value for key, value in field_tree(home_summary()).items() if key != "window"}
-        record = dataclasses.replace(_store_a_home_run(storage, "older-run"), summary_json=json.dumps(tree_without_window))
+        tree_without_pricing = {key: value for key, value in field_tree(home_summary()).items() if key != "pricing"}
+        record = dataclasses.replace(_store_a_home_run(storage, "older-run"), summary_json=json.dumps(tree_without_pricing))
 
         answer = record.summary_tree()
 
         assert answer == field_tree(record.summary())
-        assert "window" in answer
+        assert "pricing" in answer
 
     def test_a_fleet_run_answers_its_fleet_summary_s_field_tree(self, storage: RunStorage) -> None:
         fleet = make_fleet_results(n_homes=2, days=1)

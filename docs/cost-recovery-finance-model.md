@@ -98,7 +98,7 @@ the floor-binding rate is correspondingly higher).
 **Implementation**: `finance.basis_c_own_use_kwh(summary)` returns
 `summary.total_demand_kwh − summary.total_grid_import_kwh`, the summary's window's
 basis-C own-use, or 0.0 with a `UserWarning` when the import is above the demand.
-`bill_distribution` passes it to `householder_bill` as `annual_self_consumption_kwh`,
+`bill_distribution` passes it to `householder_bill` as `window_self_consumption_kwh`,
 which scales it to the window's year and hands it to `home_ledger` (§3, *One ledger
 per home*).  The projection's `home_ledger(annualise(s), finance)` takes basis C from
 the annualised totals itself, 0.0 with no warning when the import is above the demand
@@ -120,7 +120,7 @@ All monetary values in GBP (£).  VAT is applied to (import + standing + own-use
 as a block; the householder receives **no SEG deduction**.
 
 `householder_bill()` builds the home's ledger,
-`home_ledger(annualise(summary), finance, simulated_own_use_kwh=annual_self_consumption_kwh × scale)`,
+`home_ledger(annualise(summary), finance, simulated_own_use_kwh=window_self_consumption_kwh × scale)`,
 and bills from it (*One ledger per home*, below).  `annualise` scales the home's window
 totals to the window's year by the window's `annualisation_scale`, `year_days / days`,
 whatever the window's length (§4, *Annual basis*), and `scale` is that factor, so the
@@ -135,14 +135,14 @@ baseline makes `bill()`'s effective rate, `baseline_import_cost_gbp / demand_kwh
 the retail rate, which is why `self_consumption_saving_gbp` below is priced at retail.
 
 The window is the summary's own (`SummaryStatistics.window`, which `calculate_summary`
-sets).  `householder_bill` raises `ValueError` for a summary with no window, naming
-`calculate_summary`, and for a `simulation_days` other than the summary's own (INV-8),
-naming both.  `bill_distribution` also refuses
+sets, and without which `SummaryStatistics` refuses to be built, naming `calculate_summary`).
+It carries the days a bill is computed over (INV-8), so neither `householder_bill` nor
+`bill_distribution` takes a day count.  `bill_distribution` refuses
 summaries over different windows, naming the first position that differs and both
 windows, and names their one window in `BillDistribution.annualised_from`
 (`tests/unit/test_finance_window.py`).
 
-`annual_self_consumption_kwh` is the home's own-use over the window, so it lies from 0
+`window_self_consumption_kwh` is the home's own-use over the window, so it lies from 0
 to the window's demand.  `householder_bill` refuses one outside, with or without the
 override, before it scales it, raising `ValueError` naming the ledger's invariant it
 breaks and the figures as passed, whatever the window's length: L1 for an own-use

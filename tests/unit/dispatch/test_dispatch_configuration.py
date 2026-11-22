@@ -292,6 +292,7 @@ class TestOneValidatorPerRule:
                 demand_kw=1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
             for hour in (17, 12)
         ]
@@ -342,6 +343,7 @@ class TestOneValidatorPerRule:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert held == 2.0

@@ -407,6 +407,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     def _baseline_tou(self):
@@ -418,6 +419,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     def _baseline_ps(self):
@@ -429,6 +431,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     # --- SelfConsumptionStrategy ---
@@ -443,6 +446,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_sc()
         assert with_ctx.charge_kw == without.charge_kw
@@ -459,6 +463,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=None,
+            timestep_minutes=1.0,
         )
         without = self._baseline_sc()
         assert with_none.charge_kw == without.charge_kw
@@ -489,6 +494,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_tou()
         assert with_ctx.charge_kw == without.charge_kw
@@ -515,6 +521,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_ps()
         assert with_ctx.charge_kw == without.charge_kw

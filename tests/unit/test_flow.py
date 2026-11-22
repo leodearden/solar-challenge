@@ -552,7 +552,7 @@ class _RecordingStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -1278,7 +1278,7 @@ _Step = Callable[[float, float, Battery, pd.Timestamp, TariffConfig], EnergyFlow
 def _step_by_the_tou_function(
     generation_kw: float, demand_kw: float, battery: Battery, minute: pd.Timestamp, tariff: TariffConfig
 ) -> EnergyFlowResult:
-    return simulate_timestep_tou(generation_kw, demand_kw, battery, minute, tariff)
+    return simulate_timestep_tou(generation_kw, demand_kw, battery, minute, tariff, timestep_minutes=1.0)
 
 
 def _step_by_the_tou_strategy(

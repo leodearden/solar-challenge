@@ -56,6 +56,7 @@ class TestPeakShavingStrategyBasics:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert isinstance(decision, DispatchDecision)
 
@@ -83,6 +84,7 @@ class TestPeakShavingStrategyValidation:
                 demand_kw=2.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_demand_raises(self, standard_peak_shaving_strategy):
@@ -95,6 +97,7 @@ class TestPeakShavingStrategyValidation:
                 demand_kw=-1.0,
                 battery_soc_kwh=2.5,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_negative_soc_raises(self, standard_peak_shaving_strategy):
@@ -107,6 +110,7 @@ class TestPeakShavingStrategyValidation:
                 demand_kw=2.0,
                 battery_soc_kwh=-1.0,
                 battery_capacity_kwh=5.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_capacity_raises(self, standard_peak_shaving_strategy):
@@ -119,6 +123,7 @@ class TestPeakShavingStrategyValidation:
                 demand_kw=2.0,
                 battery_soc_kwh=0.0,
                 battery_capacity_kwh=0.0,
+                timestep_minutes=1.0,
             )
 
     def test_zero_timestep_raises(self, standard_peak_shaving_strategy):
@@ -147,6 +152,7 @@ class TestPeakShavingStrategyExcessPV:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 5.0 - 2.0 = 3.0 kW
         assert decision.charge_kw == 3.0
@@ -161,6 +167,7 @@ class TestPeakShavingStrategyExcessPV:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 10.0 - 1.0 = 9.0 kW
         assert decision.charge_kw == 9.0
@@ -175,6 +182,7 @@ class TestPeakShavingStrategyExcessPV:
             demand_kw=2.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 2.1 - 2.0 = 0.1 kW
         assert decision.charge_kw == pytest.approx(0.1)
@@ -196,6 +204,7 @@ class TestPeakShavingStrategyBelowThreshold:
             demand_kw=2.5,  # Shortfall = 1.5 kW < 2.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall is 1.5 kW, which is below 2.0 kW threshold
         assert decision.charge_kw == 0.0
@@ -213,6 +222,7 @@ class TestPeakShavingStrategyBelowThreshold:
             demand_kw=3.0,  # Shortfall = 2.0 kW = threshold
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall equals threshold, no shaving needed
         assert decision.charge_kw == 0.0
@@ -228,6 +238,7 @@ class TestPeakShavingStrategyBelowThreshold:
             demand_kw=2.5,  # Shortfall = 0.5 kW < 2.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -248,6 +259,7 @@ class TestPeakShavingStrategyAboveThreshold:
             demand_kw=5.0,  # Shortfall = 4.0 kW > 2.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = shortfall - threshold = 4.0 - 2.0 = 2.0 kW
         assert decision.charge_kw == 0.0
@@ -263,6 +275,7 @@ class TestPeakShavingStrategyAboveThreshold:
             demand_kw=10.0,  # Shortfall = 10.0 kW > 2.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 10.0 - 2.0 = 8.0 kW
         assert decision.charge_kw == 0.0
@@ -278,6 +291,7 @@ class TestPeakShavingStrategyAboveThreshold:
             demand_kw=3.5,  # Shortfall = 2.5 kW > 2.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 2.5 - 2.0 = 0.5 kW
         assert decision.charge_kw == 0.0
@@ -297,6 +311,7 @@ class TestPeakShavingStrategyDifferentLimits:
             demand_kw=2.0,  # Shortfall = 1.0 kW > 0.5 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 1.0 - 0.5 = 0.5 kW
         assert decision.charge_kw == 0.0
@@ -312,6 +327,7 @@ class TestPeakShavingStrategyDifferentLimits:
             demand_kw=5.0,  # Shortfall = 4.0 kW < 5.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Shortfall below threshold, no discharge
         assert decision.charge_kw == 0.0
@@ -327,6 +343,7 @@ class TestPeakShavingStrategyDifferentLimits:
             demand_kw=10.0,  # Shortfall = 10.0 kW > 5.0 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 10.0 - 5.0 = 5.0 kW
         assert decision.charge_kw == 0.0
@@ -345,6 +362,7 @@ class TestPeakShavingStrategyBalanced:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -358,6 +376,7 @@ class TestPeakShavingStrategyBalanced:
             demand_kw=0.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == 0.0
@@ -376,6 +395,7 @@ class TestPeakShavingStrategySOCIndependence:
             demand_kw=5.0,
             battery_soc_kwh=4.0,  # High SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_low = standard_peak_shaving_strategy.decide_action(
             timestamp=timestamp,
@@ -383,6 +403,7 @@ class TestPeakShavingStrategySOCIndependence:
             demand_kw=5.0,
             battery_soc_kwh=0.5,  # Low SOC
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert decision_high.charge_kw == decision_low.charge_kw
@@ -404,6 +425,7 @@ class TestPeakShavingStrategyTimestampIndependence:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_afternoon = standard_peak_shaving_strategy.decide_action(
             timestamp=afternoon,
@@ -411,6 +433,7 @@ class TestPeakShavingStrategyTimestampIndependence:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         decision_evening = standard_peak_shaving_strategy.decide_action(
             timestamp=evening,
@@ -418,6 +441,7 @@ class TestPeakShavingStrategyTimestampIndependence:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
         assert decision_morning.charge_kw == decision_afternoon.charge_kw
@@ -439,6 +463,7 @@ class TestPeakShavingStrategyEdgeCases:
             demand_kw=5.0,  # All from grid, shortfall = 5.0 kW
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 5.0 - 2.0 = 3.0 kW
         assert decision.charge_kw == 0.0
@@ -453,6 +478,7 @@ class TestPeakShavingStrategyEdgeCases:
             demand_kw=0.0,  # All excess
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Excess = 5.0 kW, should charge
         assert decision.charge_kw == 5.0
@@ -468,6 +494,7 @@ class TestPeakShavingStrategyEdgeCases:
             demand_kw=1.0,  # Shortfall = 1.0 kW > 0.1 kW limit
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         # Discharge = 1.0 - 0.1 = 0.9 kW
         assert decision.charge_kw == 0.0
@@ -695,6 +722,7 @@ class TestPeakShavingStrategyGridCharging:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == pytest.approx(2.0)
         assert decision.discharge_kw == 0.0
@@ -708,6 +736,7 @@ class TestPeakShavingStrategyGridCharging:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
         assert decision.charge_kw == 0.0
         assert decision.discharge_kw == pytest.approx(3.0)

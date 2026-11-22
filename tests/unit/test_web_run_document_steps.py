@@ -20,18 +20,31 @@ Then it pins v3, the step that reads each stored home's dispatch as it ran: whic
 dispatch_strategy it reads as greedy, which grid_charging it drops, what it leaves as it is, and
 that it changes none of its input.
 
-Last it pins v4, the step that drops each battery's grid_charging that its run ignored on a tariff
+Then it pins v4, the step that drops each battery's grid_charging that its run ignored on a tariff
 with no cheap period, one whose periods all charge the same rate: which grid_charging it drops,
 what it leaves as it is, and that it changes none of its input.
+
+Last it pins v5, the step that sets each stored SummaryStatistics document lacking a window to the
+window of its run's own time series, read through the documents' StoredTimeSeries, and drops each
+one's simulation_days: which summaries it sets, from which series, in a run's files and its runs
+row alike; that it drops simulation_days from every summary, reporting only one that differs from
+its window's days, and keeps a FleetSummary's; that v2 keeps a summary's simulation_days for it;
+that it reads no series for a summary holding a window and leaves every other document as it is;
+and that it refuses a summary whose series is missing or is not a run's.
 """
 
 import copy
 import dataclasses
 import json
+import shutil
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
+
+pytest.importorskip("pyarrow")
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import (
@@ -45,6 +58,7 @@ from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summar
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.stored_runs import (
     RUN_DOCUMENT_STEPS,
@@ -59,6 +73,7 @@ from solar_challenge.web.stored_runs import (
     StoredHomeRun,
     StoredRunDocuments,
     StoredRunUnreadable,
+    StoredTimeSeries,
     documents_in_current_format,
     read_run_documents,
 )
@@ -67,6 +82,7 @@ from tests._finance_builders import make_fleet_results_of, make_home_config, mak
 from tests._stored_run_fixtures import (
     STORED_RUN_FIXTURES,
     fixture_run_type,
+    fixture_runs_row,
     pre_dispatch_union_home_config,
     stored_run_fixture_dir,
 )
@@ -121,8 +137,11 @@ def _current_documents(name: str) -> StoredRunDocuments:
 
 def _documents_before(step: RunDocumentStep, name: str) -> StoredRunDocuments:
     """The documents of fixture *name*, brought forward by every step before *step*."""
-    run_type = fixture_run_type(name)
-    documents = _fixture_documents(name)
+    return _brought_forward_before(step, fixture_run_type(name), _fixture_documents(name))
+
+
+def _brought_forward_before(step: RunDocumentStep, run_type: RunType, documents: StoredRunDocuments) -> StoredRunDocuments:
+    """*documents*, of a run of type *run_type*, brought forward by every step before *step*."""
     for earlier in RUN_DOCUMENT_STEPS[: RUN_DOCUMENT_STEPS.index(step)]:
         documents = earlier.apply(run_type, documents).documents
     return documents
@@ -142,7 +161,8 @@ def _with_value(documents: StoredRunDocuments, document: str, keys: Keys, value:
         target[last] = value
         return dataclasses.replace(stored, content=content)
 
-    return StoredRunDocuments(
+    return dataclasses.replace(
+        documents,
         config=edited(documents.config),
         summary=edited(documents.summary),
         home_summaries=tuple(edited(each) for each in documents.home_summaries),
@@ -157,7 +177,8 @@ def _without(documents: StoredRunDocuments, document: str, key: str) -> StoredRu
             return stored
         return dataclasses.replace(stored, content={name: item for name, item in stored.content.items() if name != key})
 
-    return StoredRunDocuments(
+    return dataclasses.replace(
+        documents,
         config=edited(documents.config),
         summary=edited(documents.summary),
         home_summaries=tuple(edited(each) for each in documents.home_summaries),
@@ -235,11 +256,16 @@ def _as_saved(name: str, content: dict[str, Any]) -> StoredDocument:
 
 
 def _documents_a_home_run_s_save_writes() -> StoredRunDocuments:
-    """The documents a save of a home of every field shape writes, built as StoredHomeRun builds them: its config and its summary."""
+    """The documents a save of a home of every field shape writes, built as StoredHomeRun builds them: its config and its summary.
+
+    Its summary holds its window, so no step reads its time series, and the documents name no directory.
+    """
     results = make_sim_results(days=1)
     run = StoredHomeRun(_SAVED_RUN, home_of_every_field_shape(), results, calculate_summary(results))
     return StoredRunDocuments(
-        config=_as_saved("config.json", run.config_document()), summary=_as_saved("summary.json", run.summary_document())
+        config=_as_saved("config.json", run.config_document()),
+        summary=_as_saved("summary.json", run.summary_document()),
+        time_series=StoredTimeSeries(_SAVED_RUN, None),
     )
 
 
@@ -253,6 +279,7 @@ def _documents_a_fleet_run_s_save_writes() -> StoredRunDocuments:
     return StoredRunDocuments(
         config=_as_saved("config.json", run.config_document()),
         summary=_as_saved("summary.json", run.summary_document()),
+        time_series=StoredTimeSeries(_SAVED_RUN, None),
         home_summaries=tuple(
             _as_saved(f"homes/home_{index}_summary.json", field_tree(summary)) for index, summary in enumerate(home_summaries)
         ),
@@ -412,6 +439,7 @@ def _every_shape_documents() -> StoredRunDocuments:
     return StoredRunDocuments(
         config=StoredDocument(_EVERY_SHAPE_RUN, "config.json", copy.deepcopy(_EVERY_SHAPE_CONFIG)),
         summary=StoredDocument(_EVERY_SHAPE_RUN, "summary.json", None),
+        time_series=StoredTimeSeries(_EVERY_SHAPE_RUN, None),
     )
 
 
@@ -790,5 +818,242 @@ def test_v4_changes_none_of_its_input_documents() -> None:
     before = copy.deepcopy(documents)
 
     v4.apply("fleet", documents)
+
+    assert documents == before
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_a_run_s_documents_read_from_its_directory_carry_its_time_series(name: str) -> None:
+    assert _fixture_documents(name).time_series == StoredTimeSeries(name, stored_run_fixture_dir(name))
+
+
+def _window_of_the_series(run_dir: Path, series: str) -> dict[str, Any]:
+    """The JSON form, as a save writes it, of the window SimulationWindow.of_index reads from the index of the time series *series* in *run_dir*."""
+    index = pd.read_parquet(run_dir / series, engine="pyarrow").index
+    return json.loads(json.dumps(field_tree(SimulationWindow.of_index(index))))
+
+
+_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES: dict[str, tuple[tuple[str, str], ...]] = {
+    "pre_469_home": (("summary.json", "data.parquet"),),
+    "legacy_fleet": (
+        ("homes/home_0_summary.json", "homes/home_0.parquet"),
+        ("homes/home_1_summary.json", "homes/home_1.parquet"),
+    ),
+    "pre_786_dispatch_home": (("summary.json", "data.parquet"),),
+}
+"""Each fixture saved before summaries carried a window: each of its SummaryStatistics documents, all lacking one, and the time series of the results it summarises."""
+
+
+_SUMMARIES_HOLDING_A_WINDOW = {
+    "pre_787_dispatch_fleet": tuple(f"homes/home_{index}_summary.json" for index in range(3)),
+    "pre_839_flat_grid_charging_fleet": tuple(f"homes/home_{index}_summary.json" for index in range(3)),
+}
+"""Each fixture saved once summaries carried a window: each of its SummaryStatistics documents, all holding one beside its simulation_days."""
+
+
+def _with_the_windows_of_their_series(documents: StoredRunDocuments, name: str, run_dir: Path) -> StoredRunDocuments:
+    """*documents*, of fixture *name*, with each summary _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES names set to the window of its time series in *run_dir*, and without its simulation_days."""
+    for document, series in _SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES[name]:
+        documents = _with_value(documents, document, ("window",), _window_of_the_series(run_dir, series))
+        documents = _without(documents, document, "simulation_days")
+    return documents
+
+
+@pytest.mark.parametrize("name", list(_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES))
+def test_v5_sets_each_summary_without_a_window_to_the_window_of_its_time_series_dropping_its_days_reporting_nothing(
+    name: str,
+) -> None:
+    """A home run's summary is of data.parquet and a fleet's i-th home summary of homes/home_i.parquet; each stored simulation_days is its window's 1 day, so none is reported. A fleet's FleetSummary, its simulation_days with it, and every config are left as they are."""
+    v5 = _step(5)
+    documents = _documents_before(v5, name)
+
+    result = v5.apply(fixture_run_type(name), documents)
+
+    assert result.documents == _with_the_windows_of_their_series(documents, name, stored_run_fixture_dir(name))
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def _runs_row_documents(name: str) -> StoredRunDocuments:
+    """The documents fixture *name*'s runs row holds, runs.config_json and runs.summary_json, of a run whose id is *name* and whose time series are those of the fixture's run directory."""
+    row = fixture_runs_row(name)
+    return StoredRunDocuments(
+        config=StoredDocument.decoded(name, "runs.config_json", row["config_json"]),
+        summary=StoredDocument.decoded(name, "runs.summary_json", row["summary_json"]),
+        time_series=StoredTimeSeries(name, stored_run_fixture_dir(name)),
+    )
+
+
+@pytest.mark.parametrize("name", ["pre_469_home", "pre_786_dispatch_home"])
+def test_v5_sets_a_home_run_s_runs_row_summary_without_a_window_to_the_window_of_its_data_parquet(name: str) -> None:
+    v5 = _step(5)
+    documents = _brought_forward_before(v5, "home", _runs_row_documents(name))
+
+    result = v5.apply("home", documents)
+
+    window = _window_of_the_series(stored_run_fixture_dir(name), "data.parquet")
+    with_its_window = _with_value(documents, "runs.summary_json", ("window",), window)
+    assert result.documents == _without(with_its_window, "runs.summary_json", "simulation_days")
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v5_leaves_a_fleet_run_s_runs_row_as_it_is() -> None:
+    """A fleet's runs row holds its config and its FleetSummary, which has no window and keeps its simulation_days; it holds no home summary."""
+    v5 = _step(5)
+    documents = _brought_forward_before(v5, "fleet", _runs_row_documents("legacy_fleet"))
+
+    result = v5.apply("fleet", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def _copy_of_the_fixture_run(name: str, tmp_path: Path) -> Path:
+    """A copy of fixture *name*'s run directory in *tmp_path*, which a test may change."""
+    return Path(shutil.copytree(stored_run_fixture_dir(name), tmp_path / name))
+
+
+def _documents_before_v5_read_from(run_dir: Path, name: str) -> StoredRunDocuments:
+    """The documents of the run *run_dir* holds, a copy of fixture *name*'s, read as run *name* and brought forward by every step before v5."""
+    run_type = fixture_run_type(name)
+    return _brought_forward_before(_step(5), run_type, read_run_documents(run_dir, name, run_type))
+
+
+@pytest.mark.parametrize("name", list(_SUMMARIES_HOLDING_A_WINDOW))
+def test_v5_drops_only_the_days_of_a_run_whose_summaries_hold_a_window_reading_none_of_its_time_series(
+    name: str, tmp_path: Path
+) -> None:
+    """Each summary keeps its window, and its simulation_days, its window's 1 day, goes unreported; the fleet's FleetSummary and config are left as they are."""
+    run_dir = _copy_of_the_fixture_run(name, tmp_path)
+    for series in run_dir.glob("homes/*.parquet"):
+        series.unlink()
+    documents = _documents_before_v5_read_from(run_dir, name)
+
+    result = _step(5).apply(fixture_run_type(name), documents)
+
+    expected = documents
+    for document in _SUMMARIES_HOLDING_A_WINDOW[name]:
+        expected = _without(expected, document, "simulation_days")
+    assert result.documents == expected
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+_DAYS_OTHER_THAN_THE_WINDOW_S = [
+    pytest.param("pre_469_home", "summary.json", id="a-window-it-derives"),
+    pytest.param("pre_787_dispatch_fleet", "homes/home_1_summary.json", id="a-window-the-summary-holds"),
+]
+"""A fixture and one of its SummaryStatistics documents, whose window, derived from its 1-day series or held, covers 1 day."""
+
+
+@pytest.mark.parametrize(("name", "document"), _DAYS_OTHER_THAN_THE_WINDOW_S)
+def test_v5_reports_a_dropped_simulation_days_that_differs_from_its_window_s_days(name: str, document: str) -> None:
+    """A summary saved before simulation_days was its window's days, e.g. over a window crossing the autumn clock change, showed a day count the window does not: its run's page now shows the window's."""
+    v5 = _step(5)
+    before = _documents_before(v5, name)
+
+    result = v5.apply(fixture_run_type(name), _with_value(before, document, ("simulation_days",), 2))
+
+    assert result.documents == v5.apply(fixture_run_type(name), before).documents
+    assert result.dropped == (DroppedValue(name, document, "simulation_days", 2),)
+    assert result.rewritten == ()
+
+
+@pytest.mark.parametrize("name", list(_SUMMARIES_WITHOUT_A_WINDOW_AND_THEIR_SERIES))
+def test_v2_keeps_each_summary_s_simulation_days_for_v5_reporting_none(name: str) -> None:
+    """v5 compares a summary's simulation_days with its window's days before it drops it, so v2, which drops each key a dataclass lacks, keeps it."""
+    documents = _fixture_documents(name)
+
+    result = _V2.apply(fixture_run_type(name), documents)
+
+    summaries = [result.documents.summary, *result.documents.home_summaries]
+    assert all(summary.content["simulation_days"] == 1 for summary in summaries)
+    assert [each for each in result.dropped if each.field == "simulation_days"] == []
+
+
+def test_v5_sets_a_summary_whose_window_is_null_to_the_window_of_its_time_series() -> None:
+    """A summary whose window key is null holds no window, as one lacking the key does."""
+    v5 = _step(5)
+    lacking_the_key = _documents_before(v5, "pre_469_home")
+
+    result = v5.apply("home", _with_value(lacking_the_key, "summary.json", ("window",), None))
+
+    assert result.documents == v5.apply("home", lacking_the_key).documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def _no_series(series: Path) -> None:
+    """Delete the time series *series*."""
+    series.unlink()
+
+
+def _a_series_of_no_dates(series: Path) -> None:
+    """Write over the time series *series* a frame whose index is not a DatetimeIndex."""
+    pd.DataFrame({"generation_kw": [0.0]}).to_parquet(series, engine="pyarrow")
+
+
+_NOT_A_RUN_S_TIME_SERIES = (
+    "is not the time series of a run: SimulationWindow.of_index reads a DatetimeIndex: got RangeIndex of dtype int64"
+)
+
+
+@pytest.mark.parametrize(
+    ("name", "series", "damage", "reason"),
+    [
+        pytest.param("pre_469_home", "data.parquet", _no_series, "is missing", id="home-missing"),
+        pytest.param(
+            "pre_469_home", "data.parquet", _a_series_of_no_dates, _NOT_A_RUN_S_TIME_SERIES, id="home-not-a-run-s"
+        ),
+        pytest.param("legacy_fleet", "homes/home_1.parquet", _no_series, "is missing", id="fleet-home-missing"),
+        pytest.param(
+            "legacy_fleet",
+            "homes/home_1.parquet",
+            _a_series_of_no_dates,
+            _NOT_A_RUN_S_TIME_SERIES,
+            id="fleet-home-not-a-run-s",
+        ),
+    ],
+)
+def test_v5_refuses_a_summary_without_a_window_whose_time_series_it_cannot_read_naming_the_series(
+    name: str, series: str, damage: Callable[[Path], None], reason: str, tmp_path: Path
+) -> None:
+    """A home run's summary is refused by its data.parquet, and a fleet's i-th home summary by its homes/home_i.parquet."""
+    run_dir = _copy_of_the_fixture_run(name, tmp_path)
+    damage(run_dir / series)
+    documents = _documents_before_v5_read_from(run_dir, name)
+
+    with pytest.raises(StoredRunUnreadable) as refused:
+        _step(5).apply(fixture_run_type(name), documents)
+
+    assert (refused.value.run_id, refused.value.document, refused.value.field, refused.value.reason) == (
+        name,
+        series,
+        None,
+        reason,
+    )
+
+
+def test_v5_refuses_a_runs_row_summary_without_a_window_whose_run_has_no_directory() -> None:
+    v5 = _step(5)
+    row_documents = dataclasses.replace(
+        _runs_row_documents("pre_469_home"), time_series=StoredTimeSeries("pre_469_home", None)
+    )
+    documents = _brought_forward_before(v5, "home", row_documents)
+
+    with pytest.raises(StoredRunUnreadable) as refused:
+        v5.apply("home", documents)
+
+    assert (refused.value.run_id, refused.value.document, refused.value.field, refused.value.reason) == (
+        "pre_469_home",
+        "data.parquet",
+        None,
+        "is missing",
+    )
+
+
+def test_v5_changes_none_of_its_input_documents() -> None:
+    v5 = _step(5)
+    documents = _documents_before(v5, "legacy_fleet")
+    before = copy.deepcopy(documents)
+
+    v5.apply("fleet", documents)
 
     assert documents == before

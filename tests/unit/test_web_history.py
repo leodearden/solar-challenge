@@ -355,7 +355,7 @@ class TestRunsAPI:
         ("damaged_summary_json", "field"),
         [
             pytest.param(
-                json.dumps({**dataclasses.asdict(home_summary()), "retired_figure": 12.5}),
+                json.dumps({**field_tree(home_summary()), "retired_figure": 12.5}),
                 "retired_figure",
                 id="summary-holds-a-key-no-field-has",
             ),
@@ -909,7 +909,8 @@ class TestExportAPI:
 
         The strict reader refuses a key no field has, null or not, so the run's row is migrated
         first, as `solar-challenge web migrate` migrates a store at schema version 1, which drops
-        those keys.
+        those keys. home_summary holds a window, so v5 needs no time series for the run, which has
+        no directory.
         """
         store = tmp_path / "store"
         database = write_database_at_schema_version(database_path_in(store), 1)

@@ -31,6 +31,10 @@ from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
+from solar_challenge.timebase import SimulationWindow
+
+from tests._finance_builders import make_window
+
 
 DEFAULT_VAT_RATE = 0.05
 """VAT rate the default line items are internally consistent with."""
@@ -85,11 +89,14 @@ def make_bill_distribution(
     mean_gbp: float = 367.5,
     median_gbp: float = 367.5,
     max_gbp: float = 367.5,
+    annualised_from: SimulationWindow = make_window(),
 ) -> BillDistribution:
-    """Build a synthetic BillDistribution around *representative*.
+    """Build a synthetic BillDistribution around *representative*, annualised from *annualised_from*.
 
     Defaults to the single-home degenerate distribution: one home, every
-    statistic equal to the representative's ``total_outlay_gbp``.
+    statistic equal to the representative's ``total_outlay_gbp``, annualised
+    from make_window()'s whole calendar year, so a report of it gives no
+    extrapolation notice.
     """
     rep = representative if representative is not None else make_bill_breakdown()
     per_home = (
@@ -104,6 +111,7 @@ def make_bill_distribution(
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,
         max_gbp=max_gbp,
+        annualised_from=annualised_from,
     )
 
 

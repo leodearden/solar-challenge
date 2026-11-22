@@ -129,9 +129,11 @@ def migrate() -> None:
     its run ran by, naming the run, the document, the field, the value it
     held and the value it holds now; and each run it cannot migrate, which it
     leaves as it was, naming its run, document and field. It reads a run's
-    JSON documents, not its time series, which have no format version: a run
-    whose time series is damaged is migrated, and refused naming it when it is
-    loaded.
+    JSON documents, and its time series only for a run saved before summaries
+    carried a window, whose summaries' windows it reads from them. Such a run
+    whose time series is missing or damaged cannot be migrated and is printed
+    as one it cannot migrate. Any other run whose time series is damaged is
+    migrated, and refused naming it when it is loaded.
 
     It refuses, changing nothing and exiting with an error: a store another
     dashboard holds, naming its lock file; a store a newer solar-challenge

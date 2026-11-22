@@ -56,6 +56,7 @@ from solar_challenge.web.stored_runs import (
     StoredRun,
     StoredRunDocuments,
     StoredRunUnreadable,
+    StoredTimeSeries,
     UnmigratedRun,
     bring_run_documents_forward,
     documents_in_current_format,
@@ -325,7 +326,8 @@ def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str |
     """The name a job given none would have created run *run_id* under: the default_name of *run_type*'s kind for the homes *config_json* holds.
 
     The legacy config is read as the stored-run format reads it once migrated, every
-    run-document step brought to bear on it in memory first. A run with no config is named as a
+    run-document step brought to bear on it in memory first, with no summary and so no time
+    series for a step to read. A run with no config is named as a
     run of no homes, and so is one whose config cannot be read as its kind's even so, with a
     logged warning naming the run and the refusal: the name is a label its user can rename, so a
     damaged config does not keep the store from migrating.
@@ -337,6 +339,7 @@ def _name_of_a_run_given_none(run_id: str, run_type: RunType, config_json: str |
             legacy = StoredRunDocuments(
                 config=_row_document(run_id, "config_json", config_json),
                 summary=_row_document(run_id, "summary_json", None),
+                time_series=StoredTimeSeries(run_id, None),
             )
             homes = kind.home_configs(documents_in_current_format(run_type, legacy).config)
         except StoredRunUnreadable as refusal:
@@ -434,9 +437,17 @@ def migrate_stored_run_files(
     format.json naming *to_version* last, and the run is recorded as brought forward. A run
     whose format.json or documents cannot be read or brought forward, or whose row has no type,
     is left as it was and reported as unmigrated. A
-    run's time series are not read: they have no format version, so a run whose time series is
-    damaged is brought forward as any other is, and refused naming it when it is loaded. A
-    migration stopped part way through runs again from the start: the files it brought forward
+    run's time series have no format version and are read only by a step that needs one: v5
+    reads the series of each summary saved without a window, data.parquet for a home run and
+    homes/home_{i}.parquet for a fleet's home i. That includes the in-memory readability check
+    bring_run_documents_forward runs at every earlier schema step, so it holds whichever step
+    the migration is at. So a run whose summaries all hold a window is brought forward even
+    when its series is damaged, and refused naming it when it is loaded. A run saved before
+    summaries carried a window whose series is missing or not a run's is left as it was and
+    reported as unmigrated, naming the series. Its files then get none of the earlier steps'
+    fixes. A home run's runs row, which holds its summary, is left the same way, as
+    migrate_runs_table_documents says; a fleet run's, which holds no home summary, is brought
+    forward as any other is. A migration stopped part way through runs again from the start: the files it brought forward
     name *to_version* and are left as they are, and the steps change nothing in a document they
     already brought forward in a run stopped part way through, whose format.json is as it was.
     So the migration run again reports none of the values the steps dropped or rewrote in those
@@ -527,15 +538,19 @@ _DOCUMENT_COLUMNS: tuple[_DocumentColumn, ...] = ("config_json", "summary_json")
 
 
 def migrate_runs_table_documents(
-    conn: sqlite3.Connection, from_version: int, to_version: int, earlier: RunDocumentsOutcome
+    conn: sqlite3.Connection, data_dir: Path, from_version: int, to_version: int, earlier: RunDocumentsOutcome
 ) -> RunDocumentsOutcome:
     """The runs table's part of the schema step carrying the run-document step of *to_version*, run on *conn* inside that step's transaction.
 
-    *from_version* is the format the runs rows are in, as the store's schema version implies
-    it. *earlier* is what the earlier run-document steps of the same migration did. Each run's
-    runs.config_json and runs.summary_json are brought forward from *from_version* to
-    *to_version* by bring_run_documents_forward, and only a column the steps changed is
-    rewritten, as the JSON text a save writes. A run whose row had a column rewritten is
+    *data_dir* is the store's data directory, which holds the runs' files. *from_version* is the
+    format the runs rows are in, as the store's schema version implies it. *earlier* is what the
+    earlier run-document steps of the same migration did. Each run's runs.config_json and
+    runs.summary_json are brought forward from *from_version* to *to_version* by
+    bring_run_documents_forward, with the time series of the run's directory under *data_dir*,
+    or none when it has no directory there, and only a column the steps changed is rewritten,
+    as the JSON text a save writes. v5 reads a series only for a home run's summary saved
+    without a window, so a fleet run's row, which holds no home summary, is brought forward
+    whatever its series. A run whose row had a column rewritten is
     recorded as brought forward, as migrate_stored_run_files records a run whose files it
     wrote; a row the steps left as it was is not. A runs row records no format of its own, and
     an earlier migration may have left one in the first: so a row that cannot be brought
@@ -555,18 +570,21 @@ def migrate_runs_table_documents(
         if row["id"] in left_unmigrated:
             continue
         if row["config_json"] is not None or row["summary_json"] is not None:
-            outcome += _migrate_runs_row(conn, row, from_version, to_version)
+            outcome += _migrate_runs_row(conn, data_dir, row, from_version, to_version)
     return outcome
 
 
-def _migrate_runs_row(conn: sqlite3.Connection, row: sqlite3.Row, from_version: int, to_version: int) -> RunDocumentsOutcome:
-    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward from format *from_version* to *to_version*, as migrate_runs_table_documents does for each row, recording the run as brought forward when a column is rewritten."""
+def _migrate_runs_row(
+    conn: sqlite3.Connection, data_dir: Path, row: sqlite3.Row, from_version: int, to_version: int
+) -> RunDocumentsOutcome:
+    """Bring the documents of *row*, a runs row read with its id, type, config_json and summary_json, forward from format *from_version* to *to_version*, as migrate_runs_table_documents does for each row of the store whose data directory is *data_dir*, recording the run as brought forward when a column is rewritten."""
     run_id = row["id"]
     try:
         typed = _run_type(run_id, row["type"])
         documents = StoredRunDocuments(
             config=_row_document(run_id, "config_json", row["config_json"]),
             summary=_row_document(run_id, "summary_json", row["summary_json"]),
+            time_series=StoredTimeSeries(run_id, _existing_run_dir(data_dir, run_id)),
         )
         result = _row_brought_forward(typed, documents, from_version, to_version)
     except StoredRunUnreadable as refusal:

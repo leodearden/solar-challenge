@@ -44,7 +44,7 @@ def _make_summary(
     total_import_cost_gbp: float = 276.0,   # 1200 kWh × 23 p/kWh
     total_export_revenue_gbp: float = 73.8,  # 1800 kWh × 4.1 p/kWh
     net_cost_gbp: float = 202.2,             # 276.0 - 73.8
-    simulation_days: int = 365,
+    days: int = 365,
     seg_revenue_gbp: Optional[float] = 73.8,
     pricing: Optional[RunPricing] = RunPricing(0.23, 4.1),
 ) -> SummaryStatistics:
@@ -65,12 +65,11 @@ def _make_summary(
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=simulation_days,
+        window=make_window(days=days),
         total_import_cost_gbp=total_import_cost_gbp,
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
         seg_revenue_gbp=seg_revenue_gbp,
-        window=make_window(days=simulation_days),
         pricing=pricing,
     )
 
@@ -123,9 +122,8 @@ class TestHouseholderBillPhysics:
         finance = _make_finance()  # own_use_rate=15.0 p/kWh
         breakdown = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=summary.simulation_days,
         )
 
         assert isinstance(breakdown, BillBreakdown)
@@ -183,9 +181,8 @@ class TestHouseholderBillPhysics:
         finance = _make_finance()
         breakdown = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=summary.simulation_days,
         )
 
         # saving_vs_baseline = baseline - total_outlay (CR3 redefinition)
@@ -211,9 +208,8 @@ class TestHouseholderBillPhysics:
         finance = _make_finance(own_use_rate_pence_per_kwh=15.0)
         breakdown = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=summary.simulation_days,
         )
 
         sc_kwh = summary.total_self_consumption_kwh
@@ -229,9 +225,8 @@ class TestHouseholderBillPhysics:
         finance_parity = _make_finance(own_use_rate_pence_per_kwh=retail)
         bill_parity = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance_parity,
-            simulation_days=summary.simulation_days,
         )
         assert bill_parity.saving_vs_baseline_gbp == pytest.approx(0.0, abs=1e-9)
         assert bill_parity.self_consumption_saving_gbp == pytest.approx(0.0, abs=1e-9)
@@ -257,9 +252,8 @@ class TestHouseholderBillPhysics:
         with pytest.warns(UserWarning, match="no tariff configured"):
             breakdown = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
-                simulation_days=summary.simulation_days,
             )
 
         # import priced at retail baseline rate: 1200 kWh × 23 p/kWh = £276
@@ -287,9 +281,8 @@ class TestHouseholderBillPhysics:
             warnings.simplefilter("error")
             breakdown = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
-                simulation_days=summary.simulation_days,
             )
 
         assert breakdown.import_cost_gbp == pytest.approx(0.0)
@@ -310,9 +303,8 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         breakdown = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=summary.simulation_days,
         )
 
         assert breakdown.self_consumption_fraction == pytest.approx(0.70)
@@ -328,9 +320,8 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         breakdown = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=summary.simulation_days,
         )
 
         expected_sc = 0.70 * summary.total_generation_kwh
@@ -355,16 +346,14 @@ class TestHouseholderBillOverrideAndAnnualisation:
 
         bill_physics = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=_make_finance(self_consumption_override=None),
-            simulation_days=summary.simulation_days,
         )
         with pytest.warns(UserWarning, match="capped at demand"):
             bill_override = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=override_val),
-                simulation_days=summary.simulation_days,
             )
 
         # Higher self-consumption → different self-consumption saving
@@ -379,17 +368,16 @@ class TestHouseholderBillOverrideAndAnnualisation:
         assert bill_override.total_outlay_gbp != pytest.approx(bill_physics.total_outlay_gbp)
 
     def test_full_year_no_warning(self) -> None:
-        """simulation_days=365 must not emit any warning."""
-        summary = _make_summary(simulation_days=365)
+        """A 365-day window must not emit any warning."""
+        summary = _make_summary(days=365)
         finance = _make_finance()
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             breakdown = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
-                simulation_days=365,
             )
 
         # No exception means no warning was emitted
@@ -409,7 +397,7 @@ class TestHouseholderBillOverrideAndAnnualisation:
         net_cost_30 = (276.0 - 73.8) / scale_factor
 
         summary_30 = _make_summary(
-            simulation_days=30,
+            days=30,
             total_generation_kwh=gen_30,
             total_demand_kwh=demand_30,
             total_self_consumption_kwh=sc_30,
@@ -421,21 +409,19 @@ class TestHouseholderBillOverrideAndAnnualisation:
             seg_revenue_gbp=export_rev_30,
         )
 
-        summary_365 = _make_summary(simulation_days=365)
+        summary_365 = _make_summary(days=365)
         finance = _make_finance()
 
         bill_30 = householder_bill(
             summary=summary_30,
-            annual_self_consumption_kwh=summary_30.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary_30.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=30,
         )
 
         bill_365 = householder_bill(
             summary=summary_365,
-            annual_self_consumption_kwh=summary_365.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary_365.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
 
         # Annualised 30-day bill should be approximately equal to the 365-day bill
@@ -478,9 +464,8 @@ class TestOverrideExactValues:
         with pytest.warns(UserWarning, match="capped at demand"):
             return householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=0.70),
-                simulation_days=365,
             )
 
     @staticmethod
@@ -496,9 +481,8 @@ class TestOverrideExactValues:
         with pytest.warns(UserWarning, match="no tariff configured"):
             return householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=override),
-                simulation_days=365,
             )
 
     def test_override_own_use_capped_at_demand(self) -> None:
@@ -540,9 +524,8 @@ class TestOverrideExactValues:
             warnings.simplefilter("error")
             breakdown = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=_make_finance(self_consumption_override=0.70),
-                simulation_days=365,
             )
 
         assert breakdown.own_use_payment_gbp == pytest.approx(420.0)
@@ -567,9 +550,8 @@ class TestOverrideExactValues:
         tariffed_summary = _make_summary()  # its 1,200 kWh import cost £276, i.e. 23 p
         tariffed = householder_bill(
             summary=tariffed_summary,
-            annual_self_consumption_kwh=tariffed_summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=tariffed_summary.total_self_consumption_kwh,
             finance=_make_finance(self_consumption_override=0.70),
-            simulation_days=365,
         )
 
         untariffed = self._untariffed_override_bill()
@@ -598,9 +580,8 @@ class TestOverrideExactValues:
 
         breakdown = householder_bill(
             summary=summary_no_import,
-            annual_self_consumption_kwh=summary_no_import.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary_no_import.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
         # With override=0.50: sc=2000kWh, import=max(3400-2000,0)=1400kWh at the tariff's 30 p mean rate
         expected_import_cost = 1400.0 * 30.0 / 100.0
@@ -626,9 +607,8 @@ class TestOverrideExactValues:
 
         breakdown = householder_bill(
             summary=summary_no_export,
-            annual_self_consumption_kwh=summary_no_export.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary_no_export.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
         # CR3: no seg_export_income_gbp on the bill; total_outlay must be positive
         assert breakdown.total_outlay_gbp > 0.0
@@ -667,7 +647,7 @@ class TestBillDistribution:
         """per_home_net_bill_gbp must have length == n_homes."""
         summaries = self._make_fleet()
         finance = _make_finance()
-        dist = bill_distribution(summaries, finance, 365)
+        dist = bill_distribution(summaries, finance)
 
         assert len(dist.per_home_net_bill_gbp) == len(summaries)
 
@@ -678,20 +658,19 @@ class TestBillDistribution:
         redefined to per-home total_outlay_gbp.
 
         Basis C (task-84 §6): bill_distribution bills each home's demand −
-        import as its annual_self_consumption_kwh.  The expected bill must use
+        import as its window_self_consumption_kwh.  The expected bill must use
         the same basis so the assertion reflects the actual contract.
         """
         summaries = self._make_fleet()
         finance = _make_finance()
-        dist = bill_distribution(summaries, finance, 365)
+        dist = bill_distribution(summaries, finance)
 
         for i, s in enumerate(summaries):
             expected_bill = householder_bill(
                 summary=s,
                 # Basis C: matches what bill_distribution passes internally
-                annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
+                window_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                 finance=finance,
-                simulation_days=365,
             )
             assert dist.per_home_net_bill_gbp[i] == pytest.approx(expected_bill.total_outlay_gbp)
 
@@ -699,7 +678,7 @@ class TestBillDistribution:
         """min/mean/median/max must match pd.Series stats of per-home total_outlay values."""
         summaries = self._make_fleet()
         finance = _make_finance()
-        dist = bill_distribution(summaries, finance, 365)
+        dist = bill_distribution(summaries, finance)
 
         # per_home_net_bill_gbp now holds per-home total_outlay values (CR3)
         series = pd.Series(list(dist.per_home_net_bill_gbp))
@@ -712,7 +691,7 @@ class TestBillDistribution:
         """representative must be the BillBreakdown of the median-total_outlay home (CR3)."""
         summaries = self._make_fleet()
         finance = _make_finance()
-        dist = bill_distribution(summaries, finance, 365)
+        dist = bill_distribution(summaries, finance)
 
         # Find the median-total_outlay home index manually
         outlay_vals = list(dist.per_home_net_bill_gbp)  # now holds total_outlay_gbp
@@ -722,9 +701,8 @@ class TestBillDistribution:
 
         expected_rep = householder_bill(
             summary=summaries[rep_idx],
-            annual_self_consumption_kwh=summaries[rep_idx].total_self_consumption_kwh,
+            window_self_consumption_kwh=summaries[rep_idx].total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
         # CR3: representative keyed on total_outlay_gbp
         assert dist.representative.total_outlay_gbp == pytest.approx(
@@ -735,7 +713,7 @@ class TestBillDistribution:
         """Single-home fleet: representative equals that home, min==mean==median==max."""
         summary = _make_summary()
         finance = _make_finance()
-        dist = bill_distribution([summary], finance, 365)
+        dist = bill_distribution([summary], finance)
 
         assert len(dist.per_home_net_bill_gbp) == 1
         outlay = dist.per_home_net_bill_gbp[0]
@@ -749,14 +727,14 @@ class TestBillDistribution:
     def test_per_home_net_bill_is_tuple(self) -> None:
         """per_home_net_bill_gbp must be a tuple (immutable)."""
         summaries = self._make_fleet()
-        dist = bill_distribution(summaries, _make_finance(), 365)
+        dist = bill_distribution(summaries, _make_finance())
 
         assert isinstance(dist.per_home_net_bill_gbp, tuple)
 
     def test_empty_summaries_raises_value_error(self) -> None:
         """bill_distribution must raise ValueError for an empty summaries sequence."""
         with pytest.raises(ValueError, match="at least one summary"):
-            bill_distribution([], _make_finance(), 365)
+            bill_distribution([], _make_finance())
 
 
 # ---------------------------------------------------------------------------
@@ -978,9 +956,8 @@ class TestHouseholderBillWrapperEquivalence:
 
         actual = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
         baseline_import_cost_gbp = (
             summary.total_demand_kwh * finance.retail_baseline_rate_pence_per_kwh / 100.0
@@ -1006,9 +983,8 @@ class TestHouseholderBillWrapperEquivalence:
         with pytest.warns(UserWarning, match="capped at demand"):
             actual = householder_bill(
                 summary=summary,
-                annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+                window_self_consumption_kwh=summary.total_self_consumption_kwh,
                 finance=finance,
-                simulation_days=365,
             )
 
         # Hand-computed inputs: implied own-use 0.90 x 4,000 = 3,600 is capped at the
@@ -1034,7 +1010,7 @@ class TestHouseholderBillWrapperEquivalence:
         """
         finance = _make_finance(standing_charge_pence_per_day=60.0)
         summary = _make_summary(
-            simulation_days=30,
+            days=30,
             total_import_cost_gbp=22.68,
             total_export_revenue_gbp=6.07,
             net_cost_gbp=16.61,
@@ -1048,9 +1024,8 @@ class TestHouseholderBillWrapperEquivalence:
 
         b = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=30,
         )
 
         # The 2021 window's year_days is 365
@@ -1075,7 +1050,7 @@ class TestHouseholderBillWrapperEquivalence:
             retail_baseline_rate_pence_per_kwh=23.0,
         )
         summary = _make_summary(
-            simulation_days=365,
+            days=365,
             total_generation_kwh=4000.0,
             total_demand_kwh=3000.0,
             total_self_consumption_kwh=2400.0,
@@ -1088,9 +1063,8 @@ class TestHouseholderBillWrapperEquivalence:
         )
         b = householder_bill(
             summary=summary,
-            annual_self_consumption_kwh=summary.total_self_consumption_kwh,
+            window_self_consumption_kwh=summary.total_self_consumption_kwh,
             finance=finance,
-            simulation_days=365,
         )
         # Hand-computed literals:
         #   standing      = 60 × 365 / 100         = £219.00

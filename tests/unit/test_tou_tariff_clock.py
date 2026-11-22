@@ -80,6 +80,7 @@ def _discharge_kw(strategy: DispatchStrategy, at: time) -> float:
         demand_kw=1.0,
         battery_soc_kwh=2.5,
         battery_capacity_kwh=5.0,
+        timestep_minutes=1.0,
     ).discharge_kw
 
 
@@ -237,6 +238,7 @@ def _winter_day_of_flows(strategy: TOUOptimizedStrategy, tariff: TariffConfig) -
             timestamp=minute.to_pydatetime(),
             strategy=strategy,
             tariff=tariff,
+            timestep_minutes=1.0,
         )
         for minute in MINUTES_OF_A_WINTER_DAY
     ]

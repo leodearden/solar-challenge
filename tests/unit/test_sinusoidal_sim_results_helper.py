@@ -75,7 +75,7 @@ def test_grid_import_and_export_are_priced_at_the_flat_rates_given() -> None:
         days=1, import_rate_gbp_per_kwh=0.30, export_rate_gbp_per_kwh=0.05
     )
 
-    amounts = results.per_minute_amounts()
+    amounts = results.per_step_amounts()
     pd.testing.assert_series_equal(
         amounts["import_cost_gbp"], amounts["grid_import_kwh"] * 0.30, check_names=False
     )

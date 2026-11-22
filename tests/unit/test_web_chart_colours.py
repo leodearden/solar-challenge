@@ -47,7 +47,7 @@ from solar_challenge.web import charts
 from solar_challenge.web.charts import COLOUR_PALETTE, ChartPanel, ChartTab
 from solar_challenge.web.run_headline import run_headline
 from tests._dashboard_sources import THEME_TOKENS_KEY, theme_tokens
-from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results
+from tests._finance_builders import make_fleet_results, make_home_config, make_sim_results, make_window
 from tests._plotly_figure import Rgb, colour_literals, drawn_colours, traces
 
 
@@ -107,7 +107,7 @@ _SUMMARY = SummaryStatistics(
     self_consumption_ratio=0.5,
     grid_dependency_ratio=0.375,
     export_ratio=0.4,
-    simulation_days=1,
+    window=make_window(days=1),
     total_import_cost_gbp=0.0,
     total_export_revenue_gbp=0.0,
     net_cost_gbp=0.0,

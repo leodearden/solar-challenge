@@ -48,7 +48,6 @@ def _bill(summary: SummaryStatistics, *, self_consumption_override: float | None
         summary,
         summary.total_self_consumption_kwh,
         _finance(self_consumption_override=self_consumption_override),
-        summary.simulation_days,
     )
 
 
@@ -111,7 +110,7 @@ class TestOverrideImport:
     [
         pytest.param(_bill, id="householder_bill"),
         pytest.param(
-            lambda summary: bill_distribution([summary], _finance(), summary.simulation_days),
+            lambda summary: bill_distribution([summary], _finance()),
             id="bill_distribution",
         ),
     ],

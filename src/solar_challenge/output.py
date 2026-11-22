@@ -44,9 +44,9 @@ def _days_lasted(row_count: int, cadence: timedelta) -> float:
     return row_count * cadence / timedelta(days=1)
 
 
-def _extrapolation_notice(window: Optional[SimulationWindow]) -> str:
-    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* is None or runs from 1 January to 31 December."""
-    if window is None or not window.extrapolated:
+def _extrapolation_notice(window: SimulationWindow) -> str:
+    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* runs from 1 January to 31 December."""
+    if not window.extrapolated:
         return ""
     return (
         f"*Yearly figures are extrapolated ×{window.annualisation_scale:.3f} from a "
@@ -144,7 +144,7 @@ def generate_summary_report(
 
         # Add seasonal breakdown if we have heat pump load data
         if results.heat_pump_load is not None:
-            amounts = results.per_minute_amounts()
+            amounts = results.per_step_amounts()
             winter_totals = _in_months(amounts, _WINTER_MONTHS).sum()
             summer_totals = _in_months(amounts, _SUMMER_MONTHS).sum()
             winter_hp_load = _in_months(results.heat_pump_load, _WINTER_MONTHS)
@@ -250,7 +250,7 @@ class SeasonalMetrics:
 
 
 def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSummary:
-    """The summary of the rows in *months* of *amounts*, a run's per_minute_amounts()."""
+    """The summary of the rows in *months* of *amounts*, a run's per_step_amounts()."""
     totals = _in_months(amounts, months).sum()
     return SeasonSummary(
         generation_kwh=float(totals["generation_kwh"]),
@@ -272,7 +272,7 @@ def calculate_seasonal_metrics(results: SimulationResults) -> SeasonalMetrics:
     counts battery discharge as calculate_summary's does. The ratios are calculate_summary's,
     of the season's totals. A season with none of the run's rows has 0.0 for every figure.
     """
-    amounts = results.per_minute_amounts()
+    amounts = results.per_step_amounts()
     return SeasonalMetrics(
         winter=_season_summary(amounts, _WINTER_MONTHS),
         summer=_season_summary(amounts, _SUMMER_MONTHS),
@@ -286,7 +286,7 @@ def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
         results: Simulation results with 1-minute resolution
         freq: pandas offset alias of the period, e.g. "D" or "ME"
     """
-    totals = results.per_minute_amounts().resample(freq).sum()
+    totals = results.per_step_amounts().resample(freq).sum()
     peaks = pd.DataFrame(
         {"peak_generation_kw": results.generation, "peak_demand_kw": results.demand}
     ).resample(freq).max()

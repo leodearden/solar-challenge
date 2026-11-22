@@ -379,8 +379,7 @@ class TestRunSweepSingleConfig:
             calculate_summary(r, seg_tariff_pence_per_kwh=sweep_scenario.seg_tariff_pence_per_kwh)
             for r in fr.per_home_results
         ]
-        sim_days = summaries[0].simulation_days
-        dist = bill_distribution(summaries, finance, sim_days)
+        dist = bill_distribution(summaries, finance)
         expected_outlay = dist.representative.total_outlay_gbp
 
         assert cr.baseline_outlay_gbp == pytest.approx(expected_outlay)

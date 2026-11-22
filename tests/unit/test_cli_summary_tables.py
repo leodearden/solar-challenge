@@ -12,6 +12,7 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import fleet_summary_rows, home_summary_rows
 from solar_challenge.fleet import FleetSummary
 from solar_challenge.home import SummaryStatistics
+from tests._finance_builders import make_window
 from tests._seeded_tmy import ClearJuneDays
 
 _HOME = {
@@ -44,7 +45,7 @@ def _home_summary(**changes: float | None) -> SummaryStatistics:
             self_consumption_ratio=0.6,
             grid_dependency_ratio=0.25,
             export_ratio=0.4,
-            simulation_days=1,
+            window=make_window(days=1),
             total_import_cost_gbp=0.56,
             total_export_revenue_gbp=0.24,
             net_cost_gbp=0.32,

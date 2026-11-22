@@ -139,7 +139,7 @@ class _TimestampRecordingStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: GridChargeContext | None = None,
     ) -> DispatchDecision:

@@ -247,10 +247,9 @@ def run(
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
     primary_finance, spreadsheet_finance = _bill_finances(assumptions, finance)
-    summary_days = summaries[0].simulation_days
-    primary_bill = bill_distribution(summaries, primary_finance, summary_days)
+    primary_bill = bill_distribution(summaries, primary_finance)
     spreadsheet_bill: Optional[BillDistribution] = (
-        bill_distribution(summaries, spreadsheet_finance, summary_days)
+        bill_distribution(summaries, spreadsheet_finance)
         if spreadsheet_finance is not None
         else None
     )

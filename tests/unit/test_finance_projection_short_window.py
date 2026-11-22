@@ -138,9 +138,8 @@ class TestProjectMultiYearAnnualisesShortWindow:
             bills = [
                 householder_bill(
                     s,
-                    annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
+                    window_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                     finance=finance,
-                    simulation_days=s.simulation_days,
                 )
                 for s in summaries
             ]
