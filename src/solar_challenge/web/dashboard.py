@@ -107,9 +107,14 @@ def get_job_stream_policy() -> JobStreamPolicy:
     """Return the JobStreamPolicy the app's job progress streams are served under, the one create_app registers in the current Flask app's extensions.
 
     Raises:
+        LookupError: If the current app holds no JobStreamPolicy, naming the app.
         TypeError: If the app's job_stream_policy extension is not a JobStreamPolicy, naming the type it holds.
     """
-    policy = current_app.extensions["job_stream_policy"]
+    policy = current_app.extensions.get("job_stream_policy")
+    if policy is None:
+        raise LookupError(
+            f"The Flask app {current_app.name!r} holds no JobStreamPolicy: create_app registers one in each app it builds"
+        )
     if not isinstance(policy, JobStreamPolicy):
         raise TypeError(
             f"the app's job_stream_policy extension must be a JobStreamPolicy, got {type(policy).__name__}"

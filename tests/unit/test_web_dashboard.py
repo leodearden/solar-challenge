@@ -103,7 +103,7 @@ class TestDashboardOf:
 
 
 class TestTheCurrentAppsServices:
-    """The accessors read the services of the current Flask app: the storage, jobs and database of the Dashboard attached to it, and the JobStreamPolicy its job progress streams are served under."""
+    """The accessors read the services of the current Flask app: the storage, jobs and database of the Dashboard attached to it, and the JobStreamPolicy its job progress streams are served under; each refuses, naming the app, a current app that holds no such service."""
 
     def test_the_storage_jobs_and_database_read_are_those_of_the_dashboard_attached_to_the_current_app(
         self, tmp_path: Path, closes_at_teardown: ExitStack
@@ -123,13 +123,19 @@ class TestTheCurrentAppsServices:
             pytest.param(get_storage, id="get_storage"),
             pytest.param(get_job_manager, id="get_job_manager"),
             pytest.param(get_database, id="get_database"),
+            pytest.param(get_job_stream_policy, id="get_job_stream_policy"),
         ],
     )
-    def test_reading_a_dashboards_service_in_an_app_holding_no_dashboard_is_refused_naming_the_app(
+    def test_reading_a_service_the_current_app_does_not_hold_is_refused_naming_the_app_and_create_app(
         self, accessor: Callable[[], object]
     ) -> None:
-        with Flask("holds-no-dashboard").app_context(), pytest.raises(LookupError, match="'holds-no-dashboard'"):
+        with (
+            Flask("holds-no-services").app_context(),
+            pytest.raises(LookupError, match="'holds-no-services'") as refused,
+        ):
             accessor()
+
+        assert "create_app" in str(refused.value)
 
     def test_the_job_stream_policy_read_is_the_one_the_current_apps_job_streams_are_served_under(self) -> None:
         app = Flask("serves-job-streams")
@@ -140,7 +146,7 @@ class TestTheCurrentAppsServices:
             assert get_job_stream_policy() is policy
 
     def test_a_job_stream_policy_extension_that_is_not_a_policy_is_refused_naming_its_type(self) -> None:
-        app = Flask("holds-no-policy")
+        app = Flask("holds-something-else")
         app.extensions["job_stream_policy"] = object()
 
         with app.app_context(), pytest.raises(TypeError, match=r"\bobject\b"):
