@@ -411,7 +411,11 @@ def test_web_migrate_refused_at_a_step_after_one_it_applied_prints_the_report_of
 
 
 def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_store_and_the_fault(tmp_path: Path) -> None:
-    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write."""
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write.
+
+    The catch-up writes the run's summary.json, which v5 gives a window, before the fault, and
+    the report on stdout names it.
+    """
     database = open_database(_store_database(tmp_path))
     run_id = install_stored_run_fixture("pre_469_home", database, database.path.parent)
     marker = stored_run_dir(run_storage_over(database), run_id) / "format.json"
@@ -424,7 +428,7 @@ def test_web_migrate_refuses_a_lagging_run_s_file_it_cannot_write_naming_the_sto
     assert "Traceback" not in result.output
     for named in [str(database.path), f"schema version {SCHEMA_VERSION}", str(marker)]:
         assert named in result.stderr, (named, result.stderr)
-    assert result.stdout == ""
+    assert f"run {run_id!r}: summary.json" in result.stdout, result.stdout
 
 
 def test_after_web_migrate_the_dashboard_shows_a_run_stored_before_469_and_loads_it_with_no_grid_charge(

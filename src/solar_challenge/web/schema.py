@@ -376,6 +376,7 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
     _carrying(2),
     _carrying(3),
     _carrying(4),
+    _carrying(5),
 )
 """Every step of the store's schema, in order: MIGRATIONS[N - 1] is the step to version N."""
 
@@ -609,7 +610,7 @@ def _apply_step(
                 RunDocumentsOutcome()
                 if document_step is None
                 else migrate_runs_table_documents(
-                    conn, _run_format_at(step.version - 1), document_step.version, earlier
+                    conn, data_dir, _run_format_at(step.version - 1), document_step.version, earlier
                 )
             )
             conn.execute(f"PRAGMA user_version = {step.version}")
@@ -637,7 +638,7 @@ def _bring_lagging_runs_forward(database: Database, data_dir: Path, earlier: Run
     try:
         with database.transaction() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            rows = migrate_runs_table_documents(conn, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
+            rows = migrate_runs_table_documents(conn, data_dir, RUN_FORMAT_VERSION, RUN_FORMAT_VERSION, earlier)
     except sqlite3.Error as fault:
         raise _CatchUpRefused(fault, files) from fault
     return files + rows

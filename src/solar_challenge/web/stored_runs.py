@@ -31,14 +31,17 @@ records each run's type, are RunStorage's: nothing here reads SQL or Flask.
 
 The documents are in the format of version RUN_FORMAT_VERSION, the version of the last step
 in RUN_DOCUMENT_STEPS. Each RunDocumentStep brings a run's JSON documents, read as
-read_run_documents reads them, from the version before its own to its own. Its apply is
-pure, and applying it to its own result changes nothing and drops nothing. v2, the first,
+read_run_documents reads them with a StoredTimeSeries, a read-only accessor of the run's time
+series, from the version before its own to its own. Its apply is pure, and applying it to its
+own result changes nothing and drops nothing. v2, the first,
 drops each key a document's dataclass does not have, by without_unknown_keys, as the reader
 skipped such keys before runs carried a format version, and reports each dropped value that is
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
 dispatch ignores, and reports each value it rewrites, with the value it holds now. v4 drops each
 battery's grid_charging that its run ignored on a tariff with no cheap period, one whose periods
-all charge the same rate, and reports each value it rewrites the same way.
+all charge the same rate, and reports each value it rewrites the same way. v5 sets each summary
+saved before summaries carried a window to the window of its run's stored time series, as
+calculate_summary took it from the same results' index, and reports none.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -77,6 +80,7 @@ import pandas as pd
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
+from solar_challenge.timebase import SimulationWindow
 from solar_challenge.web.field_tree import FieldTreeRefused, field_tree, read_field_tree, without_unknown_keys
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.stored_json import UndecodableJson, decoded_json
@@ -253,7 +257,7 @@ class StoredHomeRun:
         (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
         _write_json(run_dir / _CONFIG_DOCUMENT, config_document)
         _write_json(run_dir / _SUMMARY_DOCUMENT, summary_document)
-        frame.to_parquet(run_dir / "data.parquet", engine="pyarrow")
+        frame.to_parquet(run_dir / _HOME_TIME_SERIES, engine="pyarrow")
         _write_format_marker(run_dir, RUN_FORMAT_VERSION)
 
     def export_frame(self) -> pd.DataFrame:
@@ -326,6 +330,8 @@ StoredRun = StoredHomeRun | StoredFleetRun
 
 
 _HOMES_DIR = "homes"
+_HOME_TIME_SERIES = "data.parquet"
+"""The name, in a home run's directory, of the run's time series."""
 
 
 def _home_time_series(index: int) -> str:
@@ -426,22 +432,55 @@ def _write_format_marker(run_dir: Path, format_version: int) -> None:
 
 
 @dataclass(frozen=True)
+class StoredTimeSeries:
+    """A stored run's time series as a run-document step reads them: the run's id and its directory, None when the run has none.
+
+    It reads a series' file only when asked, and writes nothing.
+    """
+
+    run_id: str
+    run_dir: Path | None
+
+    def window(self, name: str) -> SimulationWindow:
+        """The window of the run's time series *name*, e.g. "data.parquet": SimulationWindow.of_index of that file's index, its columns left unread.
+
+        Raises:
+            StoredRunUnreadable: The run has no directory, or the file is missing, cannot be
+                read, or has an index SimulationWindow.of_index refuses, as _read_time_series
+                refuses it; the field is None.
+        """
+        return _read_time_series(self.run_dir, self.run_id, name, _window_of_the_index)
+
+
+def _window_of_the_index(path: Path) -> SimulationWindow:
+    """The window SimulationWindow.of_index reads from the index of the parquet at *path*, none of its columns read.
+
+    Raises:
+        ValueError: SimulationWindow.of_index refuses the index, or the file is not a parquet.
+        OSError: The file cannot be read.
+    """
+    return SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow", columns=[]).index)
+
+
+@dataclass(frozen=True)
 class StoredRunDocuments:
-    """The JSON documents of one stored run, each a StoredDocument that names itself.
+    """A stored run as a run-document step reads it: its JSON documents, each a StoredDocument that names itself, and a read-only accessor of its time series.
 
     config is the run's config document and summary its summary document: config.json and
     summary.json in its directory, or runs.config_json and runs.summary_json in its runs row.
-    home_summaries are a fleet run's homes' summary documents, in the fleet's order, and empty
-    for a home run or a runs row. A document's content is None where its source holds none,
-    e.g. the summary column of a run not yet finished.
+    time_series is the run's StoredTimeSeries, bound to its directory, whose files a step
+    reads only when it needs one. home_summaries are a fleet run's homes' summary documents, in
+    the fleet's order, and empty for a home run or a runs row. A document's content is None
+    where its source holds none, e.g. the summary column of a run not yet finished.
     """
 
     config: StoredDocument
     summary: StoredDocument
+    time_series: StoredTimeSeries
     home_summaries: tuple[StoredDocument, ...] = ()
 
     def changed_from(self, earlier: "StoredRunDocuments") -> tuple[StoredDocument, ...]:
-        """Each of these documents whose content differs from the same document's in *earlier*, the run's documents before a step brought them forward."""
+        """Each of these JSON documents whose content differs from the same document's in *earlier*, the run's documents before a step brought them forward."""
         now = (self.config, self.summary, *self.home_summaries)
         before = (earlier.config, earlier.summary, *earlier.home_summaries)
         return tuple(document for document, was in zip(now, before, strict=True) if document.content != was.content)
@@ -461,7 +500,7 @@ def read_run_documents(run_dir: Path, run_id: str, run_type: RunType) -> StoredR
 
 
 def _home_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
-    """The JSON documents of home run *run_id* that *run_dir* holds, as StoredHomeRun.write lays them out: config.json and summary.json.
+    """The JSON documents of home run *run_id* that *run_dir* holds, as StoredHomeRun.write lays them out: config.json and summary.json, with its time series in *run_dir*.
 
     Raises:
         StoredRunUnreadable: A document is missing or is not JSON, naming it.
@@ -469,13 +508,15 @@ def _home_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     return StoredRunDocuments(
         config=_json_document(run_dir, run_id, _CONFIG_DOCUMENT),
         summary=_json_document(run_dir, run_id, _SUMMARY_DOCUMENT),
+        time_series=StoredTimeSeries(run_id, run_dir),
     )
 
 
 def _fleet_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     """The JSON documents of fleet run *run_id* that *run_dir* holds, as StoredFleetRun.write lays them out.
 
-    Those are config.json, summary.json and, in homes/, the summary of each home its config holds.
+    Those are config.json, summary.json and, in homes/, the summary of each home its config
+    holds, with its time series in *run_dir*.
 
     Raises:
         StoredRunUnreadable: A document is missing or is not JSON, naming it; or the config holds
@@ -485,6 +526,7 @@ def _fleet_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     return StoredRunDocuments(
         config=config,
         summary=_json_document(run_dir, run_id, _SUMMARY_DOCUMENT),
+        time_series=StoredTimeSeries(run_id, run_dir),
         home_summaries=tuple(_json_document(run_dir, run_id, _home_summary(index)) for index in range(_home_count(config))),
     )
 
@@ -539,6 +581,26 @@ def _check_window(results: SimulationResults) -> None:
     _ = results.window
 
 
+def _read_time_series(run_dir: Path | None, run_id: str, name: str, read: Callable[[Path], T]) -> T:
+    """*read* of the file of the time series *name* of run *run_id* in *run_dir*, refused as a stored run's time series is.
+
+    Raises:
+        StoredRunUnreadable: *run_dir* is None or the file is missing ("is missing"); *read*
+            raises an OSError, as for a file it cannot read ("is unreadable: ..."), or a
+            ValueError, as for a file that is not a run's time series ("is not the time series
+            of a run: ..."), the error being the cause. The field is None.
+    """
+    path = None if run_dir is None else run_dir / name
+    if path is None or not path.is_file():
+        raise StoredRunUnreadable(run_id, name, None, "is missing")
+    try:
+        return read(path)
+    except ValueError as refusal:
+        raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
+    except OSError as unreadable:
+        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
+
+
 def _time_series(run_dir: Path, run_id: str, name: str, summary: SummaryStatistics) -> SimulationResults:
     """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *summary*'s strategy_name, their grid charge sized by its grid_charge_forecast.
 
@@ -552,23 +614,20 @@ def _time_series(run_dir: Path, run_id: str, name: str, summary: SummaryStatisti
             no number in a row; the field is then that series' column, and SimulationResults'
             refusal is the cause.
     """
-    path = run_dir / name
-    if not path.is_file():
-        raise StoredRunUnreadable(run_id, name, None, "is missing")
-    try:
-        results = SimulationResults.from_dataframe(
-            pd.read_parquet(path, engine="pyarrow"),
-            strategy_name=summary.strategy_name,
-            grid_charge_forecast=summary.grid_charge_forecast,
-        )
+
+    def results_of(path: Path) -> SimulationResults:
+        try:
+            results = SimulationResults.from_dataframe(
+                pd.read_parquet(path, engine="pyarrow"),
+                strategy_name=summary.strategy_name,
+                grid_charge_forecast=summary.grid_charge_forecast,
+            )
+        except SeriesRefused as refused:
+            raise StoredRunUnreadable(run_id, name, refused.column, refused.reason) from refused
         _check_window(results)
-    except SeriesRefused as refused:
-        raise StoredRunUnreadable(run_id, name, refused.column, refused.reason) from refused
-    except ValueError as refusal:
-        raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
-    except OSError as unreadable:
-        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
-    return results
+        return results
+
+    return _read_time_series(run_dir, run_id, name, results_of)
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
@@ -582,7 +641,7 @@ def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
     documents = _home_run_documents(run_dir, run_id)
     config = documents.config.read(HomeConfig)
     summary = documents.summary.read(SummaryStatistics)
-    results = _time_series(run_dir, run_id, "data.parquet", summary)
+    results = _time_series(run_dir, run_id, _HOME_TIME_SERIES, summary)
     return StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
 
 
@@ -795,7 +854,8 @@ def _each_document(
     and SummaryStatistics for each home summary.
     """
     kind = RUN_KINDS[run_type]
-    return StoredRunDocuments(
+    return replace(
+        documents,
         config=edit(documents.config, kind.config_type),
         summary=edit(documents.summary, kind.summary_type),
         home_summaries=tuple(edit(each, SummaryStatistics) for each in documents.home_summaries),
@@ -952,6 +1012,42 @@ def _periods_charge_one_rate(tariff: Any) -> bool:
     return all(is_number) and all(rate == rates[0] for rate in rates)
 
 
+def _summary_windows_from_their_time_series(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v5's step: *documents* with each SummaryStatistics document lacking a window given the window of the time series it summarises, and nothing reported.
+
+    A home run's summary summarises its data.parquet, and a fleet run's home_summaries[i] its
+    homes/home_i.parquet; each window is read through *documents*' time_series, so a summary
+    holding one reads no series. calculate_summary took a summary's window from the index of the
+    same results its run stored, so the window is the one the run had. A fleet run's summary,
+    its FleetSummary, and every config are left as they are.
+
+    Raises:
+        StoredRunUnreadable: The time series of a summary lacking a window cannot be read, as
+            StoredTimeSeries.window refuses it.
+    """
+    time_series = documents.time_series
+    if run_type == "home":
+        return StepResult(replace(documents, summary=_with_a_window(documents.summary, time_series, _HOME_TIME_SERIES)))
+    home_summaries = tuple(
+        _with_a_window(summary, time_series, _home_time_series(index)) for index, summary in enumerate(documents.home_summaries)
+    )
+    return StepResult(replace(documents, home_summaries=home_summaries))
+
+
+def _with_a_window(summary: StoredDocument, time_series: StoredTimeSeries, name: str) -> StoredDocument:
+    """*summary*, a stored SummaryStatistics object, given the window of *time_series*' series *name* when it holds none, the key absent or null; any other content is left as it is.
+
+    The window is written in field_tree's JSON form, as a save writes it.
+
+    Raises:
+        StoredRunUnreadable: The series cannot be read, as StoredTimeSeries.window refuses it.
+    """
+    content = summary.content
+    if not isinstance(content, dict) or content.get("window") is not None:
+        return summary
+    return replace(summary, content={**content, "window": field_tree(time_series.window(name))})
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -971,6 +1067,11 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "Drop each battery's grid_charging that its run ignored on a tariff with no cheap period, "
         "one whose periods all charge the same rate",
         _grid_charging_without_a_cheap_period_dropped,
+    ),
+    RunDocumentStep(
+        5,
+        "Set each stored summary saved before summaries carried a window to the window of its run's stored time series",
+        _summary_windows_from_their_time_series,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

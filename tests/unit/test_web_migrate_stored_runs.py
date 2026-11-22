@@ -976,10 +976,11 @@ def test_migrate_store_reports_a_run_whose_format_json_cannot_be_read_once_by_it
     """A run's files are in the format their format.json names, so one that cannot be read leaves no format to bring them forward from.
 
     No later step of the migration, nor its catch-up, is given the files, so they are reported
-    once. pre_469_home's runs row is one no step changes, so it is as it was too.
+    once. legacy_fleet's runs row, its config and its FleetSummary, is one no step changes, so it
+    is as it was too.
     """
     run_id = install_stored_run_fixture(
-        "pre_469_home", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
+        "legacy_fleet", Database(store_at_version_1), store_at_version_1.parent, run_id="unreadable-marker"
     )
     run_dir = _run_dir(store_at_version_1, run_id)
     (run_dir / "format.json").write_text(marker)
@@ -1224,7 +1225,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     The refusal names each run whose files stay brought forward; v2 drops only null keys from
     them, so it names no value. Run again once the trigger is dropped, the migration leaves
     those files as they are until v3, as they are in format 2 already, then brings them forward
-    by v3 and v4, and brings the runs rows forward.
+    by v3, v4 and v5, and brings the runs rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(
@@ -1257,11 +1258,14 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
         rewritten_values=_values_the_steps_after_version_1_rewrite(legacy_run_ids),
     )
     rewritten_fleets = {legacy_run_ids["pre_787_dispatch_fleet"], legacy_run_ids["pre_839_flat_grid_charging_fleet"]}
-    for run_id, before in files_after_refusal.items():
-        after = _files_of(_run_dir(store_at_version_1, run_id))
-        assert {path for path in before if after[path] != before[path]} == (
-            {"format.json", "config.json"} if run_id in rewritten_fleets else {"format.json"}
-        )
+    for name, run_id in legacy_run_ids.items():
+        before, after = files_after_refusal[run_id], _files_of(_run_dir(store_at_version_1, run_id))
+        summary_files, _ = _SUMMARIES_V5_REWRITES.get(name, (frozenset(), frozenset()))
+        assert {path for path in before if after[path] != before[path]} == {
+            "format.json",
+            *(("config.json",) if run_id in rewritten_fleets else ()),
+            *summary_files,
+        }, name
     storage = _storage_of(store_at_version_1)
     assert [storage.load_run(run_id).run_id for run_id in legacy_run_ids.values()] == list(legacy_run_ids.values())
     record = storage.run_record(legacy_run_ids["pre_786_dispatch_home"])
@@ -1349,7 +1353,11 @@ def test_migrate_store_writes_nothing_to_a_store_at_the_schema_version_nor_to_it
 def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_again_once_it_can_brings_the_run_forward(
     tmp_path: Path,
 ) -> None:
-    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk."""
+    """A directory in the place of the format.json of a run in format 1, in a store at SCHEMA_VERSION, stands in for a file the catch-up cannot write, e.g. on a full disk.
+
+    The catch-up writes the run's summary.json, which v5 gives a window, before the fault, and it
+    stays so; the refusal names it, and the rest of the run's files are as they were.
+    """
     store = open_database(tmp_path / "store" / "solar-challenge.db").path
     run_id = install_stored_run_fixture("pre_469_home", Database(store), store.parent)
     marker = _run_dir(store, run_id) / "format.json"
@@ -1365,9 +1373,12 @@ def test_migrate_store_refuses_a_lagging_run_s_file_it_cannot_write_and_run_agai
         assert named in message, (named, message)
     assert refused.value.path == store
     assert refused.value.migrated == MigrationReport(store, SCHEMA_VERSION, SCHEMA_VERSION, ())
-    assert refused.value.files_brought_forward == RunFilesBroughtForward()
+    assert refused.value.files_brought_forward == RunFilesBroughtForward(
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(run_id, ("summary.json",)),)
+    )
     assert user_version_of(store) == SCHEMA_VERSION
-    assert _files_of(_run_dir(store, run_id)) == files_before
+    files_after = _files_of(_run_dir(store, run_id))
+    assert {path for path in files_before if files_after[path] != files_before[path]} == {"summary.json"}
 
     marker.rmdir()
     report = migrate_store(store, store.parent)
@@ -1383,9 +1394,10 @@ def test_migrate_store_refused_by_a_lagging_run_s_file_it_cannot_write_carries_t
 
     Runs are brought forward in order of id, and 'retired-figure' sorts before 'unwritable', so
     the catch-up brings that lagging copy of pre_469_home forward before the fault, dropping a
-    figure no field has from its summary.json, and its files stay so. The refusal carries that
-    run and that value. Run again once the fault is gone, the migration leaves those files as
-    they are, so it reports only the value it drops from that run's runs row.
+    figure no field has from its summary.json, and its files stay so. It has also written the
+    summary.json of 'unwritable', which v5 gives a window. The refusal carries that run and that
+    value, and the summary.json of 'unwritable'. Run again once the fault is gone, the migration
+    leaves those files as they are, so it reports only the value it drops from that run's runs row.
     """
     store = open_database(tmp_path / "store" / "solar-challenge.db").path
     retired = _install_a_copy_holding_a_retired_figure(store, "retired-figure")
@@ -1398,7 +1410,9 @@ def test_migrate_store_refused_by_a_lagging_run_s_file_it_cannot_write_carries_t
 
     assert isinstance(refused.value.__cause__, OSError)
     assert refused.value.files_brought_forward == RunFilesBroughtForward(
-        runs=(retired,), dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),)
+        runs=(retired,),
+        dropped_values=(DroppedValue(retired, "summary.json", "retired_figure", 12.5),),
+        partly_brought_forward_runs=(PartlyBroughtForwardRun(unwritable, ("summary.json",)),),
     )
     assert json.loads((_run_dir(store, retired) / "format.json").read_text()) == {"format_version": RUN_FORMAT_VERSION}
 

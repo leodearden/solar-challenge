@@ -35,6 +35,10 @@ Each fixture holds:
 - runs_row.json: every column of the runs row that save wrote, read back from its database,
   with config_json and summary_json as their verbatim text, which fixture_runs_row reads.
 
+pre_469_home, legacy_fleet and pre_786_dispatch_home were saved before summaries carried a
+window, so none of their SummaryStatistics documents holds one; the stored-run format's v5 step
+derives each from the time series the summary's results stored.
+
 The fixtures, in STORED_RUN_FIXTURES' order:
 
 - pre_469_home: a home run with a 5 kWh battery and no dispatch strategy.
