@@ -196,8 +196,9 @@ class TestGridChargeCeilings:
 
         ceilings = grid_charge_ceilings_kwh("perfect_foresight", generation, demand, worn, _E7)
 
+        held = [ceiling for ceiling in ceilings if ceiling is not None]
         assert worn.soc_envelope().max_soc_kwh == pytest.approx(3.6)
-        assert {ceiling for ceiling in ceilings if ceiling is not None} == {pytest.approx(3.6)}
+        assert held and held == pytest.approx([3.6] * len(held))
 
     @pytest.mark.parametrize(
         "mismatch",
