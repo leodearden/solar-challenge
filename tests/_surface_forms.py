@@ -463,15 +463,16 @@ class _MappingEntry:
 
 
 def _parted_form(obj: object) -> _PartedForm:
-    """surface_form(obj) read as its parts: an Enum's are its members and a mapping constant's its entries, while any other constant's form has none; a routine's are its signature's parameters, and a class's the qualifiers of its kind, as _class_kind_form reads them, then those parameters; the signature is read first, so its refusals come before the kind's."""
+    """surface_form(obj) read as its parts: an Enum's are its members and a mapping constant's its entries, while any other constant's form has none; a routine's are its signature's parameters, and a class's the qualifiers of its kind, as _class_kind_form reads them from that signature, then those parameters; the signature is read first, and once, so its refusals come before the kind's."""
     if is_enum(obj):
         return _enum_form(obj)
     if not _is_class_or_routine(obj):
         return _constant_form(obj)
-    signature = _signature_form(obj)
+    signature = signature_of(obj)
+    parameters = _signature_form(obj, signature)
     if inspect.isclass(obj):
-        return _class_kind_form(obj).followed_by(signature)
-    return signature
+        return _class_kind_form(obj, signature).followed_by(parameters)
+    return parameters
 
 
 def _enum_form(cls: type[enum.Enum]) -> _PartedForm:
@@ -496,9 +497,8 @@ def _constant_form(value: object) -> _PartedForm:
     )
 
 
-def _signature_form(obj: Callable[..., object]) -> _PartedForm:
-    """The signature of *obj*, a class or routine, each default in it as _spelled_value spells it and each annotation as its construct does; each parameter, so spelled, is a part, and a render keeps inspect's own spelling of the kept parameters."""
-    signature = signature_of(obj)
+def _signature_form(obj: Callable[..., object], signature: inspect.Signature) -> _PartedForm:
+    """The signature of *obj*, a class or routine, as signature_of(obj) reads it, which *signature* is, each default in it as _spelled_value spells it and each annotation as its construct does; each parameter, so spelled, is a part, and a render keeps inspect's own spelling of the kept parameters."""
     constructs = _signature_constructs(obj, signature, _looked_up_when_read)
     spelled = signature.replace(
         parameters=[
@@ -1249,9 +1249,9 @@ def _property_kind_form(member: property) -> _PartedForm:
 _DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "frozen")
 
 
-def _class_kind_form(cls: type) -> _PartedForm:
-    """The kind of *cls*, a class other than an Enum: for a dataclass, dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from, as dataclass_parameter reads them, then by its instances' qualifiers, as _instance_qualifiers reads them; for any other class, class, qualified by those alone, and '' while none is kept."""
-    instance_qualifiers = _instance_qualifiers(cls)
+def _class_kind_form(cls: type, signature: inspect.Signature) -> _PartedForm:
+    """The kind of *cls*, a class other than an Enum whose constructor's signature, as signature_of(cls) reads it, is *signature*: for a dataclass, dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from, as dataclass_parameter reads them, then by its instances' qualifiers, as _instance_qualifiers reads them; for any other class, class, qualified by those alone, and '' while none is kept."""
+    instance_qualifiers = _instance_qualifiers(cls, signature)
     if not dataclasses.is_dataclass(cls):
         return _qualified_kind_form("class", instance_qualifiers, named_unqualified=False)
     parameters = [
@@ -1262,9 +1262,9 @@ def _class_kind_form(cls: type) -> _PartedForm:
     return _qualified_kind_form("dataclass", [*parameters, *instance_qualifiers])
 
 
-def _instance_qualifiers(cls: type) -> list[_Part]:
-    """The qualifiers of *cls*'s kind that say what its instances can do, each a part: match_args, an _InstanceAbility, if _matches_positionally holds of *cls*, then those _layout_qualifiers gives."""
-    matching = [_Part("match_args", _InstanceAbility())] if _matches_positionally(cls) else []
+def _instance_qualifiers(cls: type, signature: inspect.Signature) -> list[_Part]:
+    """The qualifiers of *cls*'s kind that say what its instances can do, each a part: match_args, an _InstanceAbility, if _matches_positionally holds of *cls* and *signature*, its constructor's, then those _layout_qualifiers gives."""
+    matching = [_Part("match_args", _InstanceAbility())] if _matches_positionally(cls, signature) else []
     return [*matching, *_layout_qualifiers(cls)]
 
 
@@ -1288,8 +1288,8 @@ def _layout_qualifiers(cls: type) -> list[_Part]:
     )
 
 
-def _matches_positionally(cls: type) -> bool:
-    """Whether a positional class pattern matches instances of *cls* by its constructor's positional parameters: whether its __match_args__, as the match statement reads it from the class, is a non-empty tuple of the names of the parameters of signature_of(cls) that are of _POSITIONAL_KINDS, in order; False if it is () or absent.
+def _matches_positionally(cls: type, signature: inspect.Signature) -> bool:
+    """Whether a positional class pattern matches instances of *cls* by its constructor's positional parameters: whether its __match_args__, as the match statement reads it from the class, is a non-empty tuple of the names of the parameters of *signature*, its constructor's, that are of _POSITIONAL_KINDS, in order; False if it is () or absent.
 
     Any other __match_args__ raises TypeError naming *cls*, what it holds and those names,
     since no qualifier spells it.
@@ -1299,7 +1299,7 @@ def _matches_positionally(cls: type) -> bool:
         return False
     positional = tuple(
         name
-        for name, parameter in signature_of(cls).parameters.items()
+        for name, parameter in signature.parameters.items()
         if parameter.kind in _POSITIONAL_KINDS
     )
     if type(held) is tuple and held == positional:
