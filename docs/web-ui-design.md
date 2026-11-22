@@ -53,6 +53,22 @@ Sidebar (collapsible):
 
 ## Pages
 
+### Form limits and starting values
+
+Every dashboard form's bounds and starting values render from one value, `page_limits()` in web/fleet_components.py, a `PageLimits`. It holds the fleet size and the Fleet Simulator's size slider; the seed; the simulation window's days, default window, day choices and custom range, and the Scenario Builder's period presets; and the fleet components PV, battery and load, each with its `value_range` and the distribution its editor starts at. It reaches the pages through one channel:
+
+- A context processor in web/app.py gives every template `page_limits`, from which the templates render their inputs' bounds and choices.
+- base.html writes `page_limits.as_json()` once into each page's `<head>`, as the JSON of `<script type="application/json" id="page-limits">`.
+- The pages' scripts, static/js/fleet-simulator.js, static/js/scenario-builder.js and the Single Home page's inline script, read that element for the values they start at and the bounds they check.
+
+Each fleet component's `value_range` bounds every home's value, fixed or drawn. The server refuses a home whose PV capacity, battery capacity or annual consumption lies outside its component's range, naming the field and the range:
+
+- The Single Home page's reader, `parse_home_config` (web/simulation_params.py), reads each of the home's values within its range.
+- The Fleet Simulator's reader, `parse_fleet_form` (web/fleet_scenario.py), generates the fleet's homes and passes them to `refuse_homes_outside_ranges`, so a value a distribution draws is bounded as a fixed one is.
+- The Scenario Builder's check, `builder_form_errors` (web/builder_form.py), passes the homes the scenario loader generates to `refuse_homes_outside_ranges` and lists its refusal.
+
+The Fleet Simulator leaves validation to the server: Run posts the form as entered, and the page shows the server's refusal. The Single Home page also checks its values against the same ranges, read from `#page-limits`, before it sends them.
+
 ### 1. Dashboard
 
 The landing page providing an overview of activity and quick-start actions.
@@ -89,7 +105,7 @@ Full configuration form exposing all `HomeConfig` parameters, with run execution
 
 #### Simulation window
 
-The server enforces two rules on a run's window (web/simulation_params.py):
+The server enforces two rules on a run's window. Their constants, `MAX_DAYS` and `MAX_WINDOW_DAYS`, live in web/fleet_components.py, and web/simulation_params.py enforces them:
 
 - **Days** (`MAX_DAYS`): a request may send 1 to 365 days. 365 runs the full year 2024-01-01 to 2024-12-31. Any other value runs that many days from 2024-06-01, so one above 214 continues into 2025.
   - Running past the year's end is intended. The weather is read by UTC time of year and wraps at the year's end, so such a run reads each TMY day at most once, as a start/end window across the new year does.
@@ -101,7 +117,7 @@ The server enforces two rules on a run's window (web/simulation_params.py):
 Fleet configuration with distribution editors and live preview.
 
 **Layout:**
-- Fleet size selector (n_homes: 10-500)
+- Fleet size selector (n_homes: 1 to 10,000; the slider is a 10–500 convenience)
 - Per-component distribution editor cards:
 
 | Component | Distribution Types | Parameters |

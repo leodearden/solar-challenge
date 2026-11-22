@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/macros.html" import location_preset_options, split_card, tab_bar %}
+{% from "components/macros.html" import day_choice_buttons, location_preset_options, split_card, tab_bar %}
 {% from "partials/page-header.html" import page_header %}
 {% from "simulate/partials/progress-tracker.html" import progress_tracker %}
 
@@ -10,13 +10,17 @@
 {% block head %}
 <script>
 document.addEventListener('alpine:init', () => {
+    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
+    const limits = JSON.parse(document.getElementById('page-limits').textContent);
+    // Each fleet component of limits, by its key
+    const components = Object.fromEntries(limits.components.map((component) => [component.key, component]));
     Alpine.data('homeSimulator', (tariffPresetRates) => ({
         activeTab: {{ configuration_tabs[0].key | tojson }},
         submitting: false,
         submittedJob: null,
         errorMsg: '',
         presets: [],
-        consumptionRange: {{ fleet_components.load.fixed_range | tojson }},
+        consumptionRange: [components.load.value_range.low, components.load.value_range.high],
         formData: {
             pv_kw: 4.0,
             azimuth: 180,
@@ -37,9 +41,9 @@ document.addEventListener('alpine:init', () => {
             custom_lat: 51.45,
             custom_lon: -2.58,
             period_mode: 'preset',
-            period_days: 30,
-            start_date: '2024-06-01',
-            end_date: '2024-06-30',
+            period_days: limits.default_days,
+            start_date: limits.custom_range_default[0],
+            end_date: limits.custom_range_default[1],
             name: '',
             preset: '',
             heat_pump_enabled: false,
@@ -69,10 +73,16 @@ document.addEventListener('alpine:init', () => {
             const errors = {};
             const f = this.formData;
             const pv = parseFloat(f.pv_kw);
-            if (isNaN(pv) || pv < 0.5 || pv > 20) errors.pv_kw = 'PV capacity must be 0.5–20 kW';
+            const pvRange = components.pv.value_range;
+            if (isNaN(pv) || pv < pvRange.low || pv > pvRange.high) {
+                errors.pv_kw = 'PV capacity must be ' + pvRange.low + '–' + pvRange.high + ' kW';
+            }
             if (f.battery_enabled) {
                 const batt = parseFloat(f.battery_kwh);
-                if (isNaN(batt) || batt < 0) errors.battery_kwh = 'Battery capacity cannot be negative';
+                const batteryRange = components.battery.value_range;
+                if (isNaN(batt) || batt < batteryRange.low || batt > batteryRange.high) {
+                    errors.battery_kwh = 'Battery capacity must be between ' + batteryRange.low + ' and ' + batteryRange.high + ' kWh';
+                }
                 const eff = parseFloat(f.efficiency_pct);
                 if (isNaN(eff) || eff <= 0 || eff > 100) errors.efficiency_pct = 'Efficiency must be 1–100%';
             }
@@ -181,11 +191,11 @@ document.addEventListener('alpine:init', () => {
             }
             return payload;
         },
+        // The server refuses a form it cannot run; a refused Run leaves the earlier run's progress and results.
         async submitSimulation() {
             if (!this.validate()) return;
             this.submitting = true;
             this.errorMsg = '';
-            this.submittedJob = null;
             try {
                 const resp = await fetch('/api/simulate/home', {
                     method: 'POST',
@@ -322,19 +332,7 @@ document.addEventListener('alpine:init', () => {
 
                     <!-- Preset duration buttons -->
                     <div x-show="formData.period_mode === 'preset'" x-transition>
-                        <div class="flex flex-wrap gap-2">
-                            <template x-for="d in [7, 14, 30, 90, 365]" :key="d">
-                                <button
-                                    type="button"
-                                    @click="formData.period_days = d"
-                                    class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
-                                    :class="formData.period_days == d
-                                        ? 'bg-primary-500 text-white border-primary-500'
-                                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
-                                    x-text="d === 365 ? '1 year' : d + ' days'"
-                                ></button>
-                            </template>
-                        </div>
+                        {{ day_choice_buttons('formData.period_days', page_limits) }}
                     </div>
 
                     <!-- Custom date range -->

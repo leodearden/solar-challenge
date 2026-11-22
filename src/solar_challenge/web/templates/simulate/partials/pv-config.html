@@ -3,7 +3,8 @@
    Expected parent x-data must include formData object and sendsSystemLosses(), whether the form
    sends System Losses.
    The page's context holds default_system_losses (PVWATTS_DEFAULT_SYSTEM_LOSSES in pv.py), which the
-   System Losses input shows as its placeholder. #}
+   System Losses input shows as its placeholder, and page_limits, whose pv component's value_range the
+   Capacity slider spans. #}
 {% from "components/macros.html" import range_input %}
 
 <div class="space-y-6">
@@ -18,11 +19,13 @@
                 <span x-text="formData.pv_kw"></span> kW
             </span>
         </div>
-        {{ range_input(id='pv_kw', name='pv_kw', model='formData.pv_kw', min=0.5, max=20, step=0.5) }}
+        {% with capacity = page_limits.components.pv.value_range %}
+        {{ range_input(id='pv_kw', name='pv_kw', model='formData.pv_kw', min=capacity.low, max=capacity.high, step=0.5) }}
         <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500">
-            <span>0.5 kW</span>
-            <span>20 kW</span>
+            <span>{{ capacity.low }} kW</span>
+            <span>{{ capacity.high }} kW</span>
         </div>
+        {% endwith %}
     </div>
 
     <!-- Azimuth input -->

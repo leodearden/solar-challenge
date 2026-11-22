@@ -34,12 +34,15 @@ from solar_challenge.scenario_blocks import (
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, PresetRates, TariffConfig
+from solar_challenge.web.fleet_components import (
+    read_fleet_seed,
+    read_fleet_size,
+    refuse_homes_outside_ranges,
+)
 from solar_challenge.web.fleet_config import (
     FLEET_DISTRIBUTION_FORM_KEYS,
     distribution_form_spec,
     form_to_fleet_distribution_config,
-    read_fleet_seed,
-    read_fleet_size,
 )
 from solar_challenge.web.request_boundary import (
     read_location,
@@ -121,6 +124,9 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
             distributions, location, tariff, dispatch strategy, SEG and window, read in that
             order, a date that does not parse included.
         ConfigurationError: For homes the loaders cannot generate from the distributions.
+        ConfigurationError: For a generated home whose PV, battery or load value lies
+            outside its fleet component's value_range, from refuse_homes_outside_ranges,
+            naming the component's form path, the range, the value and the home's number.
     """
     refuse_unrecognised_keys(form, _FLEET_FORM_KEYS, "Fleet form")
     sent_name = form.get("name")
@@ -136,6 +142,7 @@ def parse_fleet_form(form: Mapping[str, Any]) -> ParsedFleetForm:
         location,
         fleet_tariff=overlay.tariff_config,
     )
+    refuse_homes_outside_ranges(homes)
     return ParsedFleetForm(
         name=name,
         homes=tuple(replace(home, seg_tariff=overlay.seg_tariff) for home in homes),
