@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; and the default window's first and last days."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
 
 import calendar
 import itertools
@@ -28,6 +28,9 @@ DEFAULT_FIRST_DAY: date = date(2024, 1, 1)
 
 DEFAULT_LAST_DAY: date = date(2024, 12, 31)
 """The last day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+SHORT_WINDOW_START: date = date(2024, 6, 1)
+"""The first day of an n-day window: home quick's --days, and a dashboard request's days short of the full year, run that many days from it (docs/prds/dashboard-limits-and-distribution-table.md §4.2)."""
 
 
 def require_valid_duration(minutes: float, quantity: str) -> None:
