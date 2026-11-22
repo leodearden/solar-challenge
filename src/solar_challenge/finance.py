@@ -47,7 +47,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -2430,7 +2430,7 @@ def solve_cost_recovery_rate(
     scenario: "ScenarioConfig",
     finance: "FinanceConfig",
     *,
-    simulate: Optional[Callable[["FleetConfig", pd.Timestamp, pd.Timestamp], "FleetResults"]] = None,
+    simulate: FleetSimulate,
 ) -> "CostRecoverySolution":
     """Find the minimum CBS own-use rate that meets the retained-cash floor.
 
@@ -2478,14 +2478,13 @@ def solve_cost_recovery_rate(
         scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
             them, are simulated over ``simulation_bounds()``.
         finance: FinanceConfig with cost-recovery fields populated.
-        simulate: Optional inject for testing.  Defaults to None → lazy import
-            ``fleet.default_runner().simulate``.  Signature must match
-            ``(FleetConfig, pd.Timestamp, pd.Timestamp) → FleetResults``.
-            Grid-services income is priced from the batteries of the
-            ``home_configs`` it returns, so it must return the batteries of the
-            ``fleet_config.homes`` it is given, in order and state of health
-            aside, as ``FleetRunner.simulate`` does; :func:`project_multi_year`
-            raises ValueError otherwise.
+        simulate: The fleet simulator the projection and the age-0 outlay
+            run through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
+            ``simulate``.  Grid-services income is priced from the batteries
+            of the ``home_configs`` it returns, so it must return the batteries
+            of the ``fleet_config.homes`` it is given, in order and state of
+            health aside, as ``FleetRunner.simulate`` does;
+            :func:`project_multi_year` raises ValueError otherwise.
 
     Returns:
         A :class:`CostRecoverySolution` with the solved rate and outlay.
@@ -2497,11 +2496,6 @@ def solve_cost_recovery_rate(
     """
     homes = scenario.simulated_homes()
     refuse_analysis_only_forecasts(homes)
-
-    # ---- The frozen default simulator (until S16 ζ) --------------------------
-    if simulate is None:
-        from solar_challenge.fleet import default_runner
-        simulate = default_runner().simulate
 
     start_ts, end_ts = scenario.simulation_bounds()
 
