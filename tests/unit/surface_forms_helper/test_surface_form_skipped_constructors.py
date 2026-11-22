@@ -188,7 +188,7 @@ def test_a_class_that_object_constructs_is_spelled_with_no_parameters() -> None:
     class ReinitialisedOverAPlainBase(Plain):
         __init__ = object.__init__
 
-    assert surface_form(object) == "()"
+    assert surface_form(object) == "class[slots] ()"
     assert surface_form(Plain) == "()"
     assert surface_form(RenewedByAStaticmethod) == "()"
     assert surface_form(RenewedByABuiltin) == "()"

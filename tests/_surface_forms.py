@@ -67,6 +67,8 @@ import typing
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 
 from tests._surface_forms_class_reads import (
+    instances_hold_a_dict,
+    instances_take_a_weakref,
     namespace_holders,
     own_annotations,
     own_namespace,
@@ -122,9 +124,12 @@ def surface_form(obj: object) -> str:
     of its instances; any other class's is class, then those qualifiers in brackets,
     and is spelled only if it has one. Its instances' qualifiers are read from the class
     itself: match_args if its __match_args__, as the match statement reads it, is a
-    non-empty tuple of the names of its constructor's positional parameters, in order. A
-    __match_args__ other than () or those names raises TypeError naming the class, what
-    it holds and those names. Each annotation in that signature is
+    non-empty tuple of the names of its constructor's positional parameters, in order;
+    then, if they hold no __dict__, slots, and weakref_slot if they take a weakref
+    nonetheless. A __match_args__ other than () or those names raises TypeError naming
+    the class, what it holds and those names, and instances that hold a __dict__ but
+    take no weakref, as a subclass of tuple or int makes, TypeError naming the class.
+    Each annotation in that signature is
     spelled as what it evaluates to: a string annotation or a forward reference is
     evaluated as named_classes reads one, in the module that spells it, which is looked up
     only then, and reading it raises what named_classes raises for it; one met again
@@ -440,6 +445,11 @@ class _DataclassParameter:
 @dataclasses.dataclass(frozen=True)
 class _InstanceAbility:
     """Marks a part as an ability a class's kind names that its instances have, as match_args says a positional class pattern matches them in class[match_args]."""
+
+
+@dataclasses.dataclass(frozen=True)
+class _InstanceRestriction:
+    """Marks a part as a restriction a class's kind names on its instances, as slots says they hold no __dict__ in class[slots]; no _ADDITIVE_PARTS row recognises it, so a kind that gains one changes breakingly."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1249,8 +1259,29 @@ def _class_kind_form(cls: type) -> _PartedForm:
 
 
 def _instance_qualifiers(cls: type) -> list[_Part]:
-    """The qualifiers of *cls*'s kind that say what its instances can do, each a part: match_args, an _InstanceAbility, if _matches_positionally holds of *cls*."""
-    return [_Part("match_args", _InstanceAbility())] if _matches_positionally(cls) else []
+    """The qualifiers of *cls*'s kind that say what its instances can do, each a part: match_args, an _InstanceAbility, if _matches_positionally holds of *cls*, then those _layout_qualifiers gives."""
+    matching = [_Part("match_args", _InstanceAbility())] if _matches_positionally(cls) else []
+    return [*matching, *_layout_qualifiers(cls)]
+
+
+def _layout_qualifiers(cls: type) -> list[_Part]:
+    """The qualifiers of *cls*'s kind that its instances' layout gives, each a part: where they hold no __dict__, slots, an _InstanceRestriction, then weakref_slot, an _InstanceAbility, if they take a weakref nonetheless; none where they hold a __dict__ and take a weakref.
+
+    Instances that hold a __dict__ but take no weakref raise TypeError naming *cls*,
+    since no qualifier spells them.
+    """
+    takes_a_weakref = instances_take_a_weakref(cls)
+    if not instances_hold_a_dict(cls):
+        slots = _Part("slots", _InstanceRestriction())
+        return [slots, _Part("weakref_slot", _InstanceAbility())] if takes_a_weakref else [slots]
+    if takes_a_weakref:
+        return []
+    raise TypeError(
+        f"The instances of {label_of(cls)} hold a __dict__ but take no weakref, as those of "
+        "a subclass of a variable-size built-in such as tuple or int do, and no qualifier "
+        "spells such instances: make the name private, or give the class __slots__ or a "
+        "base whose instances take a weakref"
+    )
 
 
 def _matches_positionally(cls: type) -> bool:
