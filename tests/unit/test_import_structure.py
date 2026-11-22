@@ -109,8 +109,8 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "(docs/domain-library-consumption.md, Cheap top-level import; "
         "tests/unit/test_public_api_surface.py::test_import_is_pvlib_free)"
     ),
-    ("solar_challenge.cli.web", "solar_challenge.web"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.app"): _CLI_WITHOUT_THE_WEB_EXTRA,
+    ("solar_challenge.cli.web", "solar_challenge.web.dashboard"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.jobs"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.reloader"): _CLI_WITHOUT_THE_WEB_EXTRA,
     ("solar_challenge.cli.web", "solar_challenge.web.schema"): _CLI_WITHOUT_THE_WEB_EXTRA,

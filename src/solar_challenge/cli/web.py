@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Web dashboard commands."""
 
+import functools
 from typing import Annotated
 
 import typer
@@ -49,10 +50,15 @@ def start(
     Launches a local web server hosting the interactive dashboard for
     visualising solar PV and battery simulation results.
 
-    Stopping the server drops the simulations still queued; those already
-    running finish before the process exits. Under --debug, stopping the
+    Stopping the server drops the simulations still queued and lets those
+    already running finish; the store stays locked until they have, so
+    another `web start` is refused meanwhile. Under --debug, stopping the
     server ends the running simulations too, and the next start marks their
     runs failed.
+
+    A fleet simulation runs its homes in parallel, on as many worker
+    processes as the root's --workers gives, unless the root's --sequential
+    runs them one after another in the server's process.
 
     One dashboard at a time may use the store under ~/.solar-challenge; while
     another holds it, this command exits with an error naming the lock file
@@ -81,14 +87,15 @@ def start(
 
 
 def _serve(cli: CliInvocation, host: str, port: int, debug: bool) -> None:
-    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped, printing cli's status lines; exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
-    from solar_challenge.web import create_app
-    from solar_challenge.web.jobs import shutdown_all_managers
+    """Build the dashboard, which takes its store and runs its jobs on cli's runner, and serve it on *host* and *port* until stopped, printing cli's status lines; then close it. Exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
+    from solar_challenge.web.app import create_app
+    from solar_challenge.web.dashboard import dashboard_of
+    from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.schema import SchemaVersionMismatch, StoreUnreadable
     from solar_challenge.web.store_lock import StoreLockError
 
     try:
-        flask_app = create_app()
+        flask_app = create_app(jobs=functools.partial(JobManager, runner=cli.runner))
     except (StoreLockError, SchemaVersionMismatch, StoreUnreadable) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
@@ -99,7 +106,7 @@ def _serve(cli: CliInvocation, host: str, port: int, debug: bool) -> None:
     try:
         flask_app.run(host=host, port=port, debug=debug)
     finally:
-        shutdown_all_managers()
+        dashboard_of(flask_app).close()
 
 
 @app.command()
