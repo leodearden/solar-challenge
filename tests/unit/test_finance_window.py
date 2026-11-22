@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Finance bills a summary's totals over the window they cover (B6, D27 invariant 8).
 
-householder_bill and bill_distribution bill over their summaries' own day count and
-refuse any other, and summaries over different windows, and householder_bill
-refuses an own-use outside 0 to the window's demand with the ledger's invariants,
-naming it as passed. A summary always carries its window: SummaryStatistics refuses
-one without (tests/unit/test_home.py).
+householder_bill and bill_distribution take no day count: they bill over their
+summaries' own window, which carries it, and bill_distribution refuses summaries
+over different windows. householder_bill refuses an own-use outside 0 to the
+window's demand with the ledger's invariants, naming it as passed. A summary always
+carries its window: SummaryStatistics refuses one without (tests/unit/test_home.py).
 `finance run` bills the day count of the summaries its fleet simulator returns.
 
 A bill is the window's year, by one rule with no threshold and no warning: the
@@ -26,8 +26,8 @@ import pytest
 
 from solar_challenge.finance import (
     BillBreakdown,
-    BillDistribution,
     FinanceConfig,
+    basis_c_own_use_kwh,
     bill_distribution,
     householder_bill,
     project_multi_year,
@@ -70,31 +70,56 @@ def _finance(*, self_consumption_override: float | None = None) -> FinanceConfig
     )
 
 
-def _householder_bill(summary: SummaryStatistics, simulation_days: int) -> BillBreakdown:
-    """householder_bill of *summary* over *simulation_days*, billing its self-consumption as own-use."""
-    return householder_bill(summary, summary.total_self_consumption_kwh, _finance(), simulation_days)
+def _householder_bill(summary: SummaryStatistics) -> BillBreakdown:
+    """householder_bill of *summary*, billing its self-consumption as own-use."""
+    return householder_bill(summary, window_self_consumption_kwh=summary.total_self_consumption_kwh, finance=_finance())
+
+
+def _representative_bill(summary: SummaryStatistics) -> BillBreakdown:
+    """bill_distribution's representative bill of a fleet of *summary* alone, over its own window."""
+    return bill_distribution([summary], _finance()).representative
+
+
+_BILLERS = [
+    pytest.param(_householder_bill, id="householder_bill"),
+    pytest.param(_representative_bill, id="bill_distribution"),
+]
 
 
 class TestDayCountIsTheSummariesOwn:
-    """INV-8: the day count a bill is computed over is its summaries' own."""
+    """INV-8: the day count a bill is computed over is its summaries' own, their window's: the bill functions take none."""
 
-    def test_bill_distribution_refuses_a_day_count_other_than_its_summaries(self) -> None:
-        summaries = [_summary(days=2, first_day=date(2024, 1, 1))] * 2
-
-        with pytest.raises(ValueError, match=r"simulation_days=1 .*2 days, 2024-01-01 to 2024-01-02"):
-            bill_distribution(summaries, _finance(), 1)
-
-    def test_householder_bill_refuses_a_day_count_other_than_its_summarys(self) -> None:
+    @pytest.mark.parametrize("bill_of", _BILLERS)
+    def test_the_summaries_own_day_count_bills(self, bill_of: Callable[[SummaryStatistics], BillBreakdown]) -> None:
+        """A 2-day window in 2024 bills 2024's year_days of standing charge and its totals × that window's annualisation_scale, 366 / 2."""
         summary = _summary(days=2, first_day=date(2024, 1, 1))
 
-        with pytest.raises(ValueError, match=r"simulation_days=1 .*2 days, 2024-01-01 to 2024-01-02"):
-            _householder_bill(summary, 1)
+        breakdown = bill_of(summary)
 
-    def test_the_summaries_own_day_count_bills(self) -> None:
+        assert breakdown.standing_charge_gbp == pytest.approx(summary.window.year_days * _STANDING_PENCE_PER_DAY / 100)
+        assert breakdown.import_cost_gbp == pytest.approx(
+            summary.total_import_cost_gbp * summary.window.annualisation_scale
+        )
+
+
+class TestWindowSelfConsumption:
+    """householder_bill bills the home's own-use over its summary's window, window_self_consumption_kwh; the annual_self_consumption_kwh keyword is gone."""
+
+    def test_householder_bill_of_a_summarys_basis_c_own_use_is_its_bill_in_a_distribution(self) -> None:
+        """bill_distribution bills each summary's basis-C own-use, so householder_bill given that own-use bills the same."""
         summary = _summary(days=2, first_day=date(2024, 1, 1))
 
-        assert isinstance(_householder_bill(summary, 2), BillBreakdown)
-        assert isinstance(bill_distribution([summary] * 2, _finance(), 2), BillDistribution)
+        breakdown = householder_bill(
+            summary, window_self_consumption_kwh=basis_c_own_use_kwh(summary), finance=_finance()
+        )
+
+        assert breakdown == bill_distribution([summary], _finance()).representative
+
+    def test_the_annual_self_consumption_kwh_keyword_is_refused(self) -> None:
+        summary = _summary(days=2, first_day=date(2024, 1, 1))
+
+        with pytest.raises(TypeError, match="unexpected keyword argument 'annual_self_consumption_kwh'"):
+            householder_bill(summary, annual_self_consumption_kwh=summary.total_self_consumption_kwh, finance=_finance())
 
 
 class TestOneWindowPerDistribution:
@@ -105,7 +130,7 @@ class TestOneWindowPerDistribution:
         january_2024 = _summary(days=3, first_day=date(2024, 1, 1))
 
         with pytest.raises(ValueError, match="position 2") as refusal:
-            bill_distribution([january_2021, january_2021, january_2024], _finance(), 3)
+            bill_distribution([january_2021, january_2021, january_2024], _finance())
 
         assert repr(january_2021.window) in str(refusal.value)
         assert repr(january_2024.window) in str(refusal.value)
@@ -141,40 +166,24 @@ class TestOwnUseWithinTheWindowsDemand:
         own_use_kwh = own_use_for_demand(summary.total_demand_kwh)
 
         with pytest.raises(ValueError, match=f"HomeLedger {invariant}:") as refusal:
-            householder_bill(
-                summary,
-                own_use_kwh,
-                _finance(self_consumption_override=self_consumption_override),
-                summary.simulation_days,
-            )
+            householder_bill(summary, own_use_kwh, _finance(self_consumption_override=self_consumption_override))
 
-        assert f"annual_self_consumption_kwh={own_use_kwh!r}" in str(refusal.value)
+        assert f"window_self_consumption_kwh={own_use_kwh!r}" in str(refusal.value)
 
     def test_own_use_above_a_short_windows_demand_is_refused_naming_the_windows_demand(self) -> None:
         summary = _summary(days=30)
 
         with pytest.raises(ValueError, match="HomeLedger L2:") as refusal:
-            householder_bill(summary, summary.total_demand_kwh + 0.1, _finance(), summary.simulation_days)
+            householder_bill(summary, summary.total_demand_kwh + 0.1, _finance())
 
         assert f"total_demand_kwh={summary.total_demand_kwh!r}" in str(refusal.value)
 
     def test_own_use_equal_to_the_windows_demand_bills(self) -> None:
         summary = _summary(days=365)
 
-        breakdown = householder_bill(summary, summary.total_demand_kwh, _finance(), summary.simulation_days)
+        breakdown = householder_bill(summary, summary.total_demand_kwh, _finance())
 
         assert breakdown.own_use_payment_gbp == pytest.approx(_OWN_USE_PENCE_PER_KWH * summary.total_demand_kwh / 100)
-
-
-def _representative_bill(summary: SummaryStatistics) -> BillBreakdown:
-    """bill_distribution's representative bill of a fleet of *summary* alone, over its own days."""
-    return bill_distribution([summary], _finance(), summary.simulation_days).representative
-
-
-_BILLERS = [
-    pytest.param(lambda summary: _householder_bill(summary, summary.simulation_days), id="householder_bill"),
-    pytest.param(_representative_bill, id="bill_distribution"),
-]
 
 
 class TestOneAnnualisationRule:
@@ -225,15 +234,15 @@ class TestOneAnnualisationRule:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            _householder_bill(summary, 30)
-            bill_distribution([summary], _finance(), 30)
+            _householder_bill(summary)
+            bill_distribution([summary], _finance())
 
 
 class TestYearlyFiguresNameTheirWindow:
     """A bill distribution and a projection carry the window their yearly figures were annualised from."""
 
     def test_a_bill_distribution_names_its_summaries_window(self) -> None:
-        distribution = bill_distribution([_summary(days=30)] * 2, _finance(), 30)
+        distribution = bill_distribution([_summary(days=30)] * 2, _finance())
 
         assert distribution.annualised_from == make_window(days=30)
 
