@@ -258,3 +258,32 @@ def test_deleting_every_run_leaves_history_empty_and_no_stored_run_s_files(
     details = {run_id: client.get(f"/api/history/runs/{run_id}").status_code for run_id in legacy_store.run_ids}
     assert details == dict.fromkeys(legacy_store.run_ids, 404)
     assert [run_dir for run_dir in run_dirs.values() if run_dir.exists()] == []
+
+
+_FLEET_SEG_REVENUE_PAIR = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue total and per-home mean a fleet run stored before format 6 holds in its summary, which `web migrate` drops."""
+
+
+def _files_of_the_run(dashboard: Flask, run_id: str) -> dict[str, bytes]:
+    """Each file of run *run_id*'s directory in *dashboard*'s store, by its path in that directory."""
+    run_dir = stored_run_dir(run_storage_of(dashboard), run_id)
+    return {path.relative_to(run_dir).as_posix(): path.read_bytes() for path in sorted(run_dir.rglob("*")) if path.is_file()}
+
+
+def test_a_fleet_run_stored_with_a_seg_revenue_pair_renders_without_it_once_migrated_and_migrating_again_changes_none_of_its_files(
+    dashboard: Flask, legacy_store: _LegacyStore
+) -> None:
+    """B15: pre_975_seg_fleet's summary, in its run directory and its runs row alike, loses the pair; its results page answers 200."""
+    (run_id,) = [run_id for run_id, name in legacy_store.stored_runs.items() if name == "pre_975_seg_fleet"]
+    rows = {row["id"]: row for row in _history_rows(dashboard.test_client())}
+    summary = json.loads((stored_run_dir(run_storage_of(dashboard), run_id) / "summary.json").read_text())
+    with closing(sqlite3.connect(legacy_store.database)) as conn:
+        (row_summary_json,) = conn.execute("SELECT summary_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+    files = _files_of_the_run(dashboard, run_id)
+
+    again = _web("migrate")
+
+    assert dashboard.test_client().get(rows[run_id]["results_url"]).status_code == 200
+    assert [key for key in _FLEET_SEG_REVENUE_PAIR if key in summary or key in json.loads(row_summary_json)] == []
+    assert again.exit_code == 0, again.output
+    assert _files_of_the_run(dashboard, run_id) == files

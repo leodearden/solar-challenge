@@ -473,12 +473,11 @@ class TestFleetSummary:
         with pytest.raises(TypeError):
             calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
-    def test_SEG_aggregates_without_tariff(self, sample_results):
-        """SEG revenue fields are None when no tariff is provided."""
-        summary = calculate_fleet_summary(sample_results)
-
-        assert summary.total_seg_revenue_gbp is None
-        assert summary.per_home_seg_revenue_mean_gbp is None
+    def test_a_fleet_summary_has_no_seg_revenue_pair(self):
+        """A fleet's export revenue is total_export_revenue_gbp: it has no second, SEG revenue total or mean."""
+        assert {field.name for field in dataclasses.fields(FleetSummary)}.isdisjoint(
+            {"total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp"}
+        )
 
     def test_aggregates_financial_totals(self):
         """Fleet aggregates per-home financial totals correctly (P6ε §3.6/§10)."""
@@ -592,7 +591,6 @@ class TestFleetSummary:
             total_import_cost_gbp=0.75,
             total_export_revenue_gbp=0.125,
             net_cost_gbp=0.625,
-            seg_revenue_gbp=0.125,
         )
         medium_array = SummaryStatistics(
             total_generation_kwh=16.0,
@@ -611,7 +609,6 @@ class TestFleetSummary:
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=1.75,
             net_cost_gbp=-0.25,
-            seg_revenue_gbp=1.75,
         )
         large_array = SummaryStatistics(
             total_generation_kwh=40.0,
@@ -630,7 +627,6 @@ class TestFleetSummary:
             total_import_cost_gbp=1.5,
             total_export_revenue_gbp=3.75,
             net_cost_gbp=-2.25,
-            seg_revenue_gbp=3.75,
         )
 
         assert aggregate_home_summaries([small_array, medium_array, large_array]) == FleetSummary(
@@ -650,24 +646,20 @@ class TestFleetSummary:
             per_home_self_consumption_ratio_max=0.75,
             per_home_self_consumption_ratio_mean=0.375,
             simulation_days=1,
-            total_seg_revenue_gbp=5.625,
-            per_home_seg_revenue_mean_gbp=1.875,
             total_net_cost_gbp=-1.875,
             total_import_cost_gbp=3.75,
             total_export_revenue_gbp=5.625,
         )
 
-    def test_seg_revenue_is_aggregated_over_the_homes_whose_summary_has_one(self, sample_results):
-        """The fleet's SEG revenue total and per-home mean are taken over the homes whose summary has a SEG revenue, leaving out a home whose summary has none."""
-        first, second, third = (
+    def test_a_home_summary_s_retired_seg_revenue_moves_nothing_in_the_fleet_s(self, sample_results):
+        """Home summaries carrying the retired seg_revenue_gbp, as stored ones can, aggregate as the same summaries without it."""
+        home_summaries = calculate_home_summaries(sample_results)
+        carrying_one = [
             replace(summary, seg_revenue_gbp=seg_revenue_gbp)
-            for summary, seg_revenue_gbp in zip(calculate_home_summaries(sample_results), (3.60, 7.20, 10.80))
-        )
+            for summary, seg_revenue_gbp in zip(home_summaries, (3.60, None, 10.80))
+        ]
 
-        summary = aggregate_home_summaries([first, replace(second, seg_revenue_gbp=None), third])
-
-        assert summary.total_seg_revenue_gbp == pytest.approx(14.40)
-        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20)
+        assert aggregate_home_summaries(carrying_one) == aggregate_home_summaries(home_summaries)
 
     def test_aggregating_no_home_summaries_is_refused(self):
         """A fleet summary aggregates at least one home's summary."""

@@ -24,13 +24,20 @@ Then it pins v4, the step that drops each battery's grid_charging that its run i
 with no cheap period, one whose periods all charge the same rate: which grid_charging it drops,
 what it leaves as it is, and that it changes none of its input.
 
-Last it pins v5, the step that sets each stored SummaryStatistics document lacking a window to the
+Then it pins v5, the step that sets each stored SummaryStatistics document lacking a window to the
 window of its run's own time series, read through the documents' StoredTimeSeries, and drops each
 one's simulation_days: which summaries it sets, from which series, in a run's files and its runs
 row alike; that it drops simulation_days from every summary, reporting only one that differs from
 its window's days, and keeps a FleetSummary's; that v2 keeps a summary's simulation_days for it;
 that it reads no series for a summary holding a window and leaves every other document as it is;
 and that it refuses a summary whose series is missing or is not a run's.
+
+Last it pins v6, the step that drops each stored FleetSummary's total_seg_revenue_gbp and
+per_home_seg_revenue_mean_gbp, a second copy of its total_export_revenue_gbp: that it drops them
+from a fleet run's summary, in its files and its runs row alike, reporting each value that is not
+null; that the dropped total is the export revenue the summary keeps; that v2 keeps the pair for
+it; that it leaves a home run's documents, every home summary and every config as they are; and
+that it changes none of its input.
 """
 
 import copy
@@ -1057,3 +1064,113 @@ def test_v5_changes_none_of_its_input_documents() -> None:
     v5.apply("fleet", documents)
 
     assert documents == before
+
+
+_FLEET_SEG_REVENUE_PAIR = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue total and per-home mean a FleetSummary stored before format 6 holds, which v6 drops."""
+
+
+def _without_the_seg_revenue_pair(documents: StoredRunDocuments, document: str) -> StoredRunDocuments:
+    """*documents*, with the one named *document* lacking both keys of _FLEET_SEG_REVENUE_PAIR at its root."""
+    for key in _FLEET_SEG_REVENUE_PAIR:
+        documents = _without(documents, document, key)
+    return documents
+
+
+def test_v6_drops_the_seg_revenue_pair_from_pre_975_s_fleet_summary_reporting_each_value() -> None:
+    """The dropped total is the summary's kept total_export_revenue_gbp: every home's export earned the SEG rate, so no figure moves."""
+    v6 = _step(6)
+    documents = _documents_before(v6, "pre_975_seg_fleet")
+    stored = documents.summary.content
+
+    result = v6.apply("fleet", documents)
+
+    assert result.documents == _without_the_seg_revenue_pair(documents, "summary.json")
+    assert result.dropped == tuple(
+        DroppedValue("pre_975_seg_fleet", "summary.json", key, stored[key]) for key in _FLEET_SEG_REVENUE_PAIR
+    )
+    assert result.rewritten == ()
+    assert stored["total_seg_revenue_gbp"] == pytest.approx(
+        result.documents.summary.content["total_export_revenue_gbp"], abs=1e-9
+    )
+
+
+def test_v6_drops_the_seg_revenue_pair_from_pre_975_s_runs_row_summary_reporting_each_value() -> None:
+    v6 = _step(6)
+    documents = _brought_forward_before(v6, "fleet", _runs_row_documents("pre_975_seg_fleet"))
+    stored = documents.summary.content
+
+    result = v6.apply("fleet", documents)
+
+    assert result.documents == _without_the_seg_revenue_pair(documents, "runs.summary_json")
+    assert result.dropped == tuple(
+        DroppedValue("pre_975_seg_fleet", "runs.summary_json", key, stored[key]) for key in _FLEET_SEG_REVENUE_PAIR
+    )
+    assert result.rewritten == ()
+
+
+def test_v6_drops_legacy_fleet_s_null_seg_revenue_pair_reporting_nothing() -> None:
+    v6 = _step(6)
+    documents = _documents_before(v6, "legacy_fleet")
+
+    result = v6.apply("fleet", documents)
+
+    assert result.documents == _without_the_seg_revenue_pair(documents, "summary.json")
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v6_leaves_a_home_run_s_documents_as_they_are() -> None:
+    v6 = _step(6)
+    documents = _documents_before(v6, "pre_469_home")
+
+    result = v6.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v6_leaves_a_fleet_run_s_config_and_home_summaries_as_they_are_each_keeping_its_seg_revenue() -> None:
+    """A home summary's seg_revenue_gbp is a field SummaryStatistics still has; its retirement drops it, not v6."""
+    v6 = _step(6)
+    documents = _documents_before(v6, "pre_975_seg_fleet")
+
+    result = v6.apply("fleet", documents)
+
+    assert (result.documents.config, result.documents.home_summaries) == (documents.config, documents.home_summaries)
+    assert all(summary.content["seg_revenue_gbp"] is not None for summary in result.documents.home_summaries)
+
+
+@pytest.mark.parametrize("content", ["not an object", [6.07, 3.03], None], ids=["text", "list", "null"])
+def test_v6_leaves_a_fleet_summary_that_is_not_an_object_as_it_is(content: Any) -> None:
+    v6 = _step(6)
+    documents = dataclasses.replace(
+        _documents_before(v6, "pre_975_seg_fleet"), summary=StoredDocument("pre_975_seg_fleet", "summary.json", content)
+    )
+
+    result = v6.apply("fleet", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v6_changes_none_of_its_input_documents() -> None:
+    v6 = _step(6)
+    documents = _documents_before(v6, "pre_975_seg_fleet")
+    before = copy.deepcopy(documents)
+
+    v6.apply("fleet", documents)
+
+    assert documents == before
+
+
+@pytest.mark.parametrize("name", ["legacy_fleet", "pre_975_seg_fleet"])
+def test_v2_keeps_a_fleet_summary_s_seg_revenue_pair_for_v6_reporting_none(name: str) -> None:
+    """v6 drops the pair and reports each of its values that is not null, so v2, which drops each key a dataclass lacks, keeps it."""
+    documents = _fixture_documents(name)
+
+    result = _V2.apply("fleet", documents)
+
+    assert {key: result.documents.summary.content[key] for key in _FLEET_SEG_REVENUE_PAIR} == {
+        key: documents.summary.content[key] for key in _FLEET_SEG_REVENUE_PAIR
+    }
+    assert [each for each in result.dropped if each.field in _FLEET_SEG_REVENUE_PAIR] == []
