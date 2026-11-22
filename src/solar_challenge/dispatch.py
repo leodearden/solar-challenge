@@ -11,7 +11,7 @@ build_dispatch_strategy builds the strategy a variant configures.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -107,6 +107,15 @@ class GridChargeContext:
         charge_efficiency: One-way charge efficiency in (0, 1], used to
             account for losses when computing how much grid power is needed
             to reach the target SOC
+        useful_charge_ceiling_kwh: The SOC in kWh above which this step's grid
+            charge is forecast to be stranded by the PV after it, finite and at
+            least 0; grid charging fills to the lower of it and target_soc_kwh.
+            None, the default, means no ceiling. The engine sets it from the
+            battery's GridChargeConfig.forecast (docs/grid-charge-forecast.md).
+
+    Raises:
+        ValueError: If an efficiency is outside (0, 1], or useful_charge_ceiling_kwh is
+            neither None nor finite and at least 0, naming the field and its value.
     """
 
     current_rate: float
@@ -116,9 +125,10 @@ class GridChargeContext:
     max_charge_kw: float
     round_trip_efficiency: float
     charge_efficiency: float
+    useful_charge_ceiling_kwh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate efficiency fields to prevent ZeroDivisionError at runtime."""
+        """Validate efficiency fields to prevent ZeroDivisionError at runtime, and refuse a ceiling NON_NEGATIVE does not admit."""
         if not (0.0 < self.round_trip_efficiency <= 1.0):
             raise ValueError(
                 f"round_trip_efficiency must be in (0, 1], "
@@ -129,6 +139,9 @@ class GridChargeContext:
                 f"charge_efficiency must be in (0, 1], "
                 f"got {self.charge_efficiency}"
             )
+        ceiling = self.useful_charge_ceiling_kwh
+        if ceiling is not None and not NON_NEGATIVE.admits(ceiling):
+            raise ValueError(f"useful_charge_ceiling_kwh must be None or finite and at least 0, got {ceiling!r} kWh")
 
 
 def compute_grid_charge_power_kw(
@@ -165,11 +178,12 @@ def compute_grid_charge_power_kw(
         ctx.max_charge_kw)``. It is 0.0 when the period is not cheap
         (ctx.is_cheap_period is False), when the spread gate fails (peak
         saving does not cover round-trip losses), or when the predicted
-        post-PV SOC is at or above ``ctx.target_soc_kwh``. The engine's
+        post-PV SOC is at or above the fill level: ``ctx.target_soc_kwh``,
+        or ``ctx.useful_charge_ceiling_kwh`` when that is lower. The engine's
         target, ``Battery.grid_charge_target_kwh``, is at most
         ``max_soc_kwh``, so a prediction past the battery's ceiling also
         gives 0.0. A step that grid-charges therefore ends at or below the
-        target.
+        lower of the target and the useful-charge ceiling.
 
     Raises:
         ValueError: If ``timestep_minutes`` is not positive and finite.
@@ -186,10 +200,12 @@ def compute_grid_charge_power_kw(
     if ctx.peak_rate <= ctx.current_rate / ctx.round_trip_efficiency:
         return 0.0
 
-    # Gate 3: how much the battery still needs after this step's PV charge
+    # Gate 3: how much the battery still needs after this step's PV charge, to the target or the
+    # lower useful-charge ceiling
+    ceiling = ctx.useful_charge_ceiling_kwh
     return _grid_power_to_target_kw(
         ctx,
-        target_kwh=ctx.target_soc_kwh,
+        target_kwh=ctx.target_soc_kwh if ceiling is None else min(ctx.target_soc_kwh, ceiling),
         battery_soc_kwh=battery_soc_kwh,
         pv_charge_kw=pv_charge_power_kw,
         timestep_minutes=timestep_minutes,
@@ -313,6 +329,35 @@ def _grid_power_to_target_kw(
 TARGET_SOC_FRACTION: Final = FRACTION
 """The grid-charge targets a battery may be given, as fractions of its effective (SOH-derated) capacity: greater than 0 and at most 1."""
 
+GridChargeForecast: TypeAlias = Literal["pv_blind", "trailing_14_days", "perfect_foresight"]
+"""The forecasts that may size a battery's grid charge in cheap periods; GridChargeConfig.forecast says what each does."""
+
+GRID_CHARGE_FORECASTS: Final[tuple[GridChargeForecast, ...]] = get_args(GridChargeForecast)
+"""Every GridChargeForecast, in its declared order."""
+
+ANALYSIS_ONLY_FORECASTS: Final[frozenset[GridChargeForecast]] = frozenset({"perfect_foresight"})
+"""The forecasts that read a run's own future PV and demand: upper bounds for analysis, which no board figure may use."""
+
+
+def distinct_grid_charge_forecasts(
+    forecasts: Iterable[Optional[GridChargeForecast]],
+) -> tuple[GridChargeForecast, ...]:
+    """The distinct forecasts among *forecasts*, each a run's, None for a run that did not grid-charge, in GRID_CHARGE_FORECASTS order: () when none is set.
+
+    The one derivation of the forecasts that sized an aggregate's grid charge, which every
+    fleet summary, bill distribution and report discloses.
+    """
+    sized_by = set(forecasts)
+    return tuple(forecast for forecast in GRID_CHARGE_FORECASTS if forecast in sized_by)
+
+
+def _refuse_unknown_forecast(forecast: object) -> None:
+    """Raise ConfigurationError, naming forecast, the value and every GRID_CHARGE_FORECASTS name, unless forecast is one of them."""
+    if not (isinstance(forecast, str) and forecast in GRID_CHARGE_FORECASTS):
+        raise ConfigurationError.must_be(
+            "forecast", f"one of {', '.join(map(repr, GRID_CHARGE_FORECASTS))}", got=forecast
+        )
+
 
 @dataclass(frozen=True)
 class GridChargeConfig:
@@ -325,17 +370,28 @@ class GridChargeConfig:
             most 1, held as the float read. Defaults to 0.9. A target above the
             battery's max_soc_fraction charges it to max_soc_kwh
             (Battery.grid_charge_target_kwh).
+        forecast: What sizes a cheap period's grid charge, one of GRID_CHARGE_FORECASTS;
+            defaults to 'pv_blind'. 'pv_blind' fills to the target whatever PV the day
+            brings. 'trailing_14_days' caps the fill at the forecast useful-charge
+            ceiling, the charge the PV after it is not forecast to strand
+            (docs/grid-charge-forecast.md). 'perfect_foresight', one of
+            ANALYSIS_ONLY_FORECASTS, is an upper-bound analysis mode: it reads the run's
+            own future PV and demand, and is never used for board figures.
 
     Raises:
         ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
-            is outside that range, naming target_soc_fraction and the value.
+            is outside that range, naming target_soc_fraction and the value; or if
+            forecast is not one of GRID_CHARGE_FORECASTS, naming forecast, the value and
+            every forecast.
     """
 
     target_soc_fraction: float = 0.9
+    forecast: GridChargeForecast = "pv_blind"
 
     def __post_init__(self) -> None:
-        """Read target_soc_fraction, and hold the float read."""
+        """Read target_soc_fraction, and hold the float read; refuse a forecast outside GRID_CHARGE_FORECASTS."""
         read_field(self, "target_soc_fraction", as_finite_float, TARGET_SOC_FRACTION)
+        _refuse_unknown_forecast(self.forecast)
 
 
 _PEAK_WINDOW_HOURS = Interval(0, 24)
@@ -781,8 +837,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 power ``compute_grid_charge_power_kw`` gives for
                 ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
                 stored first, so a step that grid-charges ends at or below
-                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
-                the decision discharges.  When the strategy was built with
+                ``grid_charge_ctx.target_soc_kwh``, or its
+                ``useful_charge_ceiling_kwh`` when that is lower.  It asks for
+                none while the decision discharges.  When the strategy was built with
                 the step's tariff, no minute is both PEAK and cheap, so it
                 never discharges while ``grid_charge_ctx.is_cheap_period``
                 is true.
@@ -901,8 +958,9 @@ class PeakShavingStrategy(DispatchStrategy):
                 power ``compute_grid_charge_power_kw`` gives for
                 ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
                 stored first, so a step that grid-charges ends at or below
-                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
-                the decision discharges to shave a peak: shaving takes
+                ``grid_charge_ctx.target_soc_kwh``, or its
+                ``useful_charge_ceiling_kwh`` when that is lower.  It asks for
+                none while the decision discharges to shave a peak: shaving takes
                 precedence.  ``None`` (default) means no grid charging:
                 ``grid_charge_kw`` is always 0.
 
@@ -1116,7 +1174,9 @@ def _window_decision(
     Above the window's target, a window that allows discharge covers a shortfall from the
     battery, down to the target and no further. Otherwise the step charges its PV excess and,
     offered a grid-charge context, the grid power that charges the battery to the target,
-    whatever the rates.
+    whatever the rates. The window's target is the device's explicit schedule, so the
+    context's useful-charge ceiling, which sizes only compute_grid_charge_power_kw's fill,
+    does not lower it.
     """
     excess_kw = _step_excess_kw(generation_kw, demand_kw)
     shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)

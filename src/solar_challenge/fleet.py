@@ -14,6 +14,7 @@ from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, 
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import (
     HomeConfig,
@@ -292,6 +293,10 @@ class FleetSummary:
     total_net_cost_gbp: Optional[float] = None
     total_import_cost_gbp: Optional[float] = None
     total_export_revenue_gbp: Optional[float] = None
+
+    # The forecasts that sized the homes' grid charge (dispatch.distinct_grid_charge_forecasts),
+    # () when none grid-charged, or the stored summary predates the field.
+    grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
 
 
 FleetSimulate: TypeAlias = Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]
@@ -631,6 +636,7 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
 
     The fleet's SEG revenue total and per-home mean are taken over the homes whose
     summary has a seg_revenue_gbp, and both are None when no home's summary has one.
+    Its grid_charge_forecasts are the forecasts that sized the homes' grid charge.
 
     Args:
         home_summaries: The summary statistics of each home in the fleet
@@ -696,6 +702,9 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
         total_net_cost_gbp=total_net_cost,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
+        grid_charge_forecasts=distinct_grid_charge_forecasts(
+            summary.grid_charge_forecast for summary in home_summaries
+        ),
     )
 
 
