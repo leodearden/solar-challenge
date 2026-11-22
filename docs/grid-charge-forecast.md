@@ -49,11 +49,13 @@ fill.
    `GridChargeContext.useful_charge_ceiling_kwh`, so `compute_grid_charge_power_kw`, which
    every grid-charging dispatcher calls, applies it; a scheduled-charge window keeps its
    own explicit target.
-5. **`trailing_14_days` reads only the past.** Each window's ceiling is the
-   `CEILING_QUANTILE` (0.75) of the ceilings the `TRAILING_DAYS` (14) earlier windows
-   opening at the same wall-clock minute needed; each of those horizons ended by the time
-   the window opens, since a horizon ends where the next window starts. Until 14 such
-   windows exist the fill is PV-blind. A past day's PV and demand come as a pair, so the
+5. **`trailing_14_days` reads only the past.** Each window's ceiling is the 75th
+   percentile of the ceilings the 14 earlier windows opening at the same wall-clock minute
+   needed; each of those horizons ended by the time the window opens, since a horizon ends
+   where the next window starts. Until 14 such windows exist the fill is PV-blind. A window
+   the run opens inside, as a cheap period spanning midnight does on the first day, opens at
+   the run's first minute, a clock no later window shares: its fill is never capped, and
+   it is no later window's analogue. A past day's PV and demand come as a pair, so the
    forecast also forecasts demand.
 
 ## 3. Why the 75th Percentile of the 14 Days Before
@@ -91,9 +93,11 @@ fill.
    14, which is chosen for its shorter warm-up, so a shorter board window gets forecast
    days. Persistence and the median leave money on the table; the 90th percentile
    over-charges.
-3. **The parameters are in the name.** `TRAILING_DAYS` and `CEILING_QUANTILE` in
-   `grid_charge_forecast.py` hold them, and a disclosed result names `trailing_14_days`,
-   so it says exactly what sized it; a re-tune is a new forecast with a new name.
+3. **The rule is keyed by its name.** `grid_charge_forecast.py` holds the 14 days and
+   the 75th percentile in one rule keyed by its name, `trailing_14_days`; the rule refuses
+   a name that does not state its days, and the label every report prints is built from
+   its two fields. A disclosed result names `trailing_14_days` and its label, so it says
+   exactly what sized it; a re-tune is a new forecast with a new name.
 
 ## 4. The Cheap-Window Hold Stays
 
@@ -115,14 +119,18 @@ from pv_blind to trailing_14_days to no grid charging to greedy, by SOC monotoni
    `SummaryStatistics.grid_charge_forecast` hold the battery's forecast, `None` for a run
    that did not grid-charge; `FleetSummary.grid_charge_forecasts` and
    `BillDistribution.grid_charge_forecasts` hold the distinct forecasts of their homes,
-   from the one derivation `home.grid_charge_forecasts_of`.
-2. **Reports state it.** The summary, finance and config-ranking reports open with a
-   notice naming each forecast and its `GRID_CHARGE_FORECAST_LABELS` text, beside the
-   extrapolation notice, and the CLI home and fleet tables gain a `Grid-charge forecast`
-   row; neither appears when nothing grid-charged.
-3. **perfect_foresight is never a board figure.** `finance.annualise`, which every bill,
-   projection and cost-recovery outlay passes through, refuses a summary it sized, with a
-   `ConfigurationError` naming the forecasts to run instead.
+   from the one derivation `dispatch.distinct_grid_charge_forecasts`.
+2. **Reports state it.** The summary, finance, config-ranking and community reports open
+   with a notice naming each forecast and its `GRID_CHARGE_FORECAST_LABELS` text, beside
+   the extrapolation notice, and the CLI home and fleet tables gain a `Grid-charge
+   forecast` row; neither appears when nothing grid-charged. The community report names
+   the forecasts of the homes whose grid flows it nets.
+3. **perfect_foresight is never a board figure.** `dispatch.ANALYSIS_ONLY_FORECASTS` holds
+   it. `finance.annualise`, which every bill, projection and cost-recovery outlay passes
+   through, refuses a summary it sized, with a `ConfigurationError` naming the forecasts
+   to run instead; `project_multi_year` and `solve_cost_recovery_rate` refuse a scenario
+   whose battery grid-charges by it before they simulate it, with the same refusal
+   (`finance.refuse_analysis_only_forecasts`).
 4. **A community battery stays PV-blind.** Its dispatch in `community.py` computes no
    ceilings, so `CommunityConfig` refuses a community battery whose forecast is not
    `pv_blind` rather than silently ignoring it.
@@ -132,10 +140,15 @@ from pv_blind to trailing_14_days to no grid charging to greedy, by SOC monotoni
 
 ## 6. The Board Fleet, Measured
 
-Measured at 575ad5c6 (task/848) by `scripts/measure_grid_charge_forecast.py` on all 100
-homes of `scenarios/bristol-phase1-flex.yaml` over 2024, 366 days, on the committed
-Bristol TMY (`tests/fixtures/weather_cache`), each home exporting at the scenario's 4.1 p
-SEG rate. Net cost is import cost less export revenue; every figure is the mean per home:
+Measured on task/848's step-14 commit, "feat(848): GREEN — the board fleet sizes its
+grid charge by trailing_14_days, and a script measures each forecast (step-14)", by
+`scripts/measure_grid_charge_forecast.py` on all 100 homes of
+`scenarios/bristol-phase1-flex.yaml` over 2024, 366 days, on the committed Bristol TMY
+(`tests/fixtures/weather_cache`), each home exporting at the scenario's 4.1 p SEG rate.
+The run preceded a rebase of task/848 onto main that brought in task 964, whose edits,
+to `fleet_distribution.py`'s sweeps and `cli/fleet.py`'s sweep options, no figure here
+runs through. Net cost is import cost less export revenue; every figure is the mean per
+home:
 
 | Forecast | DJF £ | MAM £ | JJA £ | SON £ | Year £ | Grid charge kWh | Export kWh | Householder bill £/yr |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -149,7 +162,7 @@ SEG rate. Net cost is import cost less export revenue; every figure is the mean 
    autumn, and costs £0.28 more in winter.
 2. **It grid-charges 421.77 kWh a home a year less (−39%) and exports 376.75 kWh less
    (−14.5%):** the PV a blind fill pushed out at the SEG rate is stored instead.
-3. **The householder bill rises £17.85 a home a year (+2.1%).** The bill charges a
+3. **The householder bill rises £17.84 a home a year (+2.1%).** The bill charges a
    householder the import at the tariff, the standing charge, and own use on basis C,
    demand less import, at the scenario's 15 p/kWh, plus VAT; the export income is the
    CBS's, not the householder's (`docs/cost-recovery-finance-model.md`). A home that
@@ -158,8 +171,8 @@ SEG rate. Net cost is import cost less export revenue; every figure is the mean 
    falls.
 
 4. **The finance run moves every board figure.** `solar-challenge finance run
-   scenarios/bristol-phase1-flex.yaml --project --cost-recovery` over 2024 at 575ad5c6,
-   against the same run of a copy of the scenario set to `forecast: pv_blind`:
+   scenarios/bristol-phase1-flex.yaml --project --cost-recovery` over 2024 on the same
+   commit, against the same run of a copy of the scenario set to `forecast: pv_blind`:
 
    | Figure | pv_blind | trailing_14_days | Change |
    |---|---:|---:|---:|
@@ -190,4 +203,6 @@ From the repository root, on the committed Bristol TMY; the script took 22 minut
     SOLAR_CHALLENGE_WEATHER_CACHE_DIR=tests/fixtures/weather_cache uv run --locked --extra dev solar-challenge finance run scenarios/bristol-phase1-flex.yaml --project --cost-recovery
 
 For pv_blind's finance figures, run the second command on a copy of the scenario whose
-`grid_charging:` block sets `forecast: pv_blind`.
+`grid_charging:` block sets `forecast: pv_blind`. Each change in §6 is the difference of
+the two rounded figures beside it; the script's table against pv_blind subtracts the
+unrounded means, so a delta there can differ from one here by a penny.
