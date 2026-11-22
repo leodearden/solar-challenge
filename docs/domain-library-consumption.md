@@ -130,9 +130,29 @@ either kind of class's public members, must also edit `FROZEN_SURFACE`,
 `FROZEN_CLOSURE` or `FROZEN_MEMBERS` in `tests/unit/test_public_api_surface.py`,
 which fails until it does.
 
+**Release windows.** A rename or retirement of a frozen name lands only inside
+an open release window: a `### solar-challenge-vX.Y.Z` subsection at the end of
+this section whose first line says the window is open. Its release note is a
+file under `docs/unreleased/domain-library-consumption/`, as the paragraph above
+says, never a line in the window's section. The window closes with the release
+commit that bumps the version, which folds the notes into the window's section.
+The tag is cut on that commit's merge, pushed, and checked with
+`git ls-remote`, as the push rule above says.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
+
+### solar-challenge-v0.6.0
+
+The release window is open: task 986 opened it. The release commit folds the
+note files into the groups below.
+
+**Breaking** — each entry: what changed (task N); what a consumer writes instead.
+
+**Results that move** — each entry: which figure moves and by how much where measured (task N).
+
+**Additive** — each entry (task N).
 
 ---
 
@@ -162,8 +182,8 @@ cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 ```
 
 Accessing a name from any other public submodule (`battery`, `community`,
-`dispatch`, `finance`, `flow`, `gridservices`, `load`, `location`, `seg`,
-`tariff`) leaves `pvlib` unloaded;
+`dispatch`, `errors`, `finance`, `flow`, `gridservices`, `load`, `location`,
+`seg`, `tariff`) leaves `pvlib` unloaded;
 `tests/unit/test_public_api_surface.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules`
 pins this split.  Consumers that want to avoid the pvlib cost must not touch the
 `config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
