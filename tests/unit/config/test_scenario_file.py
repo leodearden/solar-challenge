@@ -13,7 +13,6 @@ import pandas as pd
 import pytest
 
 from solar_challenge.config import (
-    OutputConfig,
     ScenarioConfig,
     SimulationPeriod,
     load_community_config,
@@ -32,7 +31,6 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
-from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 _SUMMER = SimulationPeriod("2024-06-01", "2024-08-31")
@@ -121,36 +119,6 @@ class TestSimulationPeriod:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             period.end_date = "2024-01-14"  # type: ignore[misc]
-
-
-class TestOutputConfig:
-    """Tests for OutputConfig class."""
-
-    def test_defaults(self) -> None:
-        """Test default output configuration."""
-        config = OutputConfig()
-        assert config.csv_path is None
-        assert config.include_minute_data is True
-        assert config.include_summary is True
-        assert config.aggregation == "minute"
-
-    def test_custom_values(self) -> None:
-        """Test custom output configuration."""
-        config = OutputConfig(
-            csv_path="/output/results.csv",
-            include_minute_data=False,
-            aggregation="daily",
-        )
-        assert config.csv_path == "/output/results.csv"
-        assert config.include_minute_data is False
-        assert config.aggregation == "daily"
-
-    def test_refuses_a_field_assignment(self) -> None:
-        """An output configuration is a frozen value: assigning one of its fields raises FrozenInstanceError."""
-        config = OutputConfig()
-
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            config.aggregation = "daily"  # type: ignore[misc]
 
 
 class TestScenarioConfig:
@@ -261,6 +229,13 @@ class TestScenarioConfig:
         loc = scenario.get_location()
         assert loc.latitude == pytest.approx(51.45, abs=0.01)
 
+    @pytest.mark.parametrize("field", ["output", "tariff_config"])
+    def test_takes_no_output_or_tariff_config(self, field: str) -> None:
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{field}'"):
+            ScenarioConfig(
+                name="x", period=SimulationPeriod("2024-01-01", "2024-01-07"), home=_home(), **{field: None}
+            )
+
 
 class TestSimulatedHomes:
     """simulated_homes() reads the homes a scenario simulates, each given the scenario's SEG rate unless it carries its own tariff."""
@@ -318,7 +293,7 @@ class TestSimulatedHomes:
 
 
 class TestScenarioConfigRefusals:
-    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, a scenario tariff_config, and a period whose days are not dates or run backwards."""
+    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a period whose days are not dates or run backwards."""
 
     @pytest.mark.parametrize(
         ("rate", "requirement"),
@@ -376,15 +351,6 @@ class TestScenarioConfigRefusals:
         scenario = _scenario(homes=[home], seg_tariff_pence_per_kwh=scenario_rate)
 
         assert scenario.homes == (home,)
-
-    def test_a_scenario_tariff_config_is_refused_naming_the_home_field(self) -> None:
-        with pytest.raises(ConfigurationError, match=_naming("tariff_config", "HomeConfig.tariff_config")):
-            ScenarioConfig(
-                name="x",
-                period=SimulationPeriod("2024-01-01", "2024-01-07"),
-                home=_home(),
-                tariff_config=TariffConfig.economy_7(),
-            )
 
     @pytest.mark.parametrize(
         ("start_date", "end_date"),
@@ -470,7 +436,6 @@ class TestMapHomes:
             description="every scenario-level field set",
             location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
             homes=[_home(), _home()],
-            output=OutputConfig(aggregation="daily"),
             seg_tariff_pence_per_kwh=5.0,
             finance=FinanceConfig(standing_charge_pence_per_day=28.0),
         )
@@ -550,7 +515,6 @@ class TestScenarioWindow:
             description="every scenario-level field set",
             location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
             homes=[_home(), _home()],
-            output=OutputConfig(aggregation="daily"),
             seg_tariff_pence_per_kwh=5.0,
             finance=FinanceConfig(standing_charge_pence_per_day=28.0),
         )
