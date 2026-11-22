@@ -669,7 +669,7 @@ bristol_june_tmy = _JUNE_DAYS.bristol_tmy_fixture()
 
 @pytest.fixture
 def worker_start_method(request: pytest.FixtureRequest) -> Iterator[str]:
-    """Make request.param the start method of the default multiprocessing context, which the fleet's worker pool uses, until the test ends."""
+    """Make request.param the start method of the default multiprocessing context until the test ends: the fleet's worker pool uses that start method unless it is fork, which it replaces with forkserver."""
     previous = multiprocessing.get_start_method(allow_none=True)
     multiprocessing.set_start_method(request.param, force=True)
     yield request.param

@@ -4,11 +4,13 @@
 import contextlib
 import itertools
 import math
+import multiprocessing
 import os
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
 from datetime import tzinfo
+from multiprocessing.context import BaseContext
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
@@ -345,7 +347,11 @@ class FleetRunner:
     Attributes:
         weather: Asked once per call for each distinct location of the call's homes, in the calling process
         home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it must pickle, e.g. a top-level function or an instance of a top-level class
-        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process
+        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process.
+            The pool's workers start as multiprocessing's default start method says, except that a default of fork
+            starts them by forkserver, because a call may come from any thread of a process running others (the
+            dashboard's job threads). So a script that makes a parallel call guards its entry point with
+            ``if __name__ == "__main__":``. Decision 12 of docs/prds/fleet-execution-policy.md says why
         max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
     """
 
@@ -502,7 +508,7 @@ def _homes_in_a_pool(
     """
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
     waiting = iter(jobs)
-    pool = ProcessPoolExecutor(max_workers=workers)
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=_worker_context())
 
     def submitted(job: _HomeJob) -> Future[SimulationResults]:
         """job's home submitted to the pool; a BrokenProcessPool the submit raises carries _naming_the_home's note for job."""
@@ -526,6 +532,12 @@ def _homes_in_a_pool(
                 yield job, results
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _worker_context() -> BaseContext:
+    """multiprocessing's default context, or forkserver's where that default is fork: the pool may be started from any thread of a process running others, and a fork of such a process may deadlock its child."""
+    default = multiprocessing.get_context()
+    return multiprocessing.get_context("forkserver") if default.get_start_method() == "fork" else default
 
 
 def _result_naming_the_home(job: _HomeJob, future: Future[SimulationResults]) -> SimulationResults:
