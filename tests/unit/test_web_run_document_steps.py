@@ -32,12 +32,21 @@ its window's days, and keeps a FleetSummary's; that v2 keeps a summary's simulat
 that it reads no series for a summary holding a window and leaves every other document as it is;
 and that it refuses a summary whose series is missing or is not a run's.
 
-Last it pins v6, the step that drops each stored FleetSummary's total_seg_revenue_gbp and
+Then it pins v6, the step that drops each stored FleetSummary's total_seg_revenue_gbp and
 per_home_seg_revenue_mean_gbp, a second copy of its total_export_revenue_gbp: that it drops them
 from a fleet run's summary, in its files and its runs row alike, reporting each value that is not
 null; that the dropped total is the export revenue the summary keeps; that v2 keeps the pair for
 it; that it leaves a home run's documents, every home summary and every config as they are; and
 that it changes none of its input.
+
+Last it pins v7, the step that drops each stored BatteryConfig's efficiency, the round trip its
+charge_efficiency and discharge_efficiency were derived from: that it drops it from a home run's
+battery, in its files and its runs row alike, reporting a value that is not null by its path, a
+fleet home's under its homes, and keeps the pair; that it drops each legacy fixture's null
+efficiency, reporting nothing; that v2 keeps a battery's efficiency for it, at whatever depth the
+battery is; that it leaves a config that is not an object as it is; that it changes none of its
+input; and that a run saved with a round trip reads, once every step has brought it forward, as
+the home whose battery holds the pair.
 """
 
 import copy
@@ -1171,3 +1180,116 @@ def test_v2_keeps_a_fleet_summary_s_seg_revenue_pair_for_v6_reporting_none(name:
         key: documents.summary.content[key] for key in PRE_975_FLEET_SEG_REVENUE_KEYS
     }
     assert [each for each in result.dropped if each.field in PRE_975_FLEET_SEG_REVENUE_KEYS] == []
+
+
+_PRE_867 = "pre_867_round_trip_home"
+
+_BATTERY_ROUND_TRIP = "efficiency"
+"""The key of the round-trip efficiency a BatteryConfig stored before format 7 holds, which v7 drops."""
+
+
+def _stored_batteries(config: Any, run_type: RunType) -> list[dict[str, Any]]:
+    """The battery_config object of each home of *config*, a stored config of a run of *run_type*, that has a battery: a home run's own, each of a fleet run's homes in order."""
+    homes = config["homes"] if run_type == "fleet" else [config]
+    return [home["battery_config"] for home in homes if home["battery_config"] is not None]
+
+
+def _without_battery_round_trips(documents: StoredRunDocuments, document: str, run_type: RunType) -> StoredRunDocuments:
+    """*documents*, of a run of *run_type*, with a copy of the config named *document* lacking each stored battery's efficiency."""
+    config = copy.deepcopy(documents.config.content)
+    for battery in _stored_batteries(config, run_type):
+        del battery[_BATTERY_ROUND_TRIP]
+    assert documents.config.name == document
+    return dataclasses.replace(documents, config=dataclasses.replace(documents.config, content=config))
+
+
+@pytest.mark.parametrize(
+    ("stored_documents", "document"),
+    [
+        pytest.param(_fixture_documents, "config.json", id="run-files"),
+        pytest.param(_runs_row_documents, "runs.config_json", id="runs-row"),
+    ],
+)
+def test_v7_drops_pre_867_s_battery_round_trip_reporting_it_and_keeps_the_pair_it_derived(
+    stored_documents: Callable[[str], StoredRunDocuments], document: str
+) -> None:
+    v7 = _step(7)
+    documents = _brought_forward_before(v7, "home", stored_documents(_PRE_867))
+
+    result = v7.apply("home", documents)
+
+    assert result.documents == _without_battery_round_trips(documents, document, "home")
+    assert result.dropped == (DroppedValue(_PRE_867, document, "battery_config.efficiency", 0.81),)
+    assert result.rewritten == ()
+    battery = result.documents.config.content["battery_config"]
+    assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.9, 0.9)
+
+
+@pytest.mark.parametrize("name", [name for name in STORED_RUN_FIXTURES if name != _PRE_867])
+def test_v7_drops_each_legacy_fixture_s_null_battery_round_trip_reporting_nothing(name: str) -> None:
+    """A home run's battery_config and each of a fleet run's homes[i].battery_config alike; every other document is left as it is."""
+    v7 = _step(7)
+    run_type = fixture_run_type(name)
+    documents = _documents_before(v7, name)
+    assert [battery[_BATTERY_ROUND_TRIP] for battery in _stored_batteries(documents.config.content, run_type)]
+
+    result = v7.apply(run_type, documents)
+
+    assert result.documents == _without_battery_round_trips(documents, "config.json", run_type)
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v7_reports_a_fleet_home_s_dropped_round_trip_by_its_path_under_the_fleet_s_homes() -> None:
+    v7 = _step(7)
+    documents = _with_value(
+        _documents_before(v7, "legacy_fleet"), "config.json", ("homes", 0, "battery_config", _BATTERY_ROUND_TRIP), 0.81
+    )
+
+    result = v7.apply("fleet", documents)
+
+    assert result.documents == _without_battery_round_trips(documents, "config.json", "fleet")
+    assert result.dropped == (DroppedValue("legacy_fleet", "config.json", "homes[0].battery_config.efficiency", 0.81),)
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_v2_keeps_each_stored_battery_s_round_trip_for_v7_reporting_none(name: str) -> None:
+    """v7 drops a battery's efficiency and reports each that is not null, so v2, which drops each key a dataclass lacks, keeps it, at whatever depth the battery is."""
+    run_type = fixture_run_type(name)
+    documents = _fixture_documents(name)
+
+    result = _V2.apply(run_type, documents)
+
+    def round_trips(stored: StoredRunDocuments) -> list[Any]:
+        return [battery[_BATTERY_ROUND_TRIP] for battery in _stored_batteries(stored.config.content, run_type)]
+
+    assert round_trips(result.documents) == round_trips(documents)
+    assert [each for each in result.dropped if each.field.endswith(f"battery_config.{_BATTERY_ROUND_TRIP}")] == []
+
+
+@pytest.mark.parametrize("content", ["not an object", [5.0], None], ids=["text", "list", "null"])
+def test_v7_leaves_a_config_that_is_not_an_object_as_it_is(content: Any) -> None:
+    v7 = _step(7)
+    documents = dataclasses.replace(
+        _documents_before(v7, _PRE_867), config=StoredDocument(_PRE_867, "config.json", content)
+    )
+
+    result = v7.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v7_changes_none_of_its_input_documents() -> None:
+    v7 = _step(7)
+    documents = _documents_before(v7, _PRE_867)
+    before = copy.deepcopy(documents)
+
+    v7.apply("home", documents)
+
+    assert documents == before
+
+
+def test_a_run_saved_with_a_round_trip_reads_once_brought_forward_as_its_home_whose_battery_holds_the_pair() -> None:
+    home = _current_documents(_PRE_867).config.read(HomeConfig)
+
+    assert home.battery_config == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.9)

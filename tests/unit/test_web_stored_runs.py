@@ -139,15 +139,14 @@ def test_the_fleet_kind_reads_the_config_a_fleet_run_records_as_its_homes_in_ord
     assert RUN_KINDS["fleet"].home_configs(_recorded_config(storage, _FLEET_RUN_ID)) == tuple(fleet.home_configs)
 
 
-def test_a_battery_stored_with_a_round_trip_efficiency_reads_back_with_the_pair_it_derived() -> None:
-    text = json.dumps(field_tree(BatteryConfig(capacity_kwh=5.0, efficiency=0.81)))
-    document = StoredDocument.decoded("run", "config.json", text)
+def test_a_battery_given_a_round_trip_efficiency_is_stored_as_the_pair_it_derived_and_reads_back_equal() -> None:
+    saved = BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81)
+    document = StoredDocument.decoded("run", "config.json", json.dumps(field_tree(saved)))
     stored = document.content
-    assert (stored["efficiency"], stored["charge_efficiency"], stored["discharge_efficiency"]) == (0.81, 0.9, 0.9)
+    assert "efficiency" not in stored
+    assert (stored["charge_efficiency"], stored["discharge_efficiency"]) == (0.9, 0.9)
 
-    battery = document.read(BatteryConfig)
-
-    assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (0.81, 0.9, 0.9)
+    assert document.read(BatteryConfig) == saved
 
 
 def test_a_stored_home_run_exports_its_time_series(storage: RunStorage) -> None:

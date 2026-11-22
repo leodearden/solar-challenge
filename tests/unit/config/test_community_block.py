@@ -197,7 +197,6 @@ class TestCommunityBatteryEfficiency:
         )
         assert cfg is not None
         assert cfg.community_battery == BatteryConfig(capacity_kwh=10).with_round_trip(0.95)
-        assert cfg.community_battery.efficiency is None
 
     @pytest.mark.parametrize(
         ("per_direction", "keys_named"),

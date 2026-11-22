@@ -156,7 +156,7 @@ class TestBatterySOCEfficiencyParsing:
             _parsed_home(battery={"capacity_kwh": 5.0, "charge_efficiency": 0.0})
 
     def test_yaml_round_trip_efficiency(self, tmp_path: Path) -> None:
-        """YAML battery.efficiency is the round trip: the battery holds the pair with_round_trip splits it into, and no efficiency."""
+        """YAML battery.efficiency is the round trip: the battery holds the pair with_round_trip splits it into."""
         yaml_content = """
 home:
   pv:
@@ -172,18 +172,12 @@ home:
 
         battery = load_home_config(path).battery_config
         assert battery is not None
-        assert battery.efficiency is None
         assert (battery.charge_efficiency, battery.discharge_efficiency) == (math.sqrt(0.95), math.sqrt(0.95))
         assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(0.95)
 
     def test_the_economy_7_example_battery_holds_the_pair_its_round_trip_splits_into(self) -> None:
         battery = load_home_config(SCENARIOS_DIR / "example-economy7.yaml").battery_config
-        assert battery is not None
-        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (
-            None,
-            math.sqrt(0.95),
-            math.sqrt(0.95),
-        )
+        assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(0.95)
 
     @pytest.mark.parametrize(
         ("per_direction", "keys_named"),
@@ -233,8 +227,7 @@ home:
                 "discharge_efficiency": 0.97,
             }
         ).battery_config
-        assert battery is not None
-        assert (battery.efficiency, battery.charge_efficiency, battery.discharge_efficiency) == (None, 0.96, 0.97)
+        assert battery == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.96, discharge_efficiency=0.97)
 
     def test_yaml_round_trip_min_max_soc(self, tmp_path: Path) -> None:
         """YAML with battery.min_soc_fraction/max_soc_fraction round-trips correctly."""

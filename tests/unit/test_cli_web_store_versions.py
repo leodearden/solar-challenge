@@ -14,7 +14,8 @@ and a store another dashboard holds, naming its lock file. Both commands refuse 
 file that is not a database, naming it, and leave it as it is. migrate brings the runs of a store
 at version 1 to the stored-run format too, reporting each value it drops that is not null and
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
-format version (B5). It refuses a step that cannot write a run's file, exiting 1 with the
+format version (B5); a store at version 6 it brings forward by dropping each stored battery's
+efficiency, naming each that is not null, and the run then loads with the pair it derived. It refuses a step that cannot write a run's file, exiting 1 with the
 refusal naming the step and the fault, and so it does a run an earlier migration left lagging
 whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused,
 it prints on stdout the report of the steps it applied, which stay applied, then the run files
@@ -40,8 +41,9 @@ from solar_challenge.web.database import Database
 from solar_challenge.web.schema import MIGRATIONS, SCHEMA_VERSION, open_database
 from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.store_lock import acquire_store_lock
-from solar_challenge.web.stored_runs import StoredHomeRun
+from solar_challenge.web.stored_runs import StoredHomeRun, write_run_documents
 from tests._dashboard_databases import (
+    runs_rows_of,
     schema_of,
     write_database_a_newer_solar_challenge_wrote,
     write_database_at_schema_version,
@@ -301,6 +303,26 @@ def test_web_migrate_brings_the_runs_of_a_store_at_version_1_forward_reporting_e
         assert named in result.stdout, (named, result.stdout)
     assert _a_line_naming(result.stdout, retired, "summary.json", "retired_figure", "12.5"), result.stdout
     assert _a_line_naming(result.stdout, lacking, "summary.json", "total_generation_kwh"), result.stdout
+
+
+def test_web_migrate_brings_a_store_at_version_6_forward_naming_each_battery_round_trip_it_drops(tmp_path: Path) -> None:
+    """Version 7's step drops the pre-867 home's battery efficiency, naming its 0.81; the run then loads with the pair 0.9 it derived, and neither its config.json nor its runs row's config_json holds an efficiency."""
+    database = write_database_at_schema_version(_store_database(tmp_path), 6)
+    run_id = install_stored_run_fixture("pre_867_round_trip_home", Database(database), database.parent)
+    run_dir = stored_run_dir(run_storage_over(Database(database)), run_id)
+    write_run_documents(run_dir, (), 6)
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for document in ["config.json", "runs.config_json"]:
+        assert _a_line_naming(result.stdout, run_id, f"{document}'s battery_config.efficiency", "0.81"), result.stdout
+    loaded = run_storage_over(open_database(database)).load_run(run_id)
+    assert isinstance(loaded, StoredHomeRun)
+    assert loaded.config.battery_config is not None
+    assert (loaded.config.battery_config.charge_efficiency, loaded.config.battery_config.discharge_efficiency) == (0.9, 0.9)
+    configs = [json.loads((run_dir / "config.json").read_text()), json.loads(runs_rows_of(database)[run_id]["config_json"])]
+    assert ["efficiency" in config["battery_config"] for config in configs] == [False, False]
 
 
 def test_web_migrate_reports_each_value_v3_rewrites_in_the_pre_787_fleet_with_the_value_it_holds_now(

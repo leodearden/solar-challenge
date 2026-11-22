@@ -255,16 +255,16 @@ def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_orde
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.96, 0.97)
 
 
-def test_a_battery_built_with_a_round_trip_efficiency_is_written_as_the_pair_it_derives(tmp_path: Path) -> None:
-    """Its block holds the derived pair and no efficiency, so it reads back as with_round_trip of its efficiency."""
-    battery_config = BatteryConfig(capacity_kwh=5.0, efficiency=0.81)
+def test_a_battery_given_a_round_trip_efficiency_is_written_as_the_pair_it_derives(tmp_path: Path) -> None:
+    """Its block holds the derived pair and no efficiency, so it reads back as the battery with_round_trip gave."""
+    battery_config = BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81)
     document = home_scenario(_home(4.0, battery_config=battery_config), name="Round trip")
 
     battery = document["home"]["battery"]
 
     assert "efficiency" not in battery
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.9, 0.9)
-    assert _load_through_home_run(document, tmp_path).battery_config == battery_config.with_round_trip(0.81)
+    assert _load_through_home_run(document, tmp_path).battery_config == battery_config
 
 
 def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -> None:
@@ -293,7 +293,6 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
         load_config=LoadConfig(),
         battery_config=BatteryConfig(
             capacity_kwh=5.0,
-            efficiency=None,
             charge_efficiency=0.96,
             discharge_efficiency=0.97,
         ),

@@ -253,7 +253,6 @@ class TestSimulateHomeAPI:
         call_kwargs = mock_job_manager.submit_home_job.call_args
         config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
         assert config.battery_config is not None
-        assert config.battery_config.efficiency is None
         assert config.battery_config.charge_efficiency == config.battery_config.discharge_efficiency == math.sqrt(0.9)
 
     def test_unrecognised_key_returns_400_and_submits_nothing(
