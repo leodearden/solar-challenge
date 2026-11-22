@@ -15,7 +15,6 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    OutputConfig,
     SimulationPeriod,
     detect_fleet_sweep_spec,
     load_community_config,
@@ -548,12 +547,6 @@ class TestTariffBlockKeys:
                 id="fleet-homes",
             ),
             pytest.param(
-                load_scenarios,
-                {**_SCENARIO, "tariff_config": _MISKEYED_ECONOMY_7},
-                "tariff_config",
-                id="scenario",
-            ),
-            pytest.param(
                 load_fleet_config,
                 {
                     "fleet_distribution": {"n_homes": 1, "pv": {"capacity_kw": 4.0}},
@@ -928,7 +921,7 @@ class TestFleetDistributionBlockKeys:
 
 
 class TestScenarioFileBlockKeys:
-    """The location, period, output, seg, finance and community blocks refuse a key their parser does not read."""
+    """A scenario, its location, period, seg and finance blocks, and a community block refuse a key their reader does not read, naming its path; a scenario's retired output: and tariff_config: keys are refused naming what replaces them."""
 
     _MISKEYED_SEG: dict[str, Any] = {"rate_pence_per_kwh": 5.5, "currency": "GBP"}
     _MISKEYED_FINANCE: dict[str, Any] = {"standing_charge_pence_per_day": 60.0, "vat": 0.05}
@@ -979,13 +972,6 @@ class TestScenarioFileBlockKeys:
                 "period",
                 "days",
                 id="period",
-            ),
-            pytest.param(
-                "load_scenarios",
-                {**_SCENARIO, "output": {"csv_path": "out.csv", "format": "csv"}},
-                "output",
-                "format",
-                id="output",
             ),
             pytest.param(
                 "load_scenarios",
@@ -1093,6 +1079,78 @@ class TestScenarioFileBlockKeys:
         assert refusal.type is ConfigurationError
 
     @pytest.mark.parametrize(
+        ("document", "key_path", "replacements"),
+        [
+            pytest.param(
+                {**_SCENARIO, "output": {"csv_path": "r.csv"}}, "output", ("--output",), id="output"
+            ),
+            pytest.param(
+                {"scenario": {**_SCENARIO, "output": ["csv"]}},
+                "scenario.output",
+                ("--output",),
+                id="scenario-output-not-a-mapping",
+            ),
+            pytest.param(
+                {"scenarios": [_SCENARIO, {**_SCENARIO, "name": "Second", "output": {"csv_path": "r.csv"}}]},
+                "scenarios[1].output",
+                ("--output",),
+                id="scenarios-output",
+            ),
+            pytest.param(
+                {"scenario": {**_SCENARIO, "tariff_config": {"type": "economy_7"}}},
+                "scenario.tariff_config",
+                ("home.tariff", "homes[i].tariff"),
+                id="scenario-tariff_config",
+            ),
+            pytest.param(
+                {**_SCENARIO, "tariff_config": {"type": "economy_7", "rate_per_kwh": 0.30}},
+                "tariff_config",
+                ("home.tariff", "homes[i].tariff"),
+                id="tariff_config-a-key-its-type-does-not-read",
+            ),
+        ],
+    )
+    def test_a_retired_scenario_key_is_refused_naming_its_path_and_its_replacement(
+        self, tmp_path: Path, document: dict[str, Any], key_path: str, replacements: tuple[str, ...]
+    ) -> None:
+        """A scenario's output: or tariff_config: is refused whatever it holds, before anything reads it, naming the key's path and what replaces it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        message = str(refusal.value)
+        assert message.startswith(f"{key_path}: ")
+        for replacement in replacements:
+            assert replacement in message, (replacement, message)
+
+    def test_a_retired_key_is_refused_before_an_unrecognised_one(self, tmp_path: Path) -> None:
+        """A scenario holding both a retired key and a key no scenario reads is refused for the retired key, whose refusal names what replaces it."""
+        document = {"scenario": {**_SCENARIO, "bogus": 1, "output": {"csv_path": "r.csv"}}}
+        with pytest.raises(ConfigurationError) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        assert str(refusal.value).startswith("scenario.output: ")
+
+    @pytest.mark.parametrize(
+        ("document", "label"),
+        [
+            pytest.param({**_SCENARIO, "bogus": 1}, "the top level", id="bare"),
+            pytest.param({"scenario": {**_SCENARIO, "bogus": 1}}, "scenario", id="scenario"),
+            pytest.param(
+                {"scenarios": [_SCENARIO, {**_SCENARIO, "name": "Second", "bogus": 1}]},
+                "scenarios[1]",
+                id="scenarios",
+            ),
+        ],
+    )
+    def test_an_unrecognised_scenario_key_is_refused_naming_its_block_and_the_keys_a_scenario_reads(
+        self, tmp_path: Path, document: dict[str, Any], label: str
+    ) -> None:
+        """A key no scenario reads is refused, naming the scenario's block, the key and the eight keys a scenario reads."""
+        with pytest.raises(ConfigurationError, match=_refusal(label, "bogus")) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        assert str(refusal.value).endswith(
+            "recognised keys: description, finance, home, homes, location, name, period, seg"
+        )
+
+    @pytest.mark.parametrize(
         ("read", "data", "block_path", "type_name"),
         [
             pytest.param(
@@ -1143,9 +1201,6 @@ class TestScenarioFileBlockKeys:
             pytest.param(
                 "load_community_config", {"community": "p2p"}, "community", "str", id="community"
             ),
-            pytest.param(
-                "load_scenarios", {**_SCENARIO, "output": ["csv"]}, "output", "list", id="output"
-            ),
         ],
         indirect=["read"],
     )
@@ -1159,19 +1214,13 @@ class TestScenarioFileBlockKeys:
             read(data)
 
     def test_every_recognised_key_is_accepted(self, tmp_path: Path) -> None:
-        """A scenario setting every key of its location, period, output and finance blocks, and a seg block, parses to the values set; those blocks recognise no other key."""
+        """A scenario setting every key of its location, period and finance blocks, and a seg block, parses to the values set; those blocks recognise no other key."""
         location: dict[str, Any] = {
             "latitude": 52.2,
             "longitude": -1.5,
             "timezone": "Europe/London",
             "altitude": 80.0,
             "name": "Midlands",
-        }
-        output: dict[str, Any] = {
-            "csv_path": "out.csv",
-            "include_minute_data": False,
-            "include_summary": False,
-            "aggregation": "daily",
         }
         grid_services_events: dict[str, Any] = {
             "band": "high",
@@ -1206,7 +1255,6 @@ class TestScenarioFileBlockKeys:
         document = {
             **_SCENARIO,
             "location": location,
-            "output": output,
             "seg": {"rate_pence_per_kwh": 5.5},
             "finance": finance,
         }
@@ -1229,7 +1277,6 @@ class TestScenarioFileBlockKeys:
         )
         assert scenario.location == Location(**location)
         assert scenario.period == SimulationPeriod(**_PERIOD)
-        assert scenario.output == OutputConfig(**output)
         assert scenario.seg_tariff_pence_per_kwh == 5.5
         assert scenario.finance == FinanceConfig(
             **{**finance, "grid_services_events": expected_events}
@@ -1238,7 +1285,7 @@ class TestScenarioFileBlockKeys:
         def read_scenario_with(key: str) -> Callable[[Any], object]:
             return lambda block: load_scenarios(_write(tmp_path, {**document, key: block}))
 
-        for key in ("location", "period", "output", "finance"):
+        for key in ("location", "period", "finance"):
             _assert_blocks_recognise_exactly_their_keys(read_scenario_with(key), document[key], key)
         either_seg_form = {"preset": "Octopus", "rate_pence_per_kwh": 5.5}
         _assert_blocks_recognise_exactly_their_keys(parse_seg_rate, either_seg_form, "seg")

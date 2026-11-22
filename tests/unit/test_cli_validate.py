@@ -726,6 +726,32 @@ home:
         assert "rate_pence_per_kwh" in error_row
         assert names_as_a_word(error_row, value_repr)
 
+    @pytest.mark.parametrize(
+        ("key", "setting", "named"),
+        [
+            pytest.param("output", {"csv_path": "r.csv"}, ("scenario.output", "--output"), id="output"),
+            pytest.param(
+                "tariff_config",
+                {"type": "economy_7"},
+                ("scenario.tariff_config", "home.tariff"),
+                id="tariff_config",
+            ),
+            pytest.param("bogus", 1, ("scenario", "'bogus'"), id="unrecognised"),
+        ],
+    )
+    def test_a_scenario_key_no_command_reads_is_an_error_row_naming_its_path_and_replacement(
+        self, tmp_path: Path, key: str, setting: Any, named: tuple[str, str]
+    ) -> None:
+        """A scenario: document's output:, tariff_config: or unrecognised key is the file's ERROR row, naming the key's path and what replaces it, or the key itself."""
+        result = self._validate_config(tmp_path, _scenario_document_holding(key, setting))
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        for name in named:
+            assert name in error_row, (name, error_row)
+
     def test_a_misspelt_battery_strategy_type_is_an_error_row_naming_its_path_and_the_strategies(
         self, tmp_path: Path
     ) -> None:

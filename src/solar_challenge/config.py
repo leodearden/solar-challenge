@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import (
     Any,
     Callable,
@@ -52,6 +53,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
     parse_tariff_config,
     refuse_unrecognised_keys,
+    require_mapping,
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
@@ -142,7 +144,7 @@ class ScenarioConfig:
             a 'YYYY-MM-DD' string or a Timestamp, or whose last day precedes its first
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
-        output: Output preferences
+        output: Output preferences, which no command reads; a scenario file's output: key is refused
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
             as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
         tariff_config: Refused when set: no simulation reads it, so a home's
@@ -321,72 +323,72 @@ def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
     )
 
 
-_OUTPUT_BLOCK_KEYS: frozenset[str] = frozenset({
-    "csv_path", "include_minute_data", "include_summary", "aggregation",
+_SCENARIO_KEYS: frozenset[str] = frozenset({
+    "name", "description", "location", "period", "home", "homes", "seg", "finance",
 })
 
-
-def _parse_output_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[OutputConfig]:
-    """Parse output configuration from config data."""
-    if data is None:
-        return None
-    refuse_unrecognised_keys(block_path, data, _OUTPUT_BLOCK_KEYS)
-    return OutputConfig(
-        csv_path=data.get("csv_path"),
-        include_minute_data=data.get("include_minute_data", True),
-        include_summary=data.get("include_summary", True),
-        aggregation=data.get("aggregation", "minute"),
-    )
+_RETIRED_SCENARIO_KEYS: Mapping[str, str] = MappingProxyType({
+    "output": "no command reads an output block; pass --output to the command instead",
+    "tariff_config": "a scenario-level tariff prices no home; set home.tariff, or each homes[i].tariff",
+})
+"""Each key a scenario no longer reads, with why it is refused and what replaces it."""
 
 
-def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
-    """Parse a scenario from config data."""
-    if "name" not in data:
+def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str, Any]:
+    """Return the scenario at *block_path*, refusing it unless it is a mapping holding only the keys a scenario reads.
+
+    A retired key is refused first, naming its path and what replaces it.
+    """
+    scenario = require_mapping(block_path, data)
+    for key, refusal in _RETIRED_SCENARIO_KEYS.items():
+        if key in scenario:
+            raise ConfigurationError(f"{block_label(child_path(block_path, key))}: {refusal}")
+    return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
+
+
+def _parse_scenario(data: object, *, block_path: str) -> ScenarioConfig:
+    """Parse the scenario at *block_path* from config data, refusing first any key no scenario reads."""
+    scenario = _refuse_keys_no_scenario_reads(data, block_path=block_path)
+    if "name" not in scenario:
         raise ConfigurationError("Scenario must have a 'name' field")
-    if "period" not in data:
-        raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
+    if "period" not in scenario:
+        raise ConfigurationError(f"Scenario '{scenario['name']}' must have a 'period' field")
 
     location = parse_location_block(
-        data.get("location"), block_path=child_path(block_path, "location")
+        scenario.get("location"), block_path=child_path(block_path, "location")
     )
 
     homes: list[HomeConfig] = []
     home: Optional[HomeConfig] = None
 
-    if "homes" in data:
-        for index, home_data in enumerate(data["homes"]):
+    if "homes" in scenario:
+        for index, home_data in enumerate(scenario["homes"]):
             homes.append(
                 parse_home_block(
                     home_data, location, block_path=child_path(block_path, f"homes[{index}]")
                 )
             )
-    elif "home" in data:
-        home = parse_home_block(data["home"], location, block_path=child_path(block_path, "home"))
+    elif "home" in scenario:
+        home = parse_home_block(
+            scenario["home"], location, block_path=child_path(block_path, "home")
+        )
     else:
         raise ConfigurationError(
-            f"Scenario '{data['name']}' must define either 'home' or 'homes'"
+            f"Scenario '{scenario['name']}' must define either 'home' or 'homes'"
         )
 
     return ScenarioConfig(
-        name=data["name"],
-        description=data.get("description", ""),
+        name=scenario["name"],
+        description=scenario.get("description", ""),
         location=location,
-        period=_parse_period(data["period"], block_path=child_path(block_path, "period")),
+        period=_parse_period(scenario["period"], block_path=child_path(block_path, "period")),
         homes=tuple(homes),
         home=home,
-        output=_parse_output_config(
-            data.get("output"), block_path=child_path(block_path, "output")
-        ),
         seg_tariff_pence_per_kwh=parse_seg_rate(
-            data.get("seg"), block_path=child_path(block_path, "seg")
-        ),
-        tariff_config=parse_tariff_config(
-            data.get("tariff_config"), block_path=child_path(block_path, "tariff_config")
+            scenario.get("seg"), block_path=child_path(block_path, "seg")
         ),
         finance=parse_finance_config(
-            data.get("finance"), block_path=child_path(block_path, "finance")
+            scenario.get("finance"), block_path=child_path(block_path, "finance")
         ),
     )
 

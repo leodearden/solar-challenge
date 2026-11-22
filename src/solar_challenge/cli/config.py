@@ -65,11 +65,6 @@ home:
     annual_consumption_kwh: 3400.0  # Target annual consumption
     household_occupants: 3          # Used if consumption not specified
     use_stochastic: true            # Use stochastic model if available
-
-# Output configuration (optional)
-output:
-  csv_path: results.csv
-  include_summary: true
 """
 
 FLEET_TEMPLATE = """\
@@ -138,10 +133,6 @@ home:
     capacity_kwh: 5.0
   load:
     annual_consumption_kwh: 3400.0
-
-output:
-  csv_path: scenario_results.csv
-  include_summary: true
 """
 
 
@@ -226,7 +217,7 @@ def template(
     Available templates:
     - home: Single home configuration
     - fleet: Multiple homes configuration
-    - scenario: Full scenario with period and output settings
+    - scenario: Full scenario with its simulation period
     """
     templates = {
         "home": HOME_TEMPLATE,
