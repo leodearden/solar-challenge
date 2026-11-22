@@ -798,7 +798,7 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     def test_export_of_a_fleet_run_reads_its_homes_from_its_record_and_none_of_its_time_series(
         self, storage: RunStorage, client: FlaskClient, tmp_path: Path
@@ -819,7 +819,7 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     @pytest.mark.parametrize(
         ("strategy", "grid_charging"),
@@ -899,7 +899,7 @@ class TestExportAPI:
         assert response.status_code == 200
         path = tmp_path / "export.yaml"
         path.write_bytes(response.data)
-        assert load_fleet_config(path).homes == home_configs
+        assert load_fleet_config(path).homes == tuple(home_configs)
 
     @pytest.mark.parametrize("strategy", _STRATEGIES, ids=lambda strategy: strategy.strategy_type)
     def test_export_of_a_run_stored_before_the_dispatch_union_answers_its_variant_once_migrated(

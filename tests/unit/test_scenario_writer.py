@@ -396,7 +396,7 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
 
     fleet = load_fleet_config(path)
 
-    assert fleet.homes == homes
+    assert fleet.homes == tuple(homes)
     assert fleet.name == "Fleet run"
 
 

@@ -1,7 +1,9 @@
 """Tests for fleet simulation."""
 
+import dataclasses
 import multiprocessing
 import os
+import pickle
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field, replace
@@ -89,6 +91,21 @@ class TestFleetConfigBasics:
 
         with pytest.raises(ConfigurationError, match="timezone"):
             FleetConfig(homes=[home1, home2])
+
+    def test_homes_given_as_a_list_are_held_as_a_tuple(self):
+        home = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+        fleet = FleetConfig(homes=[home])
+
+        assert fleet.homes == (home,)
+        assert type(fleet.homes) is tuple
+
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(FleetConfig)])
+    def test_assigning_a_field_raises_frozen_instance_error(self, field_name):
+        fleet = FleetConfig(homes=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())])
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(fleet, field_name, getattr(fleet, field_name))
 
 
 class TestFleetConfigCreation:
@@ -318,32 +335,34 @@ class TestFleetResults:
                 home_configs=[sample_results.home_configs[0]] * n_configs,
             )
 
-    @pytest.mark.parametrize(
-        ("break_invariant", "refusal"),
-        [
-            pytest.param(lambda fleet: fleet.per_home_results.clear(), "at least one home", id="emptied"),
-            pytest.param(
-                lambda fleet: fleet.home_configs.pop(), "got 2 per_home_results and 1 home_configs", id="unpaired"
-            ),
-        ],
-    )
-    @pytest.mark.parametrize(
-        "read",
-        [
-            pytest.param(lambda fleet: fleet.total_generation, id="total_generation"),
-            pytest.param(FleetResults.to_aggregate_dataframe, id="to_aggregate_dataframe"),
-            pytest.param(calculate_fleet_summary, id="calculate_fleet_summary"),
-            pytest.param(calculate_home_summaries, id="calculate_home_summaries"),
-        ],
-    )
-    def test_a_fleet_emptied_or_unpaired_after_construction_is_refused_where_it_is_read(
-        self, sample_results, break_invariant, refusal, read
-    ):
-        """A fleet whose per_home_results is emptied, or whose home_configs is unpaired from it, after construction is refused, naming the invariant, wherever its totals or summary are read."""
-        break_invariant(sample_results)
+    def test_results_given_as_lists_are_held_as_tuples_of_the_same_objects_unaliased(self, sample_results):
+        homes = list(sample_results.per_home_results)
+        configs = list(sample_results.home_configs)
 
-        with pytest.raises(ValueError, match=refusal):
-            read(sample_results)
+        results = FleetResults(per_home_results=homes, home_configs=configs)
+        configs.append(configs[0])
+
+        assert type(results.per_home_results) is tuple
+        assert type(results.home_configs) is tuple
+        assert all(held is given for held, given in zip(results.per_home_results, homes, strict=True))
+        assert all(held is given for held, given in zip(results.home_configs, configs[:2], strict=True))
+        assert results.home_configs == tuple(configs[:2])
+        assert results.home_configs is not configs
+        assert len(results.home_configs) == 2
+
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(FleetResults)])
+    def test_assigning_a_field_raises_frozen_instance_error(self, sample_results, field_name):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(sample_results, field_name, getattr(sample_results, field_name))
+
+    def test_a_pickled_fleet_unpickles_with_tuple_fields_and_the_same_homes(self, sample_results):
+        unpickled = pickle.loads(pickle.dumps(sample_results))
+
+        assert type(unpickled.per_home_results) is tuple
+        assert type(unpickled.home_configs) is tuple
+        assert unpickled.home_configs == sample_results.home_configs
+        for got, sent in zip(unpickled.per_home_results, sample_results.per_home_results, strict=True):
+            pd.testing.assert_frame_equal(got.to_dataframe(), sent.to_dataframe())
 
 
 class TestFleetSummary:
@@ -822,6 +841,23 @@ class TestFleetRunnerSimulates:
         for index, results in each:
             _assert_marked_results_of(results, fleets[index])
         assert told == [(done, 6) for done in range(1, 7)]
+
+    def test_a_fleets_results_hold_tuples_not_its_configurations_list(self, tmp_path: Path) -> None:
+        homes = [_home("Home 1", 2.0), _home("Home 2", 3.0)]
+        fleet = FleetConfig(homes=homes, name="Two")
+
+        results = FleetRunner(
+            weather=_CountingWeather(), home_simulator=MarkingHomeSimulator(tmp_path), parallel=False
+        ).simulate(fleet, *_JUNE_DAYS.window())
+
+        assert type(results.home_configs) is tuple
+        assert results.home_configs is not homes
+        assert results.home_configs == tuple(homes)
+        assert type(results.per_home_results) is tuple
+        with pytest.raises(AttributeError):
+            results.home_configs.append(homes[0])
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            results.home_configs = ()
 
     def test_no_fleets_yield_nothing_and_fetch_no_weather(self, tmp_path: Path) -> None:
         weather = _CountingWeather()
