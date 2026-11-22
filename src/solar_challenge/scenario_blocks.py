@@ -52,12 +52,25 @@ def block_label(block_path: str) -> str:
     return block_path or "the top level"
 
 
+def refusal(block_path: str, problem: str) -> ConfigurationError:
+    """Return the refusal of the block at *block_path*, reading "<block label>: <problem>".
+
+    The caller raises it, ``from`` the exception that caused it where there is one.
+    """
+    return ConfigurationError(f"{block_label(block_path)}: {problem}")
+
+
 def require_mapping(block_path: str, data: object) -> dict[Any, Any]:
     """Return the block at *block_path*, refusing it unless it is a mapping."""
     if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"{block_label(block_path)} must be a mapping, got {type(data).__name__}"
-        )
+        raise refusal(block_path, f"must be a mapping, got {type(data).__name__}")
+    return data
+
+
+def require_list(block_path: str, data: object) -> list[Any]:
+    """Return the list at *block_path*, refusing it unless it is a list."""
+    if not isinstance(data, list):
+        raise refusal(block_path, f"must be a list, got {type(data).__name__}")
     return data
 
 
@@ -68,9 +81,10 @@ def refuse_unrecognised_keys(
     mapping = require_mapping(block_path, data)
     unrecognised = sorted(repr(key) for key in mapping.keys() - recognised)
     if unrecognised:
-        raise ConfigurationError(
-            f"Unrecognised keys in {block_label(block_path)}: {', '.join(unrecognised)}; "
-            f"recognised keys: {', '.join(sorted(recognised))}"
+        raise refusal(
+            block_path,
+            f"unrecognised keys {', '.join(unrecognised)}; "
+            f"recognised keys: {', '.join(sorted(recognised))}",
         )
     return mapping
 
@@ -216,10 +230,9 @@ def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict
 
 
 def refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
-    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each by its path."""
+    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each in the order given."""
     if missing_keys:
-        missing = ", ".join(child_path(block_path, key) for key in missing_keys)
-        raise ConfigurationError(f"Missing required keys in {block_label(block_path)}: {missing}")
+        raise refusal(block_path, f"requires {', '.join(repr(key) for key in missing_keys)}")
 
 
 def _required_keys(config_type: type[DataclassInstance]) -> tuple[str, ...]:
@@ -235,8 +248,8 @@ def constructed(block_path: str, cls: Callable[..., _Built], /, **values: Any) -
     """cls(**values), its refusal, a ConfigurationError or a TypeError, re-raised as "<block label>: <message>" from the original."""
     try:
         return cls(**values)
-    except (ConfigurationError, TypeError) as refusal:
-        raise ConfigurationError(f"{block_label(block_path)}: {refusal}") from refusal
+    except (ConfigurationError, TypeError) as exc:
+        raise refusal(block_path, str(exc)) from exc
 
 
 def _built_component(
