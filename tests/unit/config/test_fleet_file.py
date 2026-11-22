@@ -815,7 +815,10 @@ class TestParseSweepFleetConfigs:
             ),
             pytest.param(
                 _fleet_file(5.0, tariff=_ECONOMY_7),
-                "No sweep specification found",
+                re.escape(
+                    "fleet_distribution: holds no sweep: "
+                    "give battery.capacity_kwh a proportional_to whose multiplier has type: sweep"
+                ),
                 id="no-sweep",
             ),
         ],

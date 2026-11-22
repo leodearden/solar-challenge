@@ -231,7 +231,7 @@ class TestTheParserReadsTheTable:
             _parsed_spec({"type": "lognormal"})
 
         assert str(refusal.value) == (
-            f"Unknown distribution type 'lognormal' for '{_SPEC_PATH}'. Supported: {', '.join(DISTRIBUTION_TYPES)}"
+            f"{_SPEC_PATH}.type: unknown distribution type 'lognormal'; supported types: {', '.join(DISTRIBUTION_TYPES)}"
         )
 
     @pytest.mark.parametrize("distribution_type", _TABLE_TYPES)

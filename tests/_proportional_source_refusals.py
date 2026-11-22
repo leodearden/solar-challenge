@@ -20,6 +20,6 @@ Usage::
 def proportional_source_refusal(path: str, source: str, sources: list[str]) -> str:
     """The refusal of *source*, the source of the proportional_to at *path*, where *sources*, in draw order, are those it may name."""
     return (
-        f"Invalid {path} source {source!r}; valid sources: a number or count field drawn earlier "
+        f"{path}: invalid source {source!r}; valid sources: a number or count field drawn earlier "
         f"for every home that draws it, one of {sources!r}"
     )

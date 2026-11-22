@@ -365,8 +365,7 @@ class TestScenarioAPI:
         assert validation_with_pv_pool_counts((20, 40, 30)) == {
             "valid": False,
             "errors": [
-                "fleet_distribution: FleetDistributionConfig: shuffled_pool counts for 'pv.capacity_kw' "
-                "must total n_homes (100), got 90"
+                "fleet_distribution: pv.capacity_kw: shuffled_pool counts must total n_homes (100), got 90"
             ],
         }
 

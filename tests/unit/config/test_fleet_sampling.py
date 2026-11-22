@@ -15,7 +15,9 @@ from solar_challenge.fleet_distribution import (
     ComponentDistribution,
     FleetDistributionConfig,
     NormalDistribution,
+    ProportionalDistribution,
     ShuffledPoolDistribution,
+    SpecValue,
     UniformDistribution,
     WeightedDiscreteDistribution,
     generate_homes_from_distribution,
@@ -344,7 +346,9 @@ class TestASettingDrawnPastItsValuesIsRefused:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == "pv.tilt has no value left to draw: its 2 values, one per home, are all drawn"
+        assert str(refusal.value) == (
+            "fleet_distribution.pv.tilt: has no value left to draw: its 2 values, one per home, are all drawn"
+        )
 
 
 def _fleet_with_tilt(tilt: dict[str, Any]) -> FleetDistributionConfig:
@@ -362,6 +366,60 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
         homes = generate_homes_from_distribution(fleet, Location.bristol())
 
         assert [home.pv_config.tilt for home in homes] == [20.0, 20.0]
+
+    def test_a_source_that_drew_text_is_refused_naming_the_dependents_path_and_the_text(self) -> None:
+        """The fleet's check admits the consumption, a number field drawn before the occupants, so only a pool handing out text, which no parsed fleet draws, makes its home draw one."""
+        fleet = FleetDistributionConfig(
+            n_homes=1,
+            pv=ComponentDistribution({"capacity_kw": 4.0}),
+            load=ComponentDistribution(
+                {
+                    "annual_consumption_kwh": _PoolOfText(values=(3000.0,), counts=(1,)),
+                    "household_occupants": ProportionalDistribution(source="load.annual_consumption_kwh"),
+                },
+                settings={"use_stochastic": False},
+            ),
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "fleet_distribution.load.household_occupants: proportional_to load.annual_consumption_kwh, "
+            "which drew 'x', not a number"
+        )
+
+    def test_a_sweep_multiplier_left_unexpanded_is_refused_naming_the_dependents_path(self) -> None:
+        """A fleet whose battery capacity sweeps is parsed whole, but its homes are drawn only from the fleet of each sweep point."""
+        fleet = parse_fleet_distribution_config(
+            {
+                "n_homes": 1,
+                "pv": {"capacity_kw": 4.0},
+                "battery": {
+                    "capacity_kwh": {
+                        "type": "proportional_to",
+                        "source": "pv.capacity_kw",
+                        "multiplier": {"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3},
+                    }
+                },
+            }
+        )
+
+        with pytest.raises(ConfigurationError) as refusal:
+            generate_homes_from_distribution(fleet, Location.bristol())
+
+        assert str(refusal.value) == (
+            "fleet_distribution.battery.capacity_kwh: proportional_to a sweep multiplier, "
+            "which expand_sweep_configs replaces before any home is drawn"
+        )
+
+
+class _PoolOfText(ShuffledPoolDistribution):
+    """A pool of numbers, as its fleet checks it, that hands out text in their place."""
+
+    def create_pool(self) -> list[SpecValue]:
+        """Return "x" for each value the pool's counts give."""
+        return ["x" for _ in super().create_pool()]
 
 
 def _proportional_to_pv(**spec: float) -> dict[str, Any]:
@@ -441,7 +499,7 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
             generate_homes_from_distribution(_fleet_with_an_ev_hour(key, spec), Location.bristol())
 
         assert str(refusal.value) == prefixed_construction_refusal(
-            "fleet_distribution.ev, home 1", lambda: EVConfig("7kW", **{key: hour})
+            "fleet_distribution.ev: home 1", lambda: EVConfig("7kW", **{key: hour})
         )
 
     @pytest.mark.parametrize(
@@ -478,7 +536,7 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == f"{component}.{key} must be a finite number, got {4.0 * multiplier!r}"
+        assert str(refusal.value) == f"fleet_distribution.{component}.{key}: must be a finite number, got {4.0 * multiplier!r}"
 
     def test_a_count_that_is_nan_is_refused_naming_its_path(self) -> None:
         """No finite source, multiplier and offset make a NaN, but 0 times a listed infinite consumption does, and no whole number is nearest it, so occupants proportional_to it are refused naming their path and NaN."""
@@ -498,4 +556,4 @@ class TestAProportionalCountIsConvertedAsAnyDrawnCountIs:
         with pytest.raises(ConfigurationError) as refusal:
             generate_homes_from_distribution(fleet, Location.bristol())
 
-        assert str(refusal.value) == "load.household_occupants must be a finite number, got nan"
+        assert str(refusal.value) == "fleet_distribution.load.household_occupants: must be a finite number, got nan"

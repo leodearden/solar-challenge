@@ -872,8 +872,7 @@ class TestFleetFormFromScenario:
         with pytest.raises(
             ConfigurationError,
             match=re.escape(
-                "weighted_discrete distribution for 'fleet_distribution.pv.capacity_kw' "
-                "requires 'values' and 'weights'"
+                "fleet_distribution.pv.capacity_kw: requires 'weights'"
             ),
         ):
             fleet_form_from_scenario(document)
@@ -912,7 +911,7 @@ class TestFleetFormFromScenario:
         with pytest.raises(
             ConfigurationError,
             match=re.escape(
-                "shuffled_pool counts for 'pv.capacity_kw' must total n_homes (3), "
+                "fleet_distribution: pv.capacity_kw: shuffled_pool counts must total n_homes (3), "
                 f"got {MAX_FLEET_HOMES + 1}"
             ),
         ):

@@ -413,7 +413,7 @@ home:
             ),
             pytest.param(
                 "fleet_distribution:\n  n_homes: 2\n  pv: {capacity_kw: 4.0, tilt: 100}\n",
-                "fleet_distribution.pv, home 1: tilt must be between 0 and 90, got 100.0",
+                "fleet_distribution.pv: home 1: tilt must be between 0 and 90, got 100.0",
                 id="fleet-distribution",
             ),
             pytest.param(
@@ -428,7 +428,7 @@ home:
             ),
             pytest.param(
                 _SWEEP_FLEET + "    max_charge_kw: -1\n",
-                "fleet_distribution.battery, home 1: max_charge_kw must be greater than 0, got -1.0",
+                "fleet_distribution.battery: home 1: max_charge_kw must be greater than 0, got -1.0",
                 id="fleet-sweep",
             ),
             pytest.param(
@@ -530,7 +530,7 @@ home:
         [
             pytest.param(
                 "fleet_distribution: {n_homes: 2, pv: {capacity_kw: 4.0}, heat_pump: {heat_pump_type: XSHP}}\n",
-                "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; "
+                "fleet_distribution.heat_pump.heat_pump_type: invalid value 'XSHP'; "
                 "valid values: null or one of ['ASHP', 'GSHP']",
                 id="a heat pump type outside its choices",
             ),
@@ -539,7 +539,7 @@ home:
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0}\n"
                 "  heat_pump: {heat_pump_type: {type: normal, mean: 1, std: 0.1}}\n",
-                "Invalid fleet_distribution.heat_pump.heat_pump_type {'type': 'normal', 'mean': 1, 'std': 0.1}; "
+                "fleet_distribution.heat_pump.heat_pump_type: invalid spec {'type': 'normal', 'mean': 1, 'std': 0.1}; "
                 "valid specs: null, one of ['ASHP', 'GSHP'], or a weighted_discrete or shuffled_pool of them and nulls",
                 id="a normal on a heat pump type",
             ),
@@ -547,7 +547,7 @@ home:
                 "fleet_distribution:\n"
                 "  n_homes: 2\n"
                 "  pv: {capacity_kw: 4.0, tilt: {type: weighted_discrete, values: [30, '35'], weights: [1, 1]}}\n",
-                "Invalid fleet_distribution.pv.tilt value '35'; valid values: null or a number",
+                "fleet_distribution.pv.tilt: invalid value '35'; valid values: null or a number",
                 id="a string among a number's weighted values",
             ),
         ],

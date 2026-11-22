@@ -146,43 +146,35 @@ _UNKNOWN_DISTRIBUTION_TYPES = [
     pytest.param(["normal"], id="list"),
 ]
 
-_SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS: list[tuple[dict[str, Any], str]] = [
-    (
-        {"type": "weighted_discrete", "values": [5.0], "weights": [1.0]},
-        f"weighted_discrete distribution for '{_SPEC_PATH}' requires 'values' and 'weights'",
-    ),
-    (
-        {"type": "normal", "mean": 5.0, "std": 1.0},
-        f"normal distribution for '{_SPEC_PATH}' requires 'mean' and 'std'",
-    ),
-    (
-        {"type": "uniform", "min": 5.0, "max": 6.0},
-        f"uniform distribution for '{_SPEC_PATH}' requires 'min' and 'max'",
-    ),
-    (
-        {"type": "fixed", "value": 5.0},
-        f"fixed distribution for '{_SPEC_PATH}' requires 'value'",
-    ),
-    (
-        {"type": "shuffled_pool", "values": [5.0], "counts": [1]},
-        f"shuffled_pool distribution for '{_SPEC_PATH}' requires 'values' and 'counts'",
-    ),
-    (
-        {"type": "proportional_to", "source": "pv.capacity_kw"},
-        f"proportional_to distribution for '{_SPEC_PATH}' requires 'source'",
-    ),
+_SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS: list[dict[str, Any]] = [
+    {"type": "weighted_discrete", "values": [5.0], "weights": [1.0]},
+    {"type": "normal", "mean": 5.0, "std": 1.0},
+    {"type": "uniform", "min": 5.0, "max": 6.0},
+    {"type": "fixed", "value": 5.0},
+    {"type": "shuffled_pool", "values": [5.0], "counts": [1]},
+    {"type": "proportional_to", "source": "pv.capacity_kw"},
 ]
 
 _DISTRIBUTION_SPECS_LACKING_A_REQUIRED_KEY = [
-    pytest.param(_spec_lacking(spec, key), message, id=f"{spec['type']}-absent-{key}")
-    for spec, message in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
-    for key in spec
-    if key != "type"
+    *(
+        pytest.param(_spec_lacking(spec, key), f"{_SPEC_PATH}: requires {key!r}", id=f"{spec['type']}-absent-{key}")
+        for spec in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
+        for key in spec
+        if key != "type"
+    ),
+    *(
+        pytest.param(
+            {"type": spec["type"]},
+            f"{_SPEC_PATH}: requires {', '.join(repr(key) for key in spec if key != 'type')}",
+            id=f"{spec['type']}-absent-every-key",
+        )
+        for spec in _SPECS_GIVING_ONLY_THEIR_REQUIRED_KEYS
+    ),
 ]
 
 _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP = [
-    pytest.param({"min": 0.5, "max": 2.0, "steps": 3}, id="untyped"),
-    pytest.param({"type": "normal", "mean": 1.0, "std": 0.1}, id="other-type"),
+    pytest.param({"min": 0.5, "max": 2.0, "steps": 3}, None, id="untyped"),
+    pytest.param({"type": "normal", "mean": 1.0, "std": 0.1}, "normal", id="other-type"),
 ]
 
 _FIXED_SPEC_VALUES = [
@@ -249,7 +241,7 @@ class TestDistributionSpecTypes:
         """A mapping whose type is absent or null is refused, naming the spec's path."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(spec)
-        assert str(refusal.value) == f"Distribution for '{_SPEC_PATH}' requires 'type' field"
+        assert str(refusal.value) == f"{_SPEC_PATH}: requires 'type'"
 
     @pytest.mark.parametrize("spec_type", _UNKNOWN_DISTRIBUTION_TYPES)
     def test_unknown_type_is_refused_naming_every_supported_type(
@@ -259,7 +251,7 @@ class TestDistributionSpecTypes:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec({"type": spec_type})
         assert str(refusal.value) == (
-            f"Unknown distribution type '{spec_type}' for '{_SPEC_PATH}'. Supported: "
+            f"{_SPEC_PATH}.type: unknown distribution type {spec_type!r}; supported types: "
             "weighted_discrete, normal, uniform, fixed, shuffled_pool, proportional_to"
         )
 
@@ -267,22 +259,22 @@ class TestDistributionSpecTypes:
     def test_spec_lacking_a_required_key_is_refused_naming_the_key(
         self, spec: dict[str, Any], message: str
     ) -> None:
-        """A spec lacking a key its type requires is refused, naming the type, the path and the key."""
+        """A spec lacking keys its type requires is refused, naming the path and each key it lacks in its type's order."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(spec)
         assert str(refusal.value) == message
 
-    @pytest.mark.parametrize("multiplier", _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP)
+    @pytest.mark.parametrize(("multiplier", "named_type"), _MULTIPLIER_MAPPINGS_THAT_ARE_NO_SWEEP)
     def test_proportional_to_multiplier_mapping_that_is_no_sweep_is_refused(
-        self, multiplier: dict[str, Any]
+        self, multiplier: dict[str, Any], named_type: Optional[str]
     ) -> None:
-        """A proportional_to multiplier given as a mapping must be a sweep."""
+        """A proportional_to multiplier given as a mapping must be a sweep, so one naming another type, or none, is refused at the multiplier's path, naming the type."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_distribution_spec(
                 {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": multiplier}
             )
         assert str(refusal.value) == (
-            f"proportional_to multiplier dict for '{_SPEC_PATH}' must have type='sweep'"
+            f"{_SPEC_PATH}.multiplier: a mapping multiplier must have type 'sweep', got {named_type!r}"
         )
 
     @pytest.mark.parametrize("key", ["min", "max", "steps"])

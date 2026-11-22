@@ -190,8 +190,7 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"n_homes": 5},
-                "fleet_distribution: FleetDistributionConfig: shuffled_pool counts for 'battery.capacity_kwh' "
-                "must total n_homes",
+                "fleet_distribution: battery.capacity_kwh: shuffled_pool counts must total n_homes",
                 id="battery-pool-short-of-n-homes",
             ),
             pytest.param(
@@ -201,8 +200,7 @@ class TestExportFleetYAML:
             ),
             pytest.param(
                 {"battery": {"capacity_kwh": {"type": "uniform"}}},
-                "uniform distribution for 'fleet_distribution.battery.capacity_kwh' requires "
-                "'min' and 'max'",
+                "fleet_distribution.battery.capacity_kwh: requires 'min', 'max'",
                 id="battery-uniform-without-its-range",
             ),
         ],

@@ -38,8 +38,7 @@ def _parsed_fleet_distribution(n_homes: int = 1, **sections: Any) -> FleetDistri
 def _pool_size_refusal(path: str, n_homes: int, total: int) -> str:
     """The refusal of the shuffled pool at *path* whose counts total *total* in a fleet of *n_homes* homes."""
     return (
-        f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
-        f"({n_homes}), got {total}"
+        f"{path}: shuffled_pool counts must total n_homes ({n_homes}), got {total}"
     )
 
 
@@ -51,7 +50,7 @@ def _parsed_pool_size_refusal(path: str, n_homes: int, total: int) -> str:
 def _charger_type_value_refusal(value: object) -> str:
     """The refusal of *value*, listed in a fleet's ev.charger_type, which names no charger type."""
     return (
-        f"Invalid fleet_distribution.ev.charger_type value {value!r}; "
+        f"fleet_distribution.ev.charger_type: invalid value {value!r}; "
         "valid values: null or one of ['3.6kW', '7kW', '22kW']"
     )
 
@@ -59,27 +58,27 @@ def _charger_type_value_refusal(value: object) -> str:
 def _number_spec_refusal(path: str, spec: object) -> str:
     """The refusal of *spec*, given the number or count field at *path*, whose kind draws no such spec."""
     return (
-        f"Invalid {path} {spec!r}; valid specs: null, a number, "
+        f"{path}: invalid spec {spec!r}; valid specs: null, a number, "
         "or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers"
     )
 
 
 def _number_value_refusal(path: str, value: object) -> str:
     """The refusal of *value*, listed in the spec of the number or count field at *path*, which is not a number."""
-    return f"Invalid {path} value {value!r}; valid values: null or a number"
+    return f"{path}: invalid value {value!r}; valid values: null or a number"
 
 
 def _heat_pump_type_spec_refusal(spec: object) -> str:
     """The refusal of *spec*, given a fleet's heat_pump.heat_pump_type, whose kind draws no such spec."""
     return (
-        f"Invalid fleet_distribution.heat_pump.heat_pump_type {spec!r}; "
+        f"fleet_distribution.heat_pump.heat_pump_type: invalid spec {spec!r}; "
         "valid specs: null, one of ['ASHP', 'GSHP'], or a weighted_discrete or shuffled_pool of them and nulls"
     )
 
 
 #: The refusal of 'XSHP', given or listed as a fleet's heat_pump.heat_pump_type, which names no heat pump type.
 _XSHP_HEAT_PUMP_TYPE_REFUSAL = (
-    "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
+    "fleet_distribution.heat_pump.heat_pump_type: invalid value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
 )
 
 
@@ -361,15 +360,20 @@ class TestFleetDistributionConfig:
         assert isinstance(config.battery.draws["capacity_kwh"], WeightedDiscreteDistribution)
         assert isinstance(config.load.draws["annual_consumption_kwh"], NormalDistribution)
 
-    def test_parse_missing_n_homes_raises(self) -> None:
-        """Test parsing without n_homes raises."""
-        with pytest.raises(ConfigurationError, match="requires 'n_homes'"):
-            parse_fleet_distribution_config({"pv": {"capacity_kw": 4.0}})
-
-    def test_parse_missing_pv_raises(self) -> None:
-        """Test parsing without pv raises."""
-        with pytest.raises(ConfigurationError, match="requires 'pv'"):
-            parse_fleet_distribution_config({"n_homes": 10})
+    @pytest.mark.parametrize(
+        ("block", "expected"),
+        [
+            pytest.param({"pv": {"capacity_kw": 4.0}}, "fleet_distribution: requires 'n_homes'", id="no n_homes"),
+            pytest.param({"n_homes": 10}, "fleet_distribution: requires 'pv'", id="no pv"),
+            pytest.param({}, "fleet_distribution: requires 'n_homes', 'pv'", id="neither"),
+        ],
+    )
+    def test_a_block_leaving_out_n_homes_or_pv_is_refused_naming_each_key_it_leaves_out(
+        self, block: dict[str, Any], expected: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            parse_fleet_distribution_config(block)
+        assert str(refusal.value) == expected
 
     def test_fleet_distribution_config_validation(self) -> None:
         """Test FleetDistributionConfig validation."""
@@ -606,7 +610,7 @@ class TestEVChargerTypeValuesAreChargerTypes:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, ev={"charger_type": charger_type})
         assert str(refusal.value) == (
-            f"Invalid fleet_distribution.ev.charger_type {charger_type!r}; "
+            f"fleet_distribution.ev.charger_type: invalid spec {charger_type!r}; "
             "valid specs: null, one of ['3.6kW', '7kW', '22kW'], "
             "or a weighted_discrete or shuffled_pool of them and nulls"
         )
@@ -683,9 +687,7 @@ class TestAChoiceIsOneOfItsChoices:
         """XSHP is no heat pump type, so the block is refused as it is read, even when no home would draw it."""
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_fleet_distribution(pv={"capacity_kw": 4.0}, heat_pump={"heat_pump_type": heat_pump_type})
-        assert str(refusal.value) == (
-            "Invalid fleet_distribution.heat_pump.heat_pump_type value 'XSHP'; valid values: null or one of ['ASHP', 'GSHP']"
-        )
+        assert str(refusal.value) == _XSHP_HEAT_PUMP_TYPE_REFUSAL
 
 
 class TestAComponentBlockGivesItsRequiredKeys:
@@ -764,25 +766,25 @@ class TestAComponentDistributionHoldsOnlyItsRowsKeysEachInItsPlace:
         [
             pytest.param(
                 {"load": ComponentDistribution({"use_stochastic": False})},
-                "fleet_distribution.load.use_stochastic is a flag key, "
+                "fleet_distribution.load.use_stochastic: a flag key, "
                 "which a ComponentDistribution holds in its settings, not its draws",
                 id="a flag in the draws",
             ),
             pytest.param(
                 {"battery": ComponentDistribution({"capacity_kwh": 5.0, "grid_charging": None})},
-                "fleet_distribution.battery.grid_charging is a setting key, "
+                "fleet_distribution.battery.grid_charging: a setting key, "
                 "which a ComponentDistribution holds in its settings, not its draws",
                 id="a setting in the draws",
             ),
             pytest.param(
                 {"pv": ComponentDistribution({"capacity_kw": 4.0}, settings={"tilt": 30.0})},
-                "fleet_distribution.pv.tilt is a number key, "
+                "fleet_distribution.pv.tilt: a number key, "
                 "which a ComponentDistribution holds in its draws, not its settings",
                 id="a number in the settings",
             ),
             pytest.param(
                 {"pv": ComponentDistribution({"capacity_kw": 4.0, "tilt": 30.0}, settings={"tilt": 30.0})},
-                "fleet_distribution.pv.tilt is a number key, "
+                "fleet_distribution.pv.tilt: a number key, "
                 "which a ComponentDistribution holds in its draws, not its settings",
                 id="a number in both",
             ),
@@ -893,7 +895,7 @@ class TestASpecIsOneItsFieldsKindDraws:
             ),
             pytest.param(
                 {"ev": ComponentDistribution({"charger_type": _A_PROPORTIONAL_TO})},
-                f"Invalid fleet_distribution.ev.charger_type {_A_PROPORTIONAL_TO!r}; "
+                f"fleet_distribution.ev.charger_type: invalid spec {_A_PROPORTIONAL_TO!r}; "
                 "valid specs: null, one of ['3.6kW', '7kW', '22kW'], "
                 "or a weighted_discrete or shuffled_pool of them and nulls",
                 id="a proportional_to on a charger type",
