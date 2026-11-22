@@ -3,7 +3,9 @@
 
 A surface form reads the same on every Python minor that requires-python admits, which
 inspect's own rendering does not. surface_form spells a name's form, and
-is_frozen_dataclass says whether a class's form is a frozen dataclass's. member_forms
+is_frozen_dataclass says whether a class's form is a frozen dataclass's.
+is_additive_change says whether a name's form changed from a frozen one additively: whether
+the current form, less some of its additive parts, spells the frozen one. member_forms
 spells the forms of the public members a class's own body defines or declares.
 named_classes gives the classes those forms name, and signature_closure the classes of a
 package that some names' forms name, directly or through another such class. member_forms
@@ -22,7 +24,13 @@ Usage::
 
     from pandas import Series
 
-    from tests._surface_forms import member_forms, named_classes, surface_form, undeclared_attributes
+    from tests._surface_forms import (
+        is_additive_change,
+        member_forms,
+        named_classes,
+        surface_form,
+        undeclared_attributes,
+    )
 
     def scale(values: Optional[List[float]], factor: float = 1.0) -> "Series": ...
 
@@ -37,6 +45,7 @@ Usage::
         def reading(self) -> float: ...
 
     assert surface_form(scale) == "(values: list[float] | None, factor: float = 1.0) -> Series"
+    assert is_additive_change("(values: list[float] | None) -> Series", scale)
     assert surface_form({"peak": 0.3}) == "dict {'peak': float}"
     assert member_forms(Meter) == {"site": "attribute Path", "reading": "property (self) -> float"}
     assert named_classes(Meter) == {Path, float}
@@ -131,30 +140,7 @@ def surface_form(obj: object) -> str:
     routine that inspect reads through such a descriptor, which the TypeError names
     too, with its kind.
     """
-    if is_enum(obj):
-        return ", ".join(
-            f"{name}={_spelled_value(member.value)}"
-            for name, member in obj.__members__.items()
-        )
-    if not _is_class_or_routine(obj):
-        return _constant(obj).text()
-    signature = signature_of(obj)
-    constructs = _signature_constructs(obj, signature, _looked_up_when_read)
-    text = str(
-        signature.replace(
-            parameters=[
-                parameter.replace(
-                    annotation=_spelled_annotation(constructs.get(name)),
-                    default=_spelled_default(parameter.default),
-                )
-                for name, parameter in signature.parameters.items()
-            ],
-            return_annotation=_spelled_annotation(constructs.get("return")),
-        )
-    )
-    if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
-        return f"{_dataclass_kind(obj)} {text}"
-    return text
+    return _parted_form(obj).text()
 
 
 def member_forms(cls: type) -> dict[str, str]:
@@ -373,6 +359,193 @@ def unset_attributes(cls: type, *, reviewed: Collection[str] = ()) -> set[str]:
 def is_frozen_dataclass(cls: type) -> bool:
     """Whether *cls* is a dataclass the decorator recorded as frozen, for *cls* or for the base it inherits the record from, as dataclass_parameter reads it: the frozen that surface_form(cls) spells in its kind."""
     return dataclasses.is_dataclass(cls) and dataclass_parameter(cls, "frozen")
+
+
+def is_additive_change(frozen: str, obj: object) -> bool:
+    """Whether surface_form(obj), less some of its additive parts, spells *frozen* exactly.
+
+    The rules are _ADDITIVE_PARTS's rows, and any change they do not prove additive is
+    breaking. It raises what surface_form(obj) raises.
+    """
+    return _spells_less_additive_parts(_parted_form(obj), frozen)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Part:
+    """A part of a form: its text, as the form spells it, and the value it spells, by which an _ADDITIVE_PARTS row recognises it."""
+
+    text: str
+    value: object
+
+
+@dataclasses.dataclass(frozen=True)
+class _PartedForm:
+    """A form read as its parts, with the renderer that spells it from a mask of the parts it keeps, aligned with them."""
+
+    parts: tuple[_Part, ...]
+    render: Callable[[tuple[bool, ...]], str]
+
+    def text(self) -> str:
+        """The form with every part kept."""
+        return self.render((True,) * len(self.parts))
+
+    def followed_by(self, after: "_PartedForm") -> "_PartedForm":
+        """This form, a space, then *after*: the parts of both, in that order."""
+        split = len(self.parts)
+        return _PartedForm(
+            (*self.parts, *after.parts),
+            lambda kept: f"{self.render(kept[:split])} {after.render(kept[split:])}",
+        )
+
+
+def _fixed_form(text: str) -> _PartedForm:
+    """A form of no parts, spelled *text*."""
+    return _PartedForm((), lambda kept: text)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Qualifier:
+    """A qualifier of a kind, as frozen qualifies dataclass in dataclass[frozen]."""
+
+    kind: str
+    name: str
+
+
+def _parted_form(obj: object) -> _PartedForm:
+    """surface_form(obj) read as its parts: an Enum's and a constant's have none; a class's or routine's are its signature's parameters, after the qualifiers of its kind if it is a dataclass."""
+    if is_enum(obj):
+        return _fixed_form(
+            ", ".join(
+                f"{name}={_spelled_value(member.value)}"
+                for name, member in obj.__members__.items()
+            )
+        )
+    if not _is_class_or_routine(obj):
+        return _fixed_form(_constant(obj).text())
+    signature = _signature_form(obj)
+    if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
+        return _dataclass_kind_form(obj).followed_by(signature)
+    return signature
+
+
+def _signature_form(obj: Callable[..., object]) -> _PartedForm:
+    """The signature of *obj*, a class or routine, each default in it as _spelled_value spells it and each annotation as its construct does; each parameter, so spelled, is a part, and a render keeps inspect's own spelling of the kept parameters."""
+    signature = signature_of(obj)
+    constructs = _signature_constructs(obj, signature, _looked_up_when_read)
+    spelled = signature.replace(
+        parameters=[
+            parameter.replace(
+                annotation=_spelled_annotation(constructs.get(name)),
+                default=_spelled_default(parameter.default),
+            )
+            for name, parameter in signature.parameters.items()
+        ],
+        return_annotation=_spelled_annotation(constructs.get("return")),
+    )
+    parameters = tuple(spelled.parameters.values())
+    return _PartedForm(
+        tuple(_Part(str(parameter), parameter) for parameter in parameters),
+        lambda kept: str(spelled.replace(parameters=list(itertools.compress(parameters, kept)))),
+    )
+
+
+_POSITIONAL_KINDS: frozenset[object] = frozenset(
+    {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+)
+
+
+def _is_parameter_of(value: object, kinds: Collection[object]) -> typing.TypeGuard[inspect.Parameter]:
+    """Whether *value* is a parameter of one of *kinds*."""
+    return isinstance(value, inspect.Parameter) and value.kind in kinds
+
+
+def _is_defaulted_keyword_only(value: object) -> bool:
+    """Whether *value* is a keyword-only parameter with a default."""
+    return (
+        _is_parameter_of(value, {inspect.Parameter.KEYWORD_ONLY})
+        and value.default is not inspect.Parameter.empty
+    )
+
+
+def _is_defaulted_positional(value: object) -> bool:
+    """Whether *value* is a positional-only or positional-or-keyword parameter with a default."""
+    return _is_parameter_of(value, _POSITIONAL_KINDS) and value.default is not inspect.Parameter.empty
+
+
+def _is_variadic(value: object) -> bool:
+    """Whether *value* is a *args or **kwargs parameter."""
+    return _is_parameter_of(
+        value, {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+    )
+
+
+def _is_positional(value: object) -> bool:
+    """Whether *value* is a parameter that takes a positional argument: positional-only, positional-or-keyword or *args."""
+    return _is_parameter_of(value, {*_POSITIONAL_KINDS, inspect.Parameter.VAR_POSITIONAL})
+
+
+@dataclasses.dataclass(frozen=True)
+class _AdditivePart:
+    """A kind of part whose drop from a form is additive, *description* naming it in words: the parts *recognises* holds of, by the values they spell. If *drops_later_positionals*, dropping one drops each later positional parameter too, whose positional argument it would take."""
+
+    description: str
+    recognises: Callable[[object], bool]
+    drops_later_positionals: bool = False
+
+
+_ADDITIVE_PARTS: tuple[_AdditivePart, ...] = (
+    _AdditivePart("a keyword-only parameter with a default", _is_defaulted_keyword_only),
+    _AdditivePart(
+        "a positional parameter with a default, dropped only together with every positional "
+        "parameter after it",
+        _is_defaulted_positional,
+        drops_later_positionals=True,
+    ),
+    _AdditivePart("*args or **kwargs", _is_variadic),
+)
+"""The parts whose drop from a form is additive, each kind in one row; a part no row recognises is never dropped, so a change is breaking unless dropping recognised parts alone undoes it."""
+
+
+def _additive_rule(value: object) -> _AdditivePart | None:
+    """The _ADDITIVE_PARTS row that recognises a part spelling *value*; None if no row does."""
+    return next((rule for rule in _ADDITIVE_PARTS if rule.recognises(value)), None)
+
+
+def _spells_less_additive_parts(form: _PartedForm, frozen: str) -> bool:
+    """Whether *form*, less some of the parts _ADDITIVE_PARTS recognises, renders *frozen* exactly.
+
+    The search walks the parts in order, trying to keep each before dropping it. A part
+    may be kept only if its text occurs in *frozen*, since a kept part's text occurs in
+    each render that keeps it, and dropped only if a row recognises it. Once a part whose
+    row drops later positionals is dropped, each later positional parameter may only be
+    dropped. A branch ends once the render of its longest completion, which keeps each
+    later part that may still be kept, is shorter than *frozen*, since no drop lengthens
+    a render. It compares only whole renders, and the texts of single parts, with
+    *frozen*, never splitting it.
+    """
+    keepable = [part.text in frozen for part in form.parts]
+    rules = [_additive_rule(part.value) for part in form.parts]
+    positional = [_is_positional(part.value) for part in form.parts]
+    branches: list[tuple[tuple[bool, ...], bool]] = [((), False)]
+    while branches:
+        kept, dropping_positionals = branches.pop()
+        may_keep = [
+            keepable[index] and not (dropping_positionals and positional[index])
+            for index in range(len(kept), len(form.parts))
+        ]
+        longest = form.render((*kept, *may_keep))
+        if len(kept) == len(form.parts):
+            if longest == frozen:
+                return True
+            continue
+        if len(longest) < len(frozen):
+            continue
+        rule = rules[len(kept)]
+        if rule is not None:
+            branches.append(((*kept, False), dropping_positionals or rule.drops_later_positionals))
+        if may_keep[0]:
+            branches.append(((*kept, True), dropping_positionals))
+    return False
 
 
 class _Spelling(str):
@@ -984,11 +1157,19 @@ def _property_kind(member: property) -> str:
 _DATACLASS_KIND_PARAMETERS: tuple[str, ...] = ("eq", "order", "unsafe_hash", "frozen")
 
 
-def _dataclass_kind(cls: type) -> str:
+def _dataclass_kind_form(cls: type) -> _PartedForm:
     """The kind of the dataclass *cls*: dataclass, qualified by those of _DATACLASS_KIND_PARAMETERS the decorator recorded as on, for *cls* or for the base *cls* inherits the record from, as dataclass_parameter reads them."""
-    return _qualified_kind(
+    return _qualified_kind_form(
         "dataclass",
         [name for name in _DATACLASS_KIND_PARAMETERS if dataclass_parameter(cls, name)],
+    )
+
+
+def _qualified_kind_form(kind: str, qualifiers: list[str]) -> _PartedForm:
+    """*kind* qualified by *qualifiers*, as _qualified_kind spells it, each qualifier a part."""
+    return _PartedForm(
+        tuple(_Part(name, _Qualifier(kind, name)) for name in qualifiers),
+        lambda kept: _qualified_kind(kind, list(itertools.compress(qualifiers, kept))),
     )
 
 
