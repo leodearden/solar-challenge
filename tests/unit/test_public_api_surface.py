@@ -9,7 +9,7 @@ Its sections, in order, each under a `# ===` banner; a `# ---` banner opens a pa
   A surface change edits the frozen tables' rows, and adds its release note,
   docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
 - The drift report: how a failing lock names each drifted path with its frozen and
-  current forms.
+  current forms, labels each additive or breaking, and says what each kind needs.
 - Name resolution: every exported name resolves to its typed import, the object the
   package's `if TYPE_CHECKING:` block imports under that name; dir() lists the exported
   names, and an unknown name raises AttributeError; and each EXPECTED_KIND name resolves
@@ -40,6 +40,8 @@ import solar_challenge
 import solar_challenge.dispatch as _dispatch
 import solar_challenge.tariff as _tariff
 from tests._surface_forms import (
+    is_additive_change,
+    is_additive_member_change,
     is_frozen_dataclass,
     member_forms,
     signature_closure,
@@ -191,19 +193,21 @@ def test_all_has_no_cli_names() -> None:
 def test_every_exported_signature_matches_frozen_surface() -> None:
     """Every name in __all__ has the surface form FROZEN_SURFACE pins.
 
-    Fails once, naming each drifted symbol with its frozen and current forms.  A name
-    absent from FROZEN_SURFACE counts as drifted, so its current form is printed ready to
-    paste; a name missing from __all__ is test_all_equals_frozen_set's to report.
+    Fails once, naming each drifted symbol with its frozen and current forms, labelled
+    additive or breaking.  A name absent from FROZEN_SURFACE counts as drifted, additive,
+    so its current form is printed ready to paste; a pinned name __all__ lacks is listed
+    last, breaking, its current form reading (not in __all__).
     """
     current_forms = {
         name: surface_form(getattr(solar_challenge, name))
         for name in solar_challenge.__all__
     }
-    drifted = {
-        name: form
-        for name, form in current_forms.items()
-        if form != FROZEN_SURFACE.get(name)
-    }
+    drifted = _drifted(
+        FROZEN_SURFACE,
+        current_forms,
+        absent="(not in __all__)",
+        is_additive=lambda name, row: is_additive_change(row, getattr(solar_challenge, name)),
+    )
     assert not drifted, _drift_message("FROZEN_SURFACE", FROZEN_SURFACE, drifted)
 
 
@@ -258,14 +262,18 @@ def _closure_classes() -> Mapping[str, type]:
 def test_every_class_the_frozen_surface_names_matches_frozen_closure() -> None:
     """Each class outside __all__ that the frozen surface names has the surface form FROZEN_CLOSURE pins.
 
-    Fails once, naming each drifted class with its frozen and current forms, in path
-    order.  A class a pinned form newly names counts as drifted, so its current form is
-    printed ready to paste; a pinned class no form names any longer is listed last, its
-    current form reading (not named by the frozen surface).
+    Fails once, naming each drifted class with its frozen and current forms, labelled
+    additive or breaking, in path order.  A class a pinned form newly names counts as
+    drifted, additive, so its current form is printed ready to paste; a pinned class no
+    form names any longer is listed last, breaking, its current form reading (not named
+    by the frozen surface).
     """
     current = {path: surface_form(cls) for path, cls in _closure_classes().items()}
     drifted = _drifted(
-        FROZEN_CLOSURE, current, absent="(not named by the frozen surface)"
+        FROZEN_CLOSURE,
+        current,
+        absent="(not named by the frozen surface)",
+        is_additive=lambda path, row: is_additive_change(row, _closure_classes()[path]),
     )
     assert not drifted, _drift_message("FROZEN_CLOSURE", FROZEN_CLOSURE, drifted)
 
@@ -481,14 +489,15 @@ def _pinned_classes() -> dict[str, type]:
     return {**_exported_classes(), **_closure_classes()}
 
 
-def _forms_by_member_path(
-    forms_by_class: Mapping[str, Mapping[str, str]],
-) -> dict[str, str]:
-    """Flatten *forms_by_class*, keyed by class path, to {"path.member": form}, a path built for display and comparison, never split."""
+_Held = typing.TypeVar("_Held")
+
+
+def _by_member_path(by_class: Mapping[str, Mapping[str, _Held]]) -> dict[str, _Held]:
+    """Flatten *by_class*, keyed by class path then member name, to {"path.member": held}, a path built for display and comparison, never split."""
     return {
-        f"{class_path}.{member}": form
-        for class_path, forms in forms_by_class.items()
-        for member, form in forms.items()
+        f"{class_path}.{member}": held
+        for class_path, by_member in by_class.items()
+        for member, held in by_member.items()
     }
 
 
@@ -496,15 +505,23 @@ def test_every_pinned_class_member_matches_frozen_members() -> None:
     """Every pinned class's public members have the forms FROZEN_MEMBERS pins.
 
     Fails once, naming each added, changed or removed member with its frozen and current
-    forms, in pinned-class order and, within a class, the order member_forms lists its
-    members, removed members last.  An added member's current form is printed ready to
-    paste; a removed member's current form reads (removed).
+    forms, labelled additive or breaking, in pinned-class order and, within a class, the
+    order member_forms lists its members, removed members last.  An added member is
+    additive, its current form printed ready to paste; a removed member is breaking, its
+    current form reading (removed).
     """
-    frozen = _forms_by_member_path(FROZEN_MEMBERS)
-    current = _forms_by_member_path(
-        {path: member_forms(cls) for path, cls in _pinned_classes().items()}
+    pinned = _pinned_classes()
+    forms_by_class = {path: member_forms(cls) for path, cls in pinned.items()}
+    members = _by_member_path(
+        {path: {name: (pinned[path], name) for name in forms} for path, forms in forms_by_class.items()}
     )
-    drifted = _drifted(frozen, current, absent="(removed)")
+    frozen = _by_member_path(FROZEN_MEMBERS)
+    drifted = _drifted(
+        frozen,
+        _by_member_path(forms_by_class),
+        absent="(removed)",
+        is_additive=lambda path, row: is_additive_member_change(row, *members[path]),
+    )
     assert not drifted, _drift_message("FROZEN_MEMBERS", frozen, drifted)
 
 
@@ -638,43 +655,67 @@ def test_every_pinned_dataclass_is_frozen() -> None:
 
 # ===========================================================================
 # The drift report: each path whose current form differs from its frozen one,
-# printed with both forms, the current one ready to paste
+# printed with both forms, the current one ready to paste, and labelled
+# additive or breaking
 # ===========================================================================
 
 
+@dataclasses.dataclass(frozen=True)
+class _Drift:
+    """A drifted path's current form, and whether its change from the frozen form is additive."""
+
+    current: str
+    additive: bool
+
+
 def _drift_message(
-    table: str, frozen: Mapping[str, str], drifted: Mapping[str, str]
+    table: str, frozen: Mapping[str, str], drifted: Mapping[str, _Drift]
 ) -> str:
-    """Name each path of *drifted*, a map of path to current form, with its frozen and current forms.
+    """Name each path of *drifted* with its frozen and current forms and its change, additive or breaking, then say what each kind of change needs.
 
     *frozen* holds the forms of the table named *table*, keyed by the same paths.
     """
     symbols = "".join(
         f"\n  solar_challenge.{path}"
         f"\n    frozen:  {frozen.get(path, f'(absent from {table})')}"
-        f"\n    current: {current}"
-        for path, current in drifted.items()
+        f"\n    current: {drift.current}"
+        f"\n    change:  {'additive' if drift.additive else 'breaking'}"
+        for path, drift in drifted.items()
     )
     return (
         f"Surface forms differ from {table}:{symbols}\n"
-        "Every change to the frozen public API (review/briefing.yaml), an addition "
-        "included, needs a release note, docs/unreleased/domain-library-consumption/<task "
-        "id>.md ('Changes merged since the last tag' in docs/domain-library-consumption.md), "
-        f"landed in the same commit as the {table} edit."
+        "Each change to the frozen public API (review/briefing.yaml) is labelled above. An "
+        "additive change needs its release note, docs/unreleased/domain-library-consumption/"
+        "<task id>.md ('Changes merged since the last tag', in the 'Tag / release convention' "
+        "section of docs/domain-library-consumption.md), landed in the same commit as the "
+        f"{table} edit. A breaking one lands only with a version bump under that section "
+        "(review/briefing.yaml's frozen-API convention)."
     )
 
 
 def _drifted(
-    frozen: Mapping[str, str], current: Mapping[str, str], *, absent: str
-) -> dict[str, str]:
-    """Map each path whose current form is not its frozen one to its current form.
+    frozen: Mapping[str, str],
+    current: Mapping[str, str],
+    *,
+    absent: str,
+    is_additive: Callable[[str, str], bool],
+) -> dict[str, _Drift]:
+    """Map each path whose current form is not its frozen one to its _Drift.
 
     *current*'s paths come first, in its order, then each frozen path *current* lacks,
-    whose current form reads *absent*.
+    whose current form reads *absent*.  A path only *current* holds is additive and one
+    only *frozen* holds breaking; a changed path is additive only if
+    is_additive(path, its frozen form) holds.
     """
+
+    def additive(path: str) -> bool:
+        if path not in frozen:
+            return True
+        return path in current and is_additive(path, frozen[path])
+
     missing = [path for path in frozen if path not in current]
     return {
-        path: current.get(path, absent)
+        path: _Drift(current.get(path, absent), additive(path))
         for path in [*current, *missing]
         if current.get(path) != frozen.get(path)
     }
