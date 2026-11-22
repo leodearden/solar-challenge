@@ -5,10 +5,12 @@ A document's blocks are read by solar_challenge.scenario_blocks, and its fleet_d
 block by solar_challenge.fleet_distribution.
 """
 
+import contextlib
 import json
 import math
 import re
 from dataclasses import dataclass, replace
+from datetime import date, datetime
 from pathlib import Path
 from typing import (
     Any,
@@ -53,6 +55,7 @@ from solar_challenge.scenario_blocks import (
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow, covered_days
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,30 @@ class SimulationPeriod:
         return ts
 
 
+_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+"""The one string form a period's day takes: 'YYYY-MM-DD'."""
+
+
+def _period_day(value: object, field: str) -> date:
+    """The calendar day *value*, the period's *field*, gives: a datetime's or Timestamp's own date on its own clock, a date as it is, or a 'YYYY-MM-DD' string's day.
+
+    Raises:
+        ConfigurationError: For any other value, such as NaT, '2024' or '20240601', naming period.<field>,
+            the value and the forms a period's day takes.
+    """
+    if isinstance(value, datetime) and value is not pd.NaT:
+        return value.date()
+    if type(value) is date:
+        return value
+    if isinstance(value, str) and _ISO_DAY.fullmatch(value):
+        with contextlib.suppress(ValueError):
+            return date.fromisoformat(value)
+    raise ConfigurationError(
+        f"period.{field} is {value!r}, which is not a day: "
+        "give a date, a 'YYYY-MM-DD' string or a Timestamp"
+    )
+
+
 @dataclass(frozen=True)
 class OutputConfig:
     """Configuration for simulation output.
@@ -111,7 +138,8 @@ class ScenarioConfig:
         name: Scenario identifier
         description: Human-readable description
         location: Geographic location (defaults to Bristol)
-        period: Simulation period
+        period: Simulation period; construction refuses one whose days are not a date,
+            a 'YYYY-MM-DD' string or a Timestamp, or whose last day precedes its first
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
         output: Output preferences
@@ -151,6 +179,7 @@ class ScenarioConfig:
                 f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
                 "give each home its tariff as HomeConfig.tariff_config"
             )
+        self._refuse_a_period_that_is_not_a_run_of_days()
 
     @property
     def is_fleet(self) -> bool:
@@ -176,6 +205,68 @@ class ScenarioConfig:
         if self.home is not None:
             return replace(self, home=transform(self.home))
         return replace(self, homes=tuple(transform(home) for home in self.homes))
+
+    def window(self) -> SimulationWindow:
+        """The period's first and last calendar days at ONE_MINUTE, in the zone of location, or of the first home's location when location is None."""
+        first_day, last_day = self._period_days()
+        return SimulationWindow(first_day, last_day, ONE_MINUTE, self._timezone())
+
+    def with_window(self, *, first_day: Optional[date] = None, last_day: Optional[date] = None) -> "ScenarioConfig":
+        """A copy whose period keeps each day not given, checked as construction checks; each day given is exactly a date."""
+        changes: dict[str, str] = {}
+        if first_day is not None:
+            changes["start_date"] = self._iso_day("first_day", first_day)
+        if last_day is not None:
+            changes["end_date"] = self._iso_day("last_day", last_day)
+        return replace(self, period=replace(self.period, **changes))
+
+    def simulation_bounds(self) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """The window's first and last days' local midnights: the start and end, end inclusive, that simulate_home and a fleet simulator take."""
+        window = self.window()
+        return (
+            pd.Timestamp(window.first_day, tz=window.timezone),
+            pd.Timestamp(window.last_day, tz=window.timezone),
+        )
+
+    def _timezone(self) -> str:
+        """The zone of the window's clock: location's, else the first stored home's location's."""
+        location = self.location if self.location is not None else self._stored_homes()[0].location
+        return location.timezone
+
+    def _period_days(self) -> tuple[date, date]:
+        """The period's first and last calendar days, each read by _period_day, whose refusal is prefixed with the scenario's name."""
+        try:
+            return (
+                _period_day(self.period.start_date, "start_date"),
+                _period_day(self.period.end_date, "end_date"),
+            )
+        except ConfigurationError as exc:
+            raise ConfigurationError(f"Scenario '{self.name}': {exc}") from exc
+
+    def _iso_day(self, parameter: str, day: date) -> str:
+        """The 'YYYY-MM-DD' string of day, the day with_window is given as *parameter*.
+
+        Raises:
+            ConfigurationError: If day is not exactly a date, such as a datetime or a Timestamp,
+                naming the scenario, parameter and day.
+        """
+        if type(day) is not date:
+            raise ConfigurationError(
+                f"Scenario '{self.name}': with_window's {parameter} is exactly the standard library's date, "
+                f"never a datetime, a Timestamp or any other type: got {parameter}={day!r}"
+            )
+        return day.isoformat()
+
+    def _refuse_a_period_that_is_not_a_run_of_days(self) -> None:
+        """Raise ConfigurationError for a period day that is not a day, as _period_days does; then, naming the scenario and both fields and days, for a last day before the first, through covered_days, the one home of that rule."""
+        first_day, last_day = self._period_days()
+        try:
+            covered_days(first_day, last_day)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"Scenario '{self.name}' has period.start_date {first_day.isoformat()} and "
+                f"period.end_date {last_day.isoformat()}: {exc}"
+            ) from exc
 
     def _stored_homes(self) -> tuple[HomeConfig, ...]:
         """The homes as stored: (home,) in the single-home form, else homes, in order."""

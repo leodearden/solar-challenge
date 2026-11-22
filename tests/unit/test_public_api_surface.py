@@ -294,6 +294,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "get_location": "(self) -> Location",
         "simulated_homes": "(self) -> tuple[HomeConfig, ...]",
         "map_homes": "(self, transform: Callable[[HomeConfig], HomeConfig]) -> ScenarioConfig",
+        "window": "(self) -> SimulationWindow",
+        "with_window": "(self, *, first_day: date | None = None, last_day: date | None = None) -> ScenarioConfig",
+        "simulation_bounds": "(self) -> tuple[Timestamp, Timestamp]",
     },
     "FleetConfig": {
         "create_uniform": "classmethod (cls, n_homes: int, pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', *, seed: int | None = None) -> FleetConfig",
