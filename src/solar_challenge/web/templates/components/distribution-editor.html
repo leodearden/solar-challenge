@@ -5,9 +5,10 @@
 
     dist is the Alpine expression, in the caller's scope, of the distribution:
         { type, mean, std, min, max, values: [{value, weight}, ...], entries: [{value, count}, ...], fixed }
-    component is the fleet component (FLEET_COMPONENTS in web/fleet_components.py) whose distribution it edits.
-    An added row starts at its new_row_value, and every value but a weight or count steps by its step.
-    Type '' (Fixed Value) edits dist.fixed within its value_range.
+    component is the fleet component whose distribution it edits, one of page_limits.components (FLEET_COMPONENTS in
+    web/fleet_components.py). An added row starts at its new_row_value, and every value but a weight or count steps by
+    its step. Type '' (Fixed Value) edits dist.fixed within its value_range; Std Dev is at least 0, and Mean, the clamps
+    and Uniform's Min and Max take any number.
     subject starts every control's accessible name, e.g. 'PV Capacity Value 2'; without it a control is named by its
     caption alone, e.g. 'Value 2', for a page whose cards are fieldset groups.
 
@@ -15,6 +16,7 @@
     tests/e2e/test_fleet_interactions.py that call withhold_animation_frames pin it. A type's panel puts its classes on
     an inner element, since a display class such as grid would override [hidden].
 #}
+{% from "components/macros.html" import number_field %}
 
 {% macro _caption(subject, text) -%}
 {% if subject %}<span class="sr-only">{{ subject }} </span>{% endif %}{{ text }}
@@ -25,16 +27,10 @@
 {{ _caption(subject, text) }} <span class="sr-only" x-text="idx + 1"></span>
 {%- endmacro %}
 
-{% macro _number_input(model, step, min=none, max=none) %}
-<input type="number" step="{{ step }}"{% if min is not none %} min="{{ min }}"{% endif %}{% if max is not none %} max="{{ max }}"{% endif %} x-model.number="{{ model }}"
+{# A row's input: its value or its paired weight or count, which min bounds below when given #}
+{% macro _number_input(model, step, min=none) %}
+<input type="number" step="{{ step }}"{% if min is not none %} min="{{ min }}"{% endif %} x-model.number="{{ model }}"
     class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors text-sm">
-{% endmacro %}
-
-{% macro _parameter(subject, caption, model, step, min=none, max=none) %}
-<label class="block space-y-1.5">
-    <span class="block text-sm font-semibold text-slate-700 dark:text-slate-300">{{ _caption(subject, caption) }}</span>
-    {{ _number_input(model, step, min, max) }}
-</label>
 {% endmacro %}
 
 {% macro _row_list(subject, rows, paired_key, paired_caption, paired_step, step) %}
@@ -94,19 +90,19 @@
     </label>
 
     {% call _type_panel('!dist.type') %}
-        {{ _parameter(subject, 'Fixed Value', 'dist.fixed', step, min=component.value_range.low, max=component.value_range.high) }}
+        {{ number_field(none, _caption(subject, 'Fixed Value'), 'dist.fixed', component.value_range, step) }}
     {% endcall %}
 
     {% call _type_panel("dist.type === 'normal'", 'grid grid-cols-2 gap-4') %}
-        {{ _parameter(subject, 'Mean', 'dist.mean', step) }}
-        {{ _parameter(subject, 'Std Dev', 'dist.std', step, min=0) }}
-        {{ _parameter(subject, 'Min (clamp)', 'dist.min', step) }}
-        {{ _parameter(subject, 'Max (clamp)', 'dist.max', step) }}
+        {{ number_field(none, _caption(subject, 'Mean'), 'dist.mean', step=step) }}
+        {{ number_field(none, _caption(subject, 'Std Dev'), 'dist.std', {'low': 0}, step) }}
+        {{ number_field(none, _caption(subject, 'Min (clamp)'), 'dist.min', step=step) }}
+        {{ number_field(none, _caption(subject, 'Max (clamp)'), 'dist.max', step=step) }}
     {% endcall %}
 
     {% call _type_panel("dist.type === 'uniform'", 'grid grid-cols-2 gap-4') %}
-        {{ _parameter(subject, 'Min', 'dist.min', step) }}
-        {{ _parameter(subject, 'Max', 'dist.max', step) }}
+        {{ number_field(none, _caption(subject, 'Min'), 'dist.min', step=step) }}
+        {{ number_field(none, _caption(subject, 'Max'), 'dist.max', step=step) }}
     {% endcall %}
 
     {% call _type_panel("dist.type === 'weighted_discrete'", 'space-y-3') %}

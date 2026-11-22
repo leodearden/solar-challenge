@@ -14,6 +14,7 @@ from solar_challenge.home import simulate_home
 from solar_challenge.weather import default_weather
 from solar_challenge.web.api import api_bp
 from solar_challenge.web.assistant import bp as assistant_bp
+from solar_challenge.web.fleet_components import PageLimits, page_limits
 from solar_challenge.web.history import bp as history_bp
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.plotly_js import bp as plotly_js_bp
@@ -153,6 +154,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         app.config.from_mapping(test_config)
 
     _register_blueprints(app)
+    app.context_processor(_page_limits_context)
 
     # Register custom error handlers
     @app.errorhandler(404)
@@ -196,6 +198,11 @@ def _open_store(app: Flask, default_data_dir: Path) -> None:
     interrupted = storage.fail_interrupted_runs()
     if interrupted:
         logger.info("Marked %d runs interrupted by a server restart failed on startup", interrupted)
+
+
+def _page_limits_context() -> dict[str, PageLimits]:
+    """What every template is given: page_limits, the one value every dashboard form's bounds and starting values render from, which base.html writes into each page as #page-limits."""
+    return {"page_limits": page_limits()}
 
 
 def _register_blueprints(app: Flask) -> None:

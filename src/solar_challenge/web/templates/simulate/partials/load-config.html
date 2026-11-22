@@ -1,14 +1,14 @@
 {# Load (consumption) configuration partial for the home simulation form.
    Expected parent x-data must include formData object with load fields.
-   The page's context holds fleet_components (FLEET_COMPONENTS in web/fleet_components.py), whose load
-   component bounds and steps the annual consumption input. #}
+   The page's context holds page_limits (web/fleet_components.page_limits()), whose load component
+   bounds and steps the annual consumption input. #}
 
 <div class="space-y-6">
     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Household Load Profile</h3>
     <p class="text-sm text-slate-500 dark:text-slate-400">Configure the household energy consumption pattern.</p>
 
     <!-- Annual consumption -->
-    {% with load = fleet_components.load %}
+    {% with load = page_limits.components.load %}
     <div class="space-y-1.5">
         <label for="consumption_kwh" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Annual Consumption</label>
         <div class="relative">

@@ -12,6 +12,7 @@
 {% endblock %}
 
 {% block content %}
+{% set slider_low, slider_high, slider_step = page_limits.fleet_size_slider %}
 
 {{ page_header(
     "Fleet Simulation",
@@ -28,19 +29,19 @@
             <div class="flex-1 w-full">
                 <label for="n_homes" class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-2">Number of Homes</label>
                 <div class="flex items-center gap-4">
-                    {{ range_input(id='n_homes_range', model='n_homes', min=10, max=500, step=10, width_class='flex-1') }}
+                    {{ range_input(id='n_homes_range', model='n_homes', min=slider_low, max=slider_high, step=slider_step, width_class='flex-1') }}
                     <input
                         type="number"
                         id="n_homes"
                         name="n_homes"
-                        min="10" max="500" step="1"
+                        min="{{ page_limits.fleet_size.low }}" max="{{ page_limits.fleet_size.high }}" step="1"
                         x-model.number="n_homes"
                         class="w-24 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm text-center"
                     >
                 </div>
                 <div class="flex justify-between text-xs text-slate-400 dark:text-slate-500 mt-1">
-                    <span>10</span>
-                    <span>500</span>
+                    <span>{{ slider_low }}</span>
+                    <span>{{ slider_high }}</span>
                 </div>
             </div>
         </div>
@@ -63,14 +64,14 @@
         </div>
         <div x-show="periodMode === 'preset'" x-transition>
             <div class="flex flex-wrap gap-2">
-                <template x-for="d in [7, 14, 30, 90, 365]" :key="d">
-                    <button type="button" @click="periodDays = d"
+                {% for d in page_limits.day_choices %}
+                    <button type="button" @click="periodDays = {{ d }}"
                         class="px-4 py-2 rounded-lg text-sm font-medium border transition-colors"
-                        :class="periodDays == d
+                        :class="periodDays == {{ d }}
                             ? 'bg-primary-500 text-white border-primary-500'
                             : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-600 hover:border-primary-400 dark:hover:border-primary-500'"
-                        x-text="d === 365 ? '1 year' : d + ' days'"></button>
-                </template>
+                        >{{ '1 year' if d == page_limits.full_year_days else d ~ ' days' }}</button>
+                {% endfor %}
             </div>
         </div>
         <div x-show="periodMode === 'custom'" x-cloak x-transition class="grid grid-cols-2 gap-4">
@@ -90,7 +91,7 @@
     <!-- Distribution cards grid -->
     <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 mb-6">
 
-        {% with component = fleet_components.pv %}
+        {% with component = page_limits.components.pv %}
         <!-- PV Distribution Card -->
         {% call card(
             title=component.subject,
@@ -104,7 +105,7 @@
         {% endcall %}
         {% endwith %}
 
-        {% with component = fleet_components.battery %}
+        {% with component = page_limits.components.battery %}
         <!-- Battery Distribution Card -->
         {% set enable_battery %}
         <label class="ml-auto flex items-center gap-2 cursor-pointer">
@@ -130,7 +131,7 @@
         {% endcall %}
         {% endwith %}
 
-        {% with component = fleet_components.load %}
+        {% with component = page_limits.components.load %}
         <!-- Load Distribution Card -->
         {% call card(
             title=component.subject,
