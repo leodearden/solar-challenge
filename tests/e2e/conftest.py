@@ -62,9 +62,8 @@ from solar_challenge.fleet import FleetRunner
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.weather import PvgisTmy, WeatherCache, WeatherProvider
-from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.dashboard import dashboard_of, get_job_stream_policy
 from solar_challenge.web.jobs import JobManager
-from solar_challenge.web.shared import get_job_stream_policy
 from solar_challenge.web.storage import RunStorage
 
 from tests._config_preset_rows import insert_saved_home_preset

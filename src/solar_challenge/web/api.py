@@ -22,6 +22,7 @@ from solar_challenge.number_fields import Interval, as_finite_float, as_whole_nu
 from solar_challenge.scenario_writer import scenario_yaml
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.builtin_scenarios import builtin_scenario_files
+from solar_challenge.web.dashboard import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.fleet_config import sample_distribution
 from solar_challenge.web.fleet_presets import fleet_preset_form
@@ -49,7 +50,6 @@ from solar_challenge.web.request_boundary import (
     require_encodable_text,
     require_json_object,
 )
-from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import event_stream, job_progress_frames, parse_last_event_id
 from solar_challenge.web.storage import RUN_LABELS, RUN_SORTS, RunLabel, RunQuery, RunRecord, headline_figures

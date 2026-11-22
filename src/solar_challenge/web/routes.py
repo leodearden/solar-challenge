@@ -17,8 +17,8 @@ from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES
 from solar_challenge.seg import SEG_PRESETS
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.charts import fleet_results_tabs, home_results_tabs
+from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.fleet_presets import fleet_preset_names
-from solar_challenge.web.shared import get_storage
 from solar_challenge.web.storage import RunQuery
 from solar_challenge.web.stored_runs import RUN_KINDS, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 

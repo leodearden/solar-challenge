@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for solar_challenge.web.dashboard: the Dashboard an app holds, attached with attach_dashboard and read back with dashboard_of, and its close()."""
+"""Tests for solar_challenge.web.dashboard: the Dashboard an app holds, attached with attach_dashboard and read back with dashboard_of, its close(), and the accessors the views read the current app's services with."""
 
 import threading
 import time
@@ -16,15 +16,25 @@ from flask import Flask
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.dashboard import Dashboard, attach_dashboard, dashboard_of
+from solar_challenge.web.dashboard import (
+    Dashboard,
+    attach_dashboard,
+    dashboard_of,
+    get_database,
+    get_job_manager,
+    get_job_stream_policy,
+    get_storage,
+)
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager, JobState
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunQuery, RunStorage
 from solar_challenge.web.store_lock import acquire_store_lock
 from tests._job_manager_double import autospecced_job_manager
 from tests._run_stores import empty_run_storage
 from tests._web_app import store_lock_is_free
 from tests._web_job_runner import jobs_running
+from tests.unit.web_jobs._app_client import serve_job_streams_under
 from tests.unit.web_jobs._fakes import BlockingSimulation, RecordingSimulation
 
 _A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
@@ -90,6 +100,57 @@ class TestDashboardOf:
         attach_dashboard(app, dashboard)
 
         assert dashboard_of(app) is dashboard
+
+
+class TestTheCurrentAppsServices:
+    """The accessors read the services of the current Flask app: the storage, jobs and database of the Dashboard attached to it, and the JobStreamPolicy its job progress streams are served under; each refuses, naming the app, a current app that holds no such service."""
+
+    def test_the_storage_jobs_and_database_read_are_those_of_the_dashboard_attached_to_the_current_app(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        app = Flask("dashboard")
+        dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+        attach_dashboard(app, dashboard)
+
+        with app.app_context():
+            assert get_storage() is dashboard.storage
+            assert get_job_manager() is dashboard.jobs
+            assert get_database() is dashboard.database
+
+    @pytest.mark.parametrize(
+        "accessor",
+        [
+            pytest.param(get_storage, id="get_storage"),
+            pytest.param(get_job_manager, id="get_job_manager"),
+            pytest.param(get_database, id="get_database"),
+            pytest.param(get_job_stream_policy, id="get_job_stream_policy"),
+        ],
+    )
+    def test_reading_a_service_the_current_app_does_not_hold_is_refused_naming_the_app_and_create_app(
+        self, accessor: Callable[[], object]
+    ) -> None:
+        with (
+            Flask("holds-no-services").app_context(),
+            pytest.raises(LookupError, match="'holds-no-services'") as refused,
+        ):
+            accessor()
+
+        assert "create_app" in str(refused.value)
+
+    def test_the_job_stream_policy_read_is_the_one_the_current_apps_job_streams_are_served_under(self) -> None:
+        app = Flask("serves-job-streams")
+        policy = JobStreamPolicy(limit_seconds=30.0)
+        serve_job_streams_under(app, policy)
+
+        with app.app_context():
+            assert get_job_stream_policy() is policy
+
+    def test_a_job_stream_policy_extension_that_is_not_a_policy_is_refused_naming_its_type(self) -> None:
+        app = Flask("holds-something-else")
+        app.extensions["job_stream_policy"] = object()
+
+        with app.app_context(), pytest.raises(TypeError, match=r"\bobject\b"):
+            get_job_stream_policy()
 
 
 class TestDashboardConstruction:

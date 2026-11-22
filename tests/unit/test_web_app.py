@@ -21,16 +21,14 @@ import pytest
 
 pytest.importorskip("flask")
 
-from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.weather import WeatherCache
 from solar_challenge.web.app import create_app, default_jobs
-from solar_challenge.web.dashboard import dashboard_of
+from solar_challenge.web.dashboard import dashboard_of, get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.schema import SCHEMA_VERSION, SchemaVersionMismatch, StoreUnreadable
-from solar_challenge.web.shared import get_database, get_job_manager, get_job_stream_policy, get_storage
 from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import StoreLocked, acquire_store_lock
@@ -232,16 +230,6 @@ def test_the_app_serves_its_job_progress_streams_under_the_default_policy(build_
         assert get_job_stream_policy() == JobStreamPolicy()
 
 
-def test_a_job_stream_policy_extension_that_is_not_a_policy_is_refused_naming_its_type(
-    build_app: BuildApp, tmp_path: Path
-) -> None:
-    app = build_app(tmp_path)
-    app.extensions["job_stream_policy"] = object()
-
-    with app.app_context(), pytest.raises(TypeError, match=r"\bobject\b"):
-        get_job_stream_policy()
-
-
 def test_dropping_a_closed_app_frees_its_job_manager(tmp_path: Path) -> None:
     """Nothing outside the app keeps its job manager alive, no registry of managers included, so the manager is freed along with the app."""
     app = build_test_app(tmp_path)
@@ -353,15 +341,6 @@ def test_the_apps_job_manager_is_the_one_its_factory_built_once_over_the_apps_ru
     with app.app_context():
         assert get_storage() is storage
         assert get_job_manager() is manager
-
-
-def test_the_apps_accessors_read_its_dashboard(app: Flask) -> None:
-    dashboard = dashboard_of(app)
-
-    with app.app_context():
-        assert get_storage() is dashboard.storage
-        assert get_job_manager() is dashboard.jobs
-        assert get_database() is dashboard.database
 
 
 def test_the_jobs_factory_runs_once_the_store_is_locked_and_open_and_before_the_runs_an_earlier_server_left_running_are_failed(
