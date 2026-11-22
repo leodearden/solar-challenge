@@ -1174,13 +1174,13 @@ class TestFleetFromDistribution:
     def test_a_battery_blocks_enabled_sent_as_the_string_false_returns_400_and_queues_nothing(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
     ) -> None:
-        """A battery block's enabled sent as the string "false" toggles nothing: it is a 400 naming battery.enabled, and no fleet is queued."""
-        resp = client.post(
-            "/api/simulate/fleet-from-distribution",
-            json={**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}},
-        )
+        """A battery block's enabled sent as the string "false" toggles nothing: it reaches fleet_distribution.py's grammar as sent, and is a 400 whose error is the grammar's refusal naming enabled under fleet_distribution.battery; no fleet is queued."""
+        body = {**self._VALID_BODY, "battery": {"capacity_kwh": 5.0, "enabled": "false"}}
+        refusal = grammar_refusal(body)
+        resp = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert resp.status_code == 400
-        assert "battery.enabled" in resp.get_json()["error"]
+        assert resp.get_json() == {"error": refusal}
+        assert "fleet_distribution.battery: 'enabled'" in refusal
         mock_job_manager.submit_fleet_job.assert_not_called()
 
     @pytest.mark.parametrize("seg", MALFORMED_SEG_BODIES)

@@ -28,6 +28,7 @@ from solar_challenge.web.fleet_config import (
     DISTRIBUTION_KEYS,
     MAX_FLEET_HOMES,
     distribution_grammar_spec,
+    keys_the_editor_holds,
 )
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
@@ -83,12 +84,13 @@ _RECOGNISED_KEYS = frozenset(
 def scenario_from_builder_form(form: object) -> dict[str, Any]:
     """The fleet scenario document the builder *form* describes.
 
+    A distribution's numbers, a shuffled pool's counts included, and its type are written
+    as sent, for the loaders to refuse, as builder_form_errors reports.
+
     Raises:
         ValueError: naming the form field at fault, for a form that is not an object, a
-            key the builder does not send, a value that is not the number it should be,
-            an unknown location preset or distribution type, a malformed distribution row,
-            or a shuffled pool too large for a dashboard fleet: a count outside 0 to
-            MAX_FLEET_HOMES, or counts totalling more.
+            key the builder does not send, a flat field that is not the number it should
+            be, an unknown location preset, or a malformed distribution row.
     """
     form = require_json_object(form, _BUILDER_FORM)
     refuse_unrecognised_keys(form, _RECOGNISED_KEYS, _BUILDER_FORM)
@@ -252,16 +254,23 @@ def _fleet_distribution_block(fields: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _component_block(fields: Mapping[str, Any], component: FleetComponent) -> dict[str, Any]:
-    """*component*'s block: the distribution the form sets a type for, written by the fleet form's reader, distribution_grammar_spec, else the form's fixed value.
+    """*component*'s block: the distribution the form sets a type for, translated by the fleet form's translator, distribution_grammar_spec, else the form's fixed value.
+
+    The builder sends a normal's parameters and a uniform's alike, all four of them
+    (scenario-builder.js componentFormData), so the distribution holds only the keys the
+    distribution editor holds its type in (keys_the_editor_holds).
 
     Raises:
-        ValueError: From distribution_grammar_spec, naming the builder's field, or for a
-            fixed value that is not a finite number.
+        ValueError: From distribution_grammar_spec, for malformed rows, naming the
+            builder's field, or for a fixed value that is not a finite number.
     """
     distribution_fields = _distribution_fields(component)
     if distribution_fields["type"] in fields:
+        held = keys_the_editor_holds(fields[distribution_fields["type"]])
         distribution = {
-            key: fields[field] for key, field in distribution_fields.items() if field in fields
+            key: fields[field]
+            for key, field in distribution_fields.items()
+            if key in held and field in fields
         }
         spec = distribution_grammar_spec(distribution, distribution_fields)
         return {component.grammar_key: spec}
