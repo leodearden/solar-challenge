@@ -599,6 +599,44 @@ class TestGridChargeForecastRoundtrip:
 
         assert [results.grid_charge_forecast for results in loaded.fleet_results.per_home_results] == forecasts
 
+    def test_fleet_run_reloads_its_fleet_summarys_forecasts(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(
+                _make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind", "trailing_14_days")
+            ),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ("pv_blind", "trailing_14_days")
+
+    def test_fleet_summary_saved_without_its_forecasts_loads_none(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="no-forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(_make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind",)),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-forecasts-fleet-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["grid_charge_forecasts"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded = storage.load_run("no-forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ()
+
     def test_summary_saved_without_a_forecast_loads_none(self, storage: RunStorage) -> None:
         """Every summary.json written before the field existed lacks its key, and the field's
         default reads it with no RunDocumentStep: those runs were all PV-blind or did not

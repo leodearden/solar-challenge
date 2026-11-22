@@ -51,6 +51,7 @@ import numpy as np
 import pandas as pd
 from scipy.interpolate import PchipInterpolator
 
+from solar_challenge.dispatch import GRID_CHARGE_FORECASTS, GridChargeForecast
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.gridservices import (
     FlatGridServices,
@@ -409,6 +410,9 @@ class BillDistribution:
     None only for a distribution built by hand, until the field is required.
     """
 
+    grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
+    """The forecasts that sized the homes' grid charge (home.grid_charge_forecasts_of), () when none grid-charged."""
+
 
 # ---------------------------------------------------------------------------
 # CostRecoverySolution — solve_cost_recovery_rate output
@@ -596,6 +600,27 @@ def _summary_pricing(summary: "SummaryStatistics") -> "RunPricing":
     return pricing
 
 
+_ANALYSIS_ONLY_FORECAST: GridChargeForecast = "perfect_foresight"
+"""The forecast that reads a run's own future PV and demand: an upper bound for analysis, never a board figure."""
+
+
+def _refuse_analysis_only_forecast(summary: "SummaryStatistics") -> None:
+    """Refuse *summary* when its run's grid charge was sized by the perfect_foresight forecast, which no bill, projection or cost-recovery figure may use.
+
+    Raises:
+        ConfigurationError: Naming grid_charge_forecast, the value, why, and the forecasts to
+            run the battery's grid_charging under instead.
+    """
+    if summary.grid_charge_forecast == _ANALYSIS_ONLY_FORECAST:
+        realistic = ", ".join(repr(each) for each in GRID_CHARGE_FORECASTS if each != _ANALYSIS_ONLY_FORECAST)
+        raise ConfigurationError(
+            "finance bills and projects a summary as a board figure, and this SummaryStatistics' "
+            f"grid_charge_forecast is {_ANALYSIS_ONLY_FORECAST!r}, which reads the run's own future PV and "
+            "demand: it is an upper-bound analysis mode board figures never use. Simulate the battery's "
+            f"grid_charging with forecast {realistic} instead"
+        )
+
+
 # ---------------------------------------------------------------------------
 # annualise — the one annualisation rule
 # ---------------------------------------------------------------------------
@@ -644,7 +669,11 @@ def annualise(summary: "SummaryStatistics") -> AnnualPhysics:
         ValueError: If the summary has no window (:func:`_summary_window`) or
             no pricing (:func:`_summary_pricing`), naming the missing field and
             calculate_summary, which sets both.
+        ConfigurationError: If the perfect_foresight forecast sized the
+            summary's grid charge (:func:`_refuse_analysis_only_forecast`):
+            it reads the run's own future, so no board figure may use it.
     """
+    _refuse_analysis_only_forecast(summary)
     window = _summary_window(summary)
     scale = window.annualisation_scale
     return AnnualPhysics(
@@ -1511,7 +1540,9 @@ def bill_distribution(
         simulation_days: The summaries' own day count, their window's days.
 
     Returns:
-        A BillDistribution with representative and per-home statistics.
+        A BillDistribution with representative and per-home statistics, the
+        window they were annualised from and the forecasts that sized the
+        homes' grid charge.
 
     Raises:
         ValueError: If ``summaries`` is empty; if a summary has no window; if
@@ -1519,7 +1550,11 @@ def bill_distribution(
             whose window differs and both windows; if *simulation_days* is
             not the summaries' own day count (INV-8), naming both; or if a
             summary has no pricing, naming calculate_summary.
+        ConfigurationError: If the perfect_foresight forecast sized a
+            summary's grid charge, as :func:`annualise` refuses it.
     """
+    from solar_challenge.home import grid_charge_forecasts_of
+
     if not summaries:
         raise ValueError("bill_distribution requires at least one summary")
     window = _one_window(summaries)
@@ -1554,6 +1589,7 @@ def bill_distribution(
         median_gbp=median_val,
         max_gbp=float(series.max()),
         annualised_from=window,
+        grid_charge_forecasts=grid_charge_forecasts_of(summaries),
     )
 
 

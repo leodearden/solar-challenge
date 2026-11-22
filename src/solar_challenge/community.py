@@ -77,13 +77,35 @@ def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | 
     ConfigurationError
         :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses the
         battery's grid_charging, which the strategy would ignore; its refusal
-        propagates unchanged.
+        propagates unchanged. Or the grid_charging names a forecast other than
+        'pv_blind' (:func:`_refuse_a_grid_charge_forecast`).
     """
+    _refuse_a_grid_charge_forecast(battery)
     return build_dispatch_strategy(
         battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
         grid_charging=battery.grid_charging,
         tariff=_billing_tariff(billing),
     )
+
+
+def _refuse_a_grid_charge_forecast(battery: BatteryConfig) -> None:
+    """Refuse a community battery whose grid charge a forecast other than 'pv_blind' sizes.
+
+    The community dispatch computes no useful-charge ceilings, so it would fill every cheap
+    period to the target whatever the forecast said.
+
+    Raises
+    ------
+    ConfigurationError
+        Naming the community battery, its forecast and 'pv_blind'.
+    """
+    grid_charging = battery.grid_charging
+    if grid_charging is not None and grid_charging.forecast != "pv_blind":
+        raise ConfigurationError(
+            f"The community battery's grid_charging forecast is {grid_charging.forecast!r}, but the community "
+            "dispatch computes no useful-charge ceilings and fills every cheap period to its target: "
+            "set the forecast to 'pv_blind', or leave it out"
+        )
 
 
 # ---------------------------------------------------------------------------

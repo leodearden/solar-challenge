@@ -19,7 +19,14 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import GridChargeConfig, GridChargeForecast
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import FinanceConfig, annualise, bill_distribution, householder_bill, project_multi_year
+from solar_challenge.finance import (
+    FinanceConfig,
+    annualise,
+    basis_c_own_use_kwh,
+    bill_distribution,
+    householder_bill,
+    project_multi_year,
+)
 from solar_challenge.fleet import FleetRunner, aggregate_home_summaries
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, grid_charge_forecasts_of, simulate_home
 from solar_challenge.location import Location
@@ -31,7 +38,6 @@ from tests._synthetic_weather import synthetic_june_weather
 
 _PRICING = RunPricing(0.245, 4.1)
 _YEAR_DAYS = 365
-_OWN_USE_KWH = 500.0
 
 
 def _summary(forecast: GridChargeForecast | None) -> SummaryStatistics:
@@ -41,6 +47,11 @@ def _summary(forecast: GridChargeForecast | None) -> SummaryStatistics:
 
 def _finance() -> FinanceConfig:
     return make_scenario_and_finance()[1]
+
+
+def _bill(summary: SummaryStatistics) -> object:
+    """householder_bill of *summary*'s year at its physics own-use, as bill_distribution bills it."""
+    return householder_bill(summary, basis_c_own_use_kwh(summary), _finance(), _YEAR_DAYS)
 
 
 _MIXED_FLEET: tuple[GridChargeForecast | None, ...] = ("trailing_14_days", None, "pv_blind", "trailing_14_days")
@@ -107,7 +118,7 @@ class TestFinanceRefusesPerfectForesight:
 
     def test_householder_bill_refuses_it(self) -> None:
         with pytest.raises(ConfigurationError) as refused:
-            householder_bill(_summary("perfect_foresight"), _OWN_USE_KWH, _finance(), _YEAR_DAYS)
+            _bill(_summary("perfect_foresight"))
 
         _assert_refuses_perfect_foresight(refused)
 
@@ -120,7 +131,8 @@ class TestFinanceRefusesPerfectForesight:
     def test_project_multi_year_refuses_a_scenario_whose_battery_forecast_is_it(self) -> None:
         """Two June days of synthetic weather through the real FleetRunner: simulate_home records the forecast, and the projection's annualise refuses it."""
         home = dataclasses.replace(
-            make_home_config(battery_config=BatteryConfig(5.0, grid_charging=GridChargeConfig(0.9, forecast="perfect_foresight"))),
+            make_home_config(),
+            battery_config=BatteryConfig(5.0, grid_charging=GridChargeConfig(0.9, forecast="perfect_foresight")),
             tariff_config=TariffConfig.economy_7(),
             seg_tariff=SEGTariff(name="SEG", rate_pence_per_kwh=4.1),
             dispatch_strategy="tou_optimized",
@@ -142,6 +154,4 @@ class TestFinanceRefusesPerfectForesight:
         sized, unsized = _summary(forecast), _summary(None)
 
         assert annualise(sized) == annualise(unsized)
-        assert householder_bill(sized, _OWN_USE_KWH, _finance(), _YEAR_DAYS) == householder_bill(
-            unsized, _OWN_USE_KWH, _finance(), _YEAR_DAYS
-        )
+        assert _bill(sized) == _bill(unsized)
