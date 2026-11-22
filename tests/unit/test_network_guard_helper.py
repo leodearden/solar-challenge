@@ -24,6 +24,9 @@ from tests._network_guard import refusing_network, send_child_processes_to_a_dea
 # TEST-NET-1 (RFC 5737) is never routed, and the guard refuses before any syscall, so no packet is sent.
 _OFF_THIS_MACHINE = ("192.0.2.1", 9)
 
+# An AF_UNIX address holds fewer than 108 bytes on Linux and 104 on macOS, so a path through this name is too long on every host.
+_A_DIR_NAME_LONGER_THAN_A_SOCKET_ADDRESS_HOLDS = "d" * 108
+
 
 def _fetch_in_a_child_process(url: str) -> subprocess.CompletedProcess[str]:
     """Fetch *url* with urllib in a child Python process, with this process's environment; it prints the body, or exits non-zero."""
@@ -121,13 +124,16 @@ class TestRefusingNetwork:
 
         assert refused == []
 
-    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path) -> None:
-        path = str(tmp_path / "socket")
+    def test_a_unix_domain_connection_goes_through(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Its address is relative to its own directory, as an absolute one under tmp_path can outgrow what an AF_UNIX address holds."""
+        directory = tmp_path / _A_DIR_NAME_LONGER_THAN_A_SOCKET_ADDRESS_HOLDS
+        directory.mkdir()
+        monkeypatch.chdir(directory)
         with socket.socket(socket.AF_UNIX) as server, socket.socket(socket.AF_UNIX) as client:
-            server.bind(path)
+            server.bind("socket")
             server.listen()
             with refusing_network() as refused:
-                client.connect(path)
+                client.connect("socket")
 
         assert refused == []
 
