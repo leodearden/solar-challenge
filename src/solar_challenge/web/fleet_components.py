@@ -130,8 +130,7 @@ class ComponentLimits:
 
     Attributes:
         key: Its fleet_distribution block, and the prefix of the builder form's fields for it.
-        grammar_key: Its spec's key in that block, which names the field of the home's
-            component holding the value.
+        grammar_key: Its spec's key in that block.
         fixed_field: The builder form field carrying a fixed value.
         subject: What its values measure, e.g. 'PV Capacity': the fleet page's card heading,
             and the words that start each accessible name in that card's distribution editor.
@@ -141,8 +140,8 @@ class ComponentLimits:
             included.
         new_row_value: The value an added row starts at.
         start: The distribution its card starts at.
-        home_component: The component of a home holding its value, None when the home has
-            none.
+        value_of: The value a home holds for it, None when the home has no such component
+            or leaves the value unset.
 
     Raises:
         ValueError: for a start whose fixed value lies outside value_range.
@@ -157,7 +156,7 @@ class ComponentLimits:
     value_range: Interval
     new_row_value: float
     start: EditorDistribution
-    home_component: Callable[[HomeConfig], object | None] = field(compare=False, repr=False)
+    value_of: Callable[[HomeConfig], float | None] = field(compare=False, repr=False)
 
     def __post_init__(self) -> None:
         _require(
@@ -171,12 +170,6 @@ class ComponentLimits:
     def heading(self) -> str:
         """Its subject and unit, e.g. 'PV Capacity (kW)'."""
         return f"{self.subject} ({self.unit})"
-
-    def value_of(self, home: HomeConfig) -> float | None:
-        """The value *home* holds for this component: its component's grammar_key field, None when the home has no such component or leaves the value unset."""
-        component = self.home_component(home)
-        value = None if component is None else getattr(component, self.grammar_key)
-        return None if value is None else float(value)
 
     def as_json(self) -> dict[str, Any]:
         """This component as #page-limits writes it: its names, step, value_range as its bounds, new_row_value and start as the editor holds it."""
@@ -213,7 +206,7 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
                 values=((3.0, 20), (4.0, 40), (5.0, 30)),
                 entries=((3.0, 20), (4.0, 40), (5.0, 30), (6.0, 10)),
             ),
-            home_component=lambda home: home.pv_config,
+            value_of=lambda home: home.pv_config.capacity_kw,
         ),
         ComponentLimits(
             key="battery",
@@ -233,7 +226,7 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
                 values=((0, 40), (5.0, 40), (10.0, 20)),
                 entries=((0, 40), (5.0, 40), (10.0, 20)),
             ),
-            home_component=lambda home: home.battery_config,
+            value_of=lambda home: None if home.battery_config is None else home.battery_config.capacity_kwh,
         ),
         ComponentLimits(
             key="load",
@@ -253,7 +246,7 @@ FLEET_COMPONENTS: Mapping[str, ComponentLimits] = MappingProxyType({
                 values=((2900, 30), (3500, 40), (4500, 30)),
                 entries=((2900, 30), (3500, 40), (4500, 30)),
             ),
-            home_component=lambda home: home.load_config,
+            value_of=lambda home: home.load_config.annual_consumption_kwh,
         ),
     )
 })
