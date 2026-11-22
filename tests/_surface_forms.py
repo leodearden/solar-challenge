@@ -56,6 +56,7 @@ import abc
 import ast
 import collections
 import dataclasses
+import enum
 import functools
 import inspect
 import itertools
@@ -411,21 +412,56 @@ class _Qualifier:
     name: str
 
 
+@dataclasses.dataclass(frozen=True)
+class _EnumMember:
+    """A member of an Enum, by the name __members__ lists it under, an alias's included."""
+
+    name: str
+
+
+@dataclasses.dataclass(frozen=True)
+class _MappingEntry:
+    """An entry of a mapping constant: its key as _spelled_key spells it, and its value read as a constant."""
+
+    key: str
+    value: "_Constant"
+
+
 def _parted_form(obj: object) -> _PartedForm:
-    """surface_form(obj) read as its parts: an Enum's and a constant's have none; a class's or routine's are its signature's parameters, after the qualifiers of its kind if it is a dataclass."""
+    """surface_form(obj) read as its parts: an Enum's are its members and a mapping constant's its entries, while any other constant's form has none; a class's or routine's are its signature's parameters, after the qualifiers of its kind if it is a dataclass."""
     if is_enum(obj):
-        return _fixed_form(
-            ", ".join(
-                f"{name}={_spelled_value(member.value)}"
-                for name, member in obj.__members__.items()
-            )
-        )
+        return _enum_form(obj)
     if not _is_class_or_routine(obj):
-        return _fixed_form(_constant(obj).text())
+        return _constant_form(obj)
     signature = _signature_form(obj)
     if inspect.isclass(obj) and dataclasses.is_dataclass(obj):
         return _dataclass_kind_form(obj).followed_by(signature)
     return signature
+
+
+def _enum_form(cls: type[enum.Enum]) -> _PartedForm:
+    """The form of the Enum *cls*: its members, aliases included, as NAME=value in definition order, an alias with the value of the member it names, each value as _spelled_value spells it; each member is a part."""
+    parts = tuple(
+        _Part(f"{name}={_spelled_value(member.value)}", _EnumMember(name))
+        for name, member in cls.__members__.items()
+    )
+    return _PartedForm(
+        parts, lambda kept: ", ".join(part.text for part in itertools.compress(parts, kept))
+    )
+
+
+def _constant_form(value: object) -> _PartedForm:
+    """The form of the constant *value*, as _constant reads it: a mapping's entries are parts, rendered as _Entries spells the kept ones; any other constant's form, a list's or a tuple's included, has none, nor does a value inside an entry."""
+    constant = _constant(value)
+    if not isinstance(constant, _Entries):
+        return _fixed_form(constant.text())
+    return _PartedForm(
+        tuple(
+            _Part(text, _MappingEntry(key, item))
+            for text, (key, item) in zip(constant.entry_texts(), constant.entries, strict=True)
+        ),
+        lambda kept: _Entries(constant.kind, tuple(itertools.compress(constant.entries, kept))).text(),
+    )
 
 
 def _signature_form(obj: Callable[..., object]) -> _PartedForm:
@@ -502,6 +538,8 @@ _ADDITIVE_PARTS: tuple[_AdditivePart, ...] = (
         drops_later_positionals=True,
     ),
     _AdditivePart("*args or **kwargs", _is_variadic),
+    _AdditivePart("an entry of a mapping constant", lambda value: isinstance(value, _MappingEntry)),
+    _AdditivePart("an Enum member", lambda value: isinstance(value, _EnumMember)),
 )
 """The parts whose drop from a form is additive, each kind in one row; a part no row recognises is never dropped, so a change is breaking unless dropping recognised parts alone undoes it."""
 
@@ -800,9 +838,12 @@ class _Entries(_Constant):
     kind: _Typed
     entries: tuple[tuple[str, _Constant], ...]
 
+    def entry_texts(self) -> tuple[str, ...]:
+        """Each entry spelled as key: value-form, in iteration order."""
+        return tuple(f"{key}: {value.text()}" for key, value in self.entries)
+
     def text(self) -> str:
-        inside = ", ".join(f"{key}: {value.text()}" for key, value in self.entries)
-        return f"{self.kind.text()} {{{inside}}}"
+        return f"{self.kind.text()} {{{', '.join(self.entry_texts())}}}"
 
     def classes(self) -> set[type]:
         return self.kind.classes().union(*(value.classes() for _, value in self.entries))
