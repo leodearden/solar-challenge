@@ -39,6 +39,7 @@ from solar_challenge.validation import (
     UK_YIELD_BENCHMARK_KWH_PER_KWP,
 )
 from solar_challenge.web.chat_messages import get_chat_history, save_chat_message
+from solar_challenge.web.dashboard import get_database, get_job_manager, get_storage
 from solar_challenge.web.database import Database
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
@@ -48,7 +49,6 @@ from solar_challenge.web.fleet_components import (
 )
 from solar_challenge.web.jobs import JobManager
 from solar_challenge.web.request_boundary import NotAJsonObject, request_json_object
-from solar_challenge.web.shared import get_database, get_job_manager, get_storage
 from solar_challenge.web.simulation_params import parse_home_config, with_default_days
 from solar_challenge.web.sse import (
     CHAT_DELTA,

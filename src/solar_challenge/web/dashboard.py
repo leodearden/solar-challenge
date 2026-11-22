@@ -1,19 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The services one dashboard app holds, its Dashboard: its run storage, its job manager, its database and its store lock.
+"""The services one dashboard app holds, and the accessors its views read them with: its Dashboard, which holds its run storage, its job manager, its database and its store lock, and the JobStreamPolicy its job progress streams are served under.
 
-create_app builds one Dashboard per app and attaches it with attach_dashboard. The views reach it
-through dashboard_of(current_app), as web/shared.py's accessors do, and the root that built the
-app closes it once it stops.
+create_app builds one Dashboard per app and attaches it with attach_dashboard, and the root that
+built the app closes it once it stops. The views read the current app's services through
+get_storage, get_job_manager and get_database, which read its Dashboard with dashboard_of, and
+through get_job_stream_policy, which reads the policy create_app registers beside the Dashboard,
+not in it.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from flask import Flask
+from flask import Flask, current_app
 
 from solar_challenge.web.database import Database
 from solar_challenge.web.jobs import JobManager
+from solar_challenge.web.sse import JobStreamPolicy
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.store_lock import StoreLock
 
@@ -71,3 +74,44 @@ def dashboard_of(app: Flask) -> Dashboard:
             f"The Flask app {app.name!r} holds no Dashboard: create_app attaches one to each app it builds"
         )
     return dashboard
+
+
+def get_database() -> Database:
+    """Return the Database the current app's Dashboard keeps its tables in.
+
+    Raises:
+        LookupError: If the current app holds no Dashboard, naming the app.
+    """
+    return dashboard_of(current_app).database
+
+
+def get_storage() -> RunStorage:
+    """Return the RunStorage the current app's Dashboard keeps its runs in.
+
+    Raises:
+        LookupError: If the current app holds no Dashboard, naming the app.
+    """
+    return dashboard_of(current_app).storage
+
+
+def get_job_manager() -> JobManager:
+    """Return the JobManager the current app's Dashboard runs its jobs on.
+
+    Raises:
+        LookupError: If the current app holds no Dashboard, naming the app.
+    """
+    return dashboard_of(current_app).jobs
+
+
+def get_job_stream_policy() -> JobStreamPolicy:
+    """Return the JobStreamPolicy the app's job progress streams are served under, the one create_app registers in the current Flask app's extensions.
+
+    Raises:
+        TypeError: If the app's job_stream_policy extension is not a JobStreamPolicy, naming the type it holds.
+    """
+    policy = current_app.extensions["job_stream_policy"]
+    if not isinstance(policy, JobStreamPolicy):
+        raise TypeError(
+            f"the app's job_stream_policy extension must be a JobStreamPolicy, got {type(policy).__name__}"
+        )
+    return policy

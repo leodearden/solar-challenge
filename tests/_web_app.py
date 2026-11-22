@@ -119,7 +119,7 @@ def database_path_in(data_dir: Path) -> Path:
 
 def database_of(app: Flask) -> Database:
     """Return the Database *app* keeps its tables in: the one its views read, through the accessor they read it with."""
-    from solar_challenge.web.shared import get_database
+    from solar_challenge.web.dashboard import get_database
 
     with app.app_context():
         return get_database()
@@ -127,7 +127,7 @@ def database_of(app: Flask) -> Database:
 
 def run_storage_of(app: Flask) -> RunStorage:
     """Return the RunStorage *app* keeps its runs in: the one its pages read, through the accessor they read it with."""
-    from solar_challenge.web.shared import get_storage
+    from solar_challenge.web.dashboard import get_storage
 
     with app.app_context():
         return get_storage()

@@ -19,7 +19,7 @@ from flask import (
 from werkzeug.wrappers import Response
 
 from solar_challenge.web.charts import ComparedRun, comparison_tabs
-from solar_challenge.web.shared import get_storage
+from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 bp = Blueprint("history", __name__)
