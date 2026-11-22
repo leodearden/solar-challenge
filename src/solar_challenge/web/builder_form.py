@@ -23,7 +23,12 @@ from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.scenario_writer import location_block, scenario_yaml
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
+from solar_challenge.web.fleet_components import (
+    FLEET_COMPONENTS,
+    ComponentLimits,
+    page_limits,
+    refuse_homes_outside_ranges,
+)
 from solar_challenge.web.fleet_config import DISTRIBUTION_KEYS, distribution_grammar_spec
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
@@ -114,7 +119,8 @@ def builder_form_errors(form: object) -> list[str]:
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
     homes is out of bounds, the scenario readers judge the YAML text the builder previews:
-    load_fleet_config, the seg: reader and the period's dates.
+    load_fleet_config, then each fleet component's value_range on the homes it generates,
+    the seg: reader and the period's dates.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
@@ -136,29 +142,24 @@ def _present_fields(form: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
-    """The dashboard's own rules: a scenario name, 1 to MAX_FLEET_HOMES homes, and each fleet component's fixed value within its value_range.
+    """The dashboard's own rules: a scenario name, and 1 to MAX_FLEET_HOMES homes.
 
     A value its number reader refuses is left to scenario_from_builder_form to report.
+    Each fleet component's value_range is checked on the homes the loader generates, by
+    _scenario_reader_errors, so a fixed value and a drawn one are bounded alike.
     """
     errors: list[str] = []
     if "name" not in fields:
         errors.append("Scenario name is required.")
     if not _home_count_allowed(_readable(fields, "n_homes", as_whole_number)):
-        errors.append(f"Number of homes must be between 1 and {MAX_FLEET_HOMES:,}.")
-    for component in FLEET_COMPONENTS.values():
-        fixed_value = _readable(fields, component.fixed_field, as_finite_float)
-        if fixed_value is not None and not component.value_range.admits(fixed_value):
-            errors.append(
-                f"{component.heading} must be between {component.value_range.low:g} and "
-                f"{component.value_range.high:g}, "
-                f"got {fields[component.fixed_field]!r}."
-            )
+        fleet_size = page_limits().fleet_size
+        errors.append(f"Number of homes must be between {fleet_size.low} and {fleet_size.high:,}.")
     return errors
 
 
 def _home_count_allowed(n_homes: Optional[float]) -> bool:
-    """Whether the dashboard allows *n_homes*: absent, or within 1 to MAX_FLEET_HOMES."""
-    return n_homes is None or 1 <= n_homes <= MAX_FLEET_HOMES
+    """Whether the dashboard allows *n_homes*: absent, or within page_limits().fleet_size, 1 to MAX_FLEET_HOMES."""
+    return n_homes is None or page_limits().fleet_size.admits(n_homes)
 
 
 def _readable(
@@ -177,15 +178,18 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
 
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds.  Anything else it raises is a defect in the loader, not a refusal,
-    so it propagates.
+    a config it builds, and refuse_homes_outside_ranges refuses, with ConfigurationError,
+    a fleet whose generated homes hold a value outside a component's value_range; each is
+    listed.  Anything else the loader raises is a defect in it, not a refusal, so it
+    propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "scenario.yaml"
         path.write_text(scenario_yaml(document), encoding="utf-8")
         try:
-            load_fleet_config(path)
+            fleet = load_fleet_config(path)
+            refuse_homes_outside_ranges(fleet.homes)
         except (ConfigurationError, ValueError) as exc:
             errors.append(str(exc))
     try:
