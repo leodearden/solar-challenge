@@ -875,10 +875,7 @@ def _age0_baseline_outlay(
     fleet_config = FleetConfig(homes=tuple(aged_homes), name="age-0-baseline")
     fleet_results = simulate(fleet_config, start_ts, end_ts)
 
-    summaries = [
-        calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
-        for r in fleet_results.per_home_results
-    ]
+    summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
     dist = bill_distribution(summaries, finance)
     return dist.representative.total_outlay_gbp
 

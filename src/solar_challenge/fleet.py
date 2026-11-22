@@ -599,41 +599,28 @@ def _simulate_fleets(
                 )
 
 
-def calculate_home_summaries(
-    results: FleetResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> list[SummaryStatistics]:
+def calculate_home_summaries(results: FleetResults) -> list[SummaryStatistics]:
     """Calculate each home's summary statistics, in per_home_results' order.
 
     Args:
         results: Fleet simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, each home's summary has its SEG revenue at that tariff.
 
     Returns:
         calculate_summary of each home's results, in per_home_results' order
     """
-    return [
-        calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-        for r in results.per_home_results
-    ]
+    return [calculate_summary(r) for r in results.per_home_results]
 
 
-def calculate_fleet_summary(
-    results: FleetResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> FleetSummary:
+def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
     """Calculate summary statistics for fleet simulation.
 
     Args:
         results: Fleet simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, SEG revenue is aggregated across all homes.
 
     Returns:
         FleetSummary with totals and distribution statistics
     """
-    return aggregate_home_summaries(calculate_home_summaries(results, seg_tariff_pence_per_kwh))
+    return aggregate_home_summaries(calculate_home_summaries(results))
 
 
 def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> FleetSummary:
