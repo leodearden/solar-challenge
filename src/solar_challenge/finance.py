@@ -377,27 +377,13 @@ class BillDistribution:
     ``representative`` is the BillBreakdown of the home whose total_outlay_gbp
     is closest to the median (median-total-outlay home).  Per-home outlay values
     are stored as an immutable tuple so the dataclass remains hashable.
-
-    Note: ``per_home_net_bill_gbp`` holds per-home ``total_outlay_gbp`` values,
-    not net bills, whatever its name says.
-
-    .. deprecated::
-        ``per_home_net_bill_gbp`` will be renamed to ``per_home_total_outlay_gbp``
-        at the program's surface bump.  Do not add new consumers that depend on
-        the misleading name.
     """
 
     representative: BillBreakdown
     """Representative (median-total-outlay) home's full BillBreakdown."""
 
-    per_home_net_bill_gbp: tuple[float, ...]
-    """Per-home total annual outlay (£).
-
-    .. note::
-        The values are ``total_outlay_gbp`` per home, not net bills.
-        The field is renamed to ``per_home_total_outlay_gbp`` at the
-        program's surface bump.
-    """
+    per_home_total_outlay_gbp: tuple[float, ...]
+    """Per-home total annual outlay (£), the ``total_outlay_gbp`` of each home."""
 
     min_gbp: float
     """Minimum total annual outlay across the fleet (£)."""
@@ -1522,9 +1508,6 @@ def bill_distribution(
     min / mean / median / max via ``pd.Series`` (mirroring
     ``calculate_fleet_summary``).
 
-    Note: ``BillDistribution.per_home_net_bill_gbp`` holds per-home
-    ``total_outlay_gbp`` values, not net bills.
-
     Args:
         summaries: Sequence of per-home SummaryStatistics over one window.
             Must contain at least one entry; an empty sequence raises
@@ -1569,8 +1552,7 @@ def bill_distribution(
 
     return BillDistribution(
         representative=bills[rep_idx],
-        # per_home_net_bill_gbp name retained for back-compat; value = total_outlay_gbp
-        per_home_net_bill_gbp=tuple(outlays),
+        per_home_total_outlay_gbp=tuple(outlays),
         min_gbp=float(series.min()),
         mean_gbp=float(series.mean()),
         median_gbp=median_val,
