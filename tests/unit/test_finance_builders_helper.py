@@ -12,7 +12,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.finance import FinanceConfig, project_multi_year
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import RunPricing, calculate_summary
-from solar_challenge.timebase import ONE_MINUTE
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -144,15 +144,10 @@ def test_sim_results_default_to_one_whole_calendar_year() -> None:
     assert window.annualisation_scale == 1.0
 
 
-def test_period_covers_the_local_dates_of_make_window() -> None:
-    period = make_period()
+def test_period_is_make_windows_days_at_one_minute_on_its_clock() -> None:
     window = make_window()
-    assert window.timezone is not None
 
-    assert (
-        period.get_start_timestamp(window.timezone).date(),
-        period.get_end_timestamp(window.timezone).date(),
-    ) == (window.first_day, window.last_day)
+    assert make_period() == SimulationWindow(window.first_day, window.last_day, ONE_MINUTE, window.timezone)
 
 
 def test_a_projection_of_the_builders_scenario_and_default_results_is_annualised_from_the_period_it_simulated() -> None:

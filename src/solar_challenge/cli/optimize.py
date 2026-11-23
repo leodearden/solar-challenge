@@ -16,9 +16,9 @@ import typer
 from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
+    period_window,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, grid_services_model_of
@@ -338,10 +338,7 @@ def configs(
     # ---- Build base ScenarioConfig ------------------------------------------
     base = ScenarioConfig(
         name=raw.get("name", str(scenario)),
-        period=SimulationPeriod(
-            start_date=_start_str,
-            end_date=_end_str,
-        ),
+        period=period_window(_start_str, _end_str, timezone=loc.timezone),
         homes=fleet_config.homes,
         location=loc,
         finance=finance,

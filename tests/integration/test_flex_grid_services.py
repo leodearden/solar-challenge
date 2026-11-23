@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -21,7 +22,6 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
 )
 from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
@@ -31,6 +31,7 @@ from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import make_fleet_results_of
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
@@ -328,7 +329,7 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     home_b = HomeConfig(pv_config=pv, load_config=load, battery_config=None)
     homes = [home_a, home_b]
 
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+    period = SimulationWindow(date(2024, 1, 1), date(2024, 12, 31), ONE_MINUTE, "Europe/London")
     scenario = ScenarioConfig(
         name="Hermetic-BattVsNoBatt",
         period=period,

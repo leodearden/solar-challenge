@@ -11,11 +11,12 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Callable
+from datetime import date
 
 import pandas as pd
 import pytest
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
@@ -35,6 +36,7 @@ from solar_challenge.optimize import (
     run_sweep,
 )
 from solar_challenge.seg import SEGTariff
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._factories import make_config_result, make_cost_recovery_solution
 from tests._finance_builders import make_fleet_results, make_scenario
 from tests._fleet_simulate_stand_in import answering_with
@@ -379,15 +381,12 @@ class TestRunSweepSingleConfig:
         assert cr.baseline_outlay_gbp == pytest.approx(expected_outlay)
 
     def test_the_age0_baseline_fleet_is_simulated_over_the_scenario_bounds(self) -> None:
-        """A period of zoned Timestamps at 06:00 and 18:00 reaches every fleet run_sweep simulates, the
-        age-0 baseline outlay fleet included, as the swept scenario's simulation_bounds(), its local midnights."""
+        """The calendar year 2024, a period other than make_period()'s 2021, reaches every fleet run_sweep simulates,
+        the age-0 baseline outlay fleet included, as the swept scenario's simulation_bounds()."""
         finance = _interior_finance()
         scenario = dataclasses.replace(
             _make_scenario(finance=finance),
-            period=SimulationPeriod(
-                pd.Timestamp("2024-01-01 06:00", tz="Europe/London"),
-                pd.Timestamp("2024-12-31 18:00", tz="Europe/London"),
-            ),
+            period=SimulationWindow(date(2024, 1, 1), date(2024, 12, 31), ONE_MINUTE, "Europe/London"),
         )
         configs = enumerate_configs(scenario, pv_kwp=[4.0], battery_kwh=[6.0], inverter_kw=[3.6])
         asked: list[tuple[str, pd.Timestamp, pd.Timestamp]] = []

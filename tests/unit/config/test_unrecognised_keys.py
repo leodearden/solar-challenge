@@ -4,6 +4,7 @@
 import copy
 import re
 from collections.abc import Callable, Collection, Iterator, Mapping
+from datetime import date
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -15,7 +16,6 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    SimulationPeriod,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
@@ -58,6 +58,7 @@ from solar_challenge.scenario_blocks import (
     parse_tariff_config,
 )
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._repository_paths import SCENARIOS_DIR
 from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
@@ -1336,7 +1337,9 @@ class TestScenarioFileBlockKeys:
             }
         )
         assert scenario.location == Location(**location)
-        assert scenario.period == SimulationPeriod(**_PERIOD)
+        assert scenario.period == SimulationWindow(
+            date(2024, 1, 1), date(2024, 1, 7), ONE_MINUTE, Location(**location).timezone
+        )
         assert scenario.seg_tariff_pence_per_kwh == 5.5
         assert scenario.finance == FinanceConfig(
             **{**finance, "grid_services_events": expected_events}
