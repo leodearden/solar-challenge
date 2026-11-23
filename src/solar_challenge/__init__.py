@@ -53,7 +53,6 @@ __all__: list[str] = [
     # --- flow (flow.py) ---
     "EnergyFlowResult",
     "simulate_timestep",
-    "simulate_timestep_tou",
     "validate_energy_balance",
     "calculate_self_consumption",
     "calculate_excess_pv",
@@ -152,7 +151,6 @@ _SYMBOL_MODULE: dict[str, str] = {
     # flow
     "EnergyFlowResult": "flow",
     "simulate_timestep": "flow",
-    "simulate_timestep_tou": "flow",
     "validate_energy_balance": "flow",
     "calculate_self_consumption": "flow",
     "calculate_excess_pv": "flow",
@@ -317,7 +315,6 @@ if TYPE_CHECKING:
     # flow
     from solar_challenge.flow import EnergyFlowResult as EnergyFlowResult
     from solar_challenge.flow import simulate_timestep as simulate_timestep
-    from solar_challenge.flow import simulate_timestep_tou as simulate_timestep_tou
     from solar_challenge.flow import validate_energy_balance as validate_energy_balance
     from solar_challenge.flow import calculate_self_consumption as calculate_self_consumption
     from solar_challenge.flow import calculate_excess_pv as calculate_excess_pv
