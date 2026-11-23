@@ -22,6 +22,8 @@ from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
     load_scenarios,
+    period_day,
+    period_window,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
@@ -570,6 +572,93 @@ class TestScenarioWindow:
             pd.Timestamp("2024-08-31", tz="Europe/London"),
         )
         assert [str(bound.tz) for bound in bounds] == ["Europe/London", "Europe/London"]
+
+
+class TestPeriodReaders:
+    """period_day reads one day of a period and period_window both, as a scenario file's period is read, each refusal naming the day's block path."""
+
+    def test_a_period_of_iso_days_is_the_one_minute_window_of_those_days_on_the_zone_given(self) -> None:
+        assert period_window("2024-06-01", "2024-08-31", timezone="Europe/London") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
+
+    def test_the_window_is_on_the_zone_given(self) -> None:
+        assert period_window("2024-06-01", "2024-08-31", timezone="America/New_York") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "America/New_York"
+        )
+
+    @pytest.mark.parametrize(
+        ("start_date", "end_date"),
+        [
+            pytest.param(date(2024, 6, 1), date(2024, 8, 31), id="dates-as-unquoted-yaml-gives"),
+            pytest.param(
+                pd.Timestamp("2024-06-01 06:00", tz="Europe/London"),
+                pd.Timestamp("2024-08-31 18:00", tz="Europe/London"),
+                id="zoned-timestamps-at-a-time-of-day",
+            ),
+            pytest.param(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-08-31"), id="naive-timestamps"),
+            pytest.param(
+                pd.Timestamp("2024-06-01 23:30", tz="UTC"),
+                pd.Timestamp("2024-08-31 23:30", tz="UTC"),
+                id="timestamps-late-on-utcs-clock",
+            ),
+        ],
+    )
+    def test_dates_or_timestamps_give_the_window_of_their_own_dates_on_their_own_clock(
+        self, start_date: object, end_date: object
+    ) -> None:
+        assert period_window(start_date, end_date, timezone="Europe/London") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
+
+    @pytest.mark.parametrize(
+        "start_date",
+        [
+            pytest.param("2024", id="a-year"),
+            pytest.param("2024-02-30", id="a-day-its-month-lacks"),
+            pytest.param("20240601", id="an-iso-basic-date"),
+            pytest.param(pd.NaT, id="not-a-time"),
+        ],
+    )
+    def test_a_start_day_that_is_not_a_day_is_refused_naming_its_path_and_value(self, start_date: object) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("period.start_date", repr(start_date))):
+            period_window(start_date, "2024-06-07", timezone="Europe/London")
+
+    def test_a_day_that_is_not_a_day_is_refused_after_its_path(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            period_window("2024", "2024-01-07", timezone="Europe/London")
+
+        assert str(refusal.value) == (
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        )
+
+    def test_an_end_day_that_is_not_a_day_is_refused_by_its_own_path(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("period.end_date", "'2024'")):
+            period_window("2024-01-01", "2024", timezone="Europe/London")
+
+    def test_the_refusal_names_the_block_path_given(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            period_window("2024", "2024-01-07", timezone="Europe/London", block_path="scenarios[0].period")
+
+        assert str(refusal.value) == (
+            "scenarios[0].period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        )
+
+    def test_a_last_day_before_the_first_is_refused_naming_both_from_the_windows_refusal(self) -> None:
+        with pytest.raises(
+            ConfigurationError,
+            match=_naming("period.start_date", "2024-08-31", "period.end_date", "2024-06-01"),
+        ) as refusal:
+            period_window("2024-08-31", "2024-06-01", timezone="Europe/London")
+
+        assert type(refusal.value.__cause__) is ValueError
+
+    def test_period_day_reads_a_date_as_it_is(self) -> None:
+        assert period_day(date(2024, 6, 1), "period.start_date") == date(2024, 6, 1)
+
+    def test_period_day_names_the_path_it_is_given(self) -> None:
+        with pytest.raises(ConfigurationError, match=r"^a\.b: 'x' is not a day"):
+            period_day("x", "a.b")
 
 
 class TestLoadConfigYaml:
