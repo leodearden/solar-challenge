@@ -1364,6 +1364,29 @@ class TestSummaryStatistics:
         assert stats.total_generation_kwh == 100.0
         assert stats.window == _TWO_JUNE_DAYS
 
+    def test_a_summary_takes_no_seg_revenue(self):
+        """A run's SEG income is its total_export_revenue_gbp, priced at its home's SEG rate, so a summary holds no second copy."""
+        with pytest.raises(TypeError, match="seg_revenue_gbp"):
+            SummaryStatistics(
+                total_generation_kwh=100.0,
+                total_demand_kwh=80.0,
+                total_self_consumption_kwh=60.0,
+                total_grid_import_kwh=20.0,
+                total_grid_export_kwh=40.0,
+                total_battery_charge_kwh=15.0,
+                total_battery_discharge_kwh=15.0,
+                peak_generation_kw=4.0,
+                peak_demand_kw=3.0,
+                self_consumption_ratio=0.6,
+                grid_dependency_ratio=0.25,
+                export_ratio=0.4,
+                window=_TWO_JUNE_DAYS,
+                total_import_cost_gbp=5.0,
+                total_export_revenue_gbp=8.0,
+                net_cost_gbp=-3.0,
+                seg_revenue_gbp=None,
+            )
+
     def test_a_summarys_simulation_days_are_its_windows_days(self):
         assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
 

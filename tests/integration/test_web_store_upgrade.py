@@ -22,6 +22,7 @@ shutting its job manager down, so no test submits a job.
 
 import io
 import json
+import re
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import closing
@@ -289,3 +290,48 @@ def test_a_fleet_run_stored_with_a_seg_revenue_pair_renders_without_it_once_migr
     assert [key for key in PRE_975_FLEET_SEG_REVENUE_KEYS if key in summary or key in json.loads(row_summary_json)] == []
     assert again.exit_code == 0, again.output
     assert _files_of_the_run(dashboard, run_id) == files
+
+
+_HOME_SUMMARY_FILE = re.compile(r"homes/home_\d+_summary\.json")
+"""The path, in a fleet run's directory, of each home's summary."""
+
+
+def _summary_statistics_of_the_run(files: Mapping[str, bytes], run_type: RunType) -> list[Any]:
+    """The decoded SummaryStatistics documents among *files*, those of a run of *run_type*: a home run's summary.json, or each of a fleet run's homes/home_<i>_summary.json."""
+    if run_type == "home":
+        return [json.loads(files["summary.json"])]
+    return [json.loads(content) for path, content in files.items() if _HOME_SUMMARY_FILE.fullmatch(path)]
+
+
+def test_each_home_run_stored_with_a_seg_revenue_renders_without_it_once_migrated_and_a_second_migrate_leaves_it_alone(
+    dashboard: Flask, legacy_store: _LegacyStore
+) -> None:
+    """B16 of docs/prds/board-reports-sections-by-mode.md §9, not this module's B16 of run-store-one-owner: no stored home summary keeps a seg_revenue_gbp.
+
+    Each home run's summary, in its run directory and its runs row alike, loses it, and its
+    results page answers 200; each fleet run's homes/home_<i>_summary.json loses it too. The
+    second `web migrate` finds the store at SCHEMA_VERSION and leaves every stored run's files
+    byte for byte. v9's own idempotence is checked by
+    tests/unit/test_web_run_document_steps.py::test_every_step_is_idempotent_on_the_fixture.
+    """
+    client = dashboard.test_client()
+    rows = {row["id"]: row for row in _history_rows(client)}
+    run_types = {run_id: fixture_run_type(name) for run_id, name in legacy_store.stored_runs.items()}
+    home_runs = [run_id for run_id, run_type in run_types.items() if run_type == "home"]
+    files = {run_id: _files_of_the_run(dashboard, run_id) for run_id in run_types}
+    summaries = {run_id: _summary_statistics_of_the_run(files[run_id], run_type) for run_id, run_type in run_types.items()}
+    with closing(sqlite3.connect(legacy_store.database)) as conn:
+        for run_id in home_runs:
+            (row_summary_json,) = conn.execute("SELECT summary_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+            summaries[run_id].append(json.loads(row_summary_json))
+
+    again = _web("migrate")
+
+    pages = {run_id: client.get(rows[run_id]["results_url"]).status_code for run_id in home_runs}
+    assert home_runs and pages == dict.fromkeys(home_runs, 200)
+    assert all(summaries.values()), summaries
+    assert {run_id: [each for each in stored if "seg_revenue_gbp" in each] for run_id, stored in summaries.items()} == {
+        run_id: [] for run_id in summaries
+    }
+    assert again.exit_code == 0, again.output
+    assert {run_id: _files_of_the_run(dashboard, run_id) for run_id in run_types} == files

@@ -48,7 +48,7 @@ battery is; that it leaves a config that is not an object as it is; that it chan
 input; and that a run saved with a round trip reads, once every step has brought it forward, as
 the home whose battery holds the pair.
 
-Last it pins v8, the step that moves each stored home's dispatch_strategy into its battery, the
+Then it pins v8, the step that moves each stored home's dispatch_strategy into its battery, the
 battery's own setting, then drops the home's key, which no HomeConfig has: that a battery naming no
 strategy, whose home asked for tou_optimized, takes tou_optimized on its tariff's clock, reported by
 its path, in a fleet's files and its runs row alike; that every other battery naming no strategy
@@ -58,6 +58,14 @@ key, reporting nothing, a home run's at its root, a battery naming its own strat
 home with no battery having none to take; that v2 keeps each home's dispatch_strategy for v3 and v8; that
 it leaves a config, or a fleet's home, that is not an object as it is; and that it changes none of
 its input.
+
+Last it pins v9, the step that drops each stored SummaryStatistics' seg_revenue_gbp, a second copy
+of its total_export_revenue_gbp: that it drops it from a home run's summary and from each fleet
+home summary, in a run's files and its runs row alike, reporting each value that is not null, the
+dropped values being the export revenue each summary keeps; that it drops each legacy fixture's
+null one, reporting nothing; that v2 keeps it for v9; that it leaves a fleet's FleetSummary and
+config, and a summary that is not an object, as they are; that it changes none of its input; and
+that a run stored with one reads once brought forward.
 """
 
 import copy
@@ -1149,7 +1157,7 @@ def test_v6_leaves_a_home_run_s_documents_as_they_are() -> None:
 
 
 def test_v6_leaves_a_fleet_run_s_config_and_home_summaries_as_they_are_each_keeping_its_seg_revenue() -> None:
-    """A home summary's seg_revenue_gbp is a field SummaryStatistics still has; its retirement drops it, not v6."""
+    """A home summary's seg_revenue_gbp is a SummaryStatistics key, not a FleetSummary's: its retirement's v9 drops it, not v6."""
     v6 = _step(6)
     documents = _documents_before(v6, "pre_975_seg_fleet")
 
@@ -1529,3 +1537,134 @@ def test_v2_keeps_each_stored_home_s_dispatch_strategy_for_v3_and_v8_reporting_n
 
     assert home_dispatch(result.documents) == home_dispatch(documents)
     assert [each for each in result.dropped if each.field.split(".")[-1] == _HOME_DISPATCH] == []
+
+
+_PRE_975 = "pre_975_seg_fleet"
+
+_SUMMARY_SEG_REVENUE = "seg_revenue_gbp"
+"""The key of the SEG revenue a SummaryStatistics stored before format 9 holds, a second copy of its total_export_revenue_gbp, which v9 drops."""
+
+
+def _summary_documents(documents: StoredRunDocuments, run_type: RunType) -> tuple[StoredDocument, ...]:
+    """The SummaryStatistics documents of *documents*, of a run of *run_type*: a home run's summary, or each of a fleet run's home summaries."""
+    return documents.home_summaries if run_type == "fleet" else (documents.summary,)
+
+
+def _without_summary_seg_revenues(documents: StoredRunDocuments, run_type: RunType) -> StoredRunDocuments:
+    """*documents*, of a run of *run_type*, with a copy of each SummaryStatistics document lacking its seg_revenue_gbp."""
+    for summary in _summary_documents(documents, run_type):
+        documents = _without(documents, summary.name, _SUMMARY_SEG_REVENUE)
+    return documents
+
+
+def test_v9_drops_pre_975_s_home_summaries_seg_revenue_reporting_each_value_no_figure_moving() -> None:
+    """Each dropped value is its home summary's kept total_export_revenue_gbp: every home's export earned the SEG rate, so no figure moves."""
+    v9 = _step(9)
+    documents = _documents_before(v9, _PRE_975)
+    stored = {summary.name: summary.content[_SUMMARY_SEG_REVENUE] for summary in documents.home_summaries}
+
+    result = v9.apply("fleet", documents)
+
+    assert result.documents == _without_summary_seg_revenues(documents, "fleet")
+    assert result.dropped == tuple(
+        DroppedValue(_PRE_975, document, _SUMMARY_SEG_REVENUE, stored[document])
+        for document in ("homes/home_0_summary.json", "homes/home_1_summary.json")
+    )
+    assert result.rewritten == ()
+    assert [each.value for each in result.dropped] == pytest.approx(
+        [summary.content["total_export_revenue_gbp"] for summary in result.documents.home_summaries], abs=1e-9
+    )
+
+
+@pytest.mark.parametrize("name", [name for name in STORED_RUN_FIXTURES if name != _PRE_975])
+def test_v9_drops_each_legacy_fixture_s_null_seg_revenue_reporting_nothing(name: str) -> None:
+    """A home run's summary and each of a fleet run's home summaries alike; a fleet's FleetSummary and every config are left as they are."""
+    v9 = _step(9)
+    run_type = fixture_run_type(name)
+    documents = _documents_before(v9, name)
+    summaries = _summary_documents(documents, run_type)
+    assert summaries and all(summary.content[_SUMMARY_SEG_REVENUE] is None for summary in summaries)
+
+    result = v9.apply(run_type, documents)
+
+    assert result.documents == _without_summary_seg_revenues(documents, run_type)
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize(
+    ("stored_documents", "document"),
+    [
+        pytest.param(_fixture_documents, "summary.json", id="run-files"),
+        pytest.param(_runs_row_documents, "runs.summary_json", id="runs-row"),
+    ],
+)
+def test_v9_drops_a_home_run_s_seg_revenue_reporting_it(
+    stored_documents: Callable[[str], StoredRunDocuments], document: str
+) -> None:
+    v9 = _step(9)
+    brought_forward = _brought_forward_before(v9, "home", stored_documents("pre_469_home"))
+    documents = _with_value(brought_forward, document, (_SUMMARY_SEG_REVENUE,), 1.23)
+
+    result = v9.apply("home", documents)
+
+    assert result.documents == _without(documents, document, _SUMMARY_SEG_REVENUE)
+    assert result.dropped == (DroppedValue("pre_469_home", document, _SUMMARY_SEG_REVENUE, 1.23),)
+    assert result.rewritten == ()
+
+
+def test_v9_leaves_a_fleet_run_s_runs_row_as_it_is() -> None:
+    """A fleet's runs row holds its config and its FleetSummary, which has no seg_revenue_gbp; it holds no home summary."""
+    v9 = _step(9)
+    documents = _brought_forward_before(v9, "fleet", _runs_row_documents(_PRE_975))
+
+    result = v9.apply("fleet", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+@pytest.mark.parametrize("content", ["not an object", [1.23], None], ids=["text", "list", "null"])
+def test_v9_leaves_a_summary_that_is_not_an_object_as_it_is(content: Any) -> None:
+    v9 = _step(9)
+    documents = dataclasses.replace(
+        _documents_before(v9, "pre_469_home"), summary=StoredDocument("pre_469_home", "summary.json", content)
+    )
+
+    result = v9.apply("home", documents)
+
+    assert result.documents == documents
+    assert (result.dropped, result.rewritten) == ((), ())
+
+
+def test_v9_changes_none_of_its_input_documents() -> None:
+    v9 = _step(9)
+    documents = _documents_before(v9, _PRE_975)
+    before = copy.deepcopy(documents)
+
+    v9.apply("fleet", documents)
+
+    assert documents == before
+
+
+@pytest.mark.parametrize("name", STORED_RUN_FIXTURES)
+def test_v2_keeps_each_stored_summary_s_seg_revenue_for_v9_reporting_none(name: str) -> None:
+    """v9 drops a home summary's seg_revenue_gbp and reports each that is not null, so v2, which drops each key a dataclass lacks, keeps it."""
+    run_type = fixture_run_type(name)
+    documents = _fixture_documents(name)
+
+    result = _V2.apply(run_type, documents)
+
+    def seg_revenues(stored: StoredRunDocuments) -> list[Any]:
+        return [summary.content[_SUMMARY_SEG_REVENUE] for summary in _summary_documents(stored, run_type)]
+
+    assert seg_revenues(result.documents) == seg_revenues(documents)
+    assert [each for each in result.dropped if each.field == _SUMMARY_SEG_REVENUE] == []
+
+
+def test_each_home_summary_of_a_run_stored_with_a_seg_revenue_reads_once_brought_forward() -> None:
+    """Each reads as the home's summary whose export revenue is the SEG revenue it held."""
+    stored = [summary.content[_SUMMARY_SEG_REVENUE] for summary in _fixture_documents(_PRE_975).home_summaries]
+
+    summaries = [summary.read(SummaryStatistics) for summary in _current_documents(_PRE_975).home_summaries]
+
+    assert [summary.total_export_revenue_gbp for summary in summaries] == pytest.approx(stored, abs=1e-9)
