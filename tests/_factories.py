@@ -84,7 +84,7 @@ def make_bill_breakdown(
 def make_bill_distribution(
     *,
     representative: Optional[BillBreakdown] = None,
-    per_home_net_bill_gbp: Optional[tuple[float, ...]] = None,
+    per_home_total_outlay_gbp: Optional[tuple[float, ...]] = None,
     min_gbp: float = 367.5,
     mean_gbp: float = 367.5,
     median_gbp: float = 367.5,
@@ -100,13 +100,13 @@ def make_bill_distribution(
     """
     rep = representative if representative is not None else make_bill_breakdown()
     per_home = (
-        per_home_net_bill_gbp
-        if per_home_net_bill_gbp is not None
+        per_home_total_outlay_gbp
+        if per_home_total_outlay_gbp is not None
         else (rep.total_outlay_gbp,)
     )
     return BillDistribution(
         representative=rep,
-        per_home_net_bill_gbp=per_home,
+        per_home_total_outlay_gbp=per_home,
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,

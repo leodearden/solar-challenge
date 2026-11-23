@@ -644,18 +644,15 @@ class TestBillDistribution:
         return homes
 
     def test_distribution_length(self) -> None:
-        """per_home_net_bill_gbp must have length == n_homes."""
+        """per_home_total_outlay_gbp must have length == n_homes."""
         summaries = self._make_fleet()
         finance = _make_finance()
         dist = bill_distribution(summaries, finance)
 
-        assert len(dist.per_home_net_bill_gbp) == len(summaries)
+        assert len(dist.per_home_total_outlay_gbp) == len(summaries)
 
     def test_per_home_bills_match_individual(self) -> None:
-        """per_home_net_bill_gbp[i] must equal householder_bill(summaries[i]).total_outlay_gbp.
-
-        CR3: per_home_net_bill_gbp name retained (back-compat §12-Q4), value
-        redefined to per-home total_outlay_gbp.
+        """per_home_total_outlay_gbp[i] must equal householder_bill(summaries[i]).total_outlay_gbp.
 
         Basis C (task-84 §6): bill_distribution bills each home's demand −
         import as its window_self_consumption_kwh.  The expected bill must use
@@ -672,7 +669,7 @@ class TestBillDistribution:
                 window_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                 finance=finance,
             )
-            assert dist.per_home_net_bill_gbp[i] == pytest.approx(expected_bill.total_outlay_gbp)
+            assert dist.per_home_total_outlay_gbp[i] == pytest.approx(expected_bill.total_outlay_gbp)
 
     def test_stats_match_total_outlay(self) -> None:
         """min/mean/median/max must match pd.Series stats of per-home total_outlay values."""
@@ -680,8 +677,8 @@ class TestBillDistribution:
         finance = _make_finance()
         dist = bill_distribution(summaries, finance)
 
-        # per_home_net_bill_gbp now holds per-home total_outlay values (CR3)
-        series = pd.Series(list(dist.per_home_net_bill_gbp))
+        # per_home_total_outlay_gbp now holds per-home total_outlay values (CR3)
+        series = pd.Series(list(dist.per_home_total_outlay_gbp))
         assert dist.min_gbp == pytest.approx(float(series.min()))
         assert dist.mean_gbp == pytest.approx(float(series.mean()))
         assert dist.median_gbp == pytest.approx(float(series.median()))
@@ -694,7 +691,7 @@ class TestBillDistribution:
         dist = bill_distribution(summaries, finance)
 
         # Find the median-total_outlay home index manually
-        outlay_vals = list(dist.per_home_net_bill_gbp)  # now holds total_outlay_gbp
+        outlay_vals = list(dist.per_home_total_outlay_gbp)  # now holds total_outlay_gbp
         series = pd.Series(outlay_vals)
         median_val = float(series.median())
         rep_idx = int((series - median_val).abs().idxmin())
@@ -715,21 +712,21 @@ class TestBillDistribution:
         finance = _make_finance()
         dist = bill_distribution([summary], finance)
 
-        assert len(dist.per_home_net_bill_gbp) == 1
-        outlay = dist.per_home_net_bill_gbp[0]
-        # CR3: per_home_net_bill_gbp holds total_outlay_gbp values
+        assert len(dist.per_home_total_outlay_gbp) == 1
+        outlay = dist.per_home_total_outlay_gbp[0]
+        # CR3: per_home_total_outlay_gbp holds total_outlay_gbp values
         assert dist.representative.total_outlay_gbp == pytest.approx(outlay)
         assert dist.min_gbp == pytest.approx(outlay)
         assert dist.mean_gbp == pytest.approx(outlay)
         assert dist.median_gbp == pytest.approx(outlay)
         assert dist.max_gbp == pytest.approx(outlay)
 
-    def test_per_home_net_bill_is_tuple(self) -> None:
-        """per_home_net_bill_gbp must be a tuple (immutable)."""
+    def test_per_home_total_outlay_is_tuple(self) -> None:
+        """per_home_total_outlay_gbp must be a tuple (immutable)."""
         summaries = self._make_fleet()
         dist = bill_distribution(summaries, _make_finance())
 
-        assert isinstance(dist.per_home_net_bill_gbp, tuple)
+        assert isinstance(dist.per_home_total_outlay_gbp, tuple)
 
     def test_empty_summaries_raises_value_error(self) -> None:
         """bill_distribution must raise ValueError for an empty summaries sequence."""

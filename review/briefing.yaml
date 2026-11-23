@@ -528,14 +528,14 @@ subprojects:
       - decision: "Battery own-use is billed on Basis C (see top-level conventions)."
         why: "Arbitrage-immune CBS revenue; the CBS bears the round-trip loss."
 
-    known_gaps:
-      # (RESOLVED — no live gap) The former "capacity-at-events grid-services
-      # income is memoized from the age-0 simulation" gap was retired by Task 801,
-      # which prices grid-services income from each simulated age's own fleet in
-      # project_multi_year. /review should NOT re-flag it.
-      - what: "BillDistribution.per_home_net_bill_gbp is a deprecated-but-live name that actually holds total_outlay (Task 88's F-NAME-1 explicitly left this out-of-scope; the other two sub-claims formerly bundled here — stale doc line numbers and finance.py's docstring count — were fixed by Task 88's F-DOC-4/F-DOC-5 and are dropped from this gap)."
-        why: "Doc/naming drift, not by design — confusing to a maintainer or new consumer expecting the name to match what it holds. Intentional back-compat decision to keep the name, but still worth surfacing. tracking: null"
-        tracking: null
+    # (RESOLVED — no live gap) The former "capacity-at-events grid-services
+    # income is memoized from the age-0 simulation" gap was retired by Task 801,
+    # which prices grid-services income from each simulated age's own fleet in
+    # project_multi_year. /review should NOT re-flag it.
+    # (RESOLVED — no live gap) The former "BillDistribution.per_home_net_bill_gbp
+    # holds total outlay despite its name" gap was retired by Task 941, which
+    # renamed the field per_home_total_outlay_gbp. /review should NOT re-flag it.
+    known_gaps: []
 
     # (RESOLVED — no live gap) The former "solve_cost_recovery_rate's affine
     # reconstruction can be a few pence off true breakeven under severe-loss
@@ -614,7 +614,6 @@ subprojects:
 #   - FlatRateTariff is a CamelCase FACTORY FUNCTION, not a class (a documented gotcha).
 #   - Two TariffPeriod symbols: tariff.TariffPeriod (dataclass) vs dispatch.TariffPeriod
 #     (enum, re-exported as DispatchTariffPeriod). Easy to import the wrong one.
-#   - BillDistribution.per_home_net_bill_gbp holds TOTAL OUTLAY despite the name.
 #   (RESOLVED — no live gaps) The following three footguns were fixed by Task 88
 #   (commit d650077b1850a56129b1a3536c4a6811c329fbb6, merged 2026-06-30) and
 #   re-verified directly against the live files on 2026-07-04; /review should NOT

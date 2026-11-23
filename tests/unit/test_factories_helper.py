@@ -32,7 +32,7 @@ def test_bill_distribution_from_statistics_holds_them_and_a_representative_payin
 def test_cost_recovery_solution_reads_its_representative_outlay_and_saving_from_its_outlay() -> None:
     outlay = make_bill_distribution(
         representative=make_bill_breakdown(total_outlay_gbp=350.0, saving_vs_baseline_gbp=90.0, saving_pct=18.0),
-        per_home_net_bill_gbp=(300.0, 350.0, 400.0),
+        per_home_total_outlay_gbp=(300.0, 350.0, 400.0),
         min_gbp=300.0,
         mean_gbp=345.0,
         median_gbp=350.0,
@@ -65,7 +65,7 @@ def test_cost_recovery_solution_without_an_outlay_is_one_home_paying_the_represe
     outlay = make_cost_recovery_solution(representative_outlay_gbp=420.0).outlay
 
     assert outlay.representative == make_bill_breakdown(total_outlay_gbp=420.0)
-    assert outlay.per_home_net_bill_gbp == (420.0,)
+    assert outlay.per_home_total_outlay_gbp == (420.0,)
     assert (outlay.min_gbp, outlay.mean_gbp, outlay.median_gbp, outlay.max_gbp) == (420.0,) * 4
 
 
@@ -115,7 +115,7 @@ def test_config_result_reads_its_solved_fields_from_its_solution() -> None:
 def test_config_result_over_a_given_outlay_takes_its_representatives_outlay() -> None:
     outlay = make_bill_distribution(
         representative=make_bill_breakdown(total_outlay_gbp=350.0),
-        per_home_net_bill_gbp=(300.0, 350.0, 400.0),
+        per_home_total_outlay_gbp=(300.0, 350.0, 400.0),
         min_gbp=300.0,
         mean_gbp=345.0,
         median_gbp=350.0,

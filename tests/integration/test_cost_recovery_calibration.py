@@ -140,7 +140,7 @@ def _surplus_the_bills_fund_cr6(
     figure is valid only for an age-independent injected simulate, which every CR6
     fixture uses.
     """
-    outlays = sol.outlay.per_home_net_bill_gbp
+    outlays = sol.outlay.per_home_total_outlay_gbp
     assert min(outlays) == max(outlays), (
         f"per-home outlays range £{min(outlays):.6f} to £{max(outlays):.6f}, "
         "so the representative bill does not stand for every home"
