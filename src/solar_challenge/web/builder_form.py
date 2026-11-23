@@ -14,9 +14,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Optional
 
-from solar_challenge.config import load_fleet_config, period_day
+from solar_challenge.config import load_fleet_config, period_day, period_window
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.number_fields import as_finite_float, as_whole_number
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.scenario_writer import location_block, scenario_yaml
@@ -198,7 +198,10 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
 
 
 def _period_errors(period: Mapping[str, str]) -> list[str]:
-    """What keeps the period: block from giving the simulated dates: a date it lacks, or each one that is not a day period_day reads."""
+    """What keeps the period: block from giving the simulated dates: a date it lacks, each one that is not a day period_day reads, or else days period_window refuses, such as a last day before the first.
+
+    period_window reads the days on Bristol's clock, a scenario's when it sets no location; no zone changes whether two days give a window.
+    """
     missing = [key for key in ("start_date", "end_date") if key not in period]
     if missing:
         return [f"The period needs {' and '.join(missing)}"]
@@ -208,7 +211,13 @@ def _period_errors(period: Mapping[str, str]) -> list[str]:
             period_day(period[key], f"period.{key}")
         except ConfigurationError as exc:
             errors.append(str(exc))
-    return errors
+    if errors:
+        return errors
+    try:
+        period_window(period["start_date"], period["end_date"], timezone=Location.bristol().timezone)
+    except ConfigurationError as exc:
+        return [str(exc)]
+    return []
 
 
 def _location_block(fields: Mapping[str, Any]) -> dict[str, Any]:
