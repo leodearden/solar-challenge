@@ -39,7 +39,9 @@ holding a run a solar-challenge at that version saved in format 6, is brought fo
 charge_efficiency and discharge_efficiency were derived from, in a run's files and its runs row
 alike, reporting each value that is not null, and keeps the pair. Every older store is brought
 forward by version 9's step too, which drops each stored home summary's seg_revenue_gbp, in a
-run's files and a home run's runs row alike, reporting the pre-975 fleet's two.
+run's files and a home run's runs row alike, reporting the pre-975 fleet's two. A store at
+version 8, holding the pre-867 home and the pre-975 fleet as an earlier migration to version 8
+left them, is brought forward by version 9's step alone, which rewrites only those summaries.
 A run that store's migration left in format 1, with no format.json, has its files brought
 forward by every step after format 1, so it is reported, if at all, by its own fault. After its
 steps, migrate_store catches up: it brings forward each run an earlier migration left in its
@@ -87,14 +89,21 @@ from solar_challenge.web.schema import (
 )
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import (
+    FIRST_FORMAT_VERSION,
     RUN_FORMAT_VERSION,
     DroppedValue,
     PartlyBroughtForwardRun,
     RewrittenValue,
+    RunType,
+    StoredDocument,
     StoredFleetRun,
     StoredHomeRun,
+    StoredRunDocuments,
     StoredRunUnreadable,
+    StoredTimeSeries,
     UnmigratedRun,
+    bring_run_documents_forward,
+    read_run_documents,
     write_run_documents,
 )
 from tests._dashboard_databases import (
@@ -111,6 +120,7 @@ from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
 from tests._stored_run_fixtures import (
     PRE_975_FLEET_SEG_REVENUE_KEYS,
     STORED_RUN_FIXTURES,
+    fixture_run_type,
     fixture_summary_statistics_documents,
     install_stored_run_fixture,
 )
@@ -263,6 +273,56 @@ def format_6_run_ids(store_at_version_6: Path) -> dict[str, str]:
     for run_id in run_ids.values():
         write_run_documents(_run_dir(store_at_version_6, run_id), (), 6)
     return run_ids
+
+
+_FIXTURES_IN_FORMAT_8 = ("pre_867_round_trip_home", "pre_975_seg_fleet")
+"""The legacy stored-run fixtures a store at schema version 8 holds, each brought to format 8 as an earlier migration to version 8 left it.
+
+v7 drops every fixture's battery efficiency, so none is in format 8 as committed. Each still holds
+its home summaries' seg_revenue_gbp, null in the pre-867 home's and not in the pre-975 fleet's,
+which v9 drops.
+"""
+
+
+@pytest.fixture
+def store_at_version_8(tmp_path: Path) -> Path:
+    """The database file of a store a solar-challenge at schema version 8 left in tmp_path/store, the directory of its run files."""
+    return write_database_at_schema_version(tmp_path / "store" / "solar-challenge.db", 8)
+
+
+@pytest.fixture
+def format_8_run_ids(store_at_version_8: Path) -> dict[str, str]:
+    """The run id of each of _FIXTURES_IN_FORMAT_8, by name, each installed in store_at_version_8 and brought to format 8 in its files, its format.json naming 8, and its runs row."""
+    database = Database(store_at_version_8)
+    run_ids = {name: install_stored_run_fixture(name, database, store_at_version_8.parent) for name in _FIXTURES_IN_FORMAT_8}
+    for name, run_id in run_ids.items():
+        _bring_to_format(store_at_version_8, run_id, fixture_run_type(name), 8)
+    return run_ids
+
+
+def _bring_to_format(database_path: Path, run_id: str, run_type: RunType, format_version: int) -> None:
+    """Bring run *run_id*, of type *run_type* and stored before runs carried a format version, to *format_version* in the store whose database file is *database_path*.
+
+    Its files are brought forward and format.json written naming *format_version*, and its runs
+    row's config_json and summary_json are brought forward and rewritten, each by
+    bring_run_documents_forward, as a migration to that format leaves them.
+    """
+    run_dir = _run_dir(database_path, run_id)
+    files = read_run_documents(run_dir, run_id, run_type)
+    files_forward = bring_run_documents_forward(run_type, files, FIRST_FORMAT_VERSION, format_version).documents
+    write_run_documents(run_dir, files_forward.changed_from(files), format_version)
+    row = runs_rows_of(database_path)[run_id]
+    row_documents = StoredRunDocuments(
+        config=StoredDocument.decoded(run_id, "runs.config_json", row["config_json"]),
+        summary=StoredDocument.decoded(run_id, "runs.summary_json", row["summary_json"]),
+        time_series=StoredTimeSeries(run_id, run_dir),
+    )
+    row_forward = bring_run_documents_forward(run_type, row_documents, FIRST_FORMAT_VERSION, format_version).documents
+    with Database(database_path).transaction() as conn:
+        conn.execute(
+            "UPDATE runs SET config_json = ?, summary_json = ? WHERE id = ?",
+            (json.dumps(row_forward.config.content), json.dumps(row_forward.summary.content), run_id),
+        )
 
 
 @dataclass(frozen=True)
@@ -519,6 +579,44 @@ def test_migrate_store_brings_a_store_at_version_6_forward_by_version_7_s_step_d
     loaded = _storage_of(store_at_version_6).load_run(run_id)
     assert isinstance(loaded, StoredHomeRun)
     assert loaded.config.battery_config == BatteryConfig(capacity_kwh=5.0, charge_efficiency=0.9, discharge_efficiency=0.9)
+
+
+@_NEEDS_PYARROW
+def test_migrate_store_brings_a_store_at_version_8_forward_by_version_9_s_step_alone_rewriting_only_each_home_summary(
+    store_at_version_8: Path, format_8_run_ids: dict[str, str]
+) -> None:
+    """The upgrade of a dashboard at version 8: v9 alone drops each home summary's seg_revenue_gbp, in a run's files and a home run's runs row, reporting the pre-975 fleet's two values.
+
+    Every other document and runs column is left byte for byte, and each run loads.
+    """
+    store = store_at_version_8
+    files_before = {run_id: _files_of(_run_dir(store, run_id)) for run_id in format_8_run_ids.values()}
+    rows_before = runs_rows_of(store)
+    pre_975_fleet = format_8_run_ids["pre_975_seg_fleet"]
+
+    report = migrate_store(store, store.parent)
+
+    assert report == MigrationReport(
+        path=store,
+        from_version=8,
+        to_version=SCHEMA_VERSION,
+        applied_steps=MIGRATIONS[8:],
+        dropped_values=tuple(
+            DroppedValue(pre_975_fleet, document, "seg_revenue_gbp", value)
+            for document, value in _PRE_975_HOME_SUMMARY_SEG_REVENUES
+        ),
+    )
+    rows_after = runs_rows_of(store)
+    storage = _storage_of(store)
+    for name, run_id in format_8_run_ids.items():
+        before, after = files_before[run_id], _files_of(_run_dir(store, run_id))
+        summaries = fixture_summary_statistics_documents(name)
+        assert set(after) == set(before), name
+        assert {path for path in after if after[path] != before[path]} == {"format.json", *summaries.files}, name
+        assert {column for column, value in rows_before[run_id].items() if rows_after[run_id][column] != value} == (
+            summaries.columns
+        ), name
+        assert storage.load_run(run_id).run_id == run_id
 
 
 @_NEEDS_PYARROW
