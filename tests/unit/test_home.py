@@ -1334,6 +1334,26 @@ class TestCalculateSummaryWindow:
 
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
+_SIXTEEN_REQUIRED_FIGURES = {
+    "total_generation_kwh": 100.0,
+    "total_demand_kwh": 80.0,
+    "total_self_consumption_kwh": 60.0,
+    "total_grid_import_kwh": 20.0,
+    "total_grid_export_kwh": 40.0,
+    "total_battery_charge_kwh": 15.0,
+    "total_battery_discharge_kwh": 15.0,
+    "peak_generation_kw": 4.0,
+    "peak_demand_kw": 3.0,
+    "self_consumption_ratio": 0.6,
+    "grid_dependency_ratio": 0.25,
+    "export_ratio": 0.4,
+    "window": _TWO_JUNE_DAYS,
+    "total_import_cost_gbp": 5.0,
+    "total_export_revenue_gbp": 8.0,
+    "net_cost_gbp": -3.0,
+}
+"""A summary's sixteen required figures, by keyword."""
+
 _FIGURES_IN_THE_POSITIONS_OF_0_5_0 = (100.0, 80.0, 60.0, 20.0, 40.0, 10.0, 8.0, 3.5, 2.5, 0.6, 0.25, 0.4, 7, 5.0, 6.0, -1.0)
 """A summary's sixteen required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
 
@@ -1343,49 +1363,14 @@ class TestSummaryStatistics:
 
     def test_all_fields_present(self):
         """SummaryStatistics has all required fields."""
-        stats = SummaryStatistics(
-            total_generation_kwh=100.0,
-            total_demand_kwh=80.0,
-            total_self_consumption_kwh=60.0,
-            total_grid_import_kwh=20.0,
-            total_grid_export_kwh=40.0,
-            total_battery_charge_kwh=15.0,
-            total_battery_discharge_kwh=15.0,
-            peak_generation_kw=4.0,
-            peak_demand_kw=3.0,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            export_ratio=0.4,
-            window=_TWO_JUNE_DAYS,
-            total_import_cost_gbp=5.0,
-            total_export_revenue_gbp=8.0,
-            net_cost_gbp=-3.0,
-        )
+        stats = SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES)
         assert stats.total_generation_kwh == 100.0
         assert stats.window == _TWO_JUNE_DAYS
 
     def test_a_summary_takes_no_seg_revenue(self):
         """A run's SEG income is its total_export_revenue_gbp, priced at its home's SEG rate, so a summary holds no second copy."""
         with pytest.raises(TypeError, match="seg_revenue_gbp"):
-            SummaryStatistics(
-                total_generation_kwh=100.0,
-                total_demand_kwh=80.0,
-                total_self_consumption_kwh=60.0,
-                total_grid_import_kwh=20.0,
-                total_grid_export_kwh=40.0,
-                total_battery_charge_kwh=15.0,
-                total_battery_discharge_kwh=15.0,
-                peak_generation_kw=4.0,
-                peak_demand_kw=3.0,
-                self_consumption_ratio=0.6,
-                grid_dependency_ratio=0.25,
-                export_ratio=0.4,
-                window=_TWO_JUNE_DAYS,
-                total_import_cost_gbp=5.0,
-                total_export_revenue_gbp=8.0,
-                net_cost_gbp=-3.0,
-                seg_revenue_gbp=None,
-            )
+            SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES, seg_revenue_gbp=None)
 
     def test_a_summarys_simulation_days_are_its_windows_days(self):
         assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
