@@ -385,6 +385,21 @@ class TestBuilderFormErrors:
         assert builder_form_errors(_form_with_pv_pool(rows)) == [reason]
 
 
+    def test_a_period_day_that_is_not_a_day_is_refused_as_a_scenario_files_is(self) -> None:
+        """'2024' is no day, though pd.Timestamp reads it as 2024-01-01."""
+        assert (
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+            in builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024"})
+        )
+
+    def test_each_period_day_that_is_not_a_day_is_listed_start_first(self) -> None:
+        errors = builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024", "end_date": "2024-02-30"})
+
+        assert [error for error in errors if error.startswith("period.")] == [
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp",
+            "period.end_date: '2024-02-30' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp",
+        ]
+
 class TestBothFormsWriteADistributionAlike:
     """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same fleet_distribution.py grammar spec."""
 
