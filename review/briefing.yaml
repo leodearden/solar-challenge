@@ -274,7 +274,7 @@ conventions:
       (the methods, classmethods, properties, class constants and instance attributes each class
       body defines or declares) are consumed by a separate, pinned repo. The contract also covers
       the classes outside __all__ that the exported surface names, directly or through another
-      such class, such as HomeConfig, SimulationResults, SimulationPeriod and GridChargeConfig:
+      such class, such as HomeConfig, SimulationResults, SimulationWindow and GridChargeConfig:
       their constructors and public members. For each class the contract covers that is a
       dataclass, the contract also covers which of the dataclass parameters eq, order,
       unsafe_hash and frozen it sets. For every class the contract covers, an Enum aside, it
@@ -315,9 +315,9 @@ conventions:
       exported surface names are in the contract too (task 505): the closure rule of
       docs/prds/domain-library-extraction.md §2 puts a frozen function's parameter and return
       types in the frozen surface, and consumers need these classes to use exported names. A
-      ScenarioConfig needs a SimulationPeriod and HomeConfigs, FleetResults.per_home_results holds
+      ScenarioConfig needs a SimulationWindow and HomeConfigs, FleetResults.per_home_results holds
       SimulationResults, and BatteryConfig takes a GridChargeConfig; the platform constructs
-      HomeConfig, SimulationPeriod, SimulationResults and GridChargeConfig. A dataclass's
+      HomeConfig, SimulationWindow, SimulationResults and GridChargeConfig. A dataclass's
       parameters are in the contract too (task 567), because they decide what a consumer can do
       with an instance: frozen whether it can assign a field (task 436 froze SimulationResults and
       had to record that break by hand, sending consumers to dataclasses.replace), eq and

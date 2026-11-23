@@ -6,7 +6,7 @@ import json
 import math
 import re
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -14,7 +14,6 @@ import pytest
 
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_community_config,
     load_config,
     load_config_json,
@@ -22,6 +21,8 @@ from solar_challenge.config import (
     load_fleet_config,
     load_home_config,
     load_scenarios,
+    period_day,
+    period_window,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
@@ -33,26 +34,29 @@ from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
-_SUMMER = SimulationPeriod("2024-06-01", "2024-08-31")
-"""June to August 2024, as ISO strings."""
 
-_SUMMER_AT_A_TIME_OF_DAY = SimulationPeriod(
-    pd.Timestamp("2024-06-01 06:00", tz="Europe/London"), pd.Timestamp("2024-08-31 18:00", tz="Europe/London")
-)
-"""June to August 2024, as zoned Timestamps at 06:00 on the first day and 18:00 on the last."""
+def _window(first_day: date, last_day: date, timezone: str | None = "Europe/London") -> SimulationWindow:
+    """The one-minute window from *first_day* to *last_day* on *timezone*'s clock."""
+    return SimulationWindow(first_day, last_day, ONE_MINUTE, timezone)
 
-_SUMMER_AS_NAIVE_TIMESTAMPS = SimulationPeriod(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-08-31"))
-"""June to August 2024, as naive Timestamps at midnight."""
 
-_SUMMER_LATE_ON_UTCS_CLOCK = SimulationPeriod(
-    pd.Timestamp("2024-06-01 23:30", tz="UTC"), pd.Timestamp("2024-08-31 23:30", tz="UTC")
-)
-"""June to August 2024, as Timestamps at 23:30 on UTC's clock: on London's, 00:30 on 2 June and on 1 September."""
+_FIRST_WEEK = _window(date(2024, 1, 1), date(2024, 1, 7))
+"""The first week of 2024 on London's clock."""
+
+_SUMMER = _window(date(2024, 6, 1), date(2024, 8, 31))
+"""June to August 2024 on London's clock."""
+
+_NEW_YORK = Location(latitude=40.71, longitude=-74.0, timezone="America/New_York")
 
 
 def _home() -> HomeConfig:
     """A 4 kW home on the default load, carrying no SEG tariff of its own."""
     return HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())
+
+
+def _new_york_home() -> HomeConfig:
+    """_home() in New York."""
+    return dataclasses.replace(_home(), location=_NEW_YORK)
 
 
 def _scenario(
@@ -64,14 +68,14 @@ def _scenario(
     """Scenario 'x' over the first week of 2024, holding *home* or *homes* under *seg_tariff_pence_per_kwh*."""
     return ScenarioConfig(
         name="x",
-        period=SimulationPeriod("2024-01-01", "2024-01-07"),
+        period=_FIRST_WEEK,
         home=home,
         homes=homes or [],
         seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh,
     )
 
 
-def _bristol_scenario(period: SimulationPeriod = _SUMMER) -> ScenarioConfig:
+def _bristol_scenario(period: SimulationWindow = _SUMMER) -> ScenarioConfig:
     """Scenario 'x' in Bristol over *period*, holding one home."""
     return ScenarioConfig(name="x", period=period, location=Location.bristol(), home=_home())
 
@@ -88,39 +92,6 @@ def _one_kw_larger(home: HomeConfig) -> HomeConfig:
     )
 
 
-class TestSimulationPeriod:
-    """Tests for SimulationPeriod class."""
-
-    def test_string_dates(self) -> None:
-        """Test period with string dates."""
-        period = SimulationPeriod(
-            start_date="2024-01-01",
-            end_date="2024-01-07",
-        )
-        assert period.start_date == "2024-01-01"
-        assert period.end_date == "2024-01-07"
-
-    def test_get_timestamps(self) -> None:
-        """Test getting timestamps from string dates."""
-        period = SimulationPeriod(
-            start_date="2024-01-01",
-            end_date="2024-01-07",
-        )
-        start = period.get_start_timestamp("Europe/London")
-        end = period.get_end_timestamp("Europe/London")
-        assert start.year == 2024
-        assert start.month == 1
-        assert start.day == 1
-        assert end.day == 7
-
-    def test_refuses_a_field_assignment(self) -> None:
-        """A period is a frozen value: assigning one of its fields raises FrozenInstanceError."""
-        period = SimulationPeriod(start_date="2024-01-01", end_date="2024-01-07")
-
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            period.end_date = "2024-01-14"  # type: ignore[misc]
-
-
 class TestScenarioConfig:
     """Tests for ScenarioConfig class."""
 
@@ -132,7 +103,7 @@ class TestScenarioConfig:
         )
         scenario = ScenarioConfig(
             name="Test",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             home=home,
         )
         assert not scenario.is_fleet
@@ -150,7 +121,7 @@ class TestScenarioConfig:
         ]
         scenario = ScenarioConfig(
             name="Test Fleet",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             homes=homes,
         )
         assert scenario.is_fleet
@@ -163,12 +134,12 @@ class TestScenarioConfig:
 
         fleet = ScenarioConfig(
             name="Fleet",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             homes=[h1, h2],
         )
         single = ScenarioConfig(
             name="Single",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             home=h1,
         )
 
@@ -180,7 +151,7 @@ class TestScenarioConfig:
         """A scenario is a frozen value: assigning one of its fields raises FrozenInstanceError."""
         scenario = ScenarioConfig(
             name="Test",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             homes=[HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig())],
         )
 
@@ -198,7 +169,7 @@ class TestScenarioConfig:
         with pytest.raises(ConfigurationError, match="must define either"):
             ScenarioConfig(
                 name="Empty",
-                period=SimulationPeriod("2024-01-01", "2024-01-07"),
+                period=_FIRST_WEEK,
             )
 
     def test_cannot_have_both(self) -> None:
@@ -210,7 +181,7 @@ class TestScenarioConfig:
         with pytest.raises(ConfigurationError, match="cannot define both"):
             ScenarioConfig(
                 name="Both",
-                period=SimulationPeriod("2024-01-01", "2024-01-07"),
+                period=_FIRST_WEEK,
                 home=home,
                 homes=[home],
             )
@@ -223,7 +194,7 @@ class TestScenarioConfig:
         )
         scenario = ScenarioConfig(
             name="Test",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             home=home,
         )
         loc = scenario.get_location()
@@ -233,7 +204,7 @@ class TestScenarioConfig:
     def test_takes_no_output_or_tariff_config(self, field: str) -> None:
         with pytest.raises(TypeError, match=f"unexpected keyword argument '{field}'"):
             ScenarioConfig(
-                name="x", period=SimulationPeriod("2024-01-01", "2024-01-07"), home=_home(), **{field: None}
+                name="x", period=_FIRST_WEEK, home=_home(), **{field: None}
             )
 
 
@@ -293,7 +264,7 @@ class TestSimulatedHomes:
 
 
 class TestScenarioConfigRefusals:
-    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a period whose days are not dates or run backwards."""
+    """Construction is the one point that refuses a SEG rate SEGTariff refuses, a home's own SEG rate other than the scenario's, and a period that is not a one-minute window on the scenario's clock."""
 
     @pytest.mark.parametrize(
         ("rate", "requirement"),
@@ -353,62 +324,60 @@ class TestScenarioConfigRefusals:
         assert scenario.homes == (home,)
 
     @pytest.mark.parametrize(
-        ("start_date", "end_date"),
+        ("period", "type_name"),
         [
-            pytest.param("2024", "2024-01-07", id="a-year"),
-            pytest.param("2024-02-30", "2024-03-01", id="a-day-its-month-lacks"),
-            pytest.param("20240601", "2024-06-07", id="an-iso-basic-date"),
-            pytest.param(pd.NaT, "2024-06-07", id="not-a-time"),
+            pytest.param((date(2024, 1, 1), date(2024, 1, 7)), "tuple", id="a-pair-of-dates"),
+            pytest.param("2024-01-01", "str", id="a-string"),
         ],
     )
-    def test_a_start_day_that_is_not_a_date_is_refused_naming_the_scenario_the_field_and_the_value(
-        self, start_date: object, end_date: str
+    def test_a_period_that_is_not_a_window_is_refused_naming_the_scenario_and_its_type(
+        self, period: object, type_name: str
     ) -> None:
-        with pytest.raises(ConfigurationError, match=_naming("'x'", "period.start_date", repr(start_date))):
-            ScenarioConfig(name="x", period=SimulationPeriod(start_date, end_date), home=_home())
+        with pytest.raises(ConfigurationError, match=_naming("'x'", "period", type_name)):
+            ScenarioConfig(name="x", period=period, home=_home())  # type: ignore[arg-type]
 
-    def test_a_day_that_is_not_a_date_is_refused_after_the_scenario_and_the_days_path(self) -> None:
-        with pytest.raises(ConfigurationError) as refusal:
-            ScenarioConfig(name="w", period=SimulationPeriod("2024", "2024-01-07"), home=_home())
+    def test_a_period_at_another_cadence_is_refused_naming_its_cadence_and_one_minute(self) -> None:
+        quarter_hourly = dataclasses.replace(_SUMMER, cadence=timedelta(minutes=15))
 
-        assert str(refusal.value) == (
-            "Scenario 'w': period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
-        )
-
-    def test_an_end_day_that_is_not_a_date_is_refused_by_its_own_name(self) -> None:
-        with pytest.raises(ConfigurationError, match=_naming("'x'", "period.end_date", "'2024'")):
-            ScenarioConfig(name="x", period=SimulationPeriod("2024-01-01", "2024"), home=_home())
-
-    def test_a_period_whose_last_day_precedes_its_first_is_refused_naming_both(self) -> None:
         with pytest.raises(
             ConfigurationError,
-            match=_naming("'x'", "period.start_date", "2024-08-31", "period.end_date", "2024-06-01"),
+            match=_naming("'x'", "period.cadence", repr(timedelta(minutes=15)), repr(ONE_MINUTE)),
         ):
-            ScenarioConfig(name="x", period=SimulationPeriod("2024-08-31", "2024-06-01"), home=_home())
-
-    def test_a_one_day_period_constructs(self) -> None:
-        period = SimulationPeriod("2024-06-21", "2024-06-21")
-
-        assert ScenarioConfig(name="x", period=period, home=_home()).period == period
+            _bristol_scenario(quarter_hourly)
 
     @pytest.mark.parametrize(
-        "period",
+        ("window_zone", "location", "first_home", "scenario_zone"),
         [
-            pytest.param(SimulationPeriod(date(2024, 6, 1), date(2024, 6, 7)), id="dates-as-unquoted-yaml-gives"),
             pytest.param(
-                SimulationPeriod(
-                    pd.Timestamp("2024-06-01 06:00", tz="Europe/London"),
-                    pd.Timestamp("2024-06-07 18:00", tz="Europe/London"),
-                ),
-                id="zoned-timestamps-at-a-time-of-day",
+                "America/New_York", Location.bristol(), _home(), "Europe/London", id="another-zone-than-the-location"
             ),
             pytest.param(
-                SimulationPeriod(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-06-07")), id="naive-timestamps"
+                "Europe/London", None, _new_york_home(), "America/New_York", id="another-zone-than-the-first-homes"
             ),
+            pytest.param(None, Location.bristol(), _home(), "Europe/London", id="no-zone"),
         ],
     )
-    def test_a_period_of_dates_or_timestamps_constructs(self, period: SimulationPeriod) -> None:
-        assert ScenarioConfig(name="x", period=period, home=_home()).period == period
+    def test_a_period_on_another_clock_than_the_scenarios_is_refused_naming_both_zones(
+        self, window_zone: str | None, location: Location | None, first_home: HomeConfig, scenario_zone: str
+    ) -> None:
+        period = _window(date(2024, 6, 1), date(2024, 8, 31), window_zone)
+
+        with pytest.raises(
+            ConfigurationError,
+            match=_naming("'x'", "period.timezone", repr(window_zone), repr(scenario_zone)),
+        ):
+            ScenarioConfig(name="x", period=period, location=location, homes=[first_home, _home()])
+
+    def test_replace_re_runs_the_period_check(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("'x'", "period.timezone")):
+            dataclasses.replace(
+                _bristol_scenario(), period=_window(date(2024, 6, 1), date(2024, 8, 31), "America/New_York")
+            )
+
+    def test_a_one_day_window_constructs_and_is_held_as_given(self) -> None:
+        period = _window(date(2024, 6, 21), date(2024, 6, 21))
+
+        assert ScenarioConfig(name="x", period=period, home=_home()).period is period
 
 
 class TestMapHomes:
@@ -432,7 +401,7 @@ class TestMapHomes:
     def test_every_scenario_level_field_is_kept(self) -> None:
         scenario = ScenarioConfig(
             name="full",
-            period=SimulationPeriod("2024-01-01", "2024-01-07"),
+            period=_FIRST_WEEK,
             description="every scenario-level field set",
             location=Location(latitude=53.48, longitude=-2.24, altitude=38.0, name="Manchester"),
             homes=[_home(), _home()],
@@ -465,40 +434,22 @@ class TestMapHomes:
 
 
 class TestScenarioWindow:
-    """window(), with_window() and simulation_bounds() read the scenario's period as the days it simulates."""
+    """window(), with_window() and simulation_bounds() read the scenario's period, the window it simulates."""
 
-    def test_the_window_is_the_periods_days_at_one_minute_in_the_scenarios_zone(self) -> None:
-        assert _bristol_scenario().window() == SimulationWindow(
-            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
-        )
+    def test_the_window_is_the_period_itself(self) -> None:
+        scenario = _bristol_scenario()
 
-    def test_with_no_scenario_location_the_zone_is_the_first_homes(self) -> None:
-        new_york = dataclasses.replace(
-            _home(), location=Location(latitude=40.71, longitude=-74.0, timezone="America/New_York")
+        assert scenario.window() == _SUMMER
+        assert scenario.window() is scenario.period
+
+    def test_with_no_scenario_location_the_window_is_on_the_first_homes_clock(self) -> None:
+        scenario = ScenarioConfig(
+            name="x",
+            period=_window(date(2024, 6, 1), date(2024, 8, 31), "America/New_York"),
+            homes=[_new_york_home(), _home()],
         )
-        scenario = ScenarioConfig(name="x", period=_SUMMER, homes=[new_york, _home()])
 
         assert scenario.window().timezone == "America/New_York"
-
-    @pytest.mark.parametrize(
-        "period",
-        [
-            pytest.param(SimulationPeriod(date(2024, 6, 1), date(2024, 8, 31)), id="dates"),
-            pytest.param(_SUMMER_AT_A_TIME_OF_DAY, id="zoned-timestamps-at-a-time-of-day"),
-            pytest.param(_SUMMER_AS_NAIVE_TIMESTAMPS, id="naive-timestamps"),
-        ],
-    )
-    def test_a_period_of_dates_or_timestamps_gives_the_window_of_the_same_days_as_iso_strings(
-        self, period: SimulationPeriod
-    ) -> None:
-        assert _bristol_scenario(period).window() == _bristol_scenario(_SUMMER).window()
-
-    def test_a_timestamp_on_another_zones_clock_gives_its_own_date_there_not_its_date_on_the_scenarios(
-        self,
-    ) -> None:
-        assert _bristol_scenario(_SUMMER_LATE_ON_UTCS_CLOCK).window() == SimulationWindow(
-            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
-        )
 
     def test_with_window_replaces_the_last_day(self) -> None:
         assert _bristol_scenario().with_window(last_day=date(2024, 6, 7)).window().days == 7
@@ -524,8 +475,12 @@ class TestScenarioWindow:
         assert dataclasses.replace(windowed, period=scenario.period) == scenario
         assert scenario.period == _SUMMER
 
-    def test_with_window_refuses_a_first_day_after_the_last_naming_both_fields(self) -> None:
-        with pytest.raises(ConfigurationError, match=_naming("period.start_date", "period.end_date")):
+    def test_with_window_refuses_a_first_day_after_the_last_naming_its_argument_and_the_windows_reason(
+        self,
+    ) -> None:
+        with pytest.raises(
+            ConfigurationError, match=_naming("'x'", "first_day=datetime.date(2024, 9, 1)", "is before first_day")
+        ):
             _bristol_scenario().with_window(first_day=date(2024, 9, 1))
 
     @pytest.mark.parametrize(
@@ -540,7 +495,7 @@ class TestScenarioWindow:
     def test_with_window_refuses_a_day_that_is_not_exactly_a_date_naming_its_parameter_and_value(
         self, parameter: str, day: date
     ) -> None:
-        with pytest.raises(ConfigurationError, match=_naming("'x'", f"with_window's {parameter}", repr(day))):
+        with pytest.raises(ConfigurationError, match=_naming("'x'", "with_window", f"{parameter}={day!r}")):
             _bristol_scenario().with_window(**{parameter: day})
 
     def test_the_simulation_bounds_are_the_first_and_last_days_local_midnights(self) -> None:
@@ -552,24 +507,92 @@ class TestScenarioWindow:
         )
         assert all(bound.tz is not None for bound in bounds)
 
+
+class TestPeriodReaders:
+    """period_day reads one day of a period and period_window both, as a scenario file's period is read, each refusal naming the day's block path."""
+
+    def test_a_period_of_iso_days_is_the_one_minute_window_of_those_days_on_the_zone_given(self) -> None:
+        assert period_window("2024-06-01", "2024-08-31", timezone="Europe/London") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
+        )
+
+    def test_the_window_is_on_the_zone_given(self) -> None:
+        assert period_window("2024-06-01", "2024-08-31", timezone="America/New_York") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "America/New_York"
+        )
+
     @pytest.mark.parametrize(
-        "period",
+        ("start_date", "end_date"),
         [
-            pytest.param(_SUMMER_AT_A_TIME_OF_DAY, id="zoned-timestamps-at-a-time-of-day"),
-            pytest.param(_SUMMER_AS_NAIVE_TIMESTAMPS, id="naive-timestamps"),
-            pytest.param(_SUMMER_LATE_ON_UTCS_CLOCK, id="timestamps-on-another-zones-clock"),
+            pytest.param(date(2024, 6, 1), date(2024, 8, 31), id="dates-as-unquoted-yaml-gives"),
+            pytest.param(
+                pd.Timestamp("2024-06-01 06:00", tz="Europe/London"),
+                pd.Timestamp("2024-08-31 18:00", tz="Europe/London"),
+                id="zoned-timestamps-at-a-time-of-day",
+            ),
+            pytest.param(pd.Timestamp("2024-06-01"), pd.Timestamp("2024-08-31"), id="naive-timestamps"),
+            pytest.param(
+                pd.Timestamp("2024-06-01 23:30", tz="UTC"),
+                pd.Timestamp("2024-08-31 23:30", tz="UTC"),
+                id="timestamps-late-on-utcs-clock",
+            ),
         ],
     )
-    def test_a_period_of_timestamps_bounds_at_its_own_dates_midnights_on_the_scenarios_clock(
-        self, period: SimulationPeriod
+    def test_dates_or_timestamps_give_the_window_of_their_own_dates_on_their_own_clock(
+        self, start_date: object, end_date: object
     ) -> None:
-        bounds = _bristol_scenario(period).simulation_bounds()
-
-        assert bounds == (
-            pd.Timestamp("2024-06-01", tz="Europe/London"),
-            pd.Timestamp("2024-08-31", tz="Europe/London"),
+        assert period_window(start_date, end_date, timezone="Europe/London") == SimulationWindow(
+            date(2024, 6, 1), date(2024, 8, 31), ONE_MINUTE, "Europe/London"
         )
-        assert [str(bound.tz) for bound in bounds] == ["Europe/London", "Europe/London"]
+
+    @pytest.mark.parametrize(
+        "start_date",
+        [
+            pytest.param("2024", id="a-year"),
+            pytest.param("2024-02-30", id="a-day-its-month-lacks"),
+            pytest.param("20240601", id="an-iso-basic-date"),
+            pytest.param(pd.NaT, id="not-a-time"),
+        ],
+    )
+    def test_a_start_day_that_is_not_a_day_is_refused_naming_its_path_and_value(self, start_date: object) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("period.start_date", repr(start_date))):
+            period_window(start_date, "2024-06-07", timezone="Europe/London")
+
+    def test_a_day_that_is_not_a_day_is_refused_after_its_path(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            period_window("2024", "2024-01-07", timezone="Europe/London")
+
+        assert str(refusal.value) == (
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        )
+
+    def test_an_end_day_that_is_not_a_day_is_refused_by_its_own_path(self) -> None:
+        with pytest.raises(ConfigurationError, match=_naming("period.end_date", "'2024'")):
+            period_window("2024-01-01", "2024", timezone="Europe/London")
+
+    def test_the_refusal_names_the_block_path_given(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            period_window("2024", "2024-01-07", timezone="Europe/London", block_path="scenarios[0].period")
+
+        assert str(refusal.value) == (
+            "scenarios[0].period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        )
+
+    def test_a_last_day_before_the_first_is_refused_naming_both_from_the_windows_refusal(self) -> None:
+        with pytest.raises(
+            ConfigurationError,
+            match=_naming("period.start_date", "2024-08-31", "period.end_date", "2024-06-01"),
+        ) as refusal:
+            period_window("2024-08-31", "2024-06-01", timezone="Europe/London")
+
+        assert type(refusal.value.__cause__) is ValueError
+
+    def test_period_day_reads_a_date_as_it_is(self) -> None:
+        assert period_day(date(2024, 6, 1), "period.start_date") == date(2024, 6, 1)
+
+    def test_period_day_names_the_path_it_is_given(self) -> None:
+        with pytest.raises(ConfigurationError, match=r"^a\.b: 'x' is not a day"):
+            period_day("x", "a.b")
 
 
 class TestLoadConfigYaml:
@@ -736,6 +759,13 @@ def _refusal_loading(tmp_path: Path, load: Callable[[Path], object], document: o
     return str(refusal.value)
 
 
+def _scenarios_loaded(tmp_path: Path, document: object) -> list[ScenarioConfig]:
+    """The scenarios load_scenarios reads from *document*, written as JSON."""
+    path = tmp_path / "document.json"
+    path.write_text(json.dumps(document))
+    return load_scenarios(path)
+
+
 class TestAScenarioDocumentNamesTheBlockItRefuses:
     """Each refusal load_scenarios writes for a scenario document reads '<block label>: <problem>'."""
 
@@ -773,10 +803,55 @@ class TestAScenarioDocumentNamesTheBlockItRefuses:
                 id="R2-homes-a-number",
             ),
             pytest.param({"scenarios": 5}, "scenarios: must be a list, got int", id="R2-scenarios-a-number"),
+            pytest.param(
+                {"scenarios": [{"name": "a", "period": {**_WEEK, "start_date": "2024"}, "home": _A_HOME}]},
+                "scenarios[0].period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp",
+                id="P10-a-period-day-that-is-not-a-day",
+            ),
         ],
     )
     def test_the_refusal_names_the_block(self, tmp_path: Path, document: dict, expected: str) -> None:
         assert _refusal_loading(tmp_path, load_scenarios, document) == expected
+
+    def test_a_period_whose_last_day_precedes_its_first_is_refused_naming_both_days_paths(self, tmp_path: Path) -> None:
+        reversed_period = {"start_date": "2024-08-31", "end_date": "2024-06-01"}
+        document = {"scenario": {"name": "a", "period": reversed_period, "home": _A_HOME}}
+
+        assert re.search(
+            _naming("scenario.period.start_date", "2024-08-31", "scenario.period.end_date", "2024-06-01"),
+            _refusal_loading(tmp_path, load_scenarios, document),
+        )
+
+
+class TestAScenarioDocumentsPeriod:
+    """load_scenarios reads a document's period as the one-minute window of its days on the scenario location's clock."""
+
+    def test_a_document_with_no_location_simulates_on_bristols_clock(self, tmp_path: Path) -> None:
+        (scenario,) = _scenarios_loaded(tmp_path, {"name": "a", "period": _WEEK, "home": _A_HOME})
+
+        assert scenario.period == _FIRST_WEEK
+
+    def test_the_window_is_on_the_documents_location_clock(self, tmp_path: Path) -> None:
+        location = {"latitude": 40.71, "longitude": -74.0, "timezone": "America/New_York"}
+
+        (scenario,) = _scenarios_loaded(
+            tmp_path, {"name": "a", "location": location, "period": _WEEK, "home": _A_HOME}
+        )
+
+        assert scenario.period == _window(date(2024, 1, 1), date(2024, 1, 7), "America/New_York")
+
+    def test_unquoted_yaml_dates_read_as_the_same_window_as_quoted_ones(self, tmp_path: Path) -> None:
+        def loaded(start_date: str, end_date: str) -> ScenarioConfig:
+            path = tmp_path / "scenario.yaml"
+            path.write_text(
+                "name: a\n"
+                f"period:\n  start_date: {start_date}\n  end_date: {end_date}\n"
+                "home:\n  pv:\n    capacity_kw: 4.0\n"
+            )
+            (scenario,) = load_scenarios(path)
+            return scenario
+
+        assert loaded("2024-06-01", "2024-08-31").period == loaded('"2024-06-01"', '"2024-08-31"').period == _SUMMER
 
 
 class TestEveryLoaderRefusesADocumentThatIsNoMapping:

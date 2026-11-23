@@ -33,7 +33,7 @@ from typing import Final, Optional, Union
 import pandas as pd
 
 import solar_challenge
-from solar_challenge.config import ScenarioConfig, SimulationPeriod, load_config, load_fleet_config
+from solar_challenge.config import ScenarioConfig, load_config, load_fleet_config, period_window
 from solar_challenge.dispatch import GRID_CHARGE_FORECASTS, GridChargeForecast
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
@@ -96,11 +96,12 @@ def read_scenario(
     """The fleet scenario at path as `solar-challenge finance run` reads it, over start to end: the first homes of its fleet (all when homes is None), its location, its SEG rate, which simulated_homes gives each home, and its finance: block."""
     raw = load_config(path)
     fleet = load_fleet_config(path)
+    location = fleet.homes[0].location
     return ScenarioConfig(
         name=raw.get("name", str(path)),
-        period=SimulationPeriod(start_date=start, end_date=end),
+        period=period_window(start, end, timezone=location.timezone),
         homes=tuple(fleet.homes[:homes]),
-        location=fleet.homes[0].location,
+        location=location,
         seg_tariff_pence_per_kwh=parse_seg_rate(raw.get("seg")),
         finance=parse_finance_config(raw.get("finance")),
     )

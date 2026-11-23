@@ -6,6 +6,7 @@ import itertools
 import math
 import pickle
 import re
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +15,6 @@ import pytest
 
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_scenarios,
 )
 from solar_challenge.errors import ConfigurationError
@@ -24,6 +24,7 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._construction_refusals import construction_refusal, prefixed_construction_refusal
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -674,10 +675,6 @@ class TestFinanceConfigParsing:
 class TestScenarioFinance:
     """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
 
-    _MINIMAL_PERIOD = {
-        "start_date": "2024-01-01",
-        "end_date": "2024-01-07",
-    }
     _MINIMAL_HOME = {
         "pv": {"capacity_kw": 4.0},
         "load": {"annual_consumption_kwh": 3400},
@@ -691,7 +688,7 @@ class TestScenarioFinance:
         )
         sc = ScenarioConfig(
             name="test",
-            period=SimulationPeriod(**self._MINIMAL_PERIOD),
+            period=SimulationWindow(date(2024, 1, 1), date(2024, 1, 7), ONE_MINUTE, "Europe/London"),
             home=home,
         )
         assert sc.finance is None

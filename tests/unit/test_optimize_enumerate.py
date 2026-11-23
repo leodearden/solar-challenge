@@ -2,11 +2,12 @@
 
 import dataclasses
 import itertools
+from datetime import date
 
 import pytest
 
 from solar_challenge.battery import BatteryConfig, require_valid_capacity_setting
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.dispatch import (
     GridChargeConfig,
     PeakShavingStrategyConfig,
@@ -20,6 +21,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.optimize import ConfigPoint, enumerate_configs
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._read_outcomes import outcome_of
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
@@ -27,6 +29,10 @@ from tests._unusable_numbers import UNUSABLE_NUMBERS
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
+_YEAR_2024 = SimulationWindow(date(2024, 1, 1), date(2024, 12, 31), ONE_MINUTE, "Europe/London")
+"""2024 on London's clock."""
+
 
 def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
     """Build a minimal synthetic fleet ScenarioConfig with distinct LoadConfigs."""
@@ -48,7 +54,7 @@ def _make_fleet_base(n_homes: int = 3) -> ScenarioConfig:
     ]
     return ScenarioConfig(
         name="test-fleet",
-        period=SimulationPeriod("2024-01-01", "2024-12-31"),
+        period=_YEAR_2024,
         homes=homes,
         seg_tariff_pence_per_kwh=7.5,
         finance=finance,
@@ -189,7 +195,7 @@ class TestEnumerateContract:
         result = enumerate_configs(base, [4.0, 5.0], [0.0], [3.68])
         for _, sc in result:
             assert sc.name == "test-fleet"
-            assert sc.period.start_date == "2024-01-01"
+            assert sc.period == base.period
             assert sc.seg_tariff_pence_per_kwh == pytest.approx(7.5)
 
     def test_empty_pv_list_raises(self) -> None:
@@ -218,7 +224,7 @@ class TestEnumerateContract:
         )
         base_single = ScenarioConfig(
             name="single",
-            period=SimulationPeriod("2024-01-01", "2024-12-31"),
+            period=_YEAR_2024,
             home=single_home,
         )
         with pytest.raises(ValueError, match="fleet"):
@@ -252,7 +258,7 @@ class TestPvInverterHomogenization:
         ]
         return ScenarioConfig(
             name="diverse",
-            period=SimulationPeriod("2024-06-01", "2024-06-30"),
+            period=SimulationWindow(date(2024, 6, 1), date(2024, 6, 30), ONE_MINUTE, "Europe/London"),
             homes=homes,
         )
 
@@ -330,7 +336,7 @@ class TestBatteryHomogenization:
         )
         return ScenarioConfig(
             name="mixed-battery",
-            period=SimulationPeriod("2024-01-01", "2024-12-31"),
+            period=_YEAR_2024,
             homes=[home_with_battery, home_without_battery],
         )
 
