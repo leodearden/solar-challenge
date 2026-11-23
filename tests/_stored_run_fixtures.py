@@ -89,6 +89,9 @@ The fixtures, in STORED_RUN_FIXTURES' order:
 PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
 docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
 
+fixture_summary_statistics_documents names the documents of a fixture that hold a
+SummaryStatistics, as they are named in an installed copy too.
+
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
 store can hold a copy of a fixture beside the fixture itself. The functions import the web
@@ -108,7 +111,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from solar_challenge.web.database import Database
@@ -166,6 +169,31 @@ def fixture_runs_row(name: str) -> dict[str, Any]:
     """
     row: dict[str, Any] = json.loads((_fixture_dir(name) / "runs_row.json").read_text())
     return row
+
+
+class SummaryStatisticsDocuments(NamedTuple):
+    """The documents of a stored run that hold a SummaryStatistics: its files, by their POSIX path in its run directory, and its runs row's columns."""
+
+    files: frozenset[str]
+    columns: frozenset[str]
+
+
+def fixture_summary_statistics_documents(name: str) -> SummaryStatisticsDocuments:
+    """The documents of fixture *name* that hold a SummaryStatistics.
+
+    A home run's are its summary.json and its runs row's summary_json. A fleet run's are the
+    homes/home_<i>_summary.json of each home its config.json holds; its runs row holds its
+    FleetSummary alone.
+
+    Raises:
+        ValueError: *name* is not one of STORED_RUN_FIXTURES.
+    """
+    if fixture_run_type(name) == "home":
+        return SummaryStatisticsDocuments(frozenset({"summary.json"}), frozenset({"summary_json"}))
+    homes = json.loads((stored_run_fixture_dir(name) / "config.json").read_text())["homes"]
+    return SummaryStatisticsDocuments(
+        frozenset(f"homes/home_{index}_summary.json" for index in range(len(homes))), frozenset()
+    )
 
 
 def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *, run_id: str | None = None) -> str:

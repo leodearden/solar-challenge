@@ -108,7 +108,12 @@ from tests._refused_migration_steps import the_step_to_version_3_refused
 from tests._run_storage_layout import stored_run_dir
 from tests._run_stores import empty_run_storage, run_storage_over
 from tests._stored_run_fixtures import FIXTURES_DIR as STORED_RUN_FIXTURES_DIR
-from tests._stored_run_fixtures import PRE_975_FLEET_SEG_REVENUE_KEYS, STORED_RUN_FIXTURES, install_stored_run_fixture
+from tests._stored_run_fixtures import (
+    PRE_975_FLEET_SEG_REVENUE_KEYS,
+    STORED_RUN_FIXTURES,
+    fixture_summary_statistics_documents,
+    install_stored_run_fixture,
+)
 from tests._web_runs import store_home_run
 
 _NEEDS_PYARROW = pytest.mark.skipif(
@@ -893,25 +898,6 @@ a battery.
 """
 
 
-_SUMMARY_STATISTICS_DOCUMENTS: Mapping[str, tuple[frozenset[str], frozenset[str]]] = {
-    "pre_469_home": (frozenset({"summary.json"}), frozenset({"summary_json"})),
-    "legacy_fleet": (frozenset({"homes/home_0_summary.json", "homes/home_1_summary.json"}), frozenset()),
-    "pre_786_dispatch_home": (frozenset({"summary.json"}), frozenset({"summary_json"})),
-    "pre_787_dispatch_fleet": (frozenset(f"homes/home_{index}_summary.json" for index in range(3)), frozenset()),
-    "pre_839_flat_grid_charging_fleet": (
-        frozenset(f"homes/home_{index}_summary.json" for index in range(3)),
-        frozenset(),
-    ),
-    "pre_975_seg_fleet": (frozenset({"homes/home_0_summary.json", "homes/home_1_summary.json"}), frozenset()),
-    "pre_867_round_trip_home": (frozenset({"summary.json"}), frozenset({"summary_json"})),
-}
-"""Each legacy stored-run fixture's documents holding a SummaryStatistics, by name: the files, then the runs columns.
-
-v5 rewrites each below version 5, dropping its simulation_days and setting its window when it
-holds none, and v9 each below version 9, dropping its seg_revenue_gbp. A fleet's runs row holds
-its FleetSummary, which neither step changes.
-"""
-
 _FLEET_SUMMARIES_V6_REWRITES = (
     "legacy_fleet",
     "pre_787_dispatch_fleet",
@@ -924,10 +910,12 @@ _FLEET_SUMMARIES_V6_REWRITES = (
 def _summaries_rewritten(name: str, version: int) -> tuple[frozenset[str], frozenset[str]]:
     """The files, then the runs columns, holding a summary of fixture *name* that migrating a store at schema *version* rewrites.
 
-    Below version 9 that is each of its SummaryStatistics documents, which v5 below version 5 and
-    v9 below version 9 rewrite alike, and below version 6 its FleetSummary too, which v6 rewrites.
+    Below version 9 that is each of its SummaryStatistics documents, which v5 below version 5,
+    dropping its simulation_days and setting its window when it holds none, and v9 below version
+    9, dropping its seg_revenue_gbp, rewrite alike; and below version 6 its FleetSummary too,
+    which v6 rewrites, dropping its SEG revenue pair.
     """
-    files, columns = _SUMMARY_STATISTICS_DOCUMENTS[name] if version < 9 else (frozenset(), frozenset())
+    files, columns = fixture_summary_statistics_documents(name) if version < 9 else (frozenset(), frozenset())
     if version < 6 and name in _FLEET_SUMMARIES_V6_REWRITES:
         return files | {"summary.json"}, columns | {"summary_json"}
     return files, columns
@@ -985,7 +973,7 @@ def test_after_migrate_store_no_stored_summary_holds_a_seg_revenue_and_each_run_
     rows = runs_rows_of(older_store.path)
     storage = _storage_of(older_store.path)
     for name, run_id in older_store.run_ids.items():
-        files, columns = _SUMMARY_STATISTICS_DOCUMENTS[name]
+        files, columns = fixture_summary_statistics_documents(name)
         summaries = [
             *(json.loads((_run_dir(older_store.path, run_id) / file).read_text()) for file in files),
             *(json.loads(rows[run_id][column]) for column in columns),
