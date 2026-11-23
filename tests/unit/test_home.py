@@ -1245,10 +1245,6 @@ class TestCalculateSummary:
         with pytest.raises(TypeError):
             calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
-    def test_a_summary_s_seg_revenue_is_none(self, sample_results):
-        """calculate_summary never sets the retired seg_revenue_gbp."""
-        assert calculate_summary(sample_results).seg_revenue_gbp is None
-
     def test_calculates_financial_statistics(self):
         """Calculates financial statistics correctly."""
         index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
@@ -1311,7 +1307,6 @@ class TestCalculateSummaryUnification:
             calculate_seg_revenue(summary.total_grid_export_kwh, SEGTariff(name="", rate_pence_per_kwh=rate_pence)),
             rel=1e-6,
         )
-        assert summary.seg_revenue_gbp is None
 
 
 class TestCalculateSummaryWindow:

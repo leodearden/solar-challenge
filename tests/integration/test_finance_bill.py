@@ -45,7 +45,6 @@ def _make_summary(
     total_export_revenue_gbp: float = 73.8,  # 1800 kWh × 4.1 p/kWh
     net_cost_gbp: float = 202.2,             # 276.0 - 73.8
     days: int = 365,
-    seg_revenue_gbp: Optional[float] = 73.8,
     pricing: Optional[RunPricing] = RunPricing(0.23, 4.1),
 ) -> SummaryStatistics:
     """Build a synthetic SummaryStatistics for finance tests, its run priced at *pricing*: by default the 23 p import and 4.1 p SEG rates its £ totals are."""
@@ -69,7 +68,6 @@ def _make_summary(
         total_import_cost_gbp=total_import_cost_gbp,
         total_export_revenue_gbp=total_export_revenue_gbp,
         net_cost_gbp=net_cost_gbp,
-        seg_revenue_gbp=seg_revenue_gbp,
         pricing=pricing,
     )
 
@@ -244,7 +242,6 @@ class TestHouseholderBillPhysics:
             total_import_cost_gbp=0.0,
             total_export_revenue_gbp=0.0,
             net_cost_gbp=0.0,
-            seg_revenue_gbp=None,
             pricing=RunPricing(None, None),
         )
         finance = _make_finance(retail_baseline_rate_pence_per_kwh=23.0)
@@ -406,7 +403,6 @@ class TestHouseholderBillOverrideAndAnnualisation:
             total_import_cost_gbp=import_cost_30,
             total_export_revenue_gbp=export_rev_30,
             net_cost_gbp=net_cost_30,
-            seg_revenue_gbp=export_rev_30,
         )
 
         summary_365 = _make_summary(days=365)
@@ -475,7 +471,6 @@ class TestOverrideExactValues:
             total_import_cost_gbp=0.0,
             total_export_revenue_gbp=0.0,
             net_cost_gbp=0.0,
-            seg_revenue_gbp=None,
             pricing=RunPricing(None, None),
         )
         with pytest.warns(UserWarning, match="no tariff configured"):
@@ -638,7 +633,6 @@ class TestBillDistribution:
                     total_self_consumption_kwh=2200.0 * multiplier,
                     total_grid_import_kwh=1200.0 * multiplier,
                     total_grid_export_kwh=1800.0 * multiplier,
-                    seg_revenue_gbp=73.8 * multiplier,
                 )
             )
         return homes
@@ -1014,7 +1008,6 @@ class TestHouseholderBillWrapperEquivalence:
             total_self_consumption_kwh=180.82,
             total_grid_import_kwh=98.63,
             total_grid_export_kwh=147.95,
-            seg_revenue_gbp=6.07,
         )
 
         b = householder_bill(
@@ -1054,7 +1047,6 @@ class TestHouseholderBillWrapperEquivalence:
             total_import_cost_gbp=138.0,       # 600 kWh × 23 p/kWh
             total_export_revenue_gbp=0.0,
             net_cost_gbp=138.0,
-            seg_revenue_gbp=0.0,
         )
         b = householder_bill(
             summary=summary,

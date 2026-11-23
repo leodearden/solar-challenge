@@ -29,7 +29,7 @@ _FLEET_MONEY_FIELDS_AND_METRICS = [
 
 
 def _home_summary(**changes: float | None) -> SummaryStatistics:
-    """A one-day home summary with changes applied, carrying the retired seg_revenue_gbp as a stored summary still can."""
+    """A one-day home summary with changes applied."""
     return dataclasses.replace(
         SummaryStatistics(
             total_generation_kwh=10.0,
@@ -48,7 +48,6 @@ def _home_summary(**changes: float | None) -> SummaryStatistics:
             total_import_cost_gbp=0.56,
             total_export_revenue_gbp=0.24,
             net_cost_gbp=0.32,
-            seg_revenue_gbp=1.23,
         ),
         **changes,
     )
@@ -134,10 +133,6 @@ class TestHomeSummaryRows:
             ("Grid Export Revenue", "£0.24"),
             ("Net Cost", "£0.32"),
         )
-
-    def test_a_home_summary_carrying_a_seg_revenue_prints_the_rows_of_one_without(self) -> None:
-        """A home summary's retired seg_revenue_gbp prints no row: its rows are those of the same summary without it."""
-        assert home_summary_rows(_home_summary()) == home_summary_rows(_home_summary(seg_revenue_gbp=None))
 
 
 class TestFleetSummaryRows:
