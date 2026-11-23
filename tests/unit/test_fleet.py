@@ -650,16 +650,6 @@ class TestFleetSummary:
             total_export_revenue_gbp=5.625,
         )
 
-    def test_a_home_summary_s_retired_seg_revenue_moves_nothing_in_the_fleet_s(self, sample_results):
-        """Home summaries carrying the retired seg_revenue_gbp, as stored ones can, aggregate as the same summaries without it."""
-        home_summaries = calculate_home_summaries(sample_results)
-        carrying_one = [
-            replace(summary, seg_revenue_gbp=seg_revenue_gbp)
-            for summary, seg_revenue_gbp in zip(home_summaries, (3.60, None, 10.80))
-        ]
-
-        assert aggregate_home_summaries(carrying_one) == aggregate_home_summaries(home_summaries)
-
     def test_aggregating_no_home_summaries_is_refused(self):
         """A fleet summary aggregates at least one home's summary."""
         with pytest.raises(ValueError, match="at least one home"):

@@ -15,7 +15,9 @@ file that is not a database, naming it, and leave it as it is. migrate brings th
 at version 1 to the stored-run format too, reporting each value it drops that is not null and
 each run it cannot migrate, and the dashboard then shows a run stored before runs carried a
 format version (B5); a store at version 6 it brings forward by dropping each stored battery's
-efficiency, naming each that is not null, and the run then loads with the pair it derived. It refuses a step that cannot write a run's file, exiting 1 with the
+efficiency, naming each that is not null, and the run then loads with the pair it derived; and it
+drops each stored home summary's seg_revenue_gbp, naming each that is not null, a home run then
+loading with none. It refuses a step that cannot write a run's file, exiting 1 with the
 refusal naming the step and the fault, and so it does a run an earlier migration left lagging
 whose file it cannot write in a store at SCHEMA_VERSION, naming the store and the fault. Refused,
 it prints on stdout the report of the steps it applied, which stay applied, then the run files
@@ -323,6 +325,28 @@ def test_web_migrate_brings_a_store_at_version_6_forward_naming_each_battery_rou
     assert (loaded.config.battery_config.charge_efficiency, loaded.config.battery_config.discharge_efficiency) == (0.9, 0.9)
     configs = [json.loads((run_dir / "config.json").read_text()), json.loads(runs_rows_of(database)[run_id]["config_json"])]
     assert ["efficiency" in config["battery_config"] for config in configs] == [False, False]
+
+
+def test_web_migrate_drops_each_stored_home_summary_s_seg_revenue_naming_each_that_is_not_null_and_the_home_run_then_loads(
+    legacy_run_ids: dict[str, str], tmp_path: Path
+) -> None:
+    """Version 9's step names the pre-975 fleet's two home-summary values; pre_469_home's null one goes unnamed, and its summary.json and its runs row's summary_json then hold none."""
+    database = _store_database(tmp_path)
+    fleet_id, home_id = legacy_run_ids["pre_975_seg_fleet"], legacy_run_ids["pre_469_home"]
+    fleet_dir = stored_run_dir(run_storage_over(Database(database)), fleet_id)
+    documents = [f"homes/home_{index}_summary.json" for index in range(2)]
+    stored = {document: json.loads((fleet_dir / document).read_text())["seg_revenue_gbp"] for document in documents}
+
+    result = _web(tmp_path, "migrate")
+
+    assert result.exit_code == 0, result.output
+    for document, value in stored.items():
+        assert _a_line_naming(result.stdout, fleet_id, f"{document}'s seg_revenue_gbp", json.dumps(value)), result.stdout
+    assert not _a_line_naming(result.stdout, home_id, "seg_revenue_gbp"), result.stdout
+    home_dir = stored_run_dir(run_storage_over(Database(database)), home_id)
+    summaries = [json.loads((home_dir / "summary.json").read_text()), json.loads(runs_rows_of(database)[home_id]["summary_json"])]
+    assert ["seg_revenue_gbp" in summary for summary in summaries] == [False, False]
+    assert isinstance(run_storage_over(open_database(database)).load_run(home_id), StoredHomeRun)
 
 
 def test_web_migrate_reports_each_value_v3_rewrites_in_the_pre_787_fleet_with_the_value_it_holds_now(

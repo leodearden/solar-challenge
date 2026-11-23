@@ -1245,10 +1245,6 @@ class TestCalculateSummary:
         with pytest.raises(TypeError):
             calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
-    def test_a_summary_s_seg_revenue_is_none(self, sample_results):
-        """calculate_summary never sets the retired seg_revenue_gbp."""
-        assert calculate_summary(sample_results).seg_revenue_gbp is None
-
     def test_calculates_financial_statistics(self):
         """Calculates financial statistics correctly."""
         index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
@@ -1311,7 +1307,6 @@ class TestCalculateSummaryUnification:
             calculate_seg_revenue(summary.total_grid_export_kwh, SEGTariff(name="", rate_pence_per_kwh=rate_pence)),
             rel=1e-6,
         )
-        assert summary.seg_revenue_gbp is None
 
 
 class TestCalculateSummaryWindow:
@@ -1339,6 +1334,26 @@ class TestCalculateSummaryWindow:
 
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
+_SIXTEEN_REQUIRED_FIGURES = {
+    "total_generation_kwh": 100.0,
+    "total_demand_kwh": 80.0,
+    "total_self_consumption_kwh": 60.0,
+    "total_grid_import_kwh": 20.0,
+    "total_grid_export_kwh": 40.0,
+    "total_battery_charge_kwh": 15.0,
+    "total_battery_discharge_kwh": 15.0,
+    "peak_generation_kw": 4.0,
+    "peak_demand_kw": 3.0,
+    "self_consumption_ratio": 0.6,
+    "grid_dependency_ratio": 0.25,
+    "export_ratio": 0.4,
+    "window": _TWO_JUNE_DAYS,
+    "total_import_cost_gbp": 5.0,
+    "total_export_revenue_gbp": 8.0,
+    "net_cost_gbp": -3.0,
+}
+"""A summary's sixteen required figures, by keyword."""
+
 _FIGURES_IN_THE_POSITIONS_OF_0_5_0 = (100.0, 80.0, 60.0, 20.0, 40.0, 10.0, 8.0, 3.5, 2.5, 0.6, 0.25, 0.4, 7, 5.0, 6.0, -1.0)
 """A summary's sixteen required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
 
@@ -1348,26 +1363,14 @@ class TestSummaryStatistics:
 
     def test_all_fields_present(self):
         """SummaryStatistics has all required fields."""
-        stats = SummaryStatistics(
-            total_generation_kwh=100.0,
-            total_demand_kwh=80.0,
-            total_self_consumption_kwh=60.0,
-            total_grid_import_kwh=20.0,
-            total_grid_export_kwh=40.0,
-            total_battery_charge_kwh=15.0,
-            total_battery_discharge_kwh=15.0,
-            peak_generation_kw=4.0,
-            peak_demand_kw=3.0,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            export_ratio=0.4,
-            window=_TWO_JUNE_DAYS,
-            total_import_cost_gbp=5.0,
-            total_export_revenue_gbp=8.0,
-            net_cost_gbp=-3.0,
-        )
+        stats = SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES)
         assert stats.total_generation_kwh == 100.0
         assert stats.window == _TWO_JUNE_DAYS
+
+    def test_a_summary_takes_no_seg_revenue(self):
+        """A run's SEG income is its total_export_revenue_gbp, priced at its home's SEG rate, so a summary holds no second copy."""
+        with pytest.raises(TypeError, match="seg_revenue_gbp"):
+            SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES, seg_revenue_gbp=None)
 
     def test_a_summarys_simulation_days_are_its_windows_days(self):
         assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2

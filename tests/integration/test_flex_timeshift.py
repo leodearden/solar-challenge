@@ -209,7 +209,6 @@ def test_finance_report_renders_flex_value_block() -> None:
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
-        seg_revenue_gbp=73.8,
         window=make_window(days=365),
         pricing=RunPricing(0.23, 4.1),
     )

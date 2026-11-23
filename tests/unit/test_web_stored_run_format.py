@@ -243,8 +243,8 @@ def test_a_config_value_of_a_type_its_field_cannot_be_is_refused_naming_its_path
         ),
         pytest.param(
             "summary.json",
-            _set("seg_revenue_gbp", value=-(10**400)),
-            "seg_revenue_gbp",
+            _set("total_heat_pump_load_kwh", value=-(10**400)),
+            "total_heat_pump_load_kwh",
             id="an-optional-summary-figure-below-every-float",
         ),
         pytest.param(

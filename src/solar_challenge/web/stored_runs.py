@@ -53,7 +53,9 @@ battery, whose own setting it is: a battery naming no strategy whose home asked 
 takes tou_optimized on its tariff's clock, as the home ran, reported with the value it holds now,
 and every other battery that names no strategy names self_consumption, the dispatch it ran,
 unreported; then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for
-v3 and v8 the same way.
+v3 and v8 the same way. v9 drops each stored home summary's seg_revenue_gbp, a home run's summary
+and each fleet home summary, reporting each value that is not null; v2 keeps it for v9 the same
+way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -893,15 +895,18 @@ _BATTERY_ROUND_TRIP = "efficiency"
 _HOME_DISPATCH = "dispatch_strategy"
 """The key of the dispatch a HomeConfig stored before format 8 asked for by name, 'greedy' or 'tou_optimized'; v3 reads it as its run ran, and v8 moves it into the home's battery, then drops it."""
 
+_SUMMARY_SEG_REVENUE = "seg_revenue_gbp"
+"""The key of the SEG revenue a SummaryStatistics stored before format 9 may hold, a second copy of its total_export_revenue_gbp; v9 drops it."""
+
 _RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
     {
-        SummaryStatistics: frozenset({_SIMULATION_DAYS}),
+        SummaryStatistics: frozenset({_SIMULATION_DAYS, _SUMMARY_SEG_REVENUE}),
         FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS),
         BatteryConfig: frozenset({_BATTERY_ROUND_TRIP}),
         HomeConfig: frozenset({_HOME_DISPATCH}),
     }
 )
-"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair and v7 a battery's efficiency, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery."""
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, v7 a battery's efficiency and v9 a home summary's seg_revenue_gbp, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery."""
 
 
 def _not_read_by_a_later_step(owner: type, key: str) -> bool:
@@ -1213,6 +1218,16 @@ def _tou_optimized_on_the_tariffs_clock() -> dict[str, Any]:
     return {"strategy_type": "tou_optimized", "peak_hours": None}
 
 
+def _is_a_summary_seg_revenue(owner: type, key: str) -> bool:
+    """Whether *key* of a stored object of *owner* is a SummaryStatistics' seg_revenue_gbp, _SUMMARY_SEG_REVENUE."""
+    return (owner, key) == (SummaryStatistics, _SUMMARY_SEG_REVENUE)
+
+
+def _summary_seg_revenues_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v9's step: *documents* without each stored SummaryStatistics' seg_revenue_gbp, a home run's summary and each of a fleet run's home summaries, and each dropped value that is not null; a fleet's FleetSummary and every config are left as they are."""
+    return _unknown_keys_dropped(run_type, documents, _is_a_summary_seg_revenue)
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -1257,6 +1272,12 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "takes tou_optimized on its tariff's clock when its home asked for it, and every other battery that "
         "names no strategy names self_consumption, then drop the home's key, which no HomeConfig has",
         _home_dispatch_moved_to_its_battery,
+    ),
+    RunDocumentStep(
+        9,
+        "Drop each stored home summary's seg_revenue_gbp, a second copy of its total_export_revenue_gbp, "
+        "which SummaryStatistics no longer has",
+        _summary_seg_revenues_dropped,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""
