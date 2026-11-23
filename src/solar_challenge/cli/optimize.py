@@ -10,7 +10,6 @@ import dataclasses
 from pathlib import Path
 from typing import Annotated, Optional
 
-import pandas as pd
 import typer
 
 from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
@@ -35,7 +34,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
 )
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -306,15 +305,22 @@ def configs(
         )
         fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
 
-    # ---- Resolve start/end: CLI args override scenario period; fall back to
-    #      timebase's default window when neither is present. ------------
+    # ---- Build base ScenarioConfig: CLI args override scenario period; fall
+    #      back to timebase's default window when neither is present. -----
     loc = fleet_config.homes[0].location
     _scenario_period: dict[str, str] = raw.get("period", {}) or {}
     _start_str = start or _scenario_period.get("start_date", DEFAULT_FIRST_DAY.isoformat())
     _end_str = end or _scenario_period.get("end_date", DEFAULT_LAST_DAY.isoformat())
-    start_date = pd.Timestamp(_start_str, tz=loc.timezone)
-    end_date = pd.Timestamp(_end_str, tz=loc.timezone)
-    days = covered_days(start_date.date(), end_date.date())
+    base = ScenarioConfig(
+        name=raw.get("name", str(scenario)),
+        period=period_window(_start_str, _end_str, timezone=loc.timezone),
+        homes=fleet_config.homes,
+        location=loc,
+        finance=finance,
+    )
+    if seg_rate is not None:
+        base = dataclasses.replace(base, seg_tariff_pence_per_kwh=seg_rate)
+    days = base.period.days
     n_homes = len(fleet_config.homes)
 
     n_configs = len(pv_list) * len(battery_list) * len(inverter_list)
@@ -334,17 +340,6 @@ def configs(
             "For exploratory runs, use --start / --end to limit the simulation window "
             "(e.g. --start 2024-01-01 --end 2024-01-07)."
         )
-
-    # ---- Build base ScenarioConfig ------------------------------------------
-    base = ScenarioConfig(
-        name=raw.get("name", str(scenario)),
-        period=period_window(_start_str, _end_str, timezone=loc.timezone),
-        homes=fleet_config.homes,
-        location=loc,
-        finance=finance,
-    )
-    if seg_rate is not None:
-        base = dataclasses.replace(base, seg_tariff_pence_per_kwh=seg_rate)
 
     # ---- Enumerate configs --------------------------------------------------
     all_configs = enumerate_configs(base, pv_list, battery_list, inverter_list)

@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-import pandas as pd
 import typer
 
 from solar_challenge.cli.utils import CliInvocation, handle_errors, invocation, print_info, print_report
@@ -47,7 +46,7 @@ from solar_challenge.scenario_blocks import (
     parse_seg_rate,
 )
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Financial analysis commands")
 
@@ -236,12 +235,20 @@ def run(
     fleet_config = _with_seg_tariff(fleet_config, seg_rate)
 
     loc = fleet_config.homes[0].location
-    start_date = pd.Timestamp(start, tz=loc.timezone)
-    end_date = pd.Timestamp(end, tz=loc.timezone)
-    days = covered_days(start_date.date(), end_date.date())
+    scenario_config = ScenarioConfig(
+        name=raw.get("name", str(scenario)),
+        period=period_window(start, end, timezone=loc.timezone),
+        homes=fleet_config.homes,
+        location=loc,
+        finance=finance,
+        # Only --cost-recovery passes the rate on:
+        # tests/integration/test_finance_run_cli.py::test_project_economics_are_the_same_with_and_without_cost_recovery
+        seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
+    )
+    start_date, end_date = scenario_config.simulation_bounds()
 
     cli = invocation(ctx)
-    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {days} days…")
+    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {scenario_config.period.days} days…")
     fleet_results = cli.runner.simulate(fleet_config, start_date, end_date)
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
@@ -255,16 +262,6 @@ def run(
     )
 
     simulate = reusing(cli.runner.simulate, fleet_results, start_date, end_date)
-    scenario_config = ScenarioConfig(
-        name=raw.get("name", str(scenario)),
-        period=period_window(start, end, timezone=loc.timezone),
-        homes=fleet_config.homes,
-        location=loc,
-        finance=finance,
-        # Only --cost-recovery passes the rate on:
-        # tests/integration/test_finance_run_cli.py::test_project_economics_are_the_same_with_and_without_cost_recovery
-        seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
-    )
     economics_result = (
         _project_level_economics(cli, scenario_config, finance, simulate) if project else None
     )

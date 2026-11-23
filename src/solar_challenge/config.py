@@ -88,7 +88,7 @@ def period_day(value: object, path: str) -> date:
 
 
 def period_window(start_date: object, end_date: object, *, timezone: str, block_path: str = "period") -> SimulationWindow:
-    """The one-minute window on *timezone* from *start_date* to *end_date*, each read by period_day at its path in the period at *block_path*; a last day before the first raises ConfigurationError naming both paths and days."""
+    """The one-minute window on *timezone* from *start_date* to *end_date*, each read by period_day at its path in the period at *block_path*; a pair of days SimulationWindow refuses, such as a last day before the first, raises ConfigurationError naming both paths and days and the window's reason."""
     start_path = child_path(block_path, "start_date")
     end_path = child_path(block_path, "end_date")
     first_day = period_day(start_date, start_path)
@@ -97,7 +97,7 @@ def period_window(start_date: object, end_date: object, *, timezone: str, block_
         return SimulationWindow(first_day, last_day, ONE_MINUTE, timezone)
     except ValueError as exc:
         raise refusal(
-            start_path, f"{first_day.isoformat()} is after {end_path} {last_day.isoformat()}: {exc}"
+            start_path, f"{first_day.isoformat()} to {end_path} {last_day.isoformat()} gives no window: {exc}"
         ) from exc
 
 
