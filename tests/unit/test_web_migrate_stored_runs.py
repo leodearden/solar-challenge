@@ -1544,7 +1544,7 @@ def test_a_migration_whose_transaction_fails_after_its_run_files_are_brought_for
     The refusal names each run whose files stay brought forward; v2 drops only null keys from
     them, so it names no value. Run again once the trigger is dropped, the migration leaves
     those files as they are until v3, as they are in format 2 already, then brings them forward
-    by v3, v4, v5, v6 and v7, and brings the runs rows forward.
+    by each step from v3 to v9, and brings the runs rows forward.
     """
     with Database(store_at_version_1).transaction() as conn:
         conn.execute(
@@ -1605,7 +1605,7 @@ def test_migrate_store_refused_at_v3_after_it_applied_v2_carries_the_report_of_v
     files_brought_forward. Run again, the migration goes on from version 2, leaves those files as
     they are, and so reports v3's rewrites of that fleet's runs row alone, then v4's of the pre-839
     fleet's config.json and runs row, and v6's drops of the pre-975 fleet's SEG revenue pair from
-    its summary.json and runs row.
+    its summary.json and runs row, then v9's of its home summaries' seg_revenue_gbp.
     """
     run_id = _install_a_copy_holding_a_retired_figure(store_at_version_1, "retired-figure")
 

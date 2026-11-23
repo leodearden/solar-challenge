@@ -34,8 +34,8 @@ tree's calculate_home_summaries at a 15 p SEG rate and aggregate_home_summaries;
 through that tree's RunStorage.save_fleet_run into a temporary store, then marked the run
 completed; and the format.json that save wrote was deleted. Its FleetSummary holds a non-null
 total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, which the stored-run format's v6 step
-drops, and each home summary a non-null seg_revenue_gbp, which the field's retirement at the
-program's surface bump will drop.
+drops, and each home summary a non-null seg_revenue_gbp, which the stored-run format's v9 step
+drops.
 
 pre_867_round_trip_home is a run that the code of main at commit 14e44124 ("Merge task/975 into
 main"), the base of task 867, saved in format 6, while a battery still had a round-trip efficiency

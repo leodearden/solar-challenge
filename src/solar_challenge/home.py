@@ -414,11 +414,6 @@ class SummaryStatistics:
     total_export_revenue_gbp: float  # total revenue from grid exports in £
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
-    # calculate_summary leaves it None, and no src module reads it; a summary stored before
-    # format 6 may still hold the retired figure. The run's export revenue is
-    # total_export_revenue_gbp. Retired at the program's surface bump
-    # (docs/prds/board-reports-sections-by-mode.md §5.6, ζ).
-    seg_revenue_gbp: Optional[float] = None
     total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
     peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
     heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
