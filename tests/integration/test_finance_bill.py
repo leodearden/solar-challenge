@@ -625,7 +625,7 @@ class TestBillDistribution:
 
     def _make_fleet(self) -> list:
         """Create a 5-home fleet with varying costs."""
-        # Five homes with increasing import costs → distinct net bills
+        # Five homes with increasing import costs → distinct total outlays
         homes = []
         for multiplier in [0.5, 0.8, 1.0, 1.3, 1.6]:
             homes.append(
@@ -677,7 +677,6 @@ class TestBillDistribution:
         finance = _make_finance()
         dist = bill_distribution(summaries, finance)
 
-        # per_home_total_outlay_gbp now holds per-home total_outlay values (CR3)
         series = pd.Series(list(dist.per_home_total_outlay_gbp))
         assert dist.min_gbp == pytest.approx(float(series.min()))
         assert dist.mean_gbp == pytest.approx(float(series.mean()))
@@ -691,7 +690,7 @@ class TestBillDistribution:
         dist = bill_distribution(summaries, finance)
 
         # Find the median-total_outlay home index manually
-        outlay_vals = list(dist.per_home_total_outlay_gbp)  # now holds total_outlay_gbp
+        outlay_vals = list(dist.per_home_total_outlay_gbp)
         series = pd.Series(outlay_vals)
         median_val = float(series.median())
         rep_idx = int((series - median_val).abs().idxmin())
@@ -714,7 +713,6 @@ class TestBillDistribution:
 
         assert len(dist.per_home_total_outlay_gbp) == 1
         outlay = dist.per_home_total_outlay_gbp[0]
-        # CR3: per_home_total_outlay_gbp holds total_outlay_gbp values
         assert dist.representative.total_outlay_gbp == pytest.approx(outlay)
         assert dist.min_gbp == pytest.approx(outlay)
         assert dist.mean_gbp == pytest.approx(outlay)
