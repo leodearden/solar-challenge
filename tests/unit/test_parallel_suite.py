@@ -71,9 +71,9 @@ def test_a_child_a_test_starts_inherits_no_terminal_size(
 
 
 def test_a_pytest_session_a_test_not_marked_slow_starts_runs_n_auto_in_its_own_process(pytester: pytest.Pytester) -> None:
-    """A session that a test not marked slow starts with `-n auto`, as a copy of pyproject's addopts gives it, starts no workers.
+    """A session that a test not marked slow starts with `-n auto`, as a test that runs the verify's test command verbatim passes it, starts no workers.
 
-    The suite already spreads its tests over every core. A child session that
+    The verify already spreads the suite over workers. A child session that
     started a worker per core would multiply the run's workers, and would break
     the tests that count a session's outcomes or need its tests run in order.
     """

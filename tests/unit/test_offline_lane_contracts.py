@@ -224,13 +224,13 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
-    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
+    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts or PYTEST_ADDOPTS ask for."""
     suite = lane_job_steps(project_root, job.name).suite
     arguments = pytest_arguments(suite)
 
     assert ("-n", "0") in zip(arguments, arguments[1:]), (
         f"the {job.name!r} lane job {suite.command!r} does not pass pytest `-n 0`, so its suite may run on pytest-xdist "
-        "workers (the count the command names, else one per core under pyproject's addopts `-n auto`, unless a "
+        "workers (the count the command names, or one per core should addopts or PYTEST_ADDOPTS pass `-n auto`, unless a "
         "conftest resolves that otherwise): each worker repeats the module-scoped work its suite does once, which "
         "asks a live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, "
         "each a verify over every core; and each e2e worker starts its own live server and Chromium, whose pages, on a "
