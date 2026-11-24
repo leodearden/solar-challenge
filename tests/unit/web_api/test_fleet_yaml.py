@@ -10,7 +10,7 @@ import yaml
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import load_scenario
+from solar_challenge.config import load_scenario, parse_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import parse_fleet_distribution_config
@@ -295,6 +295,27 @@ class TestImportFleetYAML:
 
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+
+    def test_a_scenario_with_a_key_no_scenario_reads_is_refused_naming_it(self, client: FlaskClient) -> None:
+        """A scenario file with a misspelt finance: block gets a 400 carrying parse_scenario's refusal, which names the key, rather than a 200 listing it as not loaded."""
+        document = {
+            "fleet_distribution": {
+                "n_homes": 25,
+                "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+                "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+            },
+            "finanse": {"standing_charge_pence_per_day": 60.0},
+        }
+        with pytest.raises(ConfigurationError) as reader_refusal:
+            parse_scenario(document)
+
+        resp = client.post(
+            "/api/fleet/import-yaml", data=yaml.safe_dump(document), content_type="text/yaml"
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(reader_refusal.value)}
+        assert "'finanse'" in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
         "counts",

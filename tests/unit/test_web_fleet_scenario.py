@@ -896,7 +896,7 @@ class TestFleetFormFromScenario:
                         **_FLEET_SCENARIO["fleet_distribution"]["battery"],
                         "dispatch_strategy": {
                             "strategy_type": "tou_optimized",
-                            "peak_hours": [[7, 9], [16, 19]],
+                            "peak_hours": [[8, 10], [16, 19]],
                         },
                     }
                 ),
@@ -929,6 +929,18 @@ class TestFleetFormFromScenario:
         """A scenario whose fleet, period, tariff or dispatch the form cannot hold exactly is refused, naming the setting: loading it anyway would run a different fleet."""
         with pytest.raises(ValueError, match=re.escape(reason)):
             fleet_form_from_scenario(document)
+
+    def test_a_scenario_key_no_scenario_reads_is_refused_naming_it(self) -> None:
+        """A misspelt finance: block is refused as parse_scenario refuses it, rather than named not loaded."""
+        document = {**_FLEET_SCENARIO, "finanse": {"standing_charge_pence_per_day": 60.0}}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+        assert "'finanse'" in str(refusal.value)
 
     def test_a_scenario_the_loaders_refuse_is_refused_with_their_message(self) -> None:
         """The loaders' refusal of a scenario is the import's refusal."""
