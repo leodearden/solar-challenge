@@ -14,7 +14,8 @@ table's header names the parameter the sweep ran, not one selected since, that
 running a sweep drops the requests the sweep before it still has in flight and
 opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
-and that the page says why when it loses track of a sweep. A point whose job
+and that the page says why when it loses track of a sweep, even when the
+browser renders no animation frame. A point whose job
 is cancelled, or which the server no longer tracks, shows that in its row, and
 the page goes on to follow the next point. A point whose final state the page
 cannot read shows failed, and the page goes on to follow the next point. A
@@ -60,6 +61,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from tests._server_drawn_badges import server_drawn_classes
 from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._animation_frames import withhold_animation_frames
 from tests.e2e._job_requests import (
     DISCONNECTED_REQUEST_CONSOLE_ERROR,
     HeldJobRequests,
@@ -495,14 +497,17 @@ def test_a_sweep_run_after_another_opens_no_stream_for_the_earlier_sweeps_remain
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
+_AN_EVENT_SOURCE_THAT_OPENS_NO_STREAMS = (
+    "window.EventSource = class {"
+    " constructor() { throw new Error('this browser opens no event streams'); } };"
+)
+
+
 def test_the_page_says_why_it_lost_track_of_a_sweep_it_cannot_follow(
     page: Page, live_server: str, sweep_jobs: _SweepJobs, page_errors: list[str]
 ) -> None:
     """Run a sweep in a browser whose EventSource constructor throws, as a real one does for a URL it cannot parse: the page says why it lost track of the sweep, and leaves no error uncaught."""
-    page.add_init_script(
-        "window.EventSource = class {"
-        " constructor() { throw new Error('this browser opens no event streams'); } };"
-    )
+    page.add_init_script(_AN_EVENT_SOURCE_THAT_OPENS_NO_STREAMS)
     page.goto(live_server + "/scenarios/sweep")
     page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
 
@@ -512,6 +517,22 @@ def test_the_page_says_why_it_lost_track_of_a_sweep_it_cannot_follow(
         )
     ).to_be_visible()
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
+
+
+def test_the_page_says_why_it_lost_track_of_a_sweep_while_the_browser_renders_no_frame(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """Run a sweep in a browser that renders no animation frame and whose EventSource constructor throws: the page still shows why it lost track of the sweep."""
+    withhold_animation_frames(page)
+    page.add_init_script(_AN_EVENT_SOURCE_THAT_OPENS_NO_STREAMS)
+    page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    expect(
+        page.get_by_text(
+            "Lost track of the sweep: this browser opens no event streams", exact=True
+        )
+    ).to_be_visible()
 
 
 def test_a_sweep_point_whose_progress_stream_disconnects_shows_its_results_once_its_job_completes(
