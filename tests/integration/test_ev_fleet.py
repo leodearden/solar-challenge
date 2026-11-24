@@ -6,8 +6,10 @@ Tests that ask june_fleet_run for equal fleets over as many days share one simul
 Tests EV integration with fleet-level aggregation and diversity.
 """
 
+import numpy as np
 import pytest
 import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.ev import EVConfig
@@ -304,9 +306,9 @@ class TestFleetWithEVs:
                 battery_config=BatteryConfig.default_5kwh(),
                 ev_config=EVConfig(
                     charger_type="7kW",
-                    arrival_hour=8,  # Arrive during solar window
+                    arrival_hour=8,
                     departure_hour=17,
-                    required_charge_kwh=21.0,  # 3 hours charging
+                    required_charge_kwh=21.0,  # 3 hours charging, 180 rows
                     smart_charging_mode="solar",
                 ),
                 location=Location.bristol(),
@@ -319,15 +321,15 @@ class TestFleetWithEVs:
         # All homes should have completed successfully
         assert len(results) == 3
 
-        # Check that charging occurs during solar hours (10:00-16:00)
-        solar_window_start = 10 * 60  # 600
-        solar_window_end = 16 * 60  # 960
-
         for i in range(3):
-            demand = results[i].demand
-            solar_window_demand = demand.iloc[solar_window_start:solar_window_end]
-            # Should have elevated demand during solar window
-            assert solar_window_demand.sum() > 0
+            stay_generation = results[i].generation[
+                pd.Timestamp("2024-06-21 08:00", tz="Europe/London") : pd.Timestamp(
+                    "2024-06-21 16:59", tz="Europe/London"
+                )
+            ]
+            start = int(np.argmax(sliding_window_view(stay_generation.to_numpy(), 180).sum(axis=1)))
+            most_generation = stay_generation.index[start : start + 180]
+            assert (results[i].demand[most_generation] >= 7.0).all()
 
     def test_off_peak_charging_mode_in_fleet(self, june_fleet_run):
         """Off-peak EV charging works in fleet simulation."""

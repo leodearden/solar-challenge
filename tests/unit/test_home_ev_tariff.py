@@ -18,7 +18,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import WeatherCache
 from tests._ev_sessions import charging_sessions
-from tests._off_peak_ev_on_each_tariff import FIRST_SESSION_ON_EACH_TARIFF, JANUARY_DAYS, OFF_PEAK_EV
+from tests._off_peak_ev_on_each_tariff import FIRST_ARRIVAL, FIRST_SESSION_ON_EACH_TARIFF, JANUARY_DAYS, OFF_PEAK_EV
 from tests._repository_paths import SCENARIOS_DIR
 from tests._synthetic_weather import synthetic_tmy, weather_for
 
@@ -38,9 +38,9 @@ def _simulated(home: HomeConfig) -> SimulationResults:
 
 
 def _first_charging_session(home: HomeConfig, results: SimulationResults) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """The (first minute, minute after the last) of the first unbroken run of minutes whose demand exceeds the household's by more than half the 7 kW charger."""
+    """The (first minute, minute after the last) of the first unbroken run of minutes from FIRST_ARRIVAL whose demand exceeds the household's by more than half the 7 kW charger."""
     ev_kw = results.demand - generate_load_profile(home.load_config, results.window)
-    return charging_sessions(ev_kw, above_kw=3.5)[0]
+    return charging_sessions(ev_kw[FIRST_ARRIVAL:], above_kw=3.5)[0]
 
 
 @pytest.mark.parametrize(("tariff", "first_session"), FIRST_SESSION_ON_EACH_TARIFF)
@@ -67,6 +67,7 @@ def test_home_run_on_economy_10_steps_demand_by_the_charger_at_00_00_and_05_00(
 ) -> None:
     """`home run` gives an off_peak EV its home tariff: scenarios/example-economy7.yaml on Economy 10, with an off_peak EV and a deterministic load.
 
+    The first morning's session, of the stay from the evening before the run, ends at 05:00;
     Economy 7's 00:30-07:30 would put the steps at 00:30 and 05:30.
     """
     document = yaml.safe_load((SCENARIOS_DIR / "example-economy7.yaml").read_text())
@@ -95,10 +96,11 @@ def test_home_run_on_economy_10_steps_demand_by_the_charger_at_00_00_and_05_00(
     demand_steps = pd.read_csv(output, index_col=0, parse_dates=True)["demand_kw"].diff()
     charger_steps = demand_steps[demand_steps.abs() > 3.5]
     assert list(charger_steps.index) == [
+        pd.Timestamp("2024-01-10 05:00", tz="Europe/London"),
         pd.Timestamp("2024-01-11 00:00", tz="Europe/London"),
         pd.Timestamp("2024-01-11 05:00", tz="Europe/London"),
     ]
-    assert charger_steps.tolist() == pytest.approx([7.0, -7.0], abs=0.5)
+    assert charger_steps.tolist() == pytest.approx([-7.0, 7.0, -7.0], abs=0.5)
 
 
 @pytest.mark.parametrize(
