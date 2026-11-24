@@ -75,7 +75,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short -n auto --dist loadgroup"
+addopts = "-v --tb=short"
 # Every pytest deprecation, and every deprecated call made from solar_challenge's modules or the test suite's own, is an error;
 # tests/unit/test_pytest_deprecations_are_errors.py and tests/unit/test_deprecated_calls_from_solar_challenge_and_its_tests_are_errors.py say why.
 filterwarnings = ["error::pytest.PytestDeprecationWarning", 'error::DeprecationWarning:solar_challenge|tests(\.|$)']
