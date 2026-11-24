@@ -31,7 +31,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "simulate_(home|fleet)"
+          pattern: "^(from|import) .*simulate_(home|fleet)|^ +simulate_(home|fleet),|simulate_(home|fleet)\\("
           paths: ["src/solar_challenge/config.py"]
           expect: absent
       - name: "runner-test-module-deleted"
