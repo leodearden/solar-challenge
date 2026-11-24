@@ -506,6 +506,40 @@ home:
         for name in named[1:]:
             assert name in error_row, (name, error_row)
 
+    @pytest.mark.parametrize(
+        ("document", "refusal"),
+        [
+            pytest.param(
+                "homes: [{}]\ncommunity: {sharing_mode: p2p, mode: p2p}\n",
+                "community: unrecognised keys 'mode'",
+                id="a-community-key-it-does-not-read",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "tariff: {type: economy_7}\nfinanse: {}\n",
+                "the top level: unrecognised keys 'finanse'",
+                id="a-sweeps-misspelt-block",
+            ),
+        ],
+    )
+    def test_every_block_of_the_file_is_read_as_the_commands_read_it(
+        self, tmp_path: Path, document: str, refusal: str
+    ) -> None:
+        """`validate config` reads the file's community: block, and a YAML sweep's top level through the scenario grammar."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        assert text[text.index("ERROR"):].startswith(f"ERROR {refusal}"), text
+
+    def test_a_sweep_with_a_tariff_and_a_seg_rate_is_valid(self, tmp_path: Path) -> None:
+        result = self._validate_config(
+            tmp_path, _SWEEP_FLEET + "tariff: {type: economy_7}\nseg: {rate_pence_per_kwh: 4.1}\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "OK Configuration is valid" in table_text(result.stdout)
+
     def test_a_homes_value_that_is_no_list_exits_as_a_refusal_not_a_traceback(self, tmp_path: Path) -> None:
         """R2: homes: 5 was a TypeError, which the command does not catch, so it escaped with a traceback."""
         result = self._validate_config(tmp_path, "homes: 5\n")
