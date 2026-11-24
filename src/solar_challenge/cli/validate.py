@@ -203,8 +203,11 @@ def _homes_defined_by(config_file: Path) -> _DefinedHomes:
     """The homes the file defines, every block of it read as the commands read it.
 
     A YAML-defined sweep is read as `fleet sweep` reads it, at every sweep point; any other
-    file through the one scenario reader, load_scenarios. Its community: block is read
-    after its homes. Raises the ConfigurationError or ValueError of the first refusal.
+    file through the one scenario reader, load_scenarios. Sweep detection reads a
+    fleet_distribution: file's keys and scenario-level blocks before its fleet_distribution:
+    block, as both readers do, so either form is refused on the same first block as `fleet
+    run` and `fleet sweep` refuse it. Its community: block is read after its homes. Raises
+    the ConfigurationError or ValueError of the first refusal.
     """
     document = load_config(config_file)
     if detect_fleet_sweep_spec(document) is not None:

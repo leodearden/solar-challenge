@@ -37,6 +37,7 @@ from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, SimulationWindow
+from tests._flex_band_refusal import flex_band_refusal
 
 
 def _window(first_day: date, last_day: date, timezone: str | None = "Europe/London") -> SimulationWindow:
@@ -798,13 +799,6 @@ def _parse_refusal(document: object, *, block_path: str = "") -> str:
     return str(refusal.value)
 
 
-def _band_refusal(value: object, what: str) -> str:
-    """The message GridServicesBand.parse refuses *value* with, for *what*."""
-    with pytest.raises(ConfigurationError) as refusal:
-        GridServicesBand.parse(value, what=what)
-    return str(refusal.value)
-
-
 class TestParseScenario:
     """parse_scenario reads one scenario mapping: its scenario-level blocks, then exactly one homes source, each home given the scenario's location and tariff."""
 
@@ -880,32 +874,58 @@ class TestParseScenario:
     @pytest.mark.parametrize(
         ("block_path", "what"), [pytest.param("", "flex_band", id="bare"), pytest.param("scenarios[2]", "scenarios[2].flex_band", id="scenarios")]
     )
-    def test_a_flex_band_naming_no_band_is_refused_as_the_band_refuses_it(self, block_path: str, what: str) -> None:
-        assert _parse_refusal({"flex_band": 1, "home": _A_HOME}, block_path=block_path) == _band_refusal(1, what)
+    @pytest.mark.parametrize("value", [pytest.param(1, id="a-number"), pytest.param("Medium", id="a-word-in-any-case")])
+    def test_a_flex_band_naming_no_band_is_refused_as_the_band_refuses_it_as_written(
+        self, block_path: str, what: str, value: object
+    ) -> None:
+        assert _parse_refusal({"flex_band": value, "home": _A_HOME}, block_path=block_path) == flex_band_refusal(value, what)
 
-    def test_a_community_block_is_read_by_its_own_reader_and_reaches_no_home(self) -> None:
+    def test_a_community_block_is_recognised_and_reaches_no_home(self) -> None:
         scenario = parse_scenario({"community": {"sharing_mode": "p2p"}, "home": _A_HOME})
 
         assert scenario.simulated_homes() == parse_scenario({"home": _A_HOME}).simulated_homes()
 
     @pytest.mark.parametrize(
-        ("sources", "named"),
+        ("sources", "refusal"),
         [
-            pytest.param({"home": _A_HOME, "homes": [_A_HOME]}, ("home", "homes"), id="home-and-homes"),
+            pytest.param(
+                {"home": _A_HOME, "homes": [_A_HOME]},
+                "the top level: sets 'home', 'homes', but a scenario's homes come from exactly one of "
+                "'home', 'homes', 'fleet_distribution'",
+                id="home-and-homes",
+            ),
             pytest.param(
                 {"home": _A_HOME, "homes": [_A_HOME], "fleet_distribution": _TWO_HOME_DISTRIBUTION},
-                ("home", "homes", "fleet_distribution"),
+                "the top level: sets 'home', 'homes', 'fleet_distribution', but a scenario's homes come "
+                "from exactly one of 'home', 'homes', 'fleet_distribution'",
                 id="all-three",
             ),
-            pytest.param({}, ("home", "homes", "fleet_distribution"), id="none"),
+            pytest.param(
+                {"homes": [_A_HOME], "fleet_distribution": None},
+                "the top level: sets 'homes', 'fleet_distribution', but a scenario's homes come from "
+                "exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="a-null-source-beside-another",
+            ),
+            pytest.param(
+                {},
+                "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="none",
+            ),
         ],
     )
-    def test_a_scenario_must_give_exactly_one_homes_source(self, sources: dict[str, object], named: tuple[str, ...]) -> None:
-        message = _parse_refusal({"name": "a", **sources})
+    def test_a_scenario_must_give_exactly_one_homes_source(self, sources: dict[str, object], refusal: str) -> None:
+        assert _parse_refusal({"name": "a", **sources}) == refusal
 
-        assert message.startswith("the top level: ")
-        for source in named:
-            assert repr(source) in message, (source, message)
+    @pytest.mark.parametrize(
+        ("source", "refusal"),
+        [
+            pytest.param("home", "home: must be a mapping, got NoneType", id="home"),
+            pytest.param("homes", "homes: must be a list, got NoneType", id="homes"),
+            pytest.param("fleet_distribution", "fleet_distribution: must be a mapping, got NoneType", id="fleet_distribution"),
+        ],
+    )
+    def test_a_null_homes_source_is_refused_by_its_reader(self, source: str, refusal: str) -> None:
+        assert _parse_refusal({source: None}) == refusal
 
     def test_an_empty_homes_list_is_refused(self) -> None:
         assert _parse_refusal({"homes": []}) == "homes: must list at least one home"

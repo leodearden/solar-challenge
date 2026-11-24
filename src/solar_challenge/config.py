@@ -381,10 +381,17 @@ def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str
 
 
 def _parse_flex_band(value: object, *, block_path: str) -> Optional[GridServicesBand]:
-    """The band the flex_band at *block_path* names, a string read case-insensitively; None when it is absent or null."""
+    """The band the flex_band at *block_path* names, a string read case-insensitively; None when it is absent or null.
+
+    Raises:
+        ConfigurationError: as GridServicesBand.parse refuses a value naming no band, naming
+            the value as written.
+    """
     if value is None:
         return None
-    return GridServicesBand.parse(value.lower() if isinstance(value, str) else value, what=block_path)
+    if isinstance(value, str) and value.lower() in {band.value for band in GridServicesBand}:
+        return GridServicesBand(value.lower())
+    return GridServicesBand.parse(value, what=block_path)
 
 
 def _read_scenario_level_blocks(document: object, *, block_path: str) -> tuple[dict[str, Any], _ScenarioLevelBlocks]:
@@ -411,11 +418,11 @@ def _read_scenario_level_blocks(document: object, *, block_path: str) -> tuple[d
     )
 
 
-def _homes_source(scenario: Mapping[str, Any], *, block_path: str) -> str:
-    """The one key of _HOMES_SOURCES the scenario at *block_path* sets, refusing it, naming the sources, unless it sets exactly one."""
+def _refuse_unless_one_homes_source(scenario: Mapping[str, Any], *, block_path: str) -> None:
+    """Refuse the scenario at *block_path*, naming the sources, unless it sets exactly one key of _HOMES_SOURCES, a null one included."""
     given = [key for key in _HOMES_SOURCES if key in scenario]
     if len(given) == 1:
-        return given[0]
+        return
     sources = ", ".join(repr(key) for key in _HOMES_SOURCES)
     if not given:
         raise refusal(block_path, f"requires the scenario's homes, from exactly one of {sources}")
@@ -423,6 +430,12 @@ def _homes_source(scenario: Mapping[str, Any], *, block_path: str) -> str:
         block_path,
         f"sets {', '.join(repr(key) for key in given)}, but a scenario's homes come from exactly one of {sources}",
     )
+
+
+def _homes_source(scenario: Mapping[str, Any], *, block_path: str) -> str:
+    """The one key of _HOMES_SOURCES the scenario at *block_path* sets, refused as _refuse_unless_one_homes_source refuses it."""
+    _refuse_unless_one_homes_source(scenario, block_path=block_path)
+    return next(key for key in _HOMES_SOURCES if key in scenario)
 
 
 def parse_scenario(document: object, *, block_path: str = "") -> ScenarioConfig:
@@ -433,8 +446,9 @@ def parse_scenario(document: object, *, block_path: str = "") -> ScenarioConfig:
     tariff, seg, finance, flex_band and community, then exactly one homes source: home, homes or
     fleet_distribution. Every home is built at the location, on the tariff unless it sets an equal
     one, and simulated at the seg rate unless it sets its own. Blocks are read in that order, a
-    null one as absent; community: is left to load_community_config. The grammar is
-    docs/prds/one-scenario-reader.md §4.2.
+    null scenario-level block as absent; community: is left to load_community_config. The homes
+    source is the key the scenario sets, so a null one is refused by its reader, as no mapping
+    or no list. The grammar is docs/prds/one-scenario-reader.md §4.2.
 
     Raises:
         ConfigurationError: naming the block's path: for a retired key, naming what replaces it,
@@ -738,9 +752,11 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
     """
     scenario = load_scenario(path)
     if scenario.home is None:
+        count = len(scenario.homes)
         raise refusal(
             "",
-            f"holds a fleet of {len(scenario.homes)} homes, not one home: read it with load_fleet_config",
+            f"holds a fleet of {'1 home' if count == 1 else f'{count} homes'}, not a home: block: "
+            "read it with load_fleet_config",
         )
     (home,) = scenario.simulated_homes()
     return home
@@ -769,8 +785,27 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     return _fleet_of(load_scenario(path))
 
 
+def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelBlocks, FleetDistributionConfig]:
+    """The scenario-level blocks and fleet_distribution: block of the bare scenario *document*, read in parse_scenario's order.
+
+    Raises:
+        ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
+            blocks; for a document holding no fleet_distribution: block, naming the top level;
+            as parse_scenario refuses one setting another homes source beside it; or as
+            parse_fleet_distribution_config refuses the block.
+    """
+    scenario, blocks = _read_scenario_level_blocks(document, block_path="")
+    require_held_keys("", scenario, ["fleet_distribution"])
+    _refuse_unless_one_homes_source(scenario, block_path="")
+    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"])
+
+
 def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
+
+    A document holding a fleet_distribution: block is read as parse_sweep_fleet_configs reads
+    it up to its sweep, its keys and scenario-level blocks before the block, so a file is
+    refused on the same first block whether or not it sweeps.
 
     Args:
         document: The fleet file's document, refused unless it is a mapping
@@ -780,13 +815,14 @@ def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
         it has no such block or the block no sweep
 
     Raises:
-        ConfigurationError: If the document is not a mapping, or its fleet_distribution: block
-            is invalid
+        ConfigurationError: If the document is not a mapping, or as parse_sweep_fleet_configs
+            refuses a document holding a fleet_distribution: block before expanding its sweep
     """
     document = require_mapping("", document)
     if "fleet_distribution" not in document:
         return None
-    return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
+    _, distribution = _read_fleet_distribution_scenario(document)
+    return detect_sweep_spec(distribution)
 
 
 def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
@@ -801,14 +837,11 @@ def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig
 
     Raises:
         ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
-            blocks; for a document whose homes come from no fleet_distribution: block, naming the
-            top level; if the block is not a mapping or holds no sweep, naming the block; or if
-            configuration is invalid
+            blocks; for a document holding no fleet_distribution: block, naming the top level,
+            or another homes source beside it; if the block is not a mapping or holds no sweep,
+            naming the block; or if configuration is invalid
     """
-    scenario, blocks = _read_scenario_level_blocks(document, block_path="")
-    if _homes_source(scenario, block_path="") != "fleet_distribution":
-        require_held_keys("", scenario, ["fleet_distribution"])
-    distribution = parse_fleet_distribution_config(scenario["fleet_distribution"])
+    blocks, distribution = _read_fleet_distribution_scenario(document)
     return [
         (
             value,

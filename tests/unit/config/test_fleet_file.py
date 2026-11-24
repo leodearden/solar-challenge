@@ -795,6 +795,19 @@ class TestParseSweepFleetConfigs:
                 id="no-fleet-distribution",
             ),
             pytest.param(
+                {"name": "no homes"},
+                re.escape("the top level: requires 'fleet_distribution'"),
+                id="no-homes-source",
+            ),
+            pytest.param(
+                {
+                    **_fleet_file(_proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3})),
+                    "homes": [{"pv": {"capacity_kw": _PV_KW}}],
+                },
+                re.escape("the top level: sets 'homes', 'fleet_distribution', but a scenario's homes come from exactly one of "),
+                id="a-second-homes-source",
+            ),
+            pytest.param(
                 _fleet_file(
                     _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
                     tariff=_ECONOMY_7,
@@ -858,10 +871,33 @@ _FLEET_DISTRIBUTION_READERS = (
 )
 
 
-class TestFleetDistributionFileReaders:
-    """parse_fleet_config and parse_sweep_fleet_configs read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: location:, then tariff:, then fleet_distribution:."""
+# The document-level readers of a fleet_distribution file's top-level blocks, sweep detection
+# included, with the battery capacity_kwh of a file each reads.
+_FLEET_DISTRIBUTION_TOP_LEVEL_READERS = (
+    *_FLEET_DISTRIBUTION_READERS,
+    pytest.param(detect_fleet_sweep_spec, 5.0, id="detect_fleet_sweep_spec-no-sweep"),
+    pytest.param(
+        detect_fleet_sweep_spec,
+        _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+        id="detect_fleet_sweep_spec-a-sweep",
+    ),
+)
 
-    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+
+class TestFleetDistributionFileReaders:
+    """parse_fleet_config, parse_sweep_fleet_configs and detect_fleet_sweep_spec read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: its keys, location:, then tariff:, then fleet_distribution:."""
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
+    def test_a_file_refused_on_every_block_is_refused_on_a_key_no_scenario_reads(
+        self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
+    ) -> None:
+        document = _fleet_file(capacity_kwh, location={"latitud": 51.45}, tariff={"type": "economy_8"}, finanse={})
+        document["fleet_distribution"]["n_homez"] = 2
+
+        with pytest.raises(ConfigurationError, match="the top level: unrecognised keys 'finanse'"):
+            read(document)
+
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
     def test_a_file_refused_on_every_block_is_refused_on_its_location(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
@@ -871,7 +907,7 @@ class TestFleetDistributionFileReaders:
         with pytest.raises(ConfigurationError, match="location: unrecognised keys 'latitud'"):
             read(document)
 
-    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
+    @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_TOP_LEVEL_READERS)
     def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_tariff(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:

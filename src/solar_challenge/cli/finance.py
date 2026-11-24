@@ -15,6 +15,7 @@ from solar_challenge.config import (
     ScenarioConfig,
     load_config,
     load_fleet_config,
+    load_scenario,
     period_window,
 )
 from solar_challenge.errors import ConfigurationError
@@ -71,24 +72,6 @@ def _required_finance_block(raw: Mapping[str, Any]) -> FinanceConfig:
             "Add a finance: block with at least standing_charge_pence_per_day."
         )
     return finance
-
-
-def _flex_band(
-    flag: Optional[GridServicesBand], scenario_value: object
-) -> Optional[GridServicesBand]:
-    """The flexibility band to report: the --flex-band flag's, else the scenario's flex_band key's, else None when the key is absent or null.
-
-    A string key is read case-insensitively, as the flag is; any other value is
-    refused with ConfigurationError.
-    """
-    if flag is not None:
-        return flag
-    if scenario_value is None:
-        return None
-    return GridServicesBand.parse(
-        scenario_value.lower() if isinstance(scenario_value, str) else scenario_value,
-        what="flex_band",
-    )
 
 
 def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> FleetConfig:
@@ -231,7 +214,7 @@ def run(
     raw = load_config(scenario)
     finance = _required_finance_block(raw)
     pricing = grid_services_model_of(finance)
-    band = _flex_band(flex_band, raw.get("flex_band"))
+    band = flex_band if flex_band is not None else load_scenario(scenario).flex_band
 
     fleet_config = load_fleet_config(scenario)
     seg_rate = parse_seg_rate(raw.get("seg"))

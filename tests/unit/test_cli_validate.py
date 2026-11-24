@@ -17,14 +17,14 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.errors import ConfigurationError
-from solar_challenge.gridservices import EventWindow, GridServicesBand
+from solar_challenge.gridservices import EventWindow
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
 from tests._construction_refusals import prefixed_construction_refusal
+from tests._flex_band_refusal import flex_band_refusal
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
@@ -272,13 +272,6 @@ def _committed_battery_sweep_with_multiplier(**multiplier: float) -> str:
     return yaml.safe_dump(document)
 
 
-def _band_refusal(value: object) -> str:
-    """The message GridServicesBand.parse refuses *value* with as a file's flex_band."""
-    with pytest.raises(ConfigurationError) as refusal:
-        GridServicesBand.parse(value, what="flex_band")
-    return str(refusal.value)
-
-
 def _scenario_document_holding(block: str, setting: Any) -> str:
     """A scenario: document of one 4 kW PV home for a week, the scenario also carrying a *block* block set to *setting*."""
     return yaml.safe_dump(
@@ -482,9 +475,26 @@ home:
         [
             pytest.param("homes: [{}]\nfinanse: {}\n", ("the top level: unrecognised keys 'finanse'",), id="a-misspelt-block"),
             pytest.param("pv: {capacity_kw: 4.0}\n", ("pv: ", "home:"), id="a-flat-home-file"),
-            pytest.param("home: {}\nhomes: [{}]\n", ("the top level: ", "'home'", "'homes'"), id="home-and-homes"),
+            pytest.param(
+                "home: {}\nhomes: [{}]\n",
+                (
+                    "the top level: sets 'home', 'homes', but a scenario's homes come from exactly one of "
+                    "'home', 'homes', 'fleet_distribution'",
+                ),
+                id="home-and-homes",
+            ),
             pytest.param("name: a\n", ("the top level: ", "'home'", "'homes'", "'fleet_distribution'"), id="no-homes"),
-            pytest.param("homes: [{}]\nflex_band: 1\n", (_band_refusal(1),), id="a-flex-band-naming-no-band"),
+            pytest.param("homes: [{}]\nflex_band: 1\n", (flex_band_refusal(1),), id="a-flex-band-naming-no-band"),
+            pytest.param(
+                "fleet_distribution:\n  n_homez: 2\n  pv: {capacity_kw: 4.0}\ntariff: {type: economy_8}\nfinanse: {}\n",
+                ("the top level: unrecognised keys 'finanse'",),
+                id="a-fleet-distribution-file-bad-in-a-key-and-its-block",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "  n_homez: 2\ntariff: {type: economy_8}\nfinanse: {}\n",
+                ("the top level: unrecognised keys 'finanse'",),
+                id="a-sweep-bad-in-a-key-and-its-block",
+            ),
             pytest.param(
                 "tariff: {type: economy_7}\nhomes:\n  - tariff: {type: flat_rate, rate_per_kwh: 0.25}\n",
                 ("homes[0].tariff: ", "tariff:"),

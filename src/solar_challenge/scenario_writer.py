@@ -49,7 +49,7 @@ def location_block(location: Location) -> dict[str, Any]:
 
 
 def home_scenario(home: HomeConfig, *, name: str) -> dict[str, Any]:
-    """The scenario *name* that load_home_config and load_scenario read back as *home*, its SEG tariff unnamed."""
+    """The scenario *name* that load_home_config reads back as *home*, and load_scenario as a scenario whose simulated home is *home*, its SEG tariff unnamed."""
     return {
         "name": name,
         "location": location_block(home.location),

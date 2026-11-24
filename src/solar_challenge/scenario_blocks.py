@@ -846,15 +846,15 @@ HOME_BLOCK_KEYS: frozenset[str] = frozenset({
 def _home_tariff(
     own: Optional[TariffConfig], fleet_tariff: Optional[TariffConfig], *, block_path: str
 ) -> Optional[TariffConfig]:
-    """The tariff of the home at *block_path*: its own, else *fleet_tariff*, refusing an own tariff that differs from *fleet_tariff* by its tariff's path."""
+    """The tariff of the home at *block_path*: its own, else *fleet_tariff*, refusing an own tariff that differs from *fleet_tariff* by its tariff's path, naming both tariffs."""
     if own is None:
         return fleet_tariff
     if fleet_tariff is None or own == fleet_tariff:
         return own
     raise refusal(
         child_path(block_path, "tariff"),
-        "differs from the scenario's top-level tariff: block, which a home takes when it sets none; "
-        "set the tariff once, or make the two equal",
+        f"{own!r} differs from the scenario's top-level tariff: block, {fleet_tariff!r}, which a home "
+        "takes when it sets none; set the tariff once, or make the two equal",
     )
 
 

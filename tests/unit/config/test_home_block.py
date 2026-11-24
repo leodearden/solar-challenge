@@ -31,6 +31,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_home_block,
+    parse_tariff_config,
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
@@ -647,6 +648,17 @@ class TestLoadHomeConfig:
         assert "fleet of 2 homes" in str(refused.value)
         assert "load_fleet_config" in str(refused.value)
 
+    def test_a_one_home_fleet_document_is_refused_as_a_fleet_of_1_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"homes": [{}]}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert str(refused.value) == (
+            "the top level: holds a fleet of 1 home, not a home: block: read it with load_fleet_config"
+        )
+
     def test_a_flat_home_file_is_refused_naming_home(self, tmp_path: Path) -> None:
         path = tmp_path / "home.json"
         path.write_text(json.dumps({"pv": {"capacity_kw": 9}}))
@@ -743,9 +755,11 @@ class TestParseHomeBlockFleetTariff:
         with pytest.raises(ConfigurationError) as refused:
             parse_home_block({"tariff": own}, Location.bristol(), block_path=block_path, fleet_tariff=TariffConfig.economy_7())
 
-        prefix = f"{block_path}.tariff: "
-        assert str(refused.value).startswith(prefix)
-        assert "tariff:" in str(refused.value).removeprefix(prefix)
+        assert str(refused.value) == (
+            f"{block_path}.tariff: {parse_tariff_config(own)!r} differs from the scenario's top-level "
+            f"tariff: block, {TariffConfig.economy_7()!r}, which a home takes when it sets none; "
+            "set the tariff once, or make the two equal"
+        )
 
     def test_a_tou_optimized_battery_without_its_own_tariff_dispatches_on_the_fleet_tariff(self) -> None:
         home = parse_home_block({"battery": _TOU_OPTIMIZED_BATTERY}, Location.bristol(), fleet_tariff=TariffConfig.economy_7())
