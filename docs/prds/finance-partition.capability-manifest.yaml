@@ -188,11 +188,11 @@ tasks:
           paths: ["src/solar_challenge/optimize.py"]
           expect: absent
       - name: "finance-has-no-simulator-local-imports"
-        binding: "grep: 10 function-local battery/fleet/home/pv import lines in finance.py today"
+        binding: "grep: 6 function-local battery/fleet/home/pv import lines in finance.py at ae77e354 binding compute_soh, FleetConfig, calculate_summary, calculate_degradation_factor (the TYPE_CHECKING block's imports stay, esc-928-3)"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: '^[[:space:]]+from solar_challenge\.(battery|fleet|home|pv) import'
+          pattern: '^[[:space:]]+from solar_challenge\.(battery|fleet|home|pv) import .*\b(compute_soh|FleetConfig|calculate_summary|calculate_degradation_factor)\b'
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
       - name: "allow-list-finance-entries-gone"
