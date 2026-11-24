@@ -242,7 +242,7 @@ def _row_weights(config: EVConfig, tariff: TariffConfig | None, generation_kw: R
     return _no_preference
 
 
-def _weights_on(rows: pd.DatetimeIndex, weights_on: RowWeights) -> np.ndarray:
+def _checked_weights(rows: pd.DatetimeIndex, weights_on: RowWeights) -> np.ndarray:
     """The weights *weights_on* gives *rows*, as floats.
 
     Raises:
@@ -403,7 +403,7 @@ def generate_ev_charging_profile(
     weights_on = _row_weights(config, tariff, generation_kw)
     widened = _widened(window)
     widened_rows = widened.rows()
-    weights = _weights_on(widened_rows, weights_on)
+    weights = _checked_weights(widened_rows, weights_on)
     days = _days_on_rows(list(widened.local_days()), minutes_of_day(widened_rows))
     charge = _charge_rows(config, window.step_hours)
     power_kw = np.zeros(len(widened_rows))
