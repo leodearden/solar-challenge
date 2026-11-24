@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.fleet_scenario, called directly with fleet forms: the bodies fleet-simulator.js's buildPayload() posts."""
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -10,10 +11,15 @@ import yaml
 
 pytest.importorskip("flask")
 
+from solar_challenge.config import parse_scenario
 from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
-from solar_challenge.scenario_blocks import parse_dispatch_strategy_config, parse_tariff_config
+from solar_challenge.scenario_blocks import (
+    parse_dispatch_strategy_config,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES
 from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
@@ -284,6 +290,47 @@ class TestParseFleetFormRefusalOrder:
             parse_fleet_form({**form, key: value})
         with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
             parse_fleet_form({**ungeneratable, key: value})
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+
+class TestParseFleetFormReadsItsDocumentThroughParseScenario:
+    """parse_fleet_form's run is its scenario document as config.parse_scenario reads it, so the simulate endpoint and the export are one reading."""
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            pytest.param(_FLEET_FORM, id="with-overlays"),
+            pytest.param(_without(_FLEET_FORM, "tariff", "seg", "dispatch_strategy"), id="without-overlays"),
+            pytest.param(_FLEET_FORM_BY_DAYS, id="by-days"),
+            pytest.param({**_FLEET_FORM, "location": "london"}, id="london"),
+        ],
+    )
+    def test_the_run_is_the_scenario_document_as_parse_scenario_reads_it(self, form: dict[str, Any]) -> None:
+        fleet = parse_fleet_form(form)
+
+        scenario = parse_scenario(fleet.scenario)
+
+        assert scenario.simulated_homes() == fleet.homes
+        assert scenario.simulation_bounds() == (fleet.start_date, fleet.end_date)
+
+    @pytest.mark.parametrize(
+        ("key", "value", "read_block"),
+        [
+            pytest.param(
+                "tariff", {"type": "flat_rate"}, lambda: parse_tariff_config({"type": "flat_rate"}), id="tariff"
+            ),
+            pytest.param("seg", {}, lambda: parse_seg_rate({}), id="seg"),
+        ],
+    )
+    def test_a_refused_tariff_or_seg_is_refused_before_a_refused_fleet_distribution_as_parse_scenario_reads_them(
+        self, key: str, value: Any, read_block: Callable[[], object]
+    ) -> None:
+        """The reader reads the tariff and SEG before the homes source, so a fleet grammar refusal is the later block's."""
+        form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
+        with pytest.raises(ConfigurationError) as expected:
+            read_block()
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form(form)
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
@@ -850,7 +897,7 @@ class TestFleetFormFromScenario:
                         **_FLEET_SCENARIO["fleet_distribution"]["battery"],
                         "dispatch_strategy": {
                             "strategy_type": "tou_optimized",
-                            "peak_hours": [[7, 9], [16, 19]],
+                            "peak_hours": [[8, 10], [16, 19]],
                         },
                     }
                 ),
@@ -883,6 +930,30 @@ class TestFleetFormFromScenario:
         """A scenario whose fleet, period, tariff or dispatch the form cannot hold exactly is refused, naming the setting: loading it anyway would run a different fleet."""
         with pytest.raises(ValueError, match=re.escape(reason)):
             fleet_form_from_scenario(document)
+
+    def test_a_scenario_key_no_scenario_reads_is_refused_naming_it(self) -> None:
+        """A misspelt finance: block is refused as parse_scenario refuses it, rather than named not loaded."""
+        document = {**_FLEET_SCENARIO, "finanse": {"standing_charge_pence_per_day": 60.0}}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+        assert "'finanse'" in str(refusal.value)
+
+    def test_a_name_that_is_not_a_string_is_refused_as_parse_scenario_refuses_it(self) -> None:
+        """The reader's refusal runs before the form's own reads of the scenario, so the name the form never holds is refused with its message."""
+        document = {**_FLEET_SCENARIO, "name": 5}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+        assert str(expected.value) == "name: must be a string, got 5", "premise: the reader refuses the name"
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
 
     def test_a_scenario_the_loaders_refuse_is_refused_with_their_message(self) -> None:
         """The loaders' refusal of a scenario is the import's refusal."""

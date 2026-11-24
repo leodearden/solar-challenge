@@ -4,14 +4,13 @@
 from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
-import pandas as pd
 import pytest
 import yaml
 
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import load_fleet_config
+from solar_challenge.config import load_scenario, parse_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import parse_fleet_distribution_config
@@ -58,10 +57,10 @@ _NAMELESS_FLEET_FORM_BODY: dict = {key: value for key, value in _FLEET_FORM_BODY
 class TestExportFleetYAML:
     """POST /api/fleet/export-yaml writes the fleet scenario the fleet page's form describes."""
 
-    def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
+    def test_export_reads_back_through_load_scenario_as_the_homes_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, its SEG rate among them, its name and dates."""
+        """The exported file, read as load_scenario reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, its SEG rate among them, its name and dates."""
         export = client.post("/api/fleet/export-yaml", json=_FLEET_FORM_BODY)
         assert export.status_code == 200, export.get_data(as_text=True)
         assert "text/yaml" in export.content_type
@@ -70,8 +69,7 @@ class TestExportFleetYAML:
         path = tmp_path / "fleet.yaml"
         path.write_text(text, encoding="utf-8")
 
-        fleet = load_fleet_config(path)
-        document = yaml.safe_load(text)
+        scenario = load_scenario(path)
 
         simulate = client.post("/api/simulate/fleet-from-distribution", json=_FLEET_FORM_BODY)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
@@ -89,14 +87,9 @@ class TestExportFleetYAML:
             for home in homes
         )
 
-        assert list(fleet.homes) == homes
-        assert fleet.name == submitted["name"]
-        timezone = homes[0].location.timezone
-        period = document["period"]
-        assert (
-            pd.Timestamp(period["start_date"], tz=timezone),
-            pd.Timestamp(period["end_date"], tz=timezone),
-        ) == (submitted["start_date"], submitted["end_date"])
+        assert scenario.simulated_homes() == tuple(homes)
+        assert scenario.simulation_bounds() == (submitted["start_date"], submitted["end_date"])
+        assert scenario.name == submitted["name"]
 
     def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
@@ -104,11 +97,10 @@ class TestExportFleetYAML:
         """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in fleet_distribution.py's grammar, and the file loads back as the fleet the simulate endpoint runs."""
         tilt = {"type": "uniform", "min": 10.0, "max": 20.0}
         grid_charging = {"target_soc_fraction": 0.5}
-        without_seg = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "seg"}
         body = {
-            **without_seg,
-            "pv": {**without_seg["pv"], "tilt": tilt},
-            "battery": {**without_seg["battery"], "grid_charging": grid_charging},
+            **_FLEET_FORM_BODY,
+            "pv": {**_FLEET_FORM_BODY["pv"], "tilt": tilt},
+            "battery": {**_FLEET_FORM_BODY["battery"], "grid_charging": grid_charging},
         }
 
         export = client.post("/api/fleet/export-yaml", json=body)
@@ -123,7 +115,7 @@ class TestExportFleetYAML:
         simulate = client.post("/api/simulate/fleet-from-distribution", json=body)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
         homes = mock_job_manager.submit_fleet_job.call_args.kwargs["configs"]
-        assert load_fleet_config(path).homes == tuple(homes)
+        assert load_scenario(path).simulated_homes() == tuple(homes)
 
     @pytest.mark.parametrize(
         "body",
@@ -303,6 +295,27 @@ class TestImportFleetYAML:
 
         assert resp.status_code == 400
         assert resp.get_json() == {"error": message}
+
+    def test_a_scenario_with_a_key_no_scenario_reads_is_refused_naming_it(self, client: FlaskClient) -> None:
+        """A scenario file with a misspelt finance: block gets a 400 carrying parse_scenario's refusal, which names the key, rather than a 200 listing it as not loaded."""
+        document = {
+            "fleet_distribution": {
+                "n_homes": 25,
+                "pv": {"capacity_kw": {"type": "uniform", "min": 3.0, "max": 6.0}},
+                "load": {"annual_consumption_kwh": {"type": "uniform", "min": 2500, "max": 4500}},
+            },
+            "finanse": {"standing_charge_pence_per_day": 60.0},
+        }
+        with pytest.raises(ConfigurationError) as reader_refusal:
+            parse_scenario(document)
+
+        resp = client.post(
+            "/api/fleet/import-yaml", data=yaml.safe_dump(document), content_type="text/yaml"
+        )
+
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": str(reader_refusal.value)}
+        assert "'finanse'" in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
         "counts",
