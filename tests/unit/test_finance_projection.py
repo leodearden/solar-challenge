@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Unit tests for project_multi_year's curve shape, fleet energy aggregation,
 its refusal of a simulated age whose aggregates are not all finite, and its
-refusal of a call that passes no simulator.
+refusal of a call that passes no simulator; and for project_fleet, the
+projection of a resolved fleet with its age-0 summaries.
 
 The projection runs on an injected synthetic simulate, with no PVGIS or network.
 """
@@ -10,13 +11,23 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import warnings
+from typing import Callable
 
 import pandas as pd
 import pytest
 
-from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.home import calculate_summary
-from solar_challenge.projection import MultiYearCurve, project_multi_year
+from solar_challenge.projection import (
+    FleetProjection,
+    MultiYearCurve,
+    project_fleet,
+    project_multi_year,
+    scenario_fleet,
+)
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
@@ -254,3 +265,103 @@ class TestProjectMultiYearRefusesNonFiniteAggregates:
         assert message.endswith(
             f"got total_battery_discharge_kwh=inf, total_self_consumption_kwh={self_consumption_kwh!r}"
         )
+
+
+_OWN_USE_OF_EACH_HOME_AT_AGE_0_KWH = (2_000.0, 1_000.0)
+"""Each home's own-use at age 0, in fleet order: unequal, so the order of the age-0 summaries shows."""
+
+
+def _declining_two_home_simulate(curvature: float) -> tuple[FleetSimulate, list[FleetResults]]:
+    """A simulate whose two homes' own-use falls as exp(-curvature × age), and the FleetResults it returns at age 0.
+
+    Each answer pairs the asked homes with their results, as FleetRunner.simulate does.
+    """
+    age0_results: list[FleetResults] = []
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        age = fleet_config.homes[0].pv_config.system_age_years
+        factor = math.exp(-curvature * age)
+        results = make_fleet_results_of(
+            [make_sim_results(self_kwh=own_use * factor) for own_use in _OWN_USE_OF_EACH_HOME_AT_AGE_0_KWH],
+            homes=fleet_config.homes,
+        )
+        if age == 0.0:
+            age0_results.append(results)
+        return results
+
+    return simulate, age0_results
+
+
+def _curve_of_project_fleet(
+    scenario: ScenarioConfig, finance: FinanceConfig, *, simulate: FleetSimulate, error_target_pct: float
+) -> MultiYearCurve:
+    return project_fleet(scenario_fleet(scenario), finance, simulate=simulate, error_target_pct=error_target_pct).curve
+
+
+_ENTRY_POINTS = [
+    pytest.param(_curve_of_project_fleet, id="project_fleet"),
+    pytest.param(project_multi_year, id="project_multi_year"),
+]
+
+
+class TestProjectFleet:
+    """project_fleet projects a resolved fleet, giving project_multi_year's curve and the fleet's age-0 summaries."""
+
+    def test_its_curve_is_project_multi_year_of_the_scenario(self) -> None:
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=25)
+        simulate, _ = _declining_two_home_simulate(curvature=0.02)
+
+        projection = project_fleet(scenario_fleet(scenario), finance, simulate=simulate)
+
+        assert isinstance(projection, FleetProjection)
+        assert projection.curve == project_multi_year(scenario, finance, simulate=simulate)
+
+    def test_its_age0_summaries_are_each_homes_summary_of_the_age0_fleet_in_fleet_order(self) -> None:
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=25)
+        simulate, age0_results = _declining_two_home_simulate(curvature=0.02)
+
+        projection = project_fleet(scenario_fleet(scenario), finance, simulate=simulate)
+
+        (age0_fleet,) = age0_results
+        assert projection.age0_summaries == tuple(calculate_summary(r) for r in age0_fleet.per_home_results)
+        assert [s.total_self_consumption_kwh for s in projection.age0_summaries] == pytest.approx(
+            list(_OWN_USE_OF_EACH_HOME_AT_AGE_0_KWH)
+        )
+
+    def test_a_call_without_simulate_raises_type_error_naming_simulate(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+
+        with pytest.raises(TypeError, match="simulate"):
+            project_fleet(scenario_fleet(scenario), finance)
+
+    def test_simulate_and_the_error_target_are_keyword_only(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        simulate, _ = _declining_two_home_simulate(curvature=0.02)
+        fleet = scenario_fleet(scenario)
+
+        with pytest.raises(TypeError):
+            project_fleet(fleet, finance, simulate)
+        with pytest.raises(TypeError):
+            project_fleet(fleet, finance, 1.0, simulate=simulate)
+
+    @pytest.mark.parametrize("project", _ENTRY_POINTS)
+    def test_a_capped_projection_warns_its_callers_file_once(self, project: Callable[..., MultiYearCurve]) -> None:
+        """An unreachable error target caps the bisection at MAX_NODES, and the one warning names this file."""
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=25)
+        simulate, _ = _declining_two_home_simulate(curvature=0.35)
+
+        with warnings.catch_warnings(record=True) as raised:
+            warnings.simplefilter("always")
+            project(scenario, finance, simulate=simulate, error_target_pct=1e-9)
+
+        capped = [w for w in raised if issubclass(w.category, UserWarning) and "MAX_NODES" in str(w.message)]
+        assert len(capped) == 1, [str(w.message) for w in raised]
+        assert capped[0].filename == __file__
+
+    def test_a_projection_is_frozen(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        simulate, _ = _declining_two_home_simulate(curvature=0.02)
+        projection = project_fleet(scenario_fleet(scenario), finance, simulate=simulate)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            projection.age0_summaries = ()
