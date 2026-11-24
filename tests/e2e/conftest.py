@@ -467,12 +467,14 @@ def runs_api_returns_a_run_of_each_badge(
 
 @pytest.fixture
 def runs_api_never_answers(page) -> Iterator[None]:
-    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort them."""
+    """Hold the Run History page's runs-list requests unanswered for the whole test, then abort each, however late Playwright hands it over.
+
+    The test errors at teardown if its page made no runs-list request within the page's default timeout of the test's start.
+    """
     held_requests = hold_requests(page, is_runs_list_request)
-    yield
-    assert held_requests, "the page made no runs-list request for runs_api_never_answers to hold"
-    for route in held_requests:
-        route.abort()
+    with page.expect_request(lambda request: is_runs_list_request(request.url)):
+        yield
+    held_requests.answer_each(lambda route: route.abort())
 
 
 # ---------------------------------------------------------------------------
