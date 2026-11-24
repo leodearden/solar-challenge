@@ -136,7 +136,7 @@ def _component_block(block: ComponentBlock[_Component], config: _Component) -> d
     }
 
 
-def _yaml_scalar(value: Any) -> Any:
+def _yaml_scalar(value: object) -> object:
     """*value*, or an enum member's value, the plain scalar that YAML carries and its reader reads back."""
     return value.value if isinstance(value, Enum) else value
 
