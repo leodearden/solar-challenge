@@ -497,9 +497,11 @@ def test_a_sweep_run_after_another_opens_no_stream_for_the_earlier_sweeps_remain
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
 
 
+_NO_EVENT_STREAMS_MESSAGE = "this browser opens no event streams"
+
 _AN_EVENT_SOURCE_THAT_OPENS_NO_STREAMS = (
     "window.EventSource = class {"
-    " constructor() { throw new Error('this browser opens no event streams'); } };"
+    f" constructor() {{ throw new Error('{_NO_EVENT_STREAMS_MESSAGE}'); }} }};"
 )
 
 
@@ -513,7 +515,7 @@ def test_the_page_says_why_it_lost_track_of_a_sweep_it_cannot_follow(
 
     expect(
         page.get_by_text(
-            "Lost track of the sweep: this browser opens no event streams", exact=True
+            f"Lost track of the sweep: {_NO_EVENT_STREAMS_MESSAGE}", exact=True
         )
     ).to_be_visible()
     assert page_errors == [], f"Errors on /scenarios/sweep: {page_errors}"
@@ -530,7 +532,7 @@ def test_the_page_says_why_it_lost_track_of_a_sweep_while_the_browser_renders_no
 
     expect(
         page.get_by_text(
-            "Lost track of the sweep: this browser opens no event streams", exact=True
+            f"Lost track of the sweep: {_NO_EVENT_STREAMS_MESSAGE}", exact=True
         )
     ).to_be_visible()
 
