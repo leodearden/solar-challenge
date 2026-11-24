@@ -913,6 +913,12 @@ class TestParseScenario:
     @pytest.mark.parametrize(
         ("document", "refused_on"),
         [
+            pytest.param({"name": 7, "location": {"lat": 1.0}, "home": _A_HOME}, "name: must be a string", id="name-before-location"),
+            pytest.param(
+                {"description": 7, "period": {"start_date": "2024-06-01"}, "home": _A_HOME},
+                "description: must be a string",
+                id="description-before-period",
+            ),
             pytest.param({"location": {"lat": 1.0}, "tariff": {"type": "economy_8"}, "home": _A_HOME}, "location: ", id="location-before-tariff"),
             pytest.param(
                 {"tariff": {"type": "economy_8"}, "fleet_distribution": {**_TWO_HOME_DISTRIBUTION, "n_homez": 2}},
