@@ -67,8 +67,10 @@ _RECOLOURED_ACCENT = "blue"
 # Only so a hung npm or node fails the tests by name. Each bound is a budget of the child's own time
 # (tests/_own_time.py), so time the lane's nice-19 run spends queued for a CPU never counts. npm ci downloads every
 # package the lock records, while a run, such as a build or a palette read, only runs installed ones, so each has its
-# own budget. npm ci's budget and every run's together fit inside the css-build lane job's `timeout -k 60 600`
-# (dark-factory-orchestrator.yaml), whose kill would file css-build::unconfirmable.
+# own budget. When the module's run is not queued, npm ci's budget and every run's together fit inside the css-build
+# lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml), so a hung child fails by name before that kill,
+# which would file css-build::unconfirmable. Under queueing, a budget of own time takes longer than its seconds of wall
+# time to spend, so the lane's wall-clock kill, not a budget, may end a hung run.
 _NPM_CI_OWN_TIME_SECS = 240
 _RUN_OWN_TIME_SECS = 40
 
