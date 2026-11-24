@@ -239,17 +239,30 @@ class TestTheDeviationScaleSeesAZeroAtAgeZero:
         assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
         assert curve.interp_error_estimate <= 1.0
 
-    def test_an_override_fleet_whose_curves_interpolate_within_target_from_the_seeds_simulates_only_the_seeds(
+    def test_an_override_fleet_that_starts_importing_near_age_19_is_bisected_once_for_its_income_kink_not_its_import(
         self,
     ) -> None:
-        """Each driven curve's PCHIP midpoint error from the seeds alone is under 1 % of its scale.
+        """At 0.3 %/yr the override's 0.9 × generation drops below the 3,400 kWh demand near age 19.
 
-        At 0.1 %/yr the override's 0.9 × generation stays above the demand to
-        age 24, so the cap binds every year and every driven curve, the SEG
-        income among them, is smooth: no bisection age is simulated.  At
-        0.3 %/yr the cap stops binding near age 19, and the income's kink there
-        is worth a bisection.
+        So import is 0 until then and grows after.  The SEG income's kink there
+        costs one bisection round, ages 6 and 18.  The import's miss at age 18
+        is measured against the demand it is part of, so it adds no age;
+        measured against its own largest seed value, about 50 kWh, it would
+        bisect on through ages 19-22.
         """
+        scenario, finance = _finance_over_25_years(0.9)
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.997),
+        )
+        assert curve.sampled_ages == (0, 6, 12, 18, 24)
+        assert curve.interp_error_estimate <= 1.0
+
+
+class TestASmoothFleetSimulatesOnlyTheSeeds:
+    def test_an_override_fleet_whose_cap_binds_at_every_age_simulates_only_the_seeds(self) -> None:
+        """At 0.1 %/yr the override's cap binds to age 24, so every driven curve is smooth and no bisection age is simulated."""
         scenario, finance = _finance_over_25_years(0.9)
         curve = project_multi_year(
             scenario,
