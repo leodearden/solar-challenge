@@ -214,7 +214,7 @@ def _finance_over_25_years(self_consumption_override: float | None) -> tuple[Sce
 
 
 class TestTheDeviationScaleSeesAZeroAtAgeZero:
-    """An export or import that is 0 at age 0 and grows with age is measured against the age-0 fleet generation or demand.
+    """An export or import that is 0 at age 0 and grows with age is measured against the largest fleet generation or demand at the seed ages.
 
     So its interpolation error stays a finite percentage.
     """

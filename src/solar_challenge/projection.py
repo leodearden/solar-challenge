@@ -110,9 +110,12 @@ class YearPoint:
 
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
-    + SEG export income (Σ each home's ledger ``seg_income_gbp``, :func:`~solar_challenge.finance.home_ledger`)
+    + the year's income: SEG export income (Σ each home's ledger
+    ``seg_income_gbp``, :func:`~solar_challenge.finance.home_ledger`)
     + grid-services income (``grid_services_model_of(finance).annual_income_gbp``
-    of that age's simulated fleet).
+    of the simulated fleet).  Between simulated ages the income follows PCHIP
+    through the income at the simulated ages, which reads no own-use rate, so
+    the revenue is affine in the rate in every year.
     """
 
     year: int
@@ -139,7 +142,7 @@ class YearPoint:
     """Total grid import by the fleet that year, Σ each home's ledger import: the simulated import, or demand − own-use with ``self_consumption_override`` set (kWh, ≥ 0)."""
 
     fleet_revenue_gbp: float
-    """CBS revenue (own-use + SEG + grid-services topper) (£); finite, and may have any sign."""
+    """CBS revenue, own_use_rate × fleet_billed_own_use_kwh / 100 + the year's SEG and grid-services income (£); finite, and may have any sign."""
 
     def __post_init__(self) -> None:
         whole_year = whole_number(self.year)
@@ -184,8 +187,9 @@ class MultiYearCurve:
     ran simulations; the remaining years are filled by PCHIP interpolation.
     ``interp_error_estimate`` is the maximum interpolation deviation when the
     adaptive loop converged (or was capped at ``MAX_NODES``): own-use and
-    revenue as a percentage of their age-0 magnitude, export and import as a
-    percentage of the age-0 fleet generation and demand.
+    income as a percentage of their largest magnitude at the seed ages, export
+    and import as a percentage of the largest fleet generation and demand
+    there.
     """
 
     points: tuple[YearPoint, ...]
@@ -195,11 +199,11 @@ class MultiYearCurve:
     """Ages at which full simulations were run (subset of 0..asset_life-1)."""
 
     interp_error_estimate: float
-    """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across all driven metrics
-    (fleet_billed_own_use_kwh, fleet_export_kwh, fleet_import_kwh,
-    fleet_revenue_gbp), convergence invariant of the adaptive loop: own-use
-    and revenue as a percentage of their age-0 magnitude, export and import as
-    a percentage of the age-0 fleet generation and demand."""
+    """Max remaining PCHIP midpoint deviation (%, ≥ 0 and finite) across the four driven metrics,
+    the fleet's own-use, export, import and income (SEG + grid services),
+    convergence invariant of the adaptive loop: own-use and income as a
+    percentage of their largest magnitude at the seed ages, export and import
+    as a percentage of the largest fleet generation and demand there."""
 
     annualised_from: SimulationWindow | None
     """The window the projection's yearly figures were annualised from, the fleet's one window.
@@ -423,8 +427,8 @@ class _NodeData:
     mean_battery_soh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Mean battery state-of-health across the fleet (fraction, 0–1)."""
 
-    fleet_revenue: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """CBS fleet revenue: own-use + SEG + grid-services (£)."""
+    fleet_income_gbp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    """Fleet income, Σ each home's ledger SEG income + the fleet's grid-services income (£/yr); it reads no own-use rate."""
 
     annualised_from: SimulationWindow
     """The fleet's one simulated window, the energy totals were annualised from."""
@@ -476,11 +480,12 @@ class _DrivenMetric:
 _OWN_USE = _DrivenMetric("own-use", lambda node: node.fleet_own_use_kwh, lambda node: node.fleet_own_use_kwh)
 _EXPORT = _DrivenMetric("export", lambda node: node.fleet_export_kwh, lambda node: node.fleet_generation_kwh)
 _IMPORT = _DrivenMetric("import", lambda node: node.fleet_import_kwh, lambda node: node.fleet_demand_kwh)
-_REVENUE = _DrivenMetric("revenue", lambda node: node.fleet_revenue, lambda node: node.fleet_revenue)
+_INCOME = _DrivenMetric("income", lambda node: node.fleet_income_gbp, lambda node: node.fleet_income_gbp)
 
-_DRIVEN_METRICS: tuple[_DrivenMetric, ...] = (_OWN_USE, _EXPORT, _IMPORT, _REVENUE)
-"""Every metric the bisection drives.  Export and import are measured against the generation and demand they are
-parts of, so a flow that is 0 at age 0 still has a scale (docs/cost-recovery-finance-model.md §4)."""
+_DRIVEN_METRICS: tuple[_DrivenMetric, ...] = (_OWN_USE, _EXPORT, _IMPORT, _INCOME)
+"""Every metric the bisection drives, none of which reads the own-use rate.  Export and import are measured against
+the generation and demand they are parts of, so a flow that is 0 at age 0 still has a scale
+(docs/cost-recovery-finance-model.md §4)."""
 
 
 def _aged_homes(
@@ -621,15 +626,14 @@ def _simulate_node(
     summaries = tuple(calculate_summary(r) for r in fleet_results.per_home_results)
     physics_of_homes = [annualise(s) for s in summaries]
     ledgers = [home_ledger(physics, finance) for physics in physics_of_homes]
-    fleet_own_use_kwh = sum(ledger.own_use_kwh for ledger in ledgers)
 
-    # CBS fleet revenue (model doc §4), every term over the window's year:
-    #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_own_use_kwh / 100
-    #   seg_revenue     = Σ ledger seg_income_gbp, each home's ledger export at its run's SEG rate
-    #   grid_services   = grid_services.annual_income_gbp(fleet_results), already annual
-    # Grid-charge energy is paid by the householder inside grid import, not a CBS
-    # outgoing (docs/cost-recovery-finance-model.md §4).
-    own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_own_use_kwh / 100.0
+    # The fleet's income (model doc §4), every term over the window's year:
+    #   seg_revenue   = Σ ledger seg_income_gbp, each home's ledger export at its run's SEG rate
+    #   grid_services = grid_services.annual_income_gbp(fleet_results), already annual
+    # Own-use revenue is the rate times the year's own-use, added per year by
+    # _assembled_curve, so no node reads the rate.  Grid-charge energy is paid by
+    # the householder inside grid import, not a CBS outgoing
+    # (docs/cost-recovery-finance-model.md §4).
     seg_revenue = sum(ledger.seg_income_gbp for ledger in ledgers)
     with warnings.catch_warnings(record=True) as raised_by_grid_services:
         grid_services_income = grid_services.annual_income_gbp(fleet_results)
@@ -640,7 +644,7 @@ def _simulate_node(
 
     node = _NodeData(
         age=age,
-        fleet_own_use_kwh=fleet_own_use_kwh,
+        fleet_own_use_kwh=sum(ledger.own_use_kwh for ledger in ledgers),
         fleet_export_kwh=sum(ledger.export_kwh for ledger in ledgers),
         fleet_import_kwh=sum(ledger.import_kwh for ledger in ledgers),
         fleet_generation_kwh=sum(ledger.generation_kwh for ledger in ledgers),
@@ -648,7 +652,7 @@ def _simulate_node(
         per_home_discharge=tuple(physics.battery_discharge_kwh for physics in physics_of_homes),
         mean_pv_soh=sum(pv_sohs) / len(pv_sohs),
         mean_battery_soh=sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0,
-        fleet_revenue=own_use_revenue + seg_revenue + grid_services_income,
+        fleet_income_gbp=seg_revenue + grid_services_income,
         annualised_from=one_window(summaries),
         per_home_throughput=tuple(throughput),
     )
@@ -678,8 +682,14 @@ def _per_year(nodes: Sequence[_NodeData], value: Callable[[_NodeData], float], y
 
 
 def _deviation_scales(seeds: Mapping[int, _NodeData]) -> tuple[float, ...]:
-    """Each driven metric's deviation scale, in :data:`_DRIVEN_METRICS` order: the magnitude of its scale quantity at age 0, floored at 1e-9."""
-    return tuple(max(abs(metric.scale_of(seeds[0])), 1e-9) for metric in _DRIVEN_METRICS)
+    """Each driven metric's deviation scale, in :data:`_DRIVEN_METRICS` order: the largest magnitude of its scale quantity at the seed ages, floored at 1e-9.
+
+    The scales are fixed once the seeds are simulated, and need no sign, so a
+    metric that is 0 at age 0 still has one.
+    """
+    return tuple(
+        max([1e-9, *(abs(metric.scale_of(node)) for node in seeds.values())]) for metric in _DRIVEN_METRICS
+    )
 
 
 def _midpoint_deviation_pct(curves: Sequence[Sequence[float]], trial: _NodeData, scales: Sequence[float]) -> float:
@@ -753,25 +763,27 @@ def _selected_nodes(
 def _assembled_curve(nodes: Sequence[_NodeData], finance: FinanceConfig, interp_error_estimate: float) -> MultiYearCurve:
     """The curve over *finance*'s asset life through *nodes*, ascending by age from age 0.
 
-    Each year's figure is the PCHIP of its node values, clipped to the range its
-    :class:`YearPoint` field admits.
+    Each year's energy and state of health is the PCHIP of its node values,
+    clipped to the range its :class:`YearPoint` field admits.  Each year's
+    revenue is the own-use rate times that year's billed own-use, plus the PCHIP
+    of the income nodes, so it is affine in the rate.
     """
     years = finance.asset_life_years
     pv_soh = _per_year(nodes, lambda node: node.mean_pv_soh, years)
     battery_soh = _per_year(nodes, lambda node: node.mean_battery_soh, years)
-    own_use = _per_year(nodes, _OWN_USE.value, years)
+    own_use = [max(0.0, kwh) for kwh in _per_year(nodes, _OWN_USE.value, years)]
     grid_export = _per_year(nodes, _EXPORT.value, years)
     grid_import = _per_year(nodes, _IMPORT.value, years)
-    revenue = _per_year(nodes, _REVENUE.value, years)
+    income = _per_year(nodes, _INCOME.value, years)
     points = tuple(
         YearPoint(
             year=y,
             pv_soh=max(0.0, min(1.0, pv_soh[y])),
             battery_soh=max(0.0, min(1.0, battery_soh[y])),
-            fleet_billed_own_use_kwh=max(0.0, own_use[y]),
+            fleet_billed_own_use_kwh=own_use[y],
             fleet_export_kwh=max(0.0, grid_export[y]),
             fleet_import_kwh=max(0.0, grid_import[y]),
-            fleet_revenue_gbp=revenue[y],
+            fleet_revenue_gbp=finance.own_use_rate_pence_per_kwh * own_use[y] / 100.0 + income[y],
         )
         for y in range(years)
     )
@@ -903,7 +915,7 @@ def project_fleet(
             NaN or infinite, naming the invariant and its values
             (:class:`~solar_challenge.finance.HomeLedger`).
         ValueError: If a simulated age gives another aggregate that is NaN or
-            infinite: the fleet's revenue, its mean PV or battery state of
+            infinite: the fleet's income, its mean PV or battery state of
             health, or a home's battery discharge or cumulative battery
             throughput.  The message names the age and each such aggregate
             with its value.
