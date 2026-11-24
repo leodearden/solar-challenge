@@ -401,8 +401,8 @@ home:
                 id="home-battery-both-efficiency-forms",
             ),
             pytest.param(
-                "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
-                "load: household_occupants must be between 1 and 10, got 11",
+                "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 11}\n",
+                "home.load: household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
             ),
             pytest.param(
@@ -534,8 +534,8 @@ home:
                 id="homes-entry-pv-capacity-boolean",
             ),
             pytest.param(
-                "pv: {capacity_kw: 4.0, azimuth: south}\n",
-                "pv",
+                "home:\n  pv: {capacity_kw: 4.0, azimuth: south}\n",
+                "home.pv",
                 lambda: PVConfig(capacity_kw=4.0, azimuth="south"),
                 id="flat-home-pv-azimuth-word",
             ),
@@ -647,7 +647,7 @@ home:
     @pytest.mark.parametrize(
         "document",
         [
-            pytest.param("pv: {capacity_kw: 4.0}\n", id="flat-home"),
+            pytest.param("home:\n  pv: {capacity_kw: 4.0}\n", id="home"),
             pytest.param(
                 "homes:\n  - {}\n  - pv: {capacity_kw: 6.0}\n", id="homes-list"
             ),

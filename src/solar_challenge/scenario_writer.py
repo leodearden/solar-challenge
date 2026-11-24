@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Write configs as the scenario YAML documents config.py's loaders read.
+"""Write configs as the scenario YAML documents config.parse_scenario reads.
 
 Each block written here is the inverse of the scenario_blocks.py reader that reads
 it: parse_location_block, parse_home_block and its block parsers,
@@ -49,7 +49,7 @@ def location_block(location: Location) -> dict[str, Any]:
 
 
 def home_scenario(home: HomeConfig, *, name: str) -> dict[str, Any]:
-    """The scenario *name* that `home run` reads back as *home*, its SEG tariff unnamed."""
+    """The scenario *name* that load_home_config and load_scenario read back as *home*, its SEG tariff unnamed."""
     return {
         "name": name,
         "location": location_block(home.location),

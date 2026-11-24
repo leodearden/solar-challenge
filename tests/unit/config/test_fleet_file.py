@@ -67,7 +67,7 @@ class TestLoadFleetConfig:
 
         with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
-        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
+        assert str(refusal.value) == "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'"
 
     def test_a_location_block_without_its_longitude_is_refused_naming_it(
         self, tmp_path: Path
@@ -316,7 +316,7 @@ fleet_distribution:
 
         with pytest.raises(ConfigurationError) as refusal:
             load_fleet_config(path)
-        assert str(refusal.value) == "the top level: requires 'homes' or 'fleet_distribution'"
+        assert str(refusal.value) == "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'"
 
     def test_load_fleet_empty_homes_list_raises(self, tmp_path: Path) -> None:
         """Test that empty homes list raises error."""
@@ -527,8 +527,7 @@ seg:
 finance:
   loan_term_years: 15
   loan_rate: 0.05
-  equity_share: 0.20
-  capex_per_home_gbp: 3000
+  equity_fraction: 0.20
   standing_charge_pence_per_day: 60.0
 """
         path = tmp_path / "fleet.yaml"
@@ -860,7 +859,7 @@ _FLEET_DISTRIBUTION_READERS = (
 
 
 class TestFleetDistributionFileReaders:
-    """parse_fleet_config and parse_sweep_fleet_configs read a fleet_distribution file's top-level blocks alike: location:, then fleet_distribution:, then tariff:."""
+    """parse_fleet_config and parse_sweep_fleet_configs read a fleet_distribution file's top-level blocks alike, in parse_scenario's order: location:, then tariff:, then fleet_distribution:."""
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
     def test_a_file_refused_on_every_block_is_refused_on_its_location(
@@ -873,13 +872,13 @@ class TestFleetDistributionFileReaders:
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)
-    def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_fleet_distribution(
+    def test_a_file_refused_on_its_fleet_distribution_and_tariff_is_refused_on_its_tariff(
         self, read: Callable[[Mapping[str, Any]], object], capacity_kwh: object
     ) -> None:
         document = _fleet_file(capacity_kwh, tariff={"type": "economy_8"})
         document["fleet_distribution"]["n_homez"] = 2
 
-        with pytest.raises(ConfigurationError, match="fleet_distribution: unrecognised keys 'n_homez'"):
+        with pytest.raises(ConfigurationError, match="tariff.type: unknown tariff type 'economy_8'"):
             read(document)
 
     @pytest.mark.parametrize(("read", "capacity_kwh"), _FLEET_DISTRIBUTION_READERS)

@@ -194,7 +194,7 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     except ConfigurationError as exc:
         errors.append(str(exc))
     errors.extend(_period_errors(document["period"]))
-    return errors
+    return list(dict.fromkeys(errors))
 
 
 def _period_errors(period: Mapping[str, str]) -> list[str]:

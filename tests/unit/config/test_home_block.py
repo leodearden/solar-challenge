@@ -660,8 +660,10 @@ class TestLoadHomeConfig:
     def test_load_home_without_battery(self, tmp_path: Path) -> None:
         """Test loading home without battery."""
         json_content = {
-            "pv": {"capacity_kw": 4.0},
-            "load": {"annual_consumption_kwh": 3400},
+            "home": {
+                "pv": {"capacity_kw": 4.0},
+                "load": {"annual_consumption_kwh": 3400},
+            }
         }
         path = tmp_path / "home.json"
         path.write_text(json.dumps(json_content))

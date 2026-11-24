@@ -673,7 +673,7 @@ class TestFinanceConfigParsing:
 
 
 class TestScenarioFinance:
-    """Tests for ScenarioConfig.finance field and _parse_scenario wiring."""
+    """Tests for ScenarioConfig.finance field and parse_scenario wiring."""
 
     _MINIMAL_HOME = {
         "pv": {"capacity_kw": 4.0},

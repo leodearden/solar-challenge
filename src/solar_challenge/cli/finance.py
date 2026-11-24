@@ -92,7 +92,7 @@ def _flex_band(
 
 
 def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> FleetConfig:
-    """*fleet_config* with *seg_rate* pence/kWh as every home's SEG export tariff (load_fleet_config sets none), or *fleet_config* itself when *seg_rate* is None."""
+    """*fleet_config* with *seg_rate* pence/kWh as every home's SEG export tariff, or *fleet_config* itself when *seg_rate* is None."""
     if seg_rate is None:
         return fleet_config
     seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
