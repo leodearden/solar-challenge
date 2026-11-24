@@ -64,8 +64,8 @@ Every dashboard form's bounds and starting values render from one value, `page_l
 Each fleet component's `value_range` bounds every home's value, fixed or drawn. The server refuses a home whose PV capacity, battery capacity or annual consumption lies outside its component's range, naming the field and the range:
 
 - The Single Home page's reader, `parse_home_config` (web/simulation_params.py), reads each of the home's values within its range.
-- The Fleet Simulator's reader, `parse_fleet_form` (web/fleet_scenario.py), generates the fleet's homes and passes them to `refuse_homes_outside_ranges`, so a value a distribution draws is bounded as a fixed one is.
-- The Scenario Builder's check, `builder_form_errors` (web/builder_form.py), passes the homes the scenario loader generates to `refuse_homes_outside_ranges` and lists its refusal.
+- The Fleet Simulator's reader, `parse_fleet_form` (web/fleet_scenario.py), passes the homes `parse_scenario` reads from the form's scenario document to `refuse_homes_outside_ranges`, so a value a distribution draws is bounded as a fixed one is.
+- The Scenario Builder's check, `builder_form_errors` (web/builder_form.py), passes the homes `parse_scenario` reads from the builder's document, read in memory, to `refuse_homes_outside_ranges` and lists its refusal.
 
 The Fleet Simulator leaves validation to the server: Run posts the form as entered, and the page shows the server's refusal. The Single Home page also checks its values against the same ranges, read from `#page-limits`, before it sends them.
 
