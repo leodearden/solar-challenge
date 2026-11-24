@@ -231,7 +231,7 @@ def _open_offline_window(temp_dir: Path) -> Iterator[_OfflineWindow]:
 def _pytest_sessions_it_starts_run_serially() -> Iterator[None]:
     """Resolve `-n auto` to no workers in every pytest session started while it is open, through pytest-xdist's PYTEST_XDIST_AUTO_NUM_WORKERS.
 
-    The suite already runs on a worker per core; tests/unit/test_parallel_suite.py
+    The verify already runs the suite on workers; tests/unit/test_parallel_suite.py
     says what a session that started its own would do to it.
     """
     with pytest.MonkeyPatch.context() as patch:
@@ -250,7 +250,7 @@ def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, object, object
     is refused, as is every HTTP(S) request the test's child processes send through
     the standard proxy variables. Over the same span, a pytest session the test
     starts runs `-n auto` in its own process, while a slow test's sessions, such as
-    the lanes' verify runs, keep a worker per core.
+    the lanes' verify runs, keep the count `-n auto` resolves to.
     """
     if item.get_closest_marker("slow"):
         return (yield)

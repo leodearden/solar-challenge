@@ -57,6 +57,19 @@ per-worktree `.venv`.
   silently losing their coverage. `tests/unit/test_per_task_verify.py` guards this. The
   type-check command takes the extra so `web/*` modules type-check against their real
   dependencies.
+- **`-n auto --dist loadgroup`.** The test command runs the suite on pytest-xdist workers,
+  `--dist loadgroup` asking for the tests that share an `xdist_group` on one worker (CLAUDE.md's
+  parallel-suite bullet says whether it does). The interpreter-matrix and newest-releases lanes
+  run the same command verbatim. The flags live in the test command, not in pyproject's addopts,
+  so an agent's or a person's pytest run stays serial: under addopts, every run rooted at the
+  repo took a worker per host core (2026-11-24: load ~300 on 32 cores; task 1683, as
+  solar-challenge-platform's task 1723 chose before it). `verify_env`'s
+  `PYTEST_XDIST_AUTO_NUM_WORKERS` caps what `auto` takes in the verify, and a reload applies it
+  with no restart; `verify_env` does not reach agents' own runs. dark-factory's serial recovery
+  strips `-n` and `--dist` from the command before it adds `-p no:xdist`, and its admission `-n`
+  knob (`verify_admission_pytest_n`) is left at its no-op default, so neither adds a second
+  `-n`. The test command is restart tier: a reload reports it under `restart_required`, and the
+  orchestrator runs its old command until it restarts.
 - **`lint_command: "true"`.** A no-op: the lint runs in the test suite. `docs/lint-gate.md`
   says why.
 
@@ -109,8 +122,9 @@ environment. If PyPI is out of reach while `uv.lock` pins a file this host's uv 
 the job's own sync fails, and so does the probe's: the lane reads a broken probe, so the red
 goes to its confirm and is filed, with a broken-probe escalation beside it.
 
-Each job passes `-n 0`, so its suite runs serially whatever workers pyproject's addopts ask
-for, as `tests/unit/test_offline_lane_contracts.py` checks. On a worker per core, each worker
+Each job passes `-n 0`, so its suite runs serially even if pyproject's addopts, or a
+`PYTEST_ADDOPTS` the lane inherits, ask for workers, as
+`tests/unit/test_offline_lane_contracts.py` checks. On a worker per core, each worker
 would repeat its suite's module-scoped work, which asks a live service or builds (pvgis' TMY,
 css-build's `npm ci`), the interpreter-matrix cases would run at once, each a verify over every
 core, and each e2e worker would start its own live server and Chromium. No e2e test needs
@@ -121,7 +135,7 @@ flakes on a loaded host too, and the lane files each failure its serial confirm 
 debt, so the e2e job stays serial until a worker count is shown to flake no more than a serial
 run does. The e2e suite also enforces serial runs itself, as
 `tests/unit/test_e2e_suite_runs_serially.py` checks: `tests/e2e/conftest.py` resolves `-n auto`
-to no workers, so a lane command without `-n 0` still runs it serially.
+to no workers, so even a command that passes `-n auto` runs it serially.
 
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
   except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
