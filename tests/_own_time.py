@@ -6,7 +6,7 @@ members spent queued for a CPU: the run delay Linux credits each one in
 /proc/PID/schedstat, and a bound on any queue stint it has not credited yet. Time a
 member spends running or blocked counts, so a hung command still fails its budget;
 time the host keeps it runnable but off a CPU does not, so a crowded host fails a
-wait only at its wall-clock limit, _WALL_LIMIT_IN_BUDGETS budgets long. The whole
+wait only at its wall-clock limit, WALL_LIMIT_IN_BUDGETS budgets long. The whole
 process group is metered because a command such as `npm run build:css` does its work
 in grandchildren while each parent sleeps. It reads /proc, so it is Linux-only.
 
@@ -27,7 +27,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, Protocol
 
-_WALL_LIMIT_IN_BUDGETS = 20
+WALL_LIMIT_IN_BUDGETS = 20
 
 # Each poll scans all of /proc, so polling more often would take CPU from the group it meters.
 _POLL_INTERVAL_SECS = 0.25
@@ -226,8 +226,8 @@ class WallLimitExceeded(TimeoutError):
 
     def __init__(self, *, budget_secs: float, reading: Reading) -> None:
         super().__init__(
-            f"{reading}, past its {_WALL_LIMIT_IN_BUDGETS * budget_secs:g} s wall-clock limit, "
-            f"{_WALL_LIMIT_IN_BUDGETS} budgets of {budget_secs:g} s"
+            f"{reading}, past its {WALL_LIMIT_IN_BUDGETS * budget_secs:g} s wall-clock limit, "
+            f"{WALL_LIMIT_IN_BUDGETS} budgets of {budget_secs:g} s"
         )
         self.budget_secs = budget_secs
         self.reading = reading
@@ -237,7 +237,7 @@ def wait_on_own_time(
     group: int, done: Callable[[], bool], *, budget_secs: float, host: GroupHost = LINUX_HOST
 ) -> None:
     """Poll the process group *group* until *done* holds, failing once the group has spent more than
-    *budget_secs* of its own time on the wait, or once the wait has lasted _WALL_LIMIT_IN_BUDGETS budgets.
+    *budget_secs* of its own time on the wait, or once the wait has lasted WALL_LIMIT_IN_BUDGETS budgets.
 
     *done* is checked after each poll's reading and before that reading is held
     against either limit, so a condition that comes true while this process is itself
@@ -264,7 +264,7 @@ def _fail_past_a_limit(reading: Reading, budget_secs: float) -> None:
     """Raise if *reading* is past the budget of own time or the wall-clock limit."""
     if reading.own > budget_secs:
         raise OwnTimeExceeded(budget_secs=budget_secs, reading=reading)
-    if reading.elapsed > _WALL_LIMIT_IN_BUDGETS * budget_secs:
+    if reading.elapsed > WALL_LIMIT_IN_BUDGETS * budget_secs:
         raise WallLimitExceeded(budget_secs=budget_secs, reading=reading)
 
 

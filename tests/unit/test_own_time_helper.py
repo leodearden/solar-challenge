@@ -26,6 +26,7 @@ import pytest
 
 from tests._own_time import (
     LINUX_HOST,
+    WALL_LIMIT_IN_BUDGETS,
     MemberSnapshot,
     OwnTimeExceeded,
     Reading,
@@ -191,9 +192,10 @@ def test_a_queue_stint_the_kernel_has_not_credited_does_not_count() -> None:
 
 @pytest.mark.parametrize("state", ["S", "R"])
 def test_a_group_credited_all_the_wait_as_queued_fails_at_the_wall_limit(state: str) -> None:
-    """A group with no own time, seen runnable or not, ends its wait only at the wall limit, twenty budgets long."""
+    """A group with no own time, seen runnable or not, ends its wait only at the wall limit, WALL_LIMIT_IN_BUDGETS
+    budgets long."""
     budget_secs = 1.0
-    wall_limit_secs = 20 * budget_secs
+    wall_limit_secs = WALL_LIMIT_IN_BUDGETS * budget_secs
     host = _ScriptedHost({_LEADER: _ScriptedMember(run_delay_share=1, state=state)})
 
     with pytest.raises(WallLimitExceeded) as raised:
@@ -206,19 +208,20 @@ def test_a_group_credited_all_the_wait_as_queued_fails_at_the_wall_limit(state: 
 
 
 @pytest.mark.parametrize(
-    ("member", "limit_secs"),
+    ("member", "limit_in_budgets"),
     [
-        pytest.param(_ScriptedMember(), 1.0, id="own-time-budget"),
-        pytest.param(_ScriptedMember(run_delay_share=1), 20.0, id="wall-limit"),
+        pytest.param(_ScriptedMember(), 1, id="own-time-budget"),
+        pytest.param(_ScriptedMember(run_delay_share=1), WALL_LIMIT_IN_BUDGETS, id="wall-limit"),
     ],
 )
 def test_a_condition_that_holds_at_the_reading_past_a_limit_ends_the_wait(
-    member: _ScriptedMember, limit_secs: float
+    member: _ScriptedMember, limit_in_budgets: int
 ) -> None:
     """The condition comes true at the first reading past the limit, so the wait returns rather than fails."""
+    budget_secs = 1.0
     host = _ScriptedHost({_LEADER: member})
 
-    _wait(host, lambda: host.now > limit_secs, budget_secs=1.0)
+    _wait(host, lambda: host.now > limit_in_budgets * budget_secs, budget_secs=budget_secs)
 
 
 def test_a_reading_reports_every_figure_it_holds() -> None:
