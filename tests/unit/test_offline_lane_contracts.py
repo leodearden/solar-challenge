@@ -12,7 +12,6 @@ SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
 
 import os
-import shlex
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from tests._orchestrator_config import (
     lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
+    pytest_arguments,
 )
 from tests._uv_env import SharedUvEnvironments
 
@@ -225,13 +225,11 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
     """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
-    command = lane_job_steps(project_root, job.name).suite.command
-    argv = shlex.split(command)
-    assert "pytest" in argv, f"the {job.name!r} lane job {command!r} runs no pytest"
-    pytest_arguments = argv[argv.index("pytest") + 1 :]
+    suite = lane_job_steps(project_root, job.name).suite
+    arguments = pytest_arguments(suite)
 
-    assert ("-n", "0") in zip(pytest_arguments, pytest_arguments[1:]), (
-        f"the {job.name!r} lane job {command!r} does not pass pytest `-n 0`, so its suite may run on pytest-xdist "
+    assert ("-n", "0") in zip(arguments, arguments[1:]), (
+        f"the {job.name!r} lane job {suite.command!r} does not pass pytest `-n 0`, so its suite may run on pytest-xdist "
         "workers (the count the command names, else one per core under pyproject's addopts `-n auto`, unless a "
         "conftest resolves that otherwise): each worker repeats the module-scoped work its suite does once, which "
         "asks a live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, "

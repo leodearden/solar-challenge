@@ -15,10 +15,14 @@ Usage::
         lane_jobs_declaring_an_outage_probe,
         lane_outage_probe,
         offline_lane_jobs,
+        pytest_arguments,
         verify_command,
+        verify_env,
     )
 
     test_command = verify_command(project_root, "test_command")
+    test_command_pytest_arguments = pytest_arguments(test_command)
+    worker_cap = verify_env(project_root).get("PYTEST_XDIST_AUTO_NUM_WORKERS")
     verify_commands = [verify_command(project_root, slot) for slot in VERIFY_SLOTS]
     e2e_job = lane_command(project_root, "e2e")
     e2e_suite_step = lane_job_steps(project_root, "e2e").suite
@@ -96,6 +100,32 @@ def verify_command(project_root: Path, slot: VerifySlot) -> OrchestratorCommand:
         "not a command string"
     )
     return OrchestratorCommand(label=slot, command=command, directory=project_root, role="task")
+
+
+def verify_env(project_root: Path) -> dict[str, str]:
+    """Return the top-level `verify_env` mapping of *project_root*'s yaml, the variables dark-factory sets for every verify command; {} when the yaml has none.
+
+    It asserts, naming what it found, that the value is a mapping of strings to
+    strings, as dark-factory reads it.
+    """
+    env = _load_orchestrator_config(project_root).get("verify_env")
+    if env is None:
+        return {}
+    assert isinstance(env, dict) and all(isinstance(key, str) and isinstance(value, str) for key, value in env.items()), (
+        f"dark-factory-orchestrator.yaml's verify_env is {env!r}, not a mapping of variable names to string values; "
+        "quote each value, as in PYTEST_XDIST_AUTO_NUM_WORKERS: \"8\""
+    )
+    return dict(env)
+
+
+def pytest_arguments(command: OrchestratorCommand) -> tuple[str, ...]:
+    """Return the words *command* passes pytest: its shell words, as shlex.split reads them, after its first `pytest` word.
+
+    It asserts, naming the command, that the command holds a `pytest` word.
+    """
+    words = shlex.split(command.command)
+    assert "pytest" in words, f"the {command.label} {command.command!r} runs no pytest"
+    return tuple(words[words.index("pytest") + 1 :])
 
 
 def lane_command(project_root: Path, name: str) -> OrchestratorCommand:
