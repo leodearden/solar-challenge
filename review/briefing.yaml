@@ -148,7 +148,7 @@ conventions:
       which undercounted across the spring-forward, so a bill could annualise its summaries by a
       day count they did not cover (fk-1cd332300623). Each summary now carries the window its
       totals cover (SummaryStatistics.window, set by calculate_summary), so the bill functions
-      read the days from it and take none, and finance.py checks the one window in _one_window
+      read the days from it and take none, and finance.py checks the one window in one_window
       (D27 invariant 8; docs/prds/simulation-window-and-cadence.md, Resolved design decisions 8
       and the lead's ruling D31).
 

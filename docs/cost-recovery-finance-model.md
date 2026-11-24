@@ -1,7 +1,7 @@
 # CBS Cost-Recovery Finance Model
 
 **Task**: W2-CR + task-84 §6 — authoritative specification (CR6, task/62; basis-C amendment, task/84)
-**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/output.py`
+**Code**: `src/solar_challenge/finance.py`, `src/solar_challenge/projection.py`, `src/solar_challenge/output.py`
 **Tests**: `tests/integration/test_cost_recovery_calibration.py` (CR6 H6 gate + basis-C gate); `tests/unit/test_finance_ledger.py` (one ledger per home, its pricing rules and balances, §3, §4); `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` (grid-charge energy paid once, §4); `tests/integration/test_finance_bill.py::TestOverrideExactValues` (override path, §3); `tests/unit/test_finance_projection_revenue.py::TestProjectMultiYearRevenue` (override path, §4)
 **Cross-ref**: `docs/finance-spreadsheet-reconciliation.md` (θ, task/48)
 **Version**: 0.5.0 (CBS amount-due release: own-use VAT + collectable total; platform PRD cbs-invoice-own-use-only task λ2 re-pins to this version)
@@ -21,7 +21,7 @@ minimum cash surplus per home.
 This document specifies the cost-recovery model precisely enough that a board member
 can reproduce a live `solar-challenge finance run <scenario> --cost-recovery` run by
 hand, and that a future code-reviewer can verify any code change against this spec.
-Every equation traces to a function in `finance.py`; every reported number in §7
+Every equation traces to a function in `finance.py` or `projection.py`; every reported number in §7
 matches a live calibration run captured by
 `tests/integration/test_cost_recovery_calibration.py`.
 
@@ -376,7 +376,7 @@ The 0.5.0 tag bills this import at £0: outlay (0 + 219 + 420) × 1.05 = £670.9
 
 ## 4. CBS-Revenue Equation
 
-Source: `finance.py:project_multi_year()`.
+Source: `projection.py:project_multi_year()`.
 
 At each projection year, the CBS fleet revenue is:
 
@@ -592,7 +592,7 @@ each grid-charged kWh twice.
 
 ## 5. Cost-Recovery Solve + Feasibility Cases
 
-Source: `finance.py:solve_cost_recovery_rate()`.
+Source: `projection.py:solve_cost_recovery_rate()`.
 
 The solve reconstructs the CBS net surplus per home as an **affine** function of the own-use rate `r`:
 
@@ -679,7 +679,7 @@ uncapped 0.70 × 5,775 = 4,042.5 kWh/home (§3), so its bills collect
 
 ## 6. Capex → Debt → Required-Own-Use → Outlay Coupling (H2)
 
-Source: `finance.py:project_economics()`.
+Source: `projection.py:project_economics()`.
 
 The project capex is built up as a 4-term sum:
 
