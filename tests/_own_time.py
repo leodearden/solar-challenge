@@ -9,17 +9,23 @@ time the host keeps it runnable but off a CPU does not, so a crowded host fails 
 wait only at its wall-clock limit, _WALL_LIMIT_IN_BUDGETS budgets long. The whole
 process group is metered because a command such as `npm run build:css` does its work
 in grandchildren while each parent sleeps. It reads /proc, so it is Linux-only.
+
+Use run_on_own_time in place of `subprocess.run(..., timeout=...)` for a real child.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
+import shlex
+import signal
+import subprocess
+import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 
 _WALL_LIMIT_IN_BUDGETS = 20
 
@@ -260,3 +266,65 @@ def _fail_past_a_limit(reading: Reading, budget_secs: float) -> None:
         raise OwnTimeExceeded(budget_secs=budget_secs, reading=reading)
     if reading.elapsed > _WALL_LIMIT_IN_BUDGETS * budget_secs:
         raise WallLimitExceeded(budget_secs=budget_secs, reading=reading)
+
+
+def run_on_own_time(
+    args: Sequence[str], *, budget_secs: float, cwd: Path, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run the command *args* in *cwd*, with *env*, to its exit, waiting on its process group as wait_on_own_time does.
+
+    Return what subprocess.run returns with capture_output=True, text=True and
+    errors="backslashreplace". The command leads a process group of its own, not a
+    session, so it stays in this process's autogroup, at the nice this process runs
+    at. Its output goes to unnamed temporary files, not pipes, as a member blocked on
+    a full pipe would be spending its own time. However the wait ends, every member
+    of the group still running is killed before the command is reaped, so none
+    outlives the run. A failed wait's exception is noted with the command, its
+    directory and everything it wrote.
+
+    Raises:
+        OwnTimeExceeded: as wait_on_own_time raises it.
+        WallLimitExceeded: as wait_on_own_time raises it.
+    """
+    command = list(args)
+    with (
+        tempfile.TemporaryFile("w+", errors="backslashreplace") as stdout,
+        tempfile.TemporaryFile("w+", errors="backslashreplace") as stderr,
+    ):
+        leader = subprocess.Popen(command, cwd=cwd, env=env, stdout=stdout, stderr=stderr, process_group=0)
+        try:
+            _wait_then_end_group(leader, budget_secs)
+        except (OwnTimeExceeded, WallLimitExceeded) as exceeded:
+            exceeded.add_note(
+                f"running {shlex.join(command)} in {cwd}\n"
+                f"its stdout:\n{_written_to(stdout)}\n"
+                f"its stderr:\n{_written_to(stderr)}"
+            )
+            raise
+        return subprocess.CompletedProcess(command, leader.returncode, _written_to(stdout), _written_to(stderr))
+
+
+def _wait_then_end_group(leader: subprocess.Popen[bytes], budget_secs: float) -> None:
+    """Wait on *leader*'s process group until *leader* exits; then, however the wait ended, kill the group and reap
+    *leader*.
+
+    *leader* stays unreaped until its group is killed, so its /proc files stay
+    readable to the wait and no other group can take its group's id.
+    """
+    try:
+        wait_on_own_time(leader.pid, lambda: _exited_unreaped(leader.pid), budget_secs=budget_secs)
+    finally:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait()
+
+
+def _exited_unreaped(pid: int) -> bool:
+    """Whether this process's child *pid* has exited, observed without reaping it."""
+    return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+
+
+def _written_to(file: IO[str]) -> str:
+    """Everything written to *file* so far."""
+    file.seek(0)
+    return file.read()
