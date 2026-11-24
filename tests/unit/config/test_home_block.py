@@ -32,6 +32,7 @@ from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_home_block,
 )
+from solar_challenge.tariff import TariffConfig
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._non_booleans import NON_BOOLEANS
 from tests._repository_paths import SCENARIOS_DIR
@@ -686,6 +687,51 @@ class TestLoadHomeConfig:
 
         assert number == expected
         assert type(number) is type(expected)
+
+
+_TOU_OPTIMIZED_BATTERY: dict[str, Any] = {"capacity_kwh": 5.0, "dispatch_strategy": {"strategy_type": "tou_optimized"}}
+
+
+class TestParseHomeBlockFleetTariff:
+    """A scenario's tariff reaches a home block that sets none, and a home's own differing tariff is refused."""
+
+    def test_a_block_without_a_tariff_is_built_with_the_fleet_tariff(self) -> None:
+        home = parse_home_block({}, Location.bristol(), block_path="homes[0]", fleet_tariff=TariffConfig.economy_7())
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    def test_a_block_whose_own_tariff_equals_the_fleet_tariff_is_built_with_it(self) -> None:
+        home = parse_home_block(
+            {"tariff": {"type": "economy_7"}}, Location.bristol(), block_path="homes[0]", fleet_tariff=TariffConfig.economy_7()
+        )
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    @pytest.mark.parametrize("block_path", ["homes[0]", "scenarios[2].homes[0]"])
+    def test_a_block_whose_own_tariff_differs_is_refused_naming_its_tariff_and_the_scenarios(self, block_path: str) -> None:
+        own = {"type": "flat_rate", "rate_per_kwh": 0.25}
+
+        with pytest.raises(ConfigurationError) as refused:
+            parse_home_block({"tariff": own}, Location.bristol(), block_path=block_path, fleet_tariff=TariffConfig.economy_7())
+
+        prefix = f"{block_path}.tariff: "
+        assert str(refused.value).startswith(prefix)
+        assert "tariff:" in str(refused.value).removeprefix(prefix)
+
+    def test_a_tou_optimized_battery_without_its_own_tariff_dispatches_on_the_fleet_tariff(self) -> None:
+        home = parse_home_block({"battery": _TOU_OPTIMIZED_BATTERY}, Location.bristol(), fleet_tariff=TariffConfig.economy_7())
+
+        assert home.tariff_config == TariffConfig.economy_7()
+
+    def test_a_tou_optimized_battery_with_no_tariff_anywhere_is_refused_naming_tou_optimized_and_the_tariff(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            parse_home_block({"battery": _TOU_OPTIMIZED_BATTERY}, Location.bristol(), fleet_tariff=None)
+
+        assert "tou_optimized" in str(refused.value)
+        assert "tariff" in str(refused.value)
+
+    def test_without_a_fleet_tariff_a_block_without_a_tariff_has_none(self) -> None:
+        assert parse_home_block({}, Location.bristol()).tariff_config is None
 
 
 class TestParseHomeBlockHeatPumpEV:
