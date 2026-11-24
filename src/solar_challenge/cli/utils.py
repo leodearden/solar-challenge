@@ -26,8 +26,7 @@ takes one (task 889).
 import dataclasses
 from collections.abc import Iterable
 from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, TypeVar
 
 import typer
 from rich.console import Console
@@ -45,15 +44,11 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from solar_challenge.battery import has_battery
-from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.location import parse_location
-from solar_challenge.scenario_writer import location_block
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
@@ -131,69 +126,6 @@ def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential
     if isinstance(obj, CliInvocation):
         return dataclasses.replace(obj, quiet=obj.quiet or quiet)
     raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
-
-
-def load_config_with_overrides(
-    config_path: Optional[Path],
-    pv_kw: Optional[float] = None,
-    battery_kwh: Optional[float] = None,
-    consumption_kwh: Optional[float] = None,
-    location_str: Optional[str] = None,
-    system_losses: Optional[float] = None,
-) -> dict[str, Any]:
-    """Load config file and apply CLI overrides.
-
-    Args:
-        config_path: Path to config file (optional)
-        pv_kw: Override PV capacity
-        battery_kwh: Override battery capacity
-        consumption_kwh: Override annual consumption
-        location_str: Override location, a location in location.parse_location's grammar:
-            a preset name or 'lat,lon[,alt]'
-        system_losses: Override PV system losses, set as the home's pv: block system_losses
-            key, which PVConfig range-checks
-
-    Returns:
-        Config dict with overrides applied
-
-    Raises:
-        ConfigurationError: From has_battery, naming --battery-kwh, if battery_kwh is
-            negative or not finite; and from location.parse_location, for a location_str
-            it refuses
-    """
-    if config_path is not None:
-        config = load_config(config_path)
-    else:
-        config = {}
-
-    # Ensure nested structure exists
-    if "home" not in config:
-        config["home"] = {}
-    if "pv" not in config["home"]:
-        config["home"]["pv"] = {}
-    if "load" not in config["home"]:
-        config["home"]["load"] = {}
-
-    # Apply overrides
-    if pv_kw is not None:
-        config["home"]["pv"]["capacity_kw"] = pv_kw
-
-    if system_losses is not None:
-        config["home"]["pv"]["system_losses"] = system_losses
-
-    if battery_kwh is not None:
-        if has_battery(battery_kwh, "--battery-kwh"):
-            config["home"]["battery"] = {"capacity_kwh": battery_kwh}
-        else:
-            config["home"].pop("battery", None)
-
-    if consumption_kwh is not None:
-        config["home"]["load"]["annual_consumption_kwh"] = consumption_kwh
-
-    if location_str is not None:
-        config["location"] = location_block(parse_location(location_str))
-
-    return config
 
 
 def verbatim_table_title(title: str) -> Text:
