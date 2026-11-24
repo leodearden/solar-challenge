@@ -976,11 +976,19 @@ def test_a_three_point_sweep_draws_one_chart_per_metric_from_its_points_runs(
     release_held_simulations: Callable[[], None],
     page_errors: list[str],
 ) -> None:
-    """The jobs are released before Run, so each point's job ends at once, saving its run through the live server's RunStorage (B12, task 135)."""
+    """The jobs are released before Run, so each point's job ends at once, saving its run through the live server's RunStorage (B12, task 135).
+
+    The test waits for the sweep POST's answer, then for the page's charts request to finish, which the page makes only
+    once each point's row has its job's final status, so each expect covers only the page's own drawing.
+    """
     release_held_simulations()
     page.goto(live_server + "/scenarios/sweep")
     page.get_by_label("Steps", exact=True).fill("3")
-    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    with page.expect_response("**/api/simulate/sweep") as submitted:
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    assert submitted.value.status == 201, submitted.value.text()
+    with page.expect_request_finished(_is_the_sweep_charts_request):
+        pass
 
     rows = _result_rows(page)
     for n in range(3):
