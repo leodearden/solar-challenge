@@ -5,13 +5,15 @@ Each block written here is the inverse of the scenario_blocks.py reader that rea
 it: parse_location_block, parse_home_block and its block parsers,
 parse_tariff_config's custom type, and parse_seg_rate.  location: and each
 component block carry every key of scenario_blocks.py's table for that component,
-in field order, an unset value as null, which the reader reads as absent.  A field
+in field order, an unset value as null, which the reader reads as absent, and an enum
+member as its value, the string the reader parses back into it.  A field
 the grammar has no key for is refused unless it is at its default.  A reader-only
 key is never written: a battery block is written without efficiency, the round
 trip, as the charge_efficiency and discharge_efficiency it holds.
 """
 
 from collections.abc import Mapping, Sequence
+from enum import Enum
 from typing import Any, Optional, TypeVar
 
 import yaml
@@ -118,17 +120,25 @@ def _component_block(block: ComponentBlock[_Component], config: _Component) -> d
     """The block scenario_blocks.py's reader of *block*'s table reads back as *config*.
 
     It holds each of the table's keys but its reader-only ones, in the table's order: a
-    sub-block key's value written by its sub-block's writer, and None as null.
+    sub-block key's value written by its sub-block's writer, an enum member as its value,
+    and None as null.
 
     Raises:
         ValueError: from _refuse_fields_without_a_key, before anything is written.
     """
     _refuse_fields_without_a_key(block, config)
-    values = {key: getattr(config, key) for key in block.keys if key not in block.reader_only}
+    values = {
+        key: _yaml_scalar(getattr(config, key)) for key in block.keys if key not in block.reader_only
+    }
     return {
         key: value if value is None or key not in block.sub_blocks else block.sub_blocks[key].write(value)
         for key, value in values.items()
     }
+
+
+def _yaml_scalar(value: object) -> object:
+    """*value*, or an enum member's value, the plain scalar that YAML carries and its reader reads back."""
+    return value.value if isinstance(value, Enum) else value
 
 
 def _refuse_fields_without_a_key(block: ComponentBlock[_Component], config: _Component) -> None:

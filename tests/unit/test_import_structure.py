@@ -98,9 +98,6 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "solar_challenge.projection and deletes finance's frozen wrapper "
         "(docs/prds/finance-partition.md §5.3)"
     ),
-    ("solar_challenge.load", "solar_challenge.ev"): Transitional(
-        "program stream S12, load composition"
-    ),
 }
 
 

@@ -214,7 +214,7 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
 
     results = _simulate_june_21(home)
 
-    load_profile = generate_load_profile(home.load_config, window, ev_config=home.ev_config)
+    load_profile = generate_load_profile(home.load_config, window)
     assert results.strategy_name == strategy_name
     assert (results.battery_charge > 0).any()
     assert (results.battery_discharge > 0).any()

@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
@@ -17,7 +18,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     build_dispatch_strategy,
 )
-from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
+from solar_challenge.ev import EVConfig, RowWeights, generate_ev_charging_profile, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
@@ -514,7 +515,7 @@ def _hourly_weather(config: HomeConfig, weather: WeatherProvider) -> pd.DataFram
 
 @dataclass(frozen=True)
 class _Demand:
-    """A run's demand in kW on its minutes: the household's load, EV charging included, plus any heat pump's load.
+    """A run's demand in kW on its minutes: the household's load, plus any EV's charging, plus any heat pump's load.
 
     heat_pump_kw is None without a heat pump.
     """
@@ -538,15 +539,32 @@ def _heat_pump_load(
     )
 
 
-def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow) -> _Demand:
-    """The home's demand on window's rows, with any heat pump run on weather."""
-    household_kw = generate_load_profile(
-        config.load_config, window, ev_config=config.ev_config, tariff=config.tariff_config
-    )
+def _generation_on(minute_generation: pd.Series) -> RowWeights:
+    """The home's PV generation in kW on whatever rows it is given, read from its TMY-year *minute_generation* by UTC time of year."""
+
+    def generation_kw(rows: pd.DatetimeIndex) -> np.ndarray:
+        on_rows: np.ndarray = align_tmy_to_index(minute_generation, rows).to_numpy()
+        return on_rows
+
+    return generation_kw
+
+
+def _demand(
+    config: HomeConfig, weather: pd.DataFrame, minute_generation: pd.Series, window: SimulationWindow
+) -> _Demand:
+    """The home's demand on window's rows: its household's, plus any EV's charging, a solar EV's in the most of *minute_generation*, plus any heat pump's, run on weather."""
+    demand_kw = generate_load_profile(config.load_config, window)
+    if config.ev_config is not None:
+        demand_kw = demand_kw + generate_ev_charging_profile(
+            config.ev_config,
+            window,
+            tariff=config.tariff_config,
+            generation_kw=_generation_on(minute_generation),
+        )
     if config.heat_pump_config is None:
-        return _Demand(household_kw, None)
-    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)
-    return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
+        return _Demand(demand_kw, None)
+    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], demand_kw.index)
+    return _Demand(demand_kw + heat_pump_kw, heat_pump_kw)
 
 
 _Timestep = Callable[[Optional[Battery], datetime.datetime, float, float, Optional[float]], EnergyFlowResult]
@@ -814,6 +832,10 @@ def simulate_home(
             tariff and battery_config.grid_charging, each row's carrying the
             same useful-charge ceiling. The results' strategy_name is its name.
 
+    The home's demand is its household's load plus any EV's charging, which
+    generate_ev_charging_profile places on the home's tariff, a 'solar' EV
+    on the home's own PV generation, plus any heat pump's load.
+
     Each cheap period's grid charge fills the battery to its target, or to
     the period's useful-charge ceiling when that is lower: grid_charge_ceilings_kwh
     under battery_config.grid_charging's forecast, from the run's generation and
@@ -842,7 +864,7 @@ def simulate_home(
     minute_generation = interpolate_to_minute_resolution(
         simulate_pv_output(config.pv_config, config.location, hourly_weather)
     )
-    demand = _demand(config, hourly_weather, window)
+    demand = _demand(config, hourly_weather, minute_generation, window)
     generation_kw = align_tmy_to_index(minute_generation, rows)
     dispatch = _dispatch_path(config, window.step_minutes, strategy)
     ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
