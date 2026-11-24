@@ -14,17 +14,22 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import solar_challenge
 from solar_challenge.finance import (
     BillDistribution,
     CostRecoverySolution,
     FinanceConfig,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.home import RunPricing
+from solar_challenge.projection import (
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
+from tests._fleet_simulate_stand_in import answering_with
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -302,7 +307,7 @@ class TestSolveCostRecoveryRateInterior:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
 
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-6
@@ -423,7 +428,7 @@ class TestSolveCostRecoveryRateInterior:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate_degrading)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
 
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-4
@@ -719,3 +724,19 @@ class TestSolveCostRecoveryRateRequiresASimulator:
 
         with pytest.raises(TypeError, match="simulate"):
             solve_cost_recovery_rate(scenario, finance)
+
+
+# ---------------------------------------------------------------------------
+# The package's frozen name
+# ---------------------------------------------------------------------------
+
+
+def test_the_packages_frozen_solve_answers_as_the_projections_solve() -> None:
+    """solar_challenge.solve_cost_recovery_rate returns the solution solar_challenge.projection's solve returns."""
+    scenario = make_scenario(n_homes=3)
+    finance = _make_finance(n_homes=3)
+    simulate = answering_with(make_fleet_results(n_homes=3))
+
+    frozen = solar_challenge.solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+    assert frozen == solve_cost_recovery_rate(scenario, finance, simulate=simulate)

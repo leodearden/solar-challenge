@@ -28,12 +28,13 @@ from solar_challenge.config import (
     load_config,
     load_fleet_config,
 )
-from solar_challenge.finance import (
-    FinanceConfig,
+from solar_challenge.finance import FinanceConfig
+from solar_challenge.projection import (
     MultiYearCurve,
     ProjectEconomics,
     project_economics,
     project_multi_year,
+    scenario_fleet,
     spreadsheet_revenue_curve,
 )
 from solar_challenge.scenario_blocks import (
@@ -80,7 +81,7 @@ def _make_finance_fin() -> FinanceConfig:
 
 
 class TestSpreadsheetRevenueCurve:
-    """Fast tests for finance.spreadsheet_revenue_curve (task/48 step-1).
+    """Fast tests for projection.spreadsheet_revenue_curve (task/48 step-1).
 
     spreadsheet_revenue_curve builds a flat [FIN]-assumption fleet-revenue
     MultiYearCurve without running the physics simulator.
@@ -281,7 +282,7 @@ class TestFinCalibrationScenarioParses:
 class TestCalibrationCapexMethodAgreement:
     """H6 capex method-agreement tests (fast, no PVGIS) (task/48 step-5).
 
-    project_economics(spreadsheet_revenue_curve(...), scenario, finance) must
+    project_economics(spreadsheet_revenue_curve(...), scenario_fleet(scenario), finance) must
     reproduce the spreadsheet capex cells exactly:
     - Capital_Stack!B6 = £775,000 at 5 kWh per home (inp_Batt_kWh=5)
     - Workings!C94 = £900,000 at 10 kWh per home (Workings build-up)
@@ -298,7 +299,7 @@ class TestCalibrationCapexMethodAgreement:
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         assert econ.total_capex_gbp == pytest.approx(
             FIN_GOLDEN["capital_stack_b6"], abs=1.0
@@ -313,7 +314,7 @@ class TestCalibrationCapexMethodAgreement:
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ = project_economics(curve, scenario, finance)
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
 
         # Verify the arithmetic manually
         expected = 100.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)
@@ -331,7 +332,7 @@ class TestCalibrationCapexMethodAgreement:
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ_10kwh = project_economics(curve, scenario_10kwh, finance)
+        econ_10kwh = project_economics(curve, scenario_fleet(scenario_10kwh), finance)
 
         assert econ_10kwh.total_capex_gbp == pytest.approx(
             FIN_GOLDEN["workings_c94"], abs=1.0
@@ -349,8 +350,8 @@ class TestCalibrationCapexMethodAgreement:
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
 
-        econ_5 = project_economics(curve, _make_scenario_fin(), finance)
-        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+        econ_5 = project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
+        econ_10 = project_economics(curve, scenario_fleet(_make_scenario_fin(battery_kwh=10.0)), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
         expected_delta = 100.0 * 5.0 * 250.0  # 100 homes × 5 kWh × £250/kWh
@@ -390,7 +391,7 @@ class TestCalibrationDscrIrrMethodAgreement:
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
         scenario = _make_scenario_fin()
-        return project_economics(curve, scenario, finance)
+        return project_economics(curve, scenario_fleet(scenario), finance)
 
     def test_min_dscr_meets_covenant_floor(self) -> None:
         """min_dscr must be ≥ 1.20 (covenant floor) under [FIN]-assumption inputs.
@@ -447,7 +448,7 @@ class TestCalibrationG6Guards:
         """Build spreadsheet-input ProjectEconomics."""
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
-        return project_economics(curve, _make_scenario_fin(), finance)
+        return project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
 
     def test_spreadsheet_column_produces_project_economics(self) -> None:
         """spreadsheet_revenue_curve → project_economics returns a ProjectEconomics."""
@@ -468,8 +469,8 @@ class TestCalibrationG6Guards:
         """
         finance = _make_finance_fin()
         curve = make_fin_spreadsheet_curve(n_homes=100, asset_life_years=finance.asset_life_years)
-        econ_5 = project_economics(curve, _make_scenario_fin(), finance)
-        econ_10 = project_economics(curve, _make_scenario_fin(battery_kwh=10.0), finance)
+        econ_5 = project_economics(curve, scenario_fleet(_make_scenario_fin()), finance)
+        econ_10 = project_economics(curve, scenario_fleet(_make_scenario_fin(battery_kwh=10.0)), finance)
 
         delta = econ_10.total_capex_gbp - econ_5.total_capex_gbp
 
@@ -546,12 +547,12 @@ class TestCalibrationPhysicsColumn:
 
         # Physics column (simulated fleet)
         physics_curve = project_multi_year(scenario, physics_finance, simulate=simulate_physics_column)
-        physics_econ = project_economics(physics_curve, scenario, physics_finance)
+        physics_econ = project_economics(physics_curve, scenario_fleet(scenario), physics_finance)
 
         # Spreadsheet column (analytic)
         ss_curve = make_fin_spreadsheet_curve(n_homes=2, asset_life_years=finance.asset_life_years)
         # Adjust scenario to match 2 homes for capex assertion
-        ss_econ = project_economics(ss_curve, scenario, finance)
+        ss_econ = project_economics(ss_curve, scenario_fleet(scenario), finance)
 
         # REPORT both columns
         print(

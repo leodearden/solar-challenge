@@ -24,17 +24,20 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
-    MultiYearCurve,
-    ProjectEconomics,
-    YearPoint,
     basis_c_own_use_kwh,
     bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.projection import (
+    MultiYearCurve,
+    ProjectEconomics,
+    YearPoint,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -72,7 +75,7 @@ def _make_fleet_results_fin_cr6(
     regime (feasible=True):
       - 100 homes × 5.5 kWp + 5 kWh (HomeConfig)
       - fleet_sc = n_homes × self_kwh = 200,000 kWh
-      - project_economics (solar_challenge.finance) charges debt service only in
+      - project_economics (solar_challenge.projection) charges debt service only in
         the 15 loan years but averages surplus over the 25-year asset life, so the
         effective annual cost is opex + debt_svc × 15/25
       - Required revenue = opex(13,100) + debt_svc(≈14,410) × 15/25 (≈8,646)
@@ -176,7 +179,7 @@ def _surplus_the_bills_fund_cr6(
         interp_error_estimate=0.0,
         annualised_from=None,
     )
-    return project_economics(curve, scenario, finance).net_surplus_per_home_per_year_gbp
+    return project_economics(curve, scenario_fleet(scenario), finance).net_surplus_per_home_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +455,7 @@ def _make_interior_fleet_cr6(
       debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,818/yr
       (the loan runs 15 years)
       opex = 5 × £131 = £655/yr
-      project_economics (solar_challenge.finance) charges debt service only in
+      project_economics (solar_challenge.projection) charges debt service only in
       the 15 loan years but averages surplus over the 25-year asset life
       (ProjectEconomics.per_year_surplus_gbp, mean_fleet_surplus_per_year_gbp),
       so the effective annual cost is opex + debt_svc × 15/25
@@ -554,7 +557,7 @@ class TestStructuralInvariants:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-6
         )
@@ -717,7 +720,7 @@ def _spreadsheet_economics_cr6(
     curve = make_fin_spreadsheet_curve(
         n_homes=len(scenario.homes), asset_life_years=finance.asset_life_years
     )
-    return project_economics(curve, scenario, finance)
+    return project_economics(curve, scenario_fleet(scenario), finance)
 
 
 class TestThetaStaysGreen:

@@ -31,11 +31,10 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     bill_distribution,
     householder_bill,
-    project_multi_year,
-    spreadsheet_revenue_curve,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
+from solar_challenge.projection import project_multi_year, spreadsheet_revenue_curve
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_distribution

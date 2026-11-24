@@ -9,9 +9,10 @@ import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import FinanceConfig, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import RunPricing, calculate_summary
+from solar_challenge.projection import project_multi_year
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import (
     make_fleet_results,

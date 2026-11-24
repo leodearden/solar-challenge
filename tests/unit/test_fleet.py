@@ -940,7 +940,7 @@ def _with_a_5kwh_battery(home: HomeConfig) -> HomeConfig:
 
 
 def _battery_at_soh(home: HomeConfig, soh: float) -> HomeConfig:
-    """*home* with its battery's soh override set to *soh*, as finance._aged_homes sets it: 1.0 at age 0."""
+    """*home* with its battery's soh override set to *soh*, as the projection's aged homes set it: 1.0 at age 0."""
     assert home.battery_config is not None, f"{home.name!r} has no battery whose soh to set"
     return replace(home, battery_config=replace(home.battery_config, soh=soh))
 

@@ -31,9 +31,9 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     home_ledger,
     householder_bill,
-    project_multi_year,
 )
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
+from solar_challenge.projection import project_multi_year
 from tests._finance_builders import (
     make_fleet_results_of,
     make_home_config,

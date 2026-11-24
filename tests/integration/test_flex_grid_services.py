@@ -24,11 +24,16 @@ from solar_challenge.config import (
     ScenarioConfig,
     load_config,
 )
-from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesEventsConfig
 from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
+from solar_challenge.projection import (
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+)
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_finance_config
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
@@ -129,7 +134,7 @@ def _surplus_at(
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
     curve = project_multi_year(scenario, finance, simulate=simulate)
-    return project_economics(curve, scenario, finance).mean_fleet_surplus_per_year_gbp
+    return project_economics(curve, scenario_fleet(scenario), finance).mean_fleet_surplus_per_year_gbp
 
 
 # ---------------------------------------------------------------------------

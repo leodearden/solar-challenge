@@ -16,9 +16,10 @@ from collections.abc import Sequence
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import householder_bill, project_multi_year
+from solar_challenge.finance import householder_bill
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import HomeConfig, RunPricing, calculate_summary
+from solar_challenge.projection import project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 

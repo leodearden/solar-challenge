@@ -13,8 +13,9 @@ from datetime import date
 import pandas as pd
 
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import FinanceConfig, project_multi_year, solve_cost_recovery_rate
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
+from solar_challenge.projection import project_multi_year, solve_cost_recovery_rate
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 from tests._fleet_simulate_stand_in import answering_with
