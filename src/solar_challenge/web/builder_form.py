@@ -108,14 +108,15 @@ def scenario_from_builder_form(form: object) -> dict[str, Any]:
 
 
 def builder_form_errors(form: object) -> list[str]:
-    """Every reason the dashboard refuses the builder *form*; none for a scenario it accepts.
+    """Why the dashboard refuses the builder *form*; no reason for a scenario it accepts.
 
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
-    homes is out of bounds, config.parse_scenario judges that document in memory, one
-    reason per block: a refused fleet is the one reason; an accepted fleet's homes' value_range
-    reasons come before the reader's refusal of the period or SEG rate, so neither hides a
-    fleet reason.
+    homes is out of bounds, config.parse_scenario judges that document in memory.  A
+    refused location, tariff or fleet_distribution is then the one reason.  Otherwise the
+    homes' value_range reasons come first, then the reader's first refusal of the period
+    or SEG rate, the period's before the SEG's: one of the two, never both, and neither
+    hides a fleet reason.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
@@ -170,7 +171,7 @@ def _readable(
 
 
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
-    """What config.parse_scenario refuses in *document*, judged in memory, one reason per block.
+    """Why config.parse_scenario refuses *document*, judged in memory, as builder_form_errors lists the reader's reasons.
 
     An accepted document has its homes' value_range reasons alone.  A refused one has the
     reasons _fleet_reasons_beside gives beside its refusal.  The reader refuses a scenario
@@ -188,9 +189,10 @@ def _fleet_reasons_beside(document: Mapping[str, Any], refusal: str) -> list[str
     """The reasons for *document*, which parse_scenario refused with *refusal*: its fleet's, read with the period: and seg: blocks left null, then *refusal*.
 
     The reader reads a null period as the default window and a null seg as no rate.  A
-    refused fleet is the one reason.  An accepted one gives its homes' value_range reasons,
-    then *refusal*, which can then only be the period's or the SEG rate's, the blocks the
-    reader reads before the homes, so neither hides a fleet reason.
+    refused location, tariff or fleet_distribution in that read is the one reason.  An
+    accepted read gives its homes' value_range reasons, then *refusal*, which can then only
+    be the reader's first refusal of the period or SEG rate, the blocks it reads before the
+    homes: the period's when both are refused.
     """
     try:
         fleet = parse_scenario({**document, "period": None, "seg": None})

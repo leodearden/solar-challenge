@@ -398,7 +398,7 @@ class TestBuilderFormErrors:
         )
 
     def test_a_period_whose_two_days_are_not_days_is_refused_once_naming_its_start_day(self) -> None:
-        """Reasons are collected per block, not per field: the period's one reason is the reader's first refusal of it."""
+        """The period's one reason is the reader's first refusal of it, not one reason per day."""
         assert builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024", "end_date": "2024-02-30"}) == [
             "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
         ]
@@ -451,6 +451,37 @@ class TestBuilderFormErrors:
         errors = builder_form_errors({**_ACCEPTED_FORM, "pv_capacity_kw": 400, **changes})
 
         assert errors == [pv_reason, str(block_refusal.value)]
+
+    def test_a_refused_period_is_the_one_reason_beside_a_refused_seg_rate(self) -> None:
+        """The reader reads the period before the SEG rate, and its first refusal of the two is the one listed."""
+        with pytest.raises(ConfigurationError) as period_refusal:
+            period_window("2024-08-31", "2024-06-01", timezone="Europe/London")
+
+        errors = builder_form_errors(
+            {**_ACCEPTED_FORM, "start_date": "2024-08-31", "end_date": "2024-06-01", "seg_rate_pence_per_kwh": -1}
+        )
+
+        assert errors == [str(period_refusal.value)]
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            pytest.param({"location_preset": "custom", "latitude": 95, "longitude": 0}, id="location"),
+            pytest.param({"import_rate": -1}, id="tariff"),
+            pytest.param({"battery_capacity_kwh": -1}, id="fleet-distribution"),
+        ],
+    )
+    def test_a_refused_location_tariff_or_fleet_distribution_is_the_one_reason_beside_a_refused_period(
+        self, changes: dict[str, object]
+    ) -> None:
+        refused_period = {"start_date": "2024-08-31", "end_date": "2024-06-01"}
+        alone = builder_form_errors({**_ACCEPTED_FORM, **changes})
+        assert len(alone) == 1, "premise: the block alone is refused with one reason"
+        assert alone != builder_form_errors({**_ACCEPTED_FORM, **refused_period}), (
+            "premise: the period alone is refused with another reason"
+        )
+
+        assert builder_form_errors({**_ACCEPTED_FORM, **changes, **refused_period}) == alone
 
     def test_a_refused_seg_rate_is_listed_once(self) -> None:
         with pytest.raises(ConfigurationError) as seg_refusal:
