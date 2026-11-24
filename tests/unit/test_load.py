@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import pytest
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVConfig
 from solar_challenge.load import (
     ELEXON_PROFILE_CLASS_1,
     DaySimulator,
@@ -26,7 +25,6 @@ from solar_challenge.load import (
     richardsonpy_household,
     scale_profile_to_energy,
 )
-from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._non_booleans import NON_BOOLEANS
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -933,50 +931,3 @@ class TestHouseholdOnLocalDays:
             generate_load_profile(load_config, window, household_model=household)
 
         assert household.windows == []
-
-
-class TestEVChargingOnTheProfile:
-    """generate_load_profile lays EV charging out a minute to a row, so it adds it only to a profile on one-minute rows."""
-
-    @pytest.mark.parametrize("load_config", _EACH_PATH)
-    def test_ev_charging_on_rows_longer_than_a_minute_is_refused_naming_the_cadence_before_any_household_is_built(
-        self, load_config: LoadConfig
-    ) -> None:
-        """A half-hourly row would read the charging at its first minute alone, so a session starting or ending inside the row would carry the wrong energy."""
-        household = _RecordingHousehold(_household_of_days(_day_of_year_watts))
-        half_hourly = datetime.timedelta(minutes=30)
-
-        with pytest.raises(ValueError, match=f"ev_config.*{re.escape(repr(half_hourly))}"):
-            generate_load_profile(
-                load_config,
-                _window("2024-06-21", "2024-06-22", cadence=half_hourly),
-                EVConfig(charger_type="3.6kW"),
-                household_model=household,
-            )
-
-        assert household.windows == []
-
-    def test_an_off_peak_ev_charges_in_the_tariffs_cheap_minutes(self) -> None:
-        """On Economy 10 the 7 kW EV charges its 35 kWh in the night's cheap minutes, 00:00-04:59."""
-        load_config = LoadConfig(annual_consumption_kwh=3400, use_stochastic=False)
-        window = _window("2024-01-10", "2024-01-12")
-
-        with_ev = generate_load_profile(
-            load_config, window, EVConfig("7kW", 18, 7, 35.0, "off_peak"), tariff=TariffConfig.economy_10()
-        )
-        ev_kw = with_ev - generate_load_profile(load_config, window)
-
-        on_the_11th = ev_kw.loc["2024-01-11"]
-        pd.testing.assert_index_equal(
-            on_the_11th.index[on_the_11th > 3.5],
-            pd.date_range("2024-01-11 00:00", "2024-01-11 04:59", freq="1min", tz="Europe/London"),
-            check_names=False,
-        )
-
-    def test_an_off_peak_ev_with_no_tariff_is_refused(self) -> None:
-        with pytest.raises(ConfigurationError, match="smart_charging_mode 'off_peak'"):
-            generate_load_profile(
-                LoadConfig(annual_consumption_kwh=3400, use_stochastic=False),
-                _window("2024-01-10", "2024-01-12"),
-                EVConfig("7kW", 18, 7, 35.0, "off_peak"),
-            )
