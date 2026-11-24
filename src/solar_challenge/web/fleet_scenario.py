@@ -17,16 +17,9 @@ import yaml
 from solar_challenge.config import parse_scenario
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet_distribution import parse_fleet_distribution_config
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
-from solar_challenge.scenario_blocks import (
-    child_path,
-    parse_dispatch_strategy_config,
-    parse_location_block,
-    parse_seg_rate,
-    parse_tariff_config,
-)
+from solar_challenge.scenario_blocks import child_path, parse_dispatch_strategy_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.tariff import PRESET_RATES, PresetRates
 from solar_challenge.web.fleet_components import (
@@ -187,17 +180,19 @@ class ImportedFleetForm:
 def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     """The fleet form the fleet scenario *document* describes, naming the settings of it the form has no control for.
 
-    The document must be a fleet_distribution scenario the loaders accept: their refusal of
-    its fleet, location, tariff or SEG is the refusal.  The form loads exactly what it
+    The document must be a fleet_distribution scenario config.parse_scenario accepts: its
+    refusal, of a top-level key no scenario reads included, is the refusal.  The fleet size,
+    seed and period are read first, with the page's own rules, which are stricter than the
+    reader's, so their refusals name the scenario's setting.  The form loads exactly what it
     holds: the name, the period's dates, the fleet size and seed, the pv, battery and load
     distributions, the battery's dispatch strategy, the tariff and the SEG.  A name, period
     or seed the scenario leaves out is left out of the form too, and the fleet page runs its
     own default for it.  A null battery capacity reads as 0 kWh, a home with no battery
     either way.  A battery dispatch strategy on its tariff's clock, which the form has no
     control for, is named in not_loaded, and the page runs self-consumption.  An economy
-    tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate the
-    loaders charge it.  A setting the form needs but cannot hold exactly
-    is refused, naming it, since loading it anyway would run a different fleet.  A period
+    tariff's rate the scenario leaves out loads as its PRESET_RATES rate, the rate
+    parse_scenario charges it.  A setting the form needs but cannot hold exactly is
+    refused, naming it, since loading it anyway would run a different fleet.  A period
     the page cannot run, ending before it starts or longer than MAX_WINDOW_DAYS days, is
     refused naming period.start_date and period.end_date.  A fleet size that is not a whole
     number from 1 to MAX_FLEET_HOMES, or a seed that is not a whole number from
@@ -207,22 +202,25 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     refused too.
 
     Raises:
-        ValueError: For a document that is not a fleet_distribution scenario, or a setting
-            the form needs but cannot hold exactly, naming it.
-        ValueError, TypeError, ConfigurationError: From the loaders, for a scenario they
-            refuse, or from parse_fleet_form, for a form the page could not run.
+        ValueError: For a document that is not a fleet_distribution scenario, a fleet size,
+            seed or period the page cannot run, or a setting the form needs but cannot hold
+            exactly, naming it.
+        ConfigurationError: From parse_scenario, for a scenario it refuses.
+        ValueError, TypeError, ConfigurationError: From parse_fleet_form, for a form the page
+            could not run.
     """
     scenario = _fleet_scenario(document)
     fleet = scenario["fleet_distribution"]
     fleet_size_and_seed = _read_fleet_size_and_seed(fleet)
-    _refuse_what_the_loaders_refuse(scenario)
+    period = _read_period(scenario.get("period"))
+    read = parse_scenario(scenario)
     form, not_loaded = _read_blocks(
         scenario,
         "",
         {
             "name": _read_name(scenario.get("name")),
-            "period": _read_period(scenario.get("period")),
-            "location": _read_location_block(scenario.get("location")),
+            "period": period,
+            "location": _read_location(read.get_location()),
             "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),
@@ -273,14 +271,6 @@ def _fleet_scenario(document: object) -> dict[str, Any]:
     return document
 
 
-def _refuse_what_the_loaders_refuse(scenario: Mapping[str, Any]) -> None:
-    """Refuse *scenario* where the loaders refuse it, with their message; the readers below read only what they accept."""
-    parse_location_block(scenario.get("location"))
-    parse_fleet_distribution_config(scenario["fleet_distribution"])
-    parse_tariff_config(scenario.get("tariff"))
-    parse_seg_rate(scenario.get("seg"))
-
-
 def _not_loaded(
     block: Mapping[str, Any], path: str, held: Mapping[str, tuple[str, ...]]
 ) -> tuple[str, ...]:
@@ -303,16 +293,10 @@ def _read_blocks(block: Mapping[str, Any], path: str, reads: Mapping[str, _Block
     return form, _not_loaded(block, path, held)
 
 
-def _read_name(name: Any) -> _BlockRead:
-    """The fleet form's name: the scenario's, none when it is absent or null.
-
-    Raises:
-        ValueError: For a name that is not a string.
-    """
+def _read_name(name: str | None) -> _BlockRead:
+    """The fleet form's name: the scenario's, which parse_scenario accepted as a string, none when it is absent or null."""
     if name is None:
         return {}, ()
-    if not isinstance(name, str):
-        raise ValueError(f"name must be a string, got {name!r}")
     return {"name": name}, ()
 
 
@@ -358,15 +342,15 @@ def _read_day(value: Any, path: str) -> date:
     return read_iso_date(value, path)
 
 
-def _read_location_block(location: Any) -> _BlockRead:
-    """Nothing of the fleet form, which has no location control: a location other than the one it runs at is not loaded."""
-    if parse_location_block(location) == _fleet_form_location({}):
+def _read_location(location: Location) -> _BlockRead:
+    """Nothing of the fleet form, which has no location control: a scenario *location*, as parse_scenario reads it, other than the one the form runs at is not loaded."""
+    if location == _fleet_form_location({}):
         return {}, ()
     return {}, ("location",)
 
 
 def _read_fleet_size_and_seed(fleet: Mapping[str, Any]) -> Mapping[str, _BlockRead]:
-    """The fleet form's fleet size and seed: the reads of the scenario's fleet_distribution block *fleet*'s n_homes and seed, by key, made ahead of the loaders, whose int() would refuse n_homes first, naming no setting.
+    """The fleet form's fleet size and seed: the reads of the scenario's fleet_distribution block *fleet*'s n_homes and seed, by key, made ahead of parse_scenario, whose int() would refuse n_homes first, naming no setting.
 
     Raises:
         ValueError: From read_fleet_size or read_fleet_seed, naming
@@ -544,7 +528,7 @@ def _read_dispatch(dispatch: Any, path: str) -> _BlockRead:
 
 
 def _on_its_tariffs_clock(dispatch: dict[str, Any], path: str) -> bool:
-    """Whether the *path* dispatch block, one the loaders accept, is tou_optimized on its tariff's clock: it sets no peak_hours."""
+    """Whether the *path* dispatch block, one parse_scenario accepted, is tou_optimized on its tariff's clock: it sets no peak_hours."""
     strategy = parse_dispatch_strategy_config(dispatch, block_path=path)
     return isinstance(strategy, TOUOptimizedStrategyConfig) and strategy.peak_hours is None
 
@@ -578,7 +562,7 @@ def _read_typed_block(
 def _read_seg(seg: Any) -> _BlockRead:
     """The fleet form's SEG: the scenario's seg block as given, none when it is absent or null.
 
-    The loaders accepted it, so it names exactly one preset or rate, both of which the form holds.
+    parse_scenario accepted it, so it names exactly one preset or rate, both of which the form holds.
     """
     if seg is None:
         return {}, ()
