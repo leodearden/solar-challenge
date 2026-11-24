@@ -55,7 +55,7 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.gridservices import GridServicesModel
 from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
-from solar_challenge.pv import calculate_degradation_factor
+from solar_challenge.pv import calculate_degradation_factor, wired_dc_capacity_kw
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
@@ -212,6 +212,10 @@ class MultiYearCurve:
     annualised from no simulated window (:func:`spreadsheet_revenue_curve`).
     """
 
+    fleet_pv_dc_kw: float
+    """The PV DC the curve's generation came from (kWp, > 0 and finite), on which
+    :func:`project_economics` prices the PV capex."""
+
     def __post_init__(self) -> None:
         if not self.points:
             raise ValueError("points must be non-empty")
@@ -222,6 +226,8 @@ class MultiYearCurve:
                 f"interp_error_estimate must be >= 0 and finite, "
                 f"got {self.interp_error_estimate!r}"
             )
+        if not 0.0 < self.fleet_pv_dc_kw < math.inf:
+            raise ValueError(f"fleet_pv_dc_kw must be > 0 and finite, got {self.fleet_pv_dc_kw!r}")
 
 
 @dataclass(frozen=True)
@@ -759,8 +765,10 @@ def _selected_nodes(
             )
 
 
-def _assembled_curve(nodes: Sequence[_NodeData], finance: FinanceConfig, interp_error_estimate: float) -> MultiYearCurve:
-    """The curve over *finance*'s asset life through *nodes*, ascending by age from age 0.
+def _assembled_curve(
+    nodes: Sequence[_NodeData], finance: FinanceConfig, interp_error_estimate: float, fleet_pv_dc_kw: float
+) -> MultiYearCurve:
+    """The curve over *finance*'s asset life through *nodes*, ascending by age from age 0, its generation from *fleet_pv_dc_kw* kWp.
 
     Each year's energy and state of health is the PCHIP of its node values,
     clipped to the range its :class:`YearPoint` field admits.  Each year's
@@ -791,6 +799,7 @@ def _assembled_curve(nodes: Sequence[_NodeData], finance: FinanceConfig, interp_
         sampled_ages=tuple(node.age for node in nodes),
         interp_error_estimate=interp_error_estimate,
         annualised_from=nodes[0].annualised_from,
+        fleet_pv_dc_kw=fleet_pv_dc_kw,
     )
 
 
@@ -831,6 +840,7 @@ def _project(
 ) -> tuple[FleetProjection, tuple[Warning, ...]]:
     """Project *fleet* over *finance*'s asset life, with the warnings its caller is to be shown, in order."""
     refuse_analysis_only_forecasts(fleet.homes)
+    fleet_pv_dc_kw = sum(wired_dc_capacity_kw(home.pv_config) for home in fleet.homes)
     simulate_at: _SimulateAt = functools.partial(
         _simulate_node, fleet, finance=finance, grid_services=grid_services_model_of(finance), simulate=simulate
     )
@@ -838,7 +848,10 @@ def _project(
     seeds = _simulated_seeds(simulate_at, len(fleet.homes), asset_life)
     selection = _selected_nodes(seeds, simulate_at, asset_life, error_target_pct)
     curve = _assembled_curve(
-        [selection.simulated[age].node for age in selection.accepted_ages], finance, selection.max_deviation_pct
+        [selection.simulated[age].node for age in selection.accepted_ages],
+        finance,
+        selection.max_deviation_pct,
+        fleet_pv_dc_kw,
     )
     notices = (*_cap_notices(selection, error_target_pct), *_distinct_grid_services_warnings(selection.simulated))
     return FleetProjection(curve=curve, age0_summaries=selection.simulated[0].summaries), notices
@@ -871,6 +884,10 @@ def project_fleet(
     such as one naming an event window the simulated period never enters, is
     shown once per call, however many ages raise it, and is attributed to the
     caller, as is the warning a bisection capped at :data:`MAX_NODES` shows.
+    The curve's ``fleet_pv_dc_kw`` is Σ :func:`~solar_challenge.pv.wired_dc_capacity_kw`
+    of the fleet's homes, and a PV config
+    :func:`~solar_challenge.pv.create_pv_system` refuses is refused before any
+    simulation.
 
     Args:
         fleet: The ScenarioFleet whose homes are simulated over its ``start``
@@ -1133,6 +1150,9 @@ def spreadsheet_revenue_curve(
     the *spreadsheet-input column* fed into :func:`project_economics` for the [FIN]
     calibration (model doc §7).
 
+    The curve's PV basis, ``fleet_pv_dc_kw``, is the fleet's nameplate,
+    ``n_homes × pv_kwp``, as its generation is nameplate × yield.
+
     Do **not** use this curve for real simulation output — use
     :func:`project_multi_year` for physics-backed projections.
 
@@ -1195,6 +1215,7 @@ def spreadsheet_revenue_curve(
         sampled_ages=(0,),          # analytic; no simulation nodes
         interp_error_estimate=0.0,  # exact; no interpolation
         annualised_from=None,       # yearly assumptions; no simulated window
+        fleet_pv_dc_kw=float(n_homes) * pv_kwp,
     )
 
 

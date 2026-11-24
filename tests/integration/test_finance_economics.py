@@ -54,14 +54,15 @@ def _make_point(year: int, revenue: float) -> YearPoint:
     )
 
 
-def _make_curve(revenues: list[float]) -> MultiYearCurve:
-    """Build a synthetic MultiYearCurve with given per-year revenues."""
+def _make_curve(revenues: list[float], *, fleet_pv_dc_kw: float) -> MultiYearCurve:
+    """Build a synthetic MultiYearCurve with given per-year revenues, its generation from *fleet_pv_dc_kw* kWp."""
     points = tuple(_make_point(y, rev) for y, rev in enumerate(revenues))
     return MultiYearCurve(
         points=points,
         sampled_ages=(0,),
         interp_error_estimate=0.0,
         annualised_from=None,
+        fleet_pv_dc_kw=fleet_pv_dc_kw,
     )
 
 
@@ -237,7 +238,7 @@ class TestProjectEconomicsCapex:
         )
         # 25 revenue entries (asset_life_years=25)
         revenues = [10000.0] * 25
-        curve = _make_curve(revenues)
+        curve = _make_curve(revenues, fleet_pv_dc_kw=7.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -249,7 +250,7 @@ class TestProjectEconomicsCapex:
         home = make_sized_home(pv_kwp=4.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=5000.0)
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -266,7 +267,7 @@ class TestProjectEconomicsCapex:
             grant_gbp=1000.0,
             equity_fraction=0.60,
         )
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -284,7 +285,7 @@ class TestProjectEconomicsCapex:
         scenario = make_scenario_of([home])
         # capex = 2*1000 + 1000 + 0 = 3000; grant=50000 >> capex
         finance = _make_finance(grant_gbp=50000.0)
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=2.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -316,7 +317,7 @@ class TestProjectEconomicsDebtService:
             loan_rate=0.07,
             loan_term_years=15,
         )
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=1.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -342,7 +343,7 @@ class TestProjectEconomicsDebtService:
             loan_rate=0.0,
             loan_term_years=10,
         )
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=2.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -357,7 +358,7 @@ class TestProjectEconomicsDebtService:
         home = make_sized_home(pv_kwp=2.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=999999.0)  # grant >> capex
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=2.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -440,7 +441,7 @@ class TestProjectEconomicsSurplusDSCR:
             asset_life_years=25,
         )
         revenues = [5000.0] * 25
-        curve = _make_curve(revenues)
+        curve = _make_curve(revenues, fleet_pv_dc_kw=7.0)
         scenario = make_scenario_of(homes)
 
         capex = 10250.0
@@ -507,7 +508,7 @@ class TestProjectEconomicsSurplusDSCR:
         )
         # Loan years: 5000 revenue; post-loan: 1000 revenue (very low)
         revenues = [5000.0] * 15 + [1000.0] * 10
-        curve = _make_curve(revenues)
+        curve = _make_curve(revenues, fleet_pv_dc_kw=7.0)
         scenario = make_scenario_of(homes)
 
         capex = 10250.0
@@ -531,7 +532,7 @@ class TestProjectEconomicsSurplusDSCR:
         home = make_sized_home(pv_kwp=2.0)
         scenario = make_scenario_of([home])
         finance = _make_finance(grant_gbp=999999.0)  # no debt
-        curve = _make_curve([5000.0] * 25)
+        curve = _make_curve([5000.0] * 25, fleet_pv_dc_kw=2.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -606,7 +607,7 @@ class TestProjectEconomicsIRRPayback:
             opex_per_home_per_year_gbp=100.0,
             asset_life_years=25,
         )
-        curve = _make_curve([8000.0] * 25)
+        curve = _make_curve([8000.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -637,7 +638,7 @@ class TestProjectEconomicsIRRPayback:
             asset_life_years=25,
         )
         # Revenue 600/yr; opex=100; surplus=500/yr; equity=2000
-        curve = _make_curve([600.0] * 25)
+        curve = _make_curve([600.0] * 25, fleet_pv_dc_kw=1.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -659,7 +660,7 @@ class TestProjectEconomicsIRRPayback:
             asset_life_years=25,
         )
         # Low revenue, massive opex → surplus always negative
-        curve = _make_curve([1.0] * 25)
+        curve = _make_curve([1.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -677,7 +678,7 @@ class TestProjectEconomicsIRRPayback:
             opex_per_home_per_year_gbp=9999.0,
             asset_life_years=25,
         )
-        curve = _make_curve([1.0] * 25)
+        curve = _make_curve([1.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -688,7 +689,7 @@ class TestProjectEconomicsIRRPayback:
         home = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         scenario = make_scenario_of([home])
         finance = _make_finance()
-        curve = _make_curve([7000.0] * 25)
+        curve = _make_curve([7000.0] * 25, fleet_pv_dc_kw=4.0)
 
         econ1 = project_economics(curve, scenario_fleet(scenario), finance)
         econ2 = project_economics(curve, scenario_fleet(scenario), finance)
@@ -966,7 +967,7 @@ class TestProjectEconomicsInverterCapex:
             battery_cost_per_kwh_gbp=250.0,
             inverter_cost_per_kw_gbp=0.0,
         )
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
@@ -991,7 +992,7 @@ class TestProjectEconomicsInverterCapex:
         home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
         homes = [home_a, home_b]
         scenario = make_scenario_of(homes)
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
         baseline = project_economics(
             curve, scenario_fleet(scenario), _make_finance(inverter_cost_per_kw_gbp=0.0)
@@ -1020,7 +1021,7 @@ class TestProjectEconomicsInverterCapex:
         home_default = make_sized_home(pv_kwp=3.0)
         homes = [home_clipped, home_default]
         scenario = make_scenario_of(homes)
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=7.0)
 
         cost_per_kw = 200.0
         baseline = project_economics(
@@ -1050,7 +1051,7 @@ class TestProjectEconomicsInverterCapex:
         """
         home_clipped = make_sized_home(pv_kwp=4.0, inverter_kw=2.5)
         scenario = make_scenario_of([home_clipped])
-        curve = _make_curve([10000.0] * 25)
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=4.0)
 
         cost_per_kw = 200.0
         baseline = project_economics(

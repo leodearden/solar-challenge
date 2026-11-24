@@ -38,6 +38,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     solve_cost_recovery_rate,
 )
+from solar_challenge.pv import wired_dc_capacity_kw
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -178,6 +179,7 @@ def _surplus_the_bills_fund_cr6(
         sampled_ages=(0,),
         interp_error_estimate=0.0,
         annualised_from=None,
+        fleet_pv_dc_kw=sum(wired_dc_capacity_kw(home.pv_config) for home in scenario_fleet(scenario).homes),
     )
     return project_economics(curve, scenario_fleet(scenario), finance).net_surplus_per_home_per_year_gbp
 
