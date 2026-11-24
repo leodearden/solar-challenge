@@ -177,7 +177,8 @@ def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
     load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
     a config it builds, and refuse_homes_outside_ranges refuses, with ConfigurationError,
     a fleet whose generated homes hold a value outside a component's value_range; each is
-    listed.  Anything else the loader raises is a defect in it, not a refusal, so it
+    listed, then each seg: and period: refusal, once: load_fleet_config refuses the first
+    of them too.  Anything else the loader raises is a defect in it, not a refusal, so it
     propagates.
     """
     errors: list[str] = []
