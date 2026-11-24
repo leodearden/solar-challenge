@@ -106,8 +106,8 @@
                     <span x-show="submitting" x-cloak>Submitting...</span>
                 </button>
 
-                <!-- Error display -->
-                <div x-show="errorMsg" x-cloak class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
+                <!-- Error display: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_page_says_why_it_lost_track_of_a_sweep_while_the_browser_renders_no_frame) -->
+                <div hidden :hidden="!errorMsg" class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
                     x-text="errorMsg"></div>
             </div>
         {% endcall %}
