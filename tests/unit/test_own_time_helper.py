@@ -5,7 +5,8 @@ A group's own time is the wall-clock time of a wait less the time its members sp
 for a CPU. Time a member spends blocked counts, so a hung group still fails its budget; time
 the host keeps it runnable but off a CPU does not, so a crowded host fails a wait only at its
 wall-clock limit. The wait's rules run on a scripted host, so no verdict here depends on how
-busy the real one is; real processes check only what the real host provides.
+busy the real one is; real processes check only what the real host provides, and what a
+run of a command gives back.
 """
 
 import contextlib
@@ -29,6 +30,7 @@ from tests._own_time import (
     OwnTimeExceeded,
     Reading,
     WallLimitExceeded,
+    run_on_own_time,
     wait_on_own_time,
 )
 
@@ -44,6 +46,17 @@ _SCRIPTED_TIME_CEILING_SECS = 1000.0
 _SETTLES_WITHIN_SECS = 60.0
 
 _REAL_PROCESS_LIFETIME_SECS = 30
+
+# A budget of own time no short command's start-up spends, however busy the host, since time queued for a CPU is
+# not its own.
+_SHORT_COMMAND_BUDGET_SECS = 30.0
+
+_HANG_BUDGET_SECS = 2.0
+
+# How long a killed member may take to be gone, ended and reaped.
+_GONE_WITHIN_SECS = 10.0
+
+_ONE_MIB = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -290,3 +303,89 @@ def test_the_host_reads_the_state_of_a_member_named_with_a_space_and_a_parenthes
         assert {pid: snapshot.state for pid, snapshot in LINUX_HOST.members(member.pid).items()} == {member.pid: "Z"}
     finally:
         _kill_and_reap(member)
+
+
+def _hang(directory: Path, pid_file: Path) -> list[str]:
+    """Write a hang script into *directory* and return the command that runs it.
+
+    The script prints a marker, starts a long-lived sleep in the background, writes
+    that sleep's pid to *pid_file*, and hangs in a shorter sleep of its own, all
+    blocked, so its time is its own. The rename makes the pid file appear whole or
+    not at all.
+    """
+    part, whole = shlex.quote(f"{pid_file}.part"), shlex.quote(str(pid_file))
+    script = directory / "hang.sh"
+    script.write_text(
+        f"echo hanging\nsleep 120 >/dev/null 2>&1 &\necho $! > {part} && mv {part} {whole}\nsleep 30\n", encoding="utf-8"
+    )
+    return ["sh", str(script)]
+
+
+def _process_exists(pid: int) -> bool:
+    """Whether a process *pid* exists, a zombie included."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _gone_within(pid: int, seconds: float) -> bool:
+    """Whether the process *pid* is gone, ended and reaped, within *seconds* of this call."""
+    deadline = time.monotonic() + seconds
+    while _process_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not _process_exists(pid)
+
+
+@_on_linux
+def test_a_run_returns_the_commands_exit_status_and_everything_it_wrote(tmp_path: Path) -> None:
+    args = ["sh", "-c", "echo out; echo err >&2; exit 3"]
+
+    run = run_on_own_time(args, budget_secs=_SHORT_COMMAND_BUDGET_SECS, cwd=tmp_path)
+
+    assert (run.args, run.returncode, run.stdout, run.stderr) == (args, 3, "out\n", "err\n")
+
+
+@_on_linux
+def test_a_run_is_given_its_env_and_cwd(tmp_path: Path) -> None:
+    run = run_on_own_time(
+        ["sh", "-c", 'pwd; echo "$OWN_TIME_PROBE"'],
+        budget_secs=_SHORT_COMMAND_BUDGET_SECS,
+        cwd=tmp_path,
+        env={**os.environ, "OWN_TIME_PROBE": "x"},
+    )
+
+    assert run.stdout == f"{tmp_path.resolve()}\nx\n"
+
+
+@_on_linux
+def test_a_run_whose_group_outspends_its_budget_fails_naming_its_command_and_output_and_leaves_no_member_running(
+    tmp_path: Path,
+) -> None:
+    """The hang's shell and both its sleeps are blocked, so the run fails about a budget in, its background sleep
+    killed with the rest of its group."""
+    pid_file = tmp_path / "background.pid"
+    args = _hang(tmp_path, pid_file)
+
+    with pytest.raises(OwnTimeExceeded) as raised:
+        run_on_own_time(args, budget_secs=_HANG_BUDGET_SECS, cwd=tmp_path)
+
+    notes = "\n".join(raised.value.__notes__)
+    assert shlex.join(args) in notes and "hanging" in notes, notes
+    assert pid_file.exists(), "the hang started no background sleep within its budget"
+    background_pid = int(pid_file.read_text(encoding="utf-8"))
+    assert _gone_within(background_pid, _GONE_WITHIN_SECS), (
+        f"the hang's background sleep {background_pid} still runs {_GONE_WITHIN_SECS:g} s after its run failed"
+    )
+
+
+@_on_linux
+def test_a_runs_output_is_not_lost_to_a_full_pipe(tmp_path: Path) -> None:
+    """The command writes far more than a pipe holds before it exits, so a run that read a pipe only once the command
+    had exited would leave it blocked, spending its own time, until the run failed."""
+    args = [sys.executable, "-I", "-c", f"import sys; sys.stdout.write('o' * {_ONE_MIB})"]
+
+    run = run_on_own_time(args, budget_secs=_SHORT_COMMAND_BUDGET_SECS, cwd=tmp_path)
+
+    assert (run.returncode, run.stdout) == (0, "o" * _ONE_MIB)
