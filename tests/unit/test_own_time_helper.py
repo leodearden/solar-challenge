@@ -17,7 +17,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,7 @@ from tests._own_time import (
     run_on_own_time,
     wait_on_own_time,
 )
+from tests._process_liveness import not_gone_within
 
 _on_linux = pytest.mark.skipif(sys.platform != "linux", reason="LINUX_HOST reads each thread's stat and schedstat under /proc")
 
@@ -329,21 +329,14 @@ def _hang(directory: Path, pid_file: Path) -> list[str]:
     return ["sh", str(script)]
 
 
-def _process_exists(pid: int) -> bool:
-    """Whether a process *pid* exists, a zombie included."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def _gone_within(pid: int, seconds: float) -> bool:
-    """Whether the process *pid* is gone, ended and reaped, within *seconds* of this call."""
-    deadline = time.monotonic() + seconds
-    while _process_exists(pid) and time.monotonic() < deadline:
-        time.sleep(0.01)
-    return not _process_exists(pid)
+def _assert_gone(pid: int, what: str) -> None:
+    """Assert the process *pid*, *what*, is gone within _GONE_WITHIN_SECS, killing it first if not, so a failure
+    leaves no process running."""
+    survivors = not_gone_within([pid], _GONE_WITHIN_SECS)
+    for survivor in survivors:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(survivor, signal.SIGKILL)
+    assert not survivors, f"{what} {pid} still ran {_GONE_WITHIN_SECS:g} s after its run ended"
 
 
 @_on_linux
@@ -382,10 +375,19 @@ def test_a_run_whose_group_outspends_its_budget_fails_naming_its_command_and_out
     notes = "\n".join(raised.value.__notes__)
     assert shlex.join(args) in notes and "hanging" in notes, notes
     assert pid_file.exists(), "the hang started no background sleep within its budget"
-    background_pid = int(pid_file.read_text(encoding="utf-8"))
-    assert _gone_within(background_pid, _GONE_WITHIN_SECS), (
-        f"the hang's background sleep {background_pid} still runs {_GONE_WITHIN_SECS:g} s after its run failed"
+    _assert_gone(int(pid_file.read_text(encoding="utf-8")), "the hang's background sleep")
+
+
+@_on_linux
+def test_a_run_whose_command_exits_leaves_no_member_of_its_group_running(tmp_path: Path) -> None:
+    """The command exits at once, leaving a long-lived sleep it started in the background and printed the pid of, so
+    only the run's kill of its group ends that sleep."""
+    run = run_on_own_time(
+        ["sh", "-c", "sleep 120 >/dev/null 2>&1 & echo $!"], budget_secs=_SHORT_COMMAND_BUDGET_SECS, cwd=tmp_path
     )
+
+    assert run.returncode == 0
+    _assert_gone(int(run.stdout), "the command's background sleep")
 
 
 @_on_linux
