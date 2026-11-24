@@ -22,8 +22,9 @@ import pytest
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from solar_challenge.home import RunPricing
-from solar_challenge.projection import MultiYearCurve, YearPoint, project_multi_year
-from tests._finance_builders import make_fleet_results, make_scenario_and_finance
+from solar_challenge.projection import MultiYearCurve, YearPoint, project_multi_year, scenario_fleet
+from solar_challenge.pv import wired_dc_capacity_kw
+from tests._finance_builders import make_fleet_results, make_scenario_and_finance, make_scenario_of, make_sized_home
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -190,6 +191,7 @@ class TestMultiYearCurve:
             sampled_ages=(0, 12, 24),
             interp_error_estimate=0.5,
             annualised_from=None,
+            fleet_pv_dc_kw=8.0,
         )
 
     def test_construction_valid(self) -> None:
@@ -198,6 +200,7 @@ class TestMultiYearCurve:
         assert len(mc.points) == 25
         assert mc.sampled_ages == (0, 12, 24)
         assert mc.interp_error_estimate == pytest.approx(0.5)
+        assert mc.fleet_pv_dc_kw == 8.0
 
     def test_points_is_tuple(self) -> None:
         """points is a tuple (immutable)."""
@@ -223,6 +226,7 @@ class TestMultiYearCurve:
                 sampled_ages=(0,),
                 interp_error_estimate=0.0,
                 annualised_from=None,
+                fleet_pv_dc_kw=8.0,
             )
 
     @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, -0.1])
@@ -235,6 +239,16 @@ class TestMultiYearCurve:
 
         assert str(exc_info.value) == f"interp_error_estimate must be >= 0 and finite, got {value!r}"
 
+    @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, 0.0, -1.0])
+    def test_a_fleet_pv_dc_kw_that_is_not_above_zero_or_not_finite_is_refused_naming_it(
+        self, value: float
+    ) -> None:
+        """A zero, negative, NaN or infinite fleet_pv_dc_kw is refused, naming the field, that it must be > 0 and finite, and the value."""
+        with pytest.raises(ValueError) as exc_info:
+            dataclasses.replace(self._make_valid(), fleet_pv_dc_kw=value)
+
+        assert str(exc_info.value) == f"fleet_pv_dc_kw must be > 0 and finite, got {value!r}"
+
     def test_empty_sampled_ages_raises(self) -> None:
         """Empty sampled_ages raises ValueError."""
         points = tuple(self._make_point(y) for y in range(25))
@@ -244,7 +258,33 @@ class TestMultiYearCurve:
                 sampled_ages=(),
                 interp_error_estimate=0.0,
                 annualised_from=None,
+                fleet_pv_dc_kw=8.0,
             )
+
+
+
+def _simulate_each_home_given(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+    """make_fleet_results of the homes the projection asks for."""
+    return make_fleet_results(homes=fleet_config.homes)
+
+
+class TestTheCurveCarriesThePvDcItsGenerationCameFrom:
+    """project_multi_year's curve carries the PV DC its homes wire, the basis project_economics prices."""
+
+    def test_the_curves_fleet_pv_dc_kw_is_the_dc_its_homes_wire(self) -> None:
+        scenario = make_scenario_of([make_sized_home(pv_kwp=3.0), make_sized_home(pv_kwp=5.0)])
+        _, finance = make_scenario_and_finance(asset_life_years=5)
+        wired = sum(wired_dc_capacity_kw(home.pv_config) for home in scenario_fleet(scenario).homes)
+        assert wired != pytest.approx(8.0), (
+            "the homes must wire a DC other than their 8 kWp nameplate, "
+            "or this test cannot tell the two bases apart"
+        )
+
+        curve = project_multi_year(
+            scenario, finance, error_target_pct=math.inf, simulate=_simulate_each_home_given
+        )
+
+        assert curve.fleet_pv_dc_kw == pytest.approx(wired)
 
 
 _PLATEAU_KWH = 10_000.0

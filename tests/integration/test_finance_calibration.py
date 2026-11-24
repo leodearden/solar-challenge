@@ -161,6 +161,11 @@ class TestSpreadsheetRevenueCurve:
         curve = self._call()
         assert curve.interp_error_estimate == pytest.approx(0.0)
 
+    def test_its_pv_basis_is_the_fleets_nameplate(self) -> None:
+        """fleet_pv_dc_kw is n_homes × pv_kwp, the nameplate its generation (pv_kwp × kwh_per_kwp) came from."""
+        assert self._call().fleet_pv_dc_kw == 550.0
+        assert self._call(n_homes=200, pv_kwp=3.0).fleet_pv_dc_kw == 600.0
+
     def test_deterministic(self) -> None:
         """Two calls with same inputs must return bit-identical results."""
         curve1 = self._call()
