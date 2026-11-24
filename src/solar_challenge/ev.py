@@ -184,14 +184,25 @@ class EVConfig:
         return self._calculate_available_hours()
 
 
+def _off_peak_tariff(tariff: TariffConfig | None) -> TariffConfig:
+    """*tariff*, whose cheap minutes an off_peak EV charges in.
+
+    Raises:
+        ConfigurationError: If tariff is None.
+    """
+    if tariff is None:
+        raise ConfigurationError(_OFF_PEAK_WITHOUT_A_TARIFF)
+    return tariff
+
+
 def require_tariff_for_smart_charging(ev_config: EVConfig, tariff: TariffConfig | None) -> None:
     """Refuse an EV whose smart charging mode reads the tariff, off_peak, when there is no tariff to read.
 
     Raises:
         ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and tariff is None.
     """
-    if SmartChargingMode(ev_config.smart_charging_mode) is SmartChargingMode.OFF_PEAK and tariff is None:
-        raise ConfigurationError(_OFF_PEAK_WITHOUT_A_TARIFF)
+    if SmartChargingMode(ev_config.smart_charging_mode) is SmartChargingMode.OFF_PEAK:
+        _off_peak_tariff(tariff)
 
 
 RowWeights: TypeAlias = Callable[[pd.DatetimeIndex], np.ndarray]
@@ -221,25 +232,78 @@ def _row_weights(config: EVConfig, tariff: TariffConfig | None, generation_kw: R
     Raises:
         ConfigurationError: off_peak with no tariff, require_tariff_for_smart_charging's refusal; or solar with no generation_kw.
     """
-    require_tariff_for_smart_charging(config, tariff)
     mode = SmartChargingMode(config.smart_charging_mode)
+    if mode is SmartChargingMode.OFF_PEAK:
+        return _cheap_minutes(_off_peak_tariff(tariff))
     if mode is SmartChargingMode.SOLAR:
         if generation_kw is None:
             raise ConfigurationError(_SOLAR_WITHOUT_GENERATION)
         return generation_kw
-    if mode is SmartChargingMode.OFF_PEAK and tariff is not None:
-        return _cheap_minutes(tariff)
     return _no_preference
 
 
-def _stays(config: EVConfig, days: Sequence[LocalDay]) -> Iterator[tuple[pd.Timestamp, pd.Timestamp]]:
-    """The (arrival, departure) instants of the stay from each of *days* but the last, on the days' wall clock: departure is the next day's when departure_hour is not after arrival_hour."""
+def _weights_on(rows: pd.DatetimeIndex, weights_on: RowWeights) -> np.ndarray:
+    """The weights *weights_on* gives *rows*, as floats.
+
+    Raises:
+        ValueError: If it gives other than one weight for each of *rows*, naming both counts, or a weight that
+            is not a finite number, naming the first such row and its weight.
+    """
+    weights = np.asarray(weights_on(rows), dtype=np.float64)
+    if weights.shape != (len(rows),):
+        raise ValueError(
+            f"The EV's row weights hold {weights.size} values for {len(rows)} rows: "
+            "a RowWeights callable gives one weight for each row it is given"
+        )
+    not_finite = np.flatnonzero(~np.isfinite(weights))
+    if not_finite.size:
+        first = not_finite[0]
+        raise ValueError(
+            f"The EV's row weights hold {weights[first]} at {rows[first]}: "
+            "a RowWeights callable gives a finite number for each row it is given"
+        )
+    return weights
+
+
+@dataclass(frozen=True, eq=False)
+class _DayOnRows:
+    """One LocalDay's rows as the positions from *begin* in the rows of every day read with it, and their local minutes of the day.
+
+    Compared by identity, as LocalDay is.
+    """
+
+    day: LocalDay
+    begin: int
+    minutes: np.ndarray
+
+    def first_reading(self, minute_of_day: int) -> int:
+        """The position of the row LocalDay.instant(minute_of_day) is: the day's first row whose local clock reads minute_of_day or later.
+
+        Raises:
+            ValueError: If no row of the day reads minute_of_day or later, naming the date and the minute.
+        """
+        reaching = np.flatnonzero(self.minutes >= minute_of_day)
+        if reaching.size == 0:
+            raise ValueError(f"No row of {self.day.date.isoformat()} reads minute {minute_of_day} of the day or later")
+        return self.begin + int(reaching[0])
+
+
+def _days_on_rows(days: Sequence[LocalDay], minutes: np.ndarray) -> list[_DayOnRows]:
+    """Each of *days*, whose rows joined in order have the local minutes of the day *minutes*, as its positions in them."""
+    begins = itertools.accumulate((len(day.rows) for day in days), initial=0)
+    return [
+        _DayOnRows(day, begin, minutes[begin : begin + len(day.rows)]) for day, begin in zip(days, begins, strict=False)
+    ]
+
+
+def _stays(config: EVConfig, days: Sequence[_DayOnRows]) -> Iterator[tuple[int, int]]:
+    """The (arrival, departure) positions of the stay from each of *days* but the last, on the days' wall clock: departure is the next day's when departure_hour is not after arrival_hour."""
     overnight = config.departure_hour <= config.arrival_hour
     for arrival_day, next_day in itertools.pairwise(days):
         departure_day = next_day if overnight else arrival_day
         yield (
-            arrival_day.instant(config.arrival_hour * MINUTES_PER_HOUR),
-            departure_day.instant(config.departure_hour * MINUTES_PER_HOUR),
+            arrival_day.first_reading(config.arrival_hour * MINUTES_PER_HOUR),
+            departure_day.first_reading(config.departure_hour * MINUTES_PER_HOUR),
         )
 
 
@@ -332,23 +396,18 @@ def generate_ev_charging_profile(
             tariff, the refusal require_tariff_for_smart_charging makes, or a "solar" EV
             with no generation_kw.
         ValueError: If generation_kw gives other than one weight for each row it is
-            given, naming both counts; or if the window's cadence does not divide one
-            hour, as window.rows() refuses it.
+            given, naming both counts, or a weight that is not a finite number, naming
+            the first such row and its weight; or if the window's cadence does not
+            divide one hour, as window.rows() refuses it.
     """
     weights_on = _row_weights(config, tariff, generation_kw)
     widened = _widened(window)
-    days = list(widened.local_days())
     widened_rows = widened.rows()
-    weights = np.asarray(weights_on(widened_rows), dtype=np.float64)
-    if weights.shape != (len(widened_rows),):
-        raise ValueError(
-            f"The EV's row weights hold {weights.size} values for {len(widened_rows)} rows: "
-            "a RowWeights callable gives one weight for each row it is given"
-        )
+    weights = _weights_on(widened_rows, weights_on)
+    days = _days_on_rows(list(widened.local_days()), minutes_of_day(widened_rows))
     charge = _charge_rows(config, window.step_hours)
     power_kw = np.zeros(len(widened_rows))
-    for arrival, departure in _stays(config, days):
-        begin, end = widened_rows.searchsorted([arrival, departure])
+    for begin, end in _stays(config, days):
         power_kw[begin:end] += _session_kw(weights[begin:end], charge, config.get_charger_power_kw())
     rows = window.rows()
     begin = widened_rows.searchsorted(rows[0])

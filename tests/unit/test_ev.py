@@ -534,6 +534,23 @@ class TestSolarChargingMode:
         assert f"{widened_rows}" in str(exc_info.value)
         assert f"{widened_rows - 1}" in str(exc_info.value)
 
+    @pytest.mark.parametrize("weight", [np.nan, np.inf, -np.inf], ids=["nan", "inf", "minus-inf"])
+    def test_generation_that_is_not_a_finite_number_is_refused_naming_its_first_such_row_and_weight(self, weight):
+        """A NaN would otherwise win np.argmax and place the session silently; the rows asked for start on 20 June."""
+        config = EVConfig("7kW", 8, 17, 14.0, "solar")
+        first_bad_row = _london_window("2024-06-20", "2024-06-22").rows()[997]
+
+        def generation(rows: pd.DatetimeIndex) -> np.ndarray:
+            with_bad_rows = _bell_generation(rows)
+            with_bad_rows[997::997] = weight
+            return with_bad_rows
+
+        with pytest.raises(ValueError) as exc_info:
+            generate_ev_charging_profile(config, JUNE_DAY, generation_kw=generation)
+
+        assert f"{first_bad_row}" in str(exc_info.value)
+        assert f" {weight} " in str(exc_info.value)
+
     def test_a_solar_ev_without_generation_is_refused_naming_the_mode_and_the_missing_generation(self):
         with pytest.raises(ConfigurationError) as exc_info:
             generate_ev_charging_profile(EVConfig("7kW", 8, 17, 14.0, "solar"), JUNE_DAY)
