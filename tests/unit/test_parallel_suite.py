@@ -166,8 +166,8 @@ def test_a_pytest_session_that_reads_the_project_ini_and_passes_no_n_runs_in_its
     result.assert_outcomes(passed=1)
 
 
-def test_the_verify_test_command_spreads_the_suite_over_xdist_workers_by_xdist_group(project_root: Path) -> None:
-    """The verify's test command passes pytest `-n auto --dist loadgroup`, so the verify runs the suite on pytest-xdist workers, scheduled by xdist_group."""
+def test_the_verify_test_command_asks_for_xdist_workers_grouped_by_xdist_group(project_root: Path) -> None:
+    """The verify's test command passes pytest `-n auto --dist loadgroup`, so the verify runs the suite on pytest-xdist workers, asking `--dist loadgroup` to keep the tests of each xdist_group on one worker."""
     test_command = verify_command(project_root, "test_command")
     arguments = pytest_arguments(test_command)
     adjacent_arguments = set(zip(arguments, arguments[1:]))
