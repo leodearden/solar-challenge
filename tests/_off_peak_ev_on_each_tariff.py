@@ -34,17 +34,20 @@ OFF_PEAK_EV = EVConfig("7kW", 18, 7, 35.0, "off_peak")
 JANUARY_DAYS = (pd.Timestamp("2024-01-10"), pd.Timestamp("2024-01-12"))
 """The first and last day of the row's period."""
 
-JANUARY_WINDOW = SimulationWindow(datetime.date(2024, 1, 10), datetime.date(2024, 1, 12), ONE_MINUTE, "Europe/London")
+JANUARY_WINDOW = SimulationWindow(JANUARY_DAYS[0].date(), JANUARY_DAYS[1].date(), ONE_MINUTE, "Europe/London")
 """The row's period as a window of one-minute rows on London's clock."""
 
 
 def _london(text: str) -> pd.Timestamp:
-    """The time *text* on London's clock."""
-    return pd.Timestamp(text, tz="Europe/London")
+    """The time *text* on the window's clock, London's."""
+    return pd.Timestamp(text, tz=JANUARY_WINDOW.timezone)
 
 
-FIRST_ARRIVAL = _london("2024-01-10 18:00")
-"""The EV's first arrival in the period, from which each row's session is read."""
+FIRST_ARRIVAL = pd.Timestamp(
+    datetime.datetime.combine(JANUARY_WINDOW.first_day, datetime.time(hour=OFF_PEAK_EV.arrival_hour)),
+    tz=JANUARY_WINDOW.timezone,
+)
+"""The EV's first arrival in the period, its arrival hour on the window's first day, from which each row's session is read."""
 
 FIRST_SESSION_ON_EACH_TARIFF = (
     pytest.param(

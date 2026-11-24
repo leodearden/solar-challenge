@@ -5,21 +5,17 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-import yaml
-from typer.testing import CliRunner
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.cli.main import app
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
-from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import WeatherCache
 from tests._ev_sessions import charging_sessions
+from tests._home_run_demand import home_run_demand_kw
 from tests._off_peak_ev_on_each_tariff import FIRST_ARRIVAL, FIRST_SESSION_ON_EACH_TARIFF, JANUARY_DAYS, OFF_PEAK_EV
-from tests._repository_paths import SCENARIOS_DIR
 from tests._synthetic_weather import synthetic_tmy, weather_for
 
 
@@ -70,30 +66,24 @@ def test_home_run_on_economy_10_steps_demand_by_the_charger_at_00_00_and_05_00(
     The first morning's session, of the stay from the evening before the run, ends at 05:00;
     Economy 7's 00:30-07:30 would put the steps at 00:30 and 05:30.
     """
-    document = yaml.safe_load((SCENARIOS_DIR / "example-economy7.yaml").read_text())
-    home = document["home"]
-    home["ev"] = {
+    ev_block = {
         "charger_type": "7kW",
         "arrival_hour": 18,
         "departure_hour": 7,
         "required_charge_kwh": 35,
         "smart_charging_mode": "off_peak",
     }
-    home["tariff"] = {"type": "economy_10"}
-    home["load"]["use_stochastic"] = False
-    config_file = tmp_path / "example-economy10-off-peak-ev.yaml"
-    config_file.write_text(yaml.safe_dump(document))
-    weather_cache.put(synthetic_tmy(), "tmy", Location.bristol())
-    output = tmp_path / "results.csv"
 
-    result = CliRunner().invoke(
-        app,
-        ["home", "run", str(config_file), "--start", "2024-01-10", "--end", "2024-01-11", "--output", str(output)],
-        catch_exceptions=False,
+    demand_kw = home_run_demand_kw(
+        tmp_path,
+        weather_cache,
+        ev_block=ev_block,
+        tariff_block={"type": "economy_10"},
+        start="2024-01-10",
+        end="2024-01-11",
     )
 
-    assert result.exit_code == 0, result.output
-    demand_steps = pd.read_csv(output, index_col=0, parse_dates=True)["demand_kw"].diff()
+    demand_steps = demand_kw.diff()
     charger_steps = demand_steps[demand_steps.abs() > 3.5]
     assert list(charger_steps.index) == [
         pd.Timestamp("2024-01-10 05:00", tz="Europe/London"),

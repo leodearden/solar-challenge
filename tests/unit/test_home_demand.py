@@ -11,10 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
-import yaml
 from numpy.lib.stride_tricks import sliding_window_view
-from typer.testing import CliRunner
-from solar_challenge.cli.main import app
 from solar_challenge.ev import EVConfig, generate_ev_charging_profile
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
@@ -22,7 +19,7 @@ from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.weather import WeatherCache
-from tests._repository_paths import SCENARIOS_DIR
+from tests._home_run_demand import home_run_demand_kw
 from tests._synthetic_weather import synthetic_june_weather, synthetic_tmy, weather_for
 
 _BRISTOL_ELEXON_HOME = HomeConfig(
@@ -81,41 +78,18 @@ def test_a_solar_ev_charges_in_the_run_of_its_stay_with_the_most_of_the_homes_ge
     assert most_generation[0] != _at("2024-06-21 10:00")
 
 
-def _home_run_demand_kw(
-    tmp_path: Path, ev_block: dict[str, Any] | None, *, start: str, end: str
+def _home_run_ev_kw(
+    tmp_path: Path, weather_cache: WeatherCache, ev_block: dict[str, Any], *, start: str, end: str
 ) -> pd.Series:
-    """The demand_kw `home run --output` writes for scenarios/example-economy7.yaml with a deterministic load and *ev_block* as its home's ev: block, on London's clock."""
-    document = yaml.safe_load((SCENARIOS_DIR / "example-economy7.yaml").read_text())
-    document["home"]["load"]["use_stochastic"] = False
-    document["home"]["ev"] = ev_block
-    run = "without-an-ev" if ev_block is None else f"with-a-{ev_block['smart_charging_mode']}-ev"
-    config_file = tmp_path / f"{run}.yaml"
-    config_file.write_text(yaml.safe_dump(document))
-    output = tmp_path / f"{run}.csv"
-
-    result = CliRunner().invoke(
-        app,
-        ["home", "run", str(config_file), "--start", start, "--end", end, "--output", str(output)],
-        catch_exceptions=False,
-    )
-
-    assert result.exit_code == 0, result.output
-    demand_kw = pd.read_csv(output, index_col=0)["demand_kw"]
-    demand_kw.index = pd.to_datetime(demand_kw.index, utc=True).tz_convert("Europe/London")
-    return demand_kw
-
-
-def _home_run_ev_kw(tmp_path: Path, ev_block: dict[str, Any], *, start: str, end: str) -> pd.Series:
     """The kW by which *ev_block* raises `home run`'s demand_kw on each row."""
-    return _home_run_demand_kw(tmp_path, ev_block, start=start, end=end) - _home_run_demand_kw(
-        tmp_path, None, start=start, end=end
-    )
+    with_the_ev = home_run_demand_kw(tmp_path, weather_cache, ev_block=ev_block, start=start, end=end)
+    without_an_ev = home_run_demand_kw(tmp_path, weather_cache, ev_block=None, start=start, end=end)
+    return with_the_ev - without_an_ev
 
 
 def test_home_run_charges_a_none_ev_from_18_00_on_each_wall_clock_day_across_the_spring_change(
     tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
-    weather_cache.put(synthetic_tmy(), "tmy", Location.bristol())
     ev_block = {
         "charger_type": "7kW",
         "arrival_hour": 18,
@@ -124,7 +98,7 @@ def test_home_run_charges_a_none_ev_from_18_00_on_each_wall_clock_day_across_the
         "smart_charging_mode": "none",
     }
 
-    ev_kw = _home_run_ev_kw(tmp_path, ev_block, start="2024-03-29", end="2024-04-02")
+    ev_kw = _home_run_ev_kw(tmp_path, weather_cache, ev_block, start="2024-03-29", end="2024-04-02")
 
     charging = ev_kw[ev_kw.abs() > 1e-9]
     evenings = [
@@ -139,7 +113,6 @@ def test_home_run_charges_an_off_peak_ev_on_its_first_morning_from_the_evening_b
     tmp_path: Path, weather_cache: WeatherCache
 ) -> None:
     """On Economy 7, the one morning of 21 June charges the stay from 20 June's 18:00: 00:30-05:29, 35 kWh."""
-    weather_cache.put(synthetic_tmy(), "tmy", Location.bristol())
     ev_block = {
         "charger_type": "7kW",
         "arrival_hour": 18,
@@ -148,7 +121,7 @@ def test_home_run_charges_an_off_peak_ev_on_its_first_morning_from_the_evening_b
         "smart_charging_mode": "off_peak",
     }
 
-    ev_kw = _home_run_ev_kw(tmp_path, ev_block, start="2024-06-21", end="2024-06-21")
+    ev_kw = _home_run_ev_kw(tmp_path, weather_cache, ev_block, start="2024-06-21", end="2024-06-21")
 
     charging = ev_kw[ev_kw.abs() > 1e-9]
     assert list(charging.index) == list(
