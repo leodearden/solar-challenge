@@ -242,15 +242,56 @@ class TestTheDeviationScaleSeesAZeroAtAgeZero:
     def test_an_override_fleet_whose_curves_interpolate_within_target_from_the_seeds_simulates_only_the_seeds(
         self,
     ) -> None:
-        """Each reported curve's PCHIP midpoint error from the seeds alone is under 1 % of its scale.
+        """Each driven curve's PCHIP midpoint error from the seeds alone is under 1 % of its scale.
 
-        So no bisection age is simulated, as at base.
+        At 0.1 %/yr the override's 0.9 × generation stays above the demand to
+        age 24, so the cap binds every year and every driven curve, the SEG
+        income among them, is smooth: no bisection age is simulated.  At
+        0.3 %/yr the cap stops binding near age 19, and the income's kink there
+        is worth a bisection.
         """
         scenario, finance = _finance_over_25_years(0.9)
         curve = project_multi_year(
             scenario,
             finance,
-            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.997),
+            simulate=_declining_simulate(_override_capped_at_demand, kept_each_year=0.999),
         )
         assert curve.sampled_ages == (0, 12, 24)
+        assert curve.interp_error_estimate <= 1.0
+
+
+def _simulate_income_rising_from_zero(
+    fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+) -> FleetResults:
+    """A home that self-consumes 2,000 kWh and imports 1,200 kWh at every age, and exports 2,000 × (1 − e^(−age/8)) kWh at 5 p.
+
+    So its SEG income is £100 × (1 − e^(−age/8)): £0 at age 0.
+    """
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=2_000.0,
+        export_kwh=2_000.0 * (1.0 - math.exp(-age / 8.0)),
+        import_kwh=1_200.0,
+        pricing=RunPricing(0.30, 5.0),
+    )
+
+
+class TestTheIncomeDeviationScaleSeesAZeroAtAgeZero:
+    """An income that is 0 at age 0 and grows with age is measured against its largest value at the seed ages.
+
+    So at a 0 p own-use rate, whose revenue is that income, its interpolation
+    error stays a finite percentage and the default 1 % target is met (B9).
+    """
+
+    def test_a_fleet_that_earns_nothing_at_age_zero_converges_below_max_nodes(self) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            curve = project_multi_year(scenario, finance, simulate=_simulate_income_rising_from_zero)
+
+        assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
+        assert math.isfinite(curve.interp_error_estimate)
         assert curve.interp_error_estimate <= 1.0

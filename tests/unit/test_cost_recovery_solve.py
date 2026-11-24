@@ -13,6 +13,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 import pytest
+from scipy.interpolate import PchipInterpolator
 
 import solar_challenge
 from solar_challenge.finance import (
@@ -23,6 +24,7 @@ from solar_challenge.finance import (
 from solar_challenge.home import RunPricing
 from solar_challenge.projection import (
     project_economics,
+    project_fleet,
     project_multi_year,
     scenario_fleet,
     solve_cost_recovery_rate,
@@ -740,3 +742,99 @@ def test_the_packages_frozen_solve_answers_as_the_projections_solve() -> None:
     frozen = solar_challenge.solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
     assert frozen == solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+
+# ---------------------------------------------------------------------------
+# B8 — the solve is exact and independent of the configured rate
+# ---------------------------------------------------------------------------
+
+_OWN_USE_THROUGH_TASK_720_NODES_KWH = PchipInterpolator([0.0, 12.0, 24.0], [10_000.0, 9_000.0, 6_000.0])
+"""The home's own-use at each age: the monotone cubic through task 720's own-use nodes."""
+
+_INCOME_THROUGH_TASK_720_NODES_GBP = PchipInterpolator([0.0, 12.0, 24.0], [500.0, 800.0, 820.0])
+"""The home's SEG income at each age: the monotone cubic through task 720's income nodes."""
+
+_TASK_720_SEG_PENCE_PER_KWH = 5.0
+
+
+def _simulate_task_720_nodes(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+    """One home whose own-use and SEG income at the fleet's PV age lie on the cubics through task 720's nodes.
+
+    The import is priced at a 30 p tariff, which keeps the solve's age-0 outlay
+    bill off its no-tariff retail fallback.
+    """
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=float(_OWN_USE_THROUGH_TASK_720_NODES_KWH(age)),
+        export_kwh=float(_INCOME_THROUGH_TASK_720_NODES_GBP(age)) * 100.0 / _TASK_720_SEG_PENCE_PER_KWH,
+        import_kwh=1_200.0,
+        pricing=RunPricing(0.30, _TASK_720_SEG_PENCE_PER_KWH),
+    )
+
+
+def _task_720_finance(own_use_rate_pence_per_kwh: float) -> FinanceConfig:
+    """Task 720's finance at *own_use_rate_pence_per_kwh*: a £1,000/home/yr floor on £2,000/kWp PV with no grant."""
+    return FinanceConfig(
+        standing_charge_pence_per_day=28.0,
+        asset_life_years=25,
+        loan_term_years=15,
+        own_use_rate_pence_per_kwh=own_use_rate_pence_per_kwh,
+        retained_cash_floor_per_home_per_year_gbp=1000.0,
+        retail_baseline_rate_pence_per_kwh=30.0,
+        pv_cost_per_kwp_gbp=2000.0,
+        grant_gbp=0.0,
+        vat_rate=0.05,
+    )
+
+
+_CONFIGURED_RATES_PENCE_PER_KWH = (0.0, 15.0, 23.0)
+
+
+class TestTheSolveIsExactAndIndependentOfTheConfiguredRate:
+    """On task 720's nodes, whose own-use and income are not proportional, the solved rate re-projects onto the floor.
+
+    The rate moves neither the ages a projection simulates nor its income, so
+    the solve's two-point line is a re-projection at every rate, whichever
+    rate the finance configures (B8).
+    """
+
+    @pytest.mark.parametrize("configured_rate", _CONFIGURED_RATES_PENCE_PER_KWH)
+    def test_re_projecting_at_the_solved_rate_meets_the_floor(self, configured_rate: float) -> None:
+        scenario = make_scenario(n_homes=1)
+        finance = _task_720_finance(configured_rate)
+
+        solution = solve_cost_recovery_rate(scenario, finance, simulate=_simulate_task_720_nodes)
+
+        assert solution.binding == "floor"
+        finance_solved = _task_720_finance(solution.own_use_rate_pence_per_kwh)
+        fleet = scenario_fleet(scenario)
+        curve_solved = project_fleet(fleet, finance_solved, simulate=_simulate_task_720_nodes).curve
+        assert project_economics(curve_solved, fleet, finance_solved).net_surplus_per_home_per_year_gbp == (
+            pytest.approx(finance.retained_cash_floor_per_home_per_year_gbp, abs=1e-6)
+        )
+
+    def test_the_solved_rate_is_the_same_at_every_configured_rate(self) -> None:
+        scenario = make_scenario(n_homes=1)
+
+        solutions = [
+            solve_cost_recovery_rate(scenario, _task_720_finance(rate), simulate=_simulate_task_720_nodes)
+            for rate in _CONFIGURED_RATES_PENCE_PER_KWH
+        ]
+
+        assert {solution.binding for solution in solutions} == {"floor"}
+        solved_rates = [solution.own_use_rate_pence_per_kwh for solution in solutions]
+        assert max(solved_rates) - min(solved_rates) <= 1e-12, solved_rates
+
+    def test_the_configured_rate_moves_neither_the_sampled_ages_nor_the_error_estimate(self) -> None:
+        fleet = scenario_fleet(make_scenario(n_homes=1))
+
+        curves = [
+            project_fleet(fleet, _task_720_finance(rate), simulate=_simulate_task_720_nodes).curve
+            for rate in _CONFIGURED_RATES_PENCE_PER_KWH
+        ]
+
+        assert len({curve.sampled_ages for curve in curves}) == 1, [curve.sampled_ages for curve in curves]
+        assert len({curve.interp_error_estimate for curve in curves}) == 1, [
+            curve.interp_error_estimate for curve in curves
+        ]

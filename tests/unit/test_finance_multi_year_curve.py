@@ -5,7 +5,9 @@
 YearPoint and MultiYearCurve are the curve's frozen dataclasses
 (docs/prds/financial-layer-battery-fidelity.md §3.1).  project_multi_year's
 curve follows PCHIP through the values at its sampled ages and never overshoots
-them (§3.3 step 4, H4); those tests run it on an injected synthetic simulate.
+them (§3.3 step 4, H4), and each year's revenue is the own-use rate times that
+year's own-use plus PCHIP through the income at those ages; those tests run it
+on an injected synthetic simulate.
 
 All tests are offline/fast — no PVGIS/network is touched.
 """
@@ -19,6 +21,7 @@ import numpy as np
 import pytest
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
+from solar_challenge.home import RunPricing
 from solar_challenge.projection import MultiYearCurve, YearPoint, project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
@@ -323,3 +326,69 @@ class TestPerYearInterpolation:
         assert [point.fleet_billed_own_use_kwh for point in curve.points] == pytest.approx(
             [_self_consumption_kwh_at(0)]
         )
+
+
+_SEG_PENCE_PER_KWH = 5.0
+_OWN_USE_RATE_PENCE_PER_KWH = 15.0
+
+
+def _export_kwh_at(age: float) -> float:
+    """Rising 500 kWh a year from 4,000 kWh, so the SEG income rises while the own-use plateaus then falls."""
+    return 4_000.0 + 500.0 * age
+
+
+def _income_gbp_at(age: float) -> float:
+    """The SEG income of _export_kwh_at at _SEG_PENCE_PER_KWH."""
+    return _export_kwh_at(age) * _SEG_PENCE_PER_KWH / 100.0
+
+
+def _simulate_own_use_plateau_and_rising_income(
+    fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+) -> FleetResults:
+    """The fleet's results: _self_consumption_kwh_at and _export_kwh_at the fleet's PV age, its export at a fixed SEG rate."""
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=_self_consumption_kwh_at(age),
+        export_kwh=_export_kwh_at(age),
+        pricing=RunPricing(0.30, _SEG_PENCE_PER_KWH),
+    )
+
+
+class TestPerYearRevenue:
+    """Each year's revenue is the own-use rate times that year's billed own-use, plus PCHIP through the income nodes.
+
+    Revenue itself is not interpolated, so it is affine in the own-use rate in
+    every year (docs/cost-recovery-finance-model.md §4, C6).
+    """
+
+    def _project_seeds_only(self) -> MultiYearCurve:
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        return project_multi_year(
+            scenario,
+            dataclasses.replace(finance, own_use_rate_pence_per_kwh=_OWN_USE_RATE_PENCE_PER_KWH),
+            error_target_pct=math.inf,
+            simulate=_simulate_own_use_plateau_and_rising_income,
+        )
+
+    def test_each_years_revenue_is_the_rate_times_its_own_use_plus_pchip_through_the_income_nodes(self) -> None:
+        curve = self._project_seeds_only()
+        ages = list(curve.sampled_ages)
+        years = np.arange(25)
+        income = PchipInterpolator(ages, [_income_gbp_at(age) for age in ages])(years)
+        own_use = np.array([point.fleet_billed_own_use_kwh for point in curve.points])
+        expected = _OWN_USE_RATE_PENCE_PER_KWH * own_use / 100.0 + income
+
+        revenue_nodes = [
+            _OWN_USE_RATE_PENCE_PER_KWH * _self_consumption_kwh_at(age) / 100.0 + _income_gbp_at(age) for age in ages
+        ]
+        assert np.max(np.abs(PchipInterpolator(ages, revenue_nodes)(years) - expected)) > 1.0, (
+            "the fixture's own-use and income nodes must not be proportional, or PCHIP through the revenue "
+            "nodes cannot be told apart from the rate times the own-use plus PCHIP through the income nodes"
+        )
+        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx(expected.tolist(), rel=1e-9)
+
+    def test_every_years_revenue_is_at_least_zero(self) -> None:
+        curve = self._project_seeds_only()
+
+        assert min(point.fleet_revenue_gbp for point in curve.points) >= 0.0
