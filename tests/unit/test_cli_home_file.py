@@ -6,6 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 import yaml
 from typer.testing import Result
@@ -17,6 +18,7 @@ from solar_challenge.load import LoadConfig
 from solar_challenge.location import LOCATION_PRESETS, parse_location
 from solar_challenge.pv import PVConfig
 from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 from tests._repository_paths import SCENARIOS_DIR
 
@@ -277,4 +279,68 @@ def test_an_option_its_homes_config_refuses_is_refused_naming_the_option(
 
     assert (result.exit_code, result.stdout) == (1, "")
     assert _stderr_text(result) == f"Configuration error: {option}: {oracle.value}"
+    assert recorder.fleets == []
+
+
+def _london(day: object) -> pd.Timestamp:
+    """The local midnight starting *day* in Europe/London."""
+    return pd.Timestamp(day, tz="Europe/London")
+
+
+def _home_without_a_period() -> Path:
+    """Write home.yaml: 4 kW of PV and a deterministic 3400 kWh a year of load, with no period:."""
+    return _written({"home": {"pv": {"capacity_kw": 4.0}, "load": _DETERMINISTIC_LOAD}})
+
+
+@pytest.mark.parametrize(
+    ("home_file", "flags", "first", "last"),
+    [
+        pytest.param(_committed_bristol_arbitrage, (), "2024-01-15", "2024-01-15", id="the-files-period"),
+        pytest.param(
+            _committed_bristol_arbitrage, ("--start", "2024-01-10"), "2024-01-10", "2024-01-15", id="start-flag"
+        ),
+        pytest.param(_committed_bristol_arbitrage, ("--end", "2024-01-20"), "2024-01-15", "2024-01-20", id="end-flag"),
+        pytest.param(
+            _committed_bristol_arbitrage,
+            ("--start", "2024-01-10", "--end", "2024-01-20"),
+            "2024-01-10",
+            "2024-01-20",
+            id="both-flags",
+        ),
+        pytest.param(_home_without_a_period, (), DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, id="no-period"),
+        pytest.param(None, ("--end", "2024-01-31"), DEFAULT_FIRST_DAY, "2024-01-31", id="no-file-end-flag"),
+    ],
+)
+def test_home_run_simulates_the_files_period_each_flag_replacing_only_its_own_day(
+    home_file: Callable[[], Path] | None, flags: tuple[str, ...], first: object, last: object
+) -> None:
+    files = () if home_file is None else (str(home_file()),)
+
+    result, recorder = _home_run(*files, *flags)
+
+    assert result.exit_code == 0, result.output
+    assert recorder.bounds == [(_london(first), _london(last))]
+
+
+def test_home_run_names_the_window_it_simulates() -> None:
+    result, _ = _home_run(str(_committed_bristol_arbitrage()), "--start", "2024-01-10")
+
+    assert result.exit_code == 0, result.output
+    assert "Simulating 6 days from 2024-01-10 to 2024-01-15" in _stderr_text(result)
+
+
+def test_a_flag_day_that_leaves_no_window_is_refused_and_nothing_is_simulated() -> None:
+    result, recorder = _home_run(str(_committed_bristol_arbitrage()), "--start", "2024-01-20")
+
+    assert result.exit_code == 1
+    stderr = _stderr_text(result)
+    assert stderr.startswith("Configuration error:"), stderr
+    assert [day for day in ("2024-01-20", "2024-01-15") if day not in stderr] == [], stderr
+    assert recorder.fleets == []
+
+
+def test_a_flag_that_is_not_a_date_is_a_usage_error() -> None:
+    result, recorder = _home_run("--start", "2024-13-01")
+
+    assert result.exit_code == 2
     assert recorder.fleets == []
