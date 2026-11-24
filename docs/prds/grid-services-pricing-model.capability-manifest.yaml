@@ -152,7 +152,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "delivery_baseline"
+          pattern: "fields\\(GridServicesEventsConfig\\)"
           paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py"]
           expect: present
       - name: "breakdown-carries-the-reliability-capacities"
