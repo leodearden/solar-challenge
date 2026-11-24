@@ -355,6 +355,27 @@ def _simulate_own_use_plateau_and_rising_income(
     )
 
 
+_LATE_EXPORT_KWH_PER_YEAR = 1_000.0
+
+
+def _late_export_kwh_at(age: float) -> float:
+    """0 kWh to age 12, then rising 1,000 kWh a year, so the SEG income is £0 at ages 0 and 12 and £600 at age 24."""
+    return _LATE_EXPORT_KWH_PER_YEAR * max(0.0, age - _PLATEAU_END_AGE)
+
+
+def _simulate_own_use_plateau_and_export_only_after_age_12(
+    fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp
+) -> FleetResults:
+    """The fleet's results: _self_consumption_kwh_at and _late_export_kwh_at the fleet's PV age, its export at a fixed SEG rate."""
+    age = fleet_config.homes[0].pv_config.system_age_years
+    return make_fleet_results(
+        homes=fleet_config.homes,
+        self_kwh=_self_consumption_kwh_at(age),
+        export_kwh=_late_export_kwh_at(age),
+        pricing=RunPricing(0.30, _SEG_PENCE_PER_KWH),
+    )
+
+
 class TestPerYearRevenue:
     """Each year's revenue is the own-use rate times that year's billed own-use, plus PCHIP through the income nodes.
 
@@ -388,7 +409,20 @@ class TestPerYearRevenue:
         )
         assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx(expected.tolist(), rel=1e-9)
 
-    def test_every_years_revenue_is_at_least_zero(self) -> None:
-        curve = self._project_seeds_only()
+    def test_no_years_revenue_is_below_zero_where_a_free_cubic_through_the_income_nodes_is(self) -> None:
+        """At a 0 p own-use rate, income nodes of £0 at ages 0 and 12 give no year a revenue below £0."""
+        scenario, finance = make_scenario_and_finance(asset_life_years=25)
+        curve = project_multi_year(
+            scenario,
+            dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0),
+            error_target_pct=math.inf,
+            simulate=_simulate_own_use_plateau_and_export_only_after_age_12,
+        )
+        ages = list(curve.sampled_ages)
+        income_nodes = [_late_export_kwh_at(age) * _SEG_PENCE_PER_KWH / 100.0 for age in ages]
 
+        assert np.min(CubicSpline(ages, income_nodes)(np.arange(_PLATEAU_END_AGE))) < -1.0, (
+            "a free cubic through the income nodes must go below £0 between ages 0 and 12, or this test "
+            "cannot tell a shape-preserving interpolant of the income from one that is not"
+        )
         assert min(point.fleet_revenue_gbp for point in curve.points) >= 0.0
