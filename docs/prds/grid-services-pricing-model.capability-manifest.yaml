@@ -340,7 +340,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "class GridServicesBand\\(str, Enum\\)"
+          pattern: "class GridServicesBand\\(StrEnum\\)"
           paths: ["src/solar_challenge/gridservices.py"]
           expect: present
       - name: "events-local-band-set-deleted"
