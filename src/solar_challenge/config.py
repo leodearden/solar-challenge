@@ -390,6 +390,8 @@ def _parse_flex_band(value: object, *, block_path: str) -> Optional[GridServices
 def _read_scenario_level_blocks(document: object, *, block_path: str) -> tuple[dict[str, Any], _ScenarioLevelBlocks]:
     """The scenario at *block_path*, refused unless it holds only the keys a scenario reads, and its blocks other than its homes source, read in order."""
     scenario = _refuse_keys_no_scenario_reads(document, block_path=block_path)
+    name = read_text(scenario, "name", block_path=block_path)
+    description = read_text(scenario, "description", block_path=block_path)
     location = parse_location_block(scenario.get("location"), block_path=child_path(block_path, "location"))
     period_path = child_path(block_path, "period")
     period = (
@@ -398,8 +400,8 @@ def _read_scenario_level_blocks(document: object, *, block_path: str) -> tuple[d
         else _parse_period(scenario["period"], timezone=location.timezone, block_path=period_path)
     )
     return scenario, _ScenarioLevelBlocks(
-        name=read_text(scenario, "name", block_path=block_path),
-        description=read_text(scenario, "description", block_path=block_path),
+        name=name,
+        description=description,
         location=location,
         period=period,
         tariff=parse_tariff_config(scenario.get("tariff"), block_path=child_path(block_path, "tariff")),
