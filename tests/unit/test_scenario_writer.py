@@ -20,7 +20,7 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVChargerType, EVConfig, SmartChargingMode
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
@@ -291,6 +291,23 @@ def test_a_default_battery_is_written_dispatching_self_consumption_and_reads_bac
     document = home_scenario(home, name="Default battery")
 
     assert document["home"]["battery"]["dispatch_strategy"] == {"strategy_type": "self_consumption"}
+    assert _load_through_home_run(document, tmp_path) == home
+
+
+def test_an_ev_holding_its_enum_members_is_written_as_plain_strings_and_reads_back_equal(
+    tmp_path: Path,
+) -> None:
+    """An EV's charger type and smart charging mode are written as the strings its block's reader reads, never as their enum members, which YAML cannot carry."""
+    home = _home(
+        4.0,
+        ev_config=EVConfig(EVChargerType.RAPID, 20, 6, 50.0, SmartChargingMode.SOLAR),
+    )
+
+    document = home_scenario(home, name="Rapid charger")
+
+    ev = document["home"]["ev"]
+    assert (ev["charger_type"], type(ev["charger_type"])) == ("22kW", str)
+    assert (ev["smart_charging_mode"], type(ev["smart_charging_mode"])) == ("solar", str)
     assert _load_through_home_run(document, tmp_path) == home
 
 
