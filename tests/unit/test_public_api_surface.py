@@ -467,6 +467,9 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "get_charger_power_kw": "(self) -> float",
         "get_available_charging_hours": "(self) -> float",
     },
+    "gridservices.GridServicesBand": {
+        "parse": "classmethod (cls, value: object, *, what: str) -> GridServicesBand",
+    },
     "heat_pump.HeatPumpConfig": {
         "default_ashp": "classmethod (cls) -> HeatPumpConfig",
         "default_gshp": "classmethod (cls) -> HeatPumpConfig",
@@ -576,7 +579,9 @@ def test_every_pinned_class_call_matches_frozen_calls() -> None:
     assert not drifted, _drift_message("FROZEN_CALLS", FROZEN_CALLS, drifted)
 
 
-_STDLIB_BASES: tuple[type, ...] = (object, abc.ABC, enum.Enum, typing.Protocol, typing.Generic, BaseException, Exception, ValueError)
+_STDLIB_BASES: tuple[type, ...] = (
+    object, abc.ABC, enum.Enum, enum.ReprEnum, enum.StrEnum, str, typing.Protocol, typing.Generic, BaseException, Exception, ValueError
+)
 
 
 def test_pinned_classes_inherit_only_from_pinned_classes() -> None:

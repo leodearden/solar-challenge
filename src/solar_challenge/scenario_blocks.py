@@ -109,14 +109,14 @@ RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
 """The home's and the fleet's retired dispatch_strategy key, with why it is refused and what replaces it."""
 
 
-def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
-    """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
-    name = block.get("name")
-    if name is None:
+def read_text(block: Mapping[str, Any], key: str, *, block_path: str) -> str:
+    """Return the text the block at *block_path* sets for *key*, "" when it sets none or a null one, refusing a value that is not a string by its path."""
+    text = block.get(key)
+    if text is None:
         return ""
-    if not isinstance(name, str):
-        raise refusal(child_path(block_path, "name"), f"must be a string, got {name!r}")
-    return name
+    if not isinstance(text, str):
+        raise refusal(child_path(block_path, key), f"must be a string, got {text!r}")
+    return text
 
 
 _Built = TypeVar("_Built")
@@ -695,7 +695,7 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
         block_path,
         TariffConfig.flat_rate,
         rate_per_kwh=data["rate_per_kwh"],
-        name=_read_name(data, block_path=block_path),
+        name=read_text(data, "name", block_path=block_path),
     )
 
 
@@ -739,7 +739,7 @@ def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
         start_time=period["start_time"],
         end_time=period["end_time"],
         rate_per_kwh=period["rate_per_kwh"],
-        name=_read_name(period, block_path=block_path),
+        name=read_text(period, "name", block_path=block_path),
     )
 
 
@@ -756,7 +756,7 @@ def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
         _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
         for index, period in enumerate(periods_data)
     )
-    return constructed(block_path, TariffConfig, periods=periods, name=_read_name(data, block_path=block_path))
+    return constructed(block_path, TariffConfig, periods=periods, name=read_text(data, "name", block_path=block_path))
 
 
 _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({

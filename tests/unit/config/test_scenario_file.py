@@ -943,20 +943,10 @@ class TestAScenarioDocumentNamesTheBlockItRefuses:
                 id="a-period-with-neither-day",
             ),
             pytest.param(
-                {"scenarios": [{"period": _WEEK, "home": _A_HOME}]},
-                "scenarios[0]: requires 'name'",
-                id="no-name",
-            ),
-            pytest.param({"scenario": {"name": "a", "home": _A_HOME}}, "scenario: requires 'period'", id="no-period"),
-            pytest.param(
-                {"scenarios": [{"home": _A_HOME}]}, "scenarios[0]: requires 'name', 'period'", id="neither"
-            ),
-            pytest.param(
                 {"scenario": {"name": "a", "period": _WEEK}},
-                "scenario: requires 'home' or 'homes'",
-                id="no-home-or-homes",
+                "scenario: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="no-homes-source",
             ),
-            pytest.param({"name": "a", "home": _A_HOME}, "the top level: requires 'period'", id="the-bare-form"),
             pytest.param(
                 {"scenario": {"name": "a", "period": _WEEK, "homes": 5}},
                 "scenario.homes: must be a list, got int",
@@ -985,6 +975,31 @@ class TestAScenarioDocumentNamesTheBlockItRefuses:
 
 class TestAScenarioDocumentsPeriod:
     """load_scenarios reads a document's period as the one-minute window of its days on the scenario location's clock."""
+
+    @pytest.mark.parametrize(
+        ("document", "name", "period"),
+        [
+            pytest.param({"scenarios": [{"period": _WEEK, "home": _A_HOME}]}, "", _FIRST_WEEK, id="no-name"),
+            pytest.param(
+                {"scenario": {"name": "a", "home": _A_HOME}},
+                "a",
+                _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY),
+                id="no-period",
+            ),
+            pytest.param(
+                {"scenarios": [{"home": _A_HOME}]}, "", _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY), id="neither"
+            ),
+            pytest.param(
+                {"name": "a", "home": _A_HOME}, "a", _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY), id="the-bare-form"
+            ),
+        ],
+    )
+    def test_a_document_without_a_name_or_period_reads_as_unnamed_over_the_default_days(
+        self, tmp_path: Path, document: dict[str, object], name: str, period: SimulationWindow
+    ) -> None:
+        (scenario,) = _scenarios_loaded(tmp_path, document)
+
+        assert (scenario.name, scenario.period) == (name, period)
 
     def test_a_document_with_no_location_simulates_on_bristols_clock(self, tmp_path: Path) -> None:
         (scenario,) = _scenarios_loaded(tmp_path, {"name": "a", "period": _WEEK, "home": _A_HOME})

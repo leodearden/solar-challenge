@@ -448,11 +448,6 @@ home:
                 id="fleet-sweep-tariff",
             ),
             pytest.param(
-                "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
-                "scenarios[0]: requires 'period'",
-                id="scenarios",
-            ),
-            pytest.param(
                 "scenario:\n"
                 "  name: winter\n"
                 "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
@@ -636,6 +631,9 @@ home:
                 "    home: {pv: {capacity_kw: 4.0}}\n",
                 id="scenarios",
             ),
+            pytest.param(
+                "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n", id="scenarios-without-a-period"
+            ),
         ],
     )
     def test_a_file_its_loader_builds_is_valid(
@@ -790,7 +788,7 @@ home:
             pytest.param(
                 "tariff_config",
                 {"type": "economy_7"},
-                ("scenario.tariff_config", "home.tariff"),
+                ("scenario.tariff_config", "tariff:"),
                 id="tariff_config",
             ),
             pytest.param("bogus", 1, ("scenario", "'bogus'"), id="unrecognised"),
