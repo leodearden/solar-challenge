@@ -103,7 +103,7 @@ class YearPoint:
 
     ``fleet_revenue_gbp`` is the CBS revenue:
     own-use revenue (own_use_rate × fleet_billed_own_use_kwh / 100)
-    + SEG export income (Σ each home's ledger ``seg_income_gbp``, :func:`home_ledger`)
+    + SEG export income (Σ each home's ledger ``seg_income_gbp``, :func:`~solar_challenge.finance.home_ledger`)
     + grid-services income (``grid_services_model_of(finance).annual_income_gbp``
     of that age's simulated fleet).
     """
@@ -223,7 +223,7 @@ class ProjectEconomics:
     """Project-level financial appraisal results for a community PV/battery fleet.
 
     Produced by :func:`project_economics` from a :class:`MultiYearCurve` and a
-    :class:`FinanceConfig`.  All monetary values are in
+    :class:`~solar_challenge.finance.FinanceConfig`.  All monetary values are in
     nominal GBP (£).
 
     Attributes:
@@ -382,7 +382,7 @@ class _NodeData:
     """System age in calendar years at which the fleet was simulated."""
 
     fleet_billed_own_use: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
-    """Fleet billed own-use, Σ each home's :func:`home_ledger` own-use (kWh/yr)."""
+    """Fleet billed own-use, Σ each home's :func:`~solar_challenge.finance.home_ledger` own-use (kWh/yr)."""
 
     fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid export, Σ each home's ledger export (kWh/yr)."""
@@ -446,7 +446,7 @@ def _aged_homes(
     ``cum_throughput`` entry, the throughput compute_soh counts; 0.0 when
     ``cum_throughput`` is omitted) and the battery's nominal usable capacity.
     It is injected into the battery config via
-    ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`Battery`
+    ``dataclasses.replace(battery_config, soh=soh_i)`` so :class:`~solar_challenge.battery.Battery`
     uses it directly at construction time.
 
     Args:
@@ -506,13 +506,13 @@ def _throughput_at(age: int, seeds: Mapping[int, _NodeData]) -> List[float]:
     ]
 
 
-def _installed_battery(home: "HomeConfig") -> Optional["BatteryConfig"]:
+def _installed_battery(home: HomeConfig) -> Optional[BatteryConfig]:
     """*home*'s battery with its state of health set aside, or None for a home without one."""
     return None if home.battery_config is None else dataclasses.replace(home.battery_config, soh=None)
 
 
 def _refuse_results_without_the_fleets_batteries(
-    fleet_config: "FleetConfig", fleet_results: "FleetResults"
+    fleet_config: FleetConfig, fleet_results: FleetResults
 ) -> None:
     """Raise ValueError unless *fleet_results*' home_configs carry the batteries of *fleet_config*'s homes, in order, state of health aside.
 
@@ -548,8 +548,8 @@ def _refuse_results_without_the_fleets_batteries(
 
 
 def project_multi_year(
-    scenario: "ScenarioConfig",
-    finance: "FinanceConfig",
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
     *,
     error_target_pct: float = 1.0,
     simulate: FleetSimulate,
@@ -585,10 +585,10 @@ def project_multi_year(
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
         own-use, export, import and SEG income are its ledger
-        (:func:`home_ledger`), the one :func:`householder_bill` bills, and its
+        (:func:`~solar_challenge.finance.home_ledger`), the one :func:`~solar_challenge.finance.householder_bill` bills, and its
         battery discharge is its simulated flow, all from its window totals ×
         the window's annualisation_scale (year_days / days,
-        :func:`annualise`), so energy fields and ``fleet_revenue_gbp`` stay on
+        :func:`~solar_challenge.finance.annualise`), so energy fields and ``fleet_revenue_gbp`` stay on
         one basis.  A short window is still one
         season's sample, so board figures want ``scenario.period`` to cover
         about one full year.
@@ -607,7 +607,7 @@ def project_multi_year(
         ValueError: If a home's ledger at a simulated age, seed or bisection
             trial, breaks L1-L4, such as an own-use, export or import that is
             NaN or infinite, naming the invariant and its values
-            (:class:`HomeLedger`).
+            (:class:`~solar_challenge.finance.HomeLedger`).
         ValueError: If a simulated age gives another aggregate that is NaN or
             infinite: the fleet's revenue, its mean PV or battery state of
             health, or a home's battery discharge or cumulative battery
@@ -615,13 +615,13 @@ def project_multi_year(
             with its value.
         ValueError: If ``simulate`` returns a home's results that record no
             pricing, which only results simulate_home did not make lack, naming
-            calculate_summary (:func:`_summary_pricing`); or whose billed export
+            calculate_summary (:func:`~solar_challenge.finance.annualise`); or whose billed export
             at a recorded SEG rate is negative, which
             :func:`~solar_challenge.seg.calculate_seg_revenue` refuses, naming
             the export.
         ConfigurationError: Before any simulation, if a home's battery
             grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
-            :func:`refuse_analysis_only_forecasts` refuses it.
+            :func:`~solar_challenge.finance.refuse_analysis_only_forecasts` refuses it.
     """
     fleet = scenario_fleet(scenario)
     homes = fleet.homes
@@ -684,8 +684,8 @@ def project_multi_year(
         ]
         mean_pv_soh = sum(pv_sohs) / len(pv_sohs) if pv_sohs else 1.0
 
-        # Battery SOH: mean of the SOH _aged_homes gave each simulated battery (1.0 if no batteries)
-        battery_sohs = [battery.soh for battery in (h.battery_config for h in aged) if battery is not None and battery.soh is not None]
+        # Battery SOH: mean of the SOH each simulated battery held, the one _aged_homes gave it (1.0 if no batteries)
+        battery_sohs = [h.battery_config.resolved_soh for h in aged if h.battery_config is not None]
         mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
 
         return _NodeData(
@@ -848,7 +848,7 @@ def project_multi_year(
 def project_economics(
     curve: MultiYearCurve,
     fleet: ScenarioFleet,
-    finance: "FinanceConfig",
+    finance: FinanceConfig,
 ) -> ProjectEconomics:
     """Compute project-level financial appraisal from a multi-year revenue curve.
 
@@ -1097,11 +1097,11 @@ _SLOPE_EPS: float = 1e-9
 
 
 def solve_cost_recovery_rate(
-    scenario: "ScenarioConfig",
-    finance: "FinanceConfig",
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
     *,
     simulate: FleetSimulate,
-) -> "CostRecoverySolution":
+) -> CostRecoverySolution:
     """Find the minimum CBS own-use rate that meets the retained-cash floor.
 
     The CBS charges householders ``own_use_rate_pence_per_kwh`` p/kWh for every
@@ -1157,12 +1157,12 @@ def solve_cost_recovery_rate(
             :func:`project_multi_year` raises ValueError otherwise.
 
     Returns:
-        A :class:`CostRecoverySolution` with the solved rate and outlay.
+        A :class:`~solar_challenge.finance.CostRecoverySolution` with the solved rate and outlay.
 
     Raises:
         ConfigurationError: Before any simulation, if a home's battery
             grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
-            :func:`refuse_analysis_only_forecasts` refuses it.
+            :func:`~solar_challenge.finance.refuse_analysis_only_forecasts` refuses it.
     """
     fleet = scenario_fleet(scenario)
     refuse_analysis_only_forecasts(fleet.homes)
