@@ -34,6 +34,11 @@ OFF_PEAK_WITHOUT_A_TARIFF = (
 )
 
 
+def _charger_type_refusal(got: str) -> str:
+    """The refusal of a charger_type given as *got*, its repr."""
+    return f"charger_type must be one of 3.6kW, 7kW, 22kW, got {got}"
+
+
 def _at(text: str) -> pd.Timestamp:
     """The time *text* in Europe/London, generate_ev_charging_profile's default timezone."""
     return pd.Timestamp(text, tz="Europe/London")
@@ -120,18 +125,42 @@ class TestEVConfigBasics:
             )
             assert config.charger_type == charger_type
 
+    def test_a_charger_type_is_held_as_its_member(self):
+        assert EVConfig("7kW").charger_type is EVChargerType.FAST
+
+    def test_a_smart_charging_mode_is_held_as_its_member(self):
+        assert EVConfig("7kW", smart_charging_mode="off_peak").smart_charging_mode is SmartChargingMode.OFF_PEAK
+
+    def test_the_default_smart_charging_mode_is_held_as_its_member(self):
+        assert EVConfig("7kW").smart_charging_mode is SmartChargingMode.NONE
+
+    def test_a_member_given_is_held_as_that_member(self):
+        config = EVConfig(EVChargerType.RAPID, smart_charging_mode=SmartChargingMode.SOLAR)
+
+        assert (config.charger_type, config.smart_charging_mode) == (EVChargerType.RAPID, SmartChargingMode.SOLAR)
+        assert config.charger_type is EVChargerType.RAPID
+        assert config.smart_charging_mode is SmartChargingMode.SOLAR
+
+    def test_a_held_member_still_reads_as_its_string(self):
+        """A held member equals, formats and indexes as the string it was given."""
+        charger_type = EVConfig("7kW").charger_type
+
+        assert charger_type == "7kW"
+        assert str(charger_type) == "7kW"
+        assert f"{charger_type}" == "7kW"
+        assert {"7kW": 1}[charger_type] == 1
+
 
 class TestEVConfigValidation:
     """Test parameter validation."""
 
-    def test_invalid_charger_type_raises(self):
-        """Invalid charger type raises error."""
-        with pytest.raises(ConfigurationError, match="Charger type"):
-            EVConfig(charger_type="50kW", arrival_hour=18)
-        with pytest.raises(ConfigurationError, match="Charger type"):
-            EVConfig(charger_type="invalid", arrival_hour=18)
-        with pytest.raises(ConfigurationError, match="Charger type"):
-            EVConfig("9kW", 18)
+    @pytest.mark.parametrize("charger_type", ["50kW", "invalid", "9kW", 7, None])
+    def test_invalid_charger_type_raises(self, charger_type):
+        """An unknown charger type, or one that is not a str, is refused naming the field and the allowed values."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            EVConfig(charger_type=charger_type, arrival_hour=18)
+        assert isinstance(exc_info.value, ValueError)
+        assert str(exc_info.value) == _charger_type_refusal(repr(charger_type))
 
     @pytest.mark.parametrize("arrival_hour", [-1, 24])
     def test_arrival_hour_must_be_valid(self, arrival_hour):
@@ -190,13 +219,15 @@ class TestEVConfigValidation:
         assert type(hour) is int
 
     def test_invalid_smart_charging_mode_raises(self):
-        """Invalid smart charging mode raises error."""
-        with pytest.raises(ConfigurationError, match="Smart charging mode"):
+        """An unknown smart charging mode is refused naming the field and the allowed values."""
+        with pytest.raises(ConfigurationError) as exc_info:
             EVConfig(
                 charger_type="7kW",
                 arrival_hour=18,
                 smart_charging_mode="invalid",
             )
+        assert isinstance(exc_info.value, ValueError)
+        assert str(exc_info.value) == "smart_charging_mode must be one of none, solar, off_peak, got 'invalid'"
 
     def test_insufficient_time_to_charge_raises(self):
         """Insufficient time to charge raises error."""
@@ -224,6 +255,12 @@ class TestEVConfigHelperMethods:
 
         config3 = EVConfig(charger_type="22kW", arrival_hour=18)
         assert config3.get_charger_power_kw() == 22.0
+
+    @pytest.mark.parametrize("charger_type", CHARGER_TYPES)
+    def test_get_charger_power_kw_is_the_held_charger_types_power(self, charger_type):
+        config = EVConfig(charger_type)
+
+        assert config.get_charger_power_kw() == config.charger_type.power_kw
 
     def test_get_available_charging_hours_same_day(self):
         """Available hours calculated correctly for same-day charging."""
@@ -805,6 +842,13 @@ class TestEnumTypes:
         assert EVChargerType.FAST == "7kW"
         assert EVChargerType.RAPID == "22kW"
 
+    @pytest.mark.parametrize(
+        ("charger_type", "power_kw"),
+        [(EVChargerType.SLOW, 3.6), (EVChargerType.FAST, 7.0), (EVChargerType.RAPID, 22.0)],
+    )
+    def test_a_charger_types_power_is_its_rating_in_kw(self, charger_type, power_kw):
+        assert charger_type.power_kw == power_kw
+
     def test_smart_charging_mode_enum_values(self):
         """SmartChargingMode enum has correct values."""
         assert SmartChargingMode.NONE == "none"
@@ -820,6 +864,8 @@ class TestEnumTypes:
         )
         assert config.charger_type == "7kW"
         assert config.smart_charging_mode == "solar"
+        assert config.charger_type is EVChargerType.FAST
+        assert config.smart_charging_mode is SmartChargingMode.SOLAR
 
 
 class TestChargerTypes:
@@ -832,4 +878,4 @@ class TestChargerTypes:
     def test_a_charger_type_outside_charger_types_is_refused_listing_each_one(self, charger_type):
         with pytest.raises(ConfigurationError) as exc_info:
             EVConfig(charger_type=charger_type)
-        assert str(exc_info.value) == f"Charger type must be one of {list(CHARGER_TYPES)}, got '{charger_type}'"
+        assert str(exc_info.value) == _charger_type_refusal(repr(charger_type))
