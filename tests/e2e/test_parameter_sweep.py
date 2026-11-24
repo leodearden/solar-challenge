@@ -14,8 +14,9 @@ table's header names the parameter the sweep ran, not one selected since, that
 running a sweep drops the requests the sweep before it still has in flight and
 opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
-and that the page says why when it loses track of a sweep, even when the
-browser renders no animation frame. A point whose job
+that the results table shows each point's row even while the browser renders no
+animation frame, and that the page says why when it loses track of a sweep, even
+when the browser renders no animation frame. A point whose job
 is cancelled, or which the server no longer tracks, shows that in its row, and
 the page goes on to follow the next point. A point whose final state the page
 cannot read shows failed, and the page goes on to follow the next point. A
@@ -309,6 +310,20 @@ def _results(
 def _result_rows(page: Page) -> Locator:
     """The Sweep Results table's rows, one per sweep point: its rows of cells, which leaves out the header row."""
     return page.get_by_role("row").filter(has=page.get_by_role("cell"))
+
+
+def test_the_sweep_results_table_shows_each_points_row_while_the_browser_renders_no_frame(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """Run a two-point sweep while the page's animation frames are withheld, as a loaded host's headless browser can withhold them for seconds: the Sweep Results table still shows a row per point, since the page shows it once the sweep has rows, not at the next frame."""
+    withhold_animation_frames(page)
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    rows = _result_rows(page)
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(["1", "-", "-", "-", "pending"])
+    expect(rows.nth(1).get_by_role("cell")).to_have_text(["11", "-", "-", "-", "pending"])
 
 
 def test_a_sweep_point_whose_job_fails_shows_failed_in_its_own_row(
