@@ -1091,10 +1091,16 @@ class TestPhysicsColumnPremises:
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
+        """The physics fleet is priced on the PV DC its homes wire, the basis its physics column's projection carries."""
         scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
+        fleet = scenario_fleet(scenario)
+        curve = dataclasses.replace(
+            make_fin_spreadsheet_curve(n_homes=2, asset_life_years=25),
+            fleet_pv_dc_kw=sum(wired_dc_capacity_kw(home.pv_config) for home in fleet.homes),
+        )
 
-        econ = _spreadsheet_economics_cr6(scenario, finance)
+        econ = project_economics(curve, fleet, finance)
 
         assert econ.total_capex_gbp <= finance.grant_gbp, (
             f"grant £{finance.grant_gbp:,.0f} no longer covers the physics fleet's "

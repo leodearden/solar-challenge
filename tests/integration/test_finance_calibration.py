@@ -37,6 +37,7 @@ from solar_challenge.projection import (
     scenario_fleet,
     spreadsheet_revenue_curve,
 )
+from solar_challenge.pv import wired_dc_capacity_kw
 from solar_challenge.scenario_blocks import (
     parse_finance_config,
     parse_seg_rate,
@@ -539,12 +540,14 @@ class TestCalibrationPhysicsColumn:
     """
 
     def test_physics_column_structural_sanity(self) -> None:
-        """Physics column: capex still input-driven (2 homes × £7,750).
+        """Physics column: capex prices the PV DC its curve's generation came from.
 
         The physics column uses the real project_multi_year simulation (2 homes,
         3-day window) with no self_consumption_override, so it prices the
-        simulated own-use. Only STRUCTURAL checks: capex == £15,500, physics scf MAY
-        differ from 0.70, no physics==spreadsheet assertion.
+        simulated own-use. Only STRUCTURAL checks: the physics capex prices the
+        2 × 5.606 kWp the homes wire (about £15,711.98), the spreadsheet column's
+        the 2 × 5.5 kWp nameplate (£15,500), physics scf MAY differ from 0.70, no
+        physics==spreadsheet assertion.
         """
         scenario = make_physics_column_scenario()
         finance = _make_finance_fin()
@@ -579,13 +582,16 @@ class TestCalibrationPhysicsColumn:
         )
 
         # STRUCTURAL assertions only (no physics==spreadsheet assertions)
-        # Capex is input-driven: assert against the concrete golden value, not the other column
-        # 2 homes × (5.5kWp×£1000 + £1000 + 5.0kWh×£250) = 2 × £7,750 = £15,500
-        _two_home_capex_gbp = 2.0 * (5.5 * 1000.0 + 1000.0 + 5.0 * 250.0)  # = 15500.0
-        assert physics_econ.total_capex_gbp == pytest.approx(_two_home_capex_gbp, abs=1.0), (
-            f"Physics capex (2 homes × £7,750) expected £{_two_home_capex_gbp:,.2f}, "
-            f"got £{physics_econ.total_capex_gbp:,.2f}"
+        # The physics curve's PV basis is the DC its 2 homes wire, not their 2 × 5.5 kWp nameplate
+        wired_per_home_kw = wired_dc_capacity_kw(scenario_fleet(scenario).homes[0].pv_config)
+        assert physics_curve.fleet_pv_dc_kw == pytest.approx(2.0 * wired_per_home_kw)
+        assert physics_curve.fleet_pv_dc_kw != pytest.approx(11.0)
+        # Physics capex: that PV DC × £1000 + 2 × (£1000 + 5.0kWh×£250)
+        assert physics_econ.total_capex_gbp == pytest.approx(
+            physics_curve.fleet_pv_dc_kw * 1000.0 + 2 * (1000.0 + 5.0 * 250.0), abs=1e-6
         )
+        # The spreadsheet column keeps its nameplate: 2 × (5.5kWp×£1000 + £1000 + 5.0kWh×£250) = £15,500
+        assert ss_econ.total_capex_gbp == pytest.approx(15_500.0, abs=1.0)
         # Physics DSCR must be positive, or inf when debt-free (structural sanity)
         assert physics_econ.min_dscr > 0.0 or physics_econ.min_dscr == float("inf")
         # Physics IRR: just check it's a float (nan when no equity is invested, as here)

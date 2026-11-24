@@ -17,6 +17,7 @@ import yaml
 from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
+from solar_challenge.config import load_scenarios
 from solar_challenge.finance import (
     BillDistribution,
     FinanceConfig,
@@ -30,11 +31,14 @@ from solar_challenge.projection import (
     ProjectEconomics,
     YearPoint,
     project_economics,
+    project_multi_year,
     scenario_fleet,
 )
+from solar_challenge.pv import wired_dc_capacity_kw
 from tests._cli_fleet_simulator import invoke_finance_run
 from tests._factories import make_bill_breakdown, make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario_of, make_sized_home
+from tests._repository_paths import SCENARIOS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +248,59 @@ class TestProjectEconomicsCapex:
 
         expected_capex = (4.0 * 1000.0 + 1000.0 + 5.0 * 250.0) + (3.0 * 1000.0 + 1000.0 + 0.0 * 250.0)
         assert econ.total_capex_gbp == pytest.approx(expected_capex)
+
+
+class TestCapexPricesTheCurvesPvDc:
+    """project_economics prices the PV term on the curve's fleet_pv_dc_kw, the PV DC its generation came from."""
+
+    def test_the_pv_term_reads_the_curves_pv_dc_not_the_homes_nameplate(self) -> None:
+        """A curve whose generation came from 6.5 kWp prices 6.5 kWp of PV, not the homes' 7 kWp nameplate."""
+        home_a = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
+        home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
+        scenario = make_scenario_of([home_a, home_b])
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=1000.0,
+            roof_fit_cost_gbp=1000.0,
+            battery_cost_per_kwh_gbp=250.0,
+            inverter_cost_per_kw_gbp=0.0,
+        )
+        curve = _make_curve([10000.0] * 25, fleet_pv_dc_kw=6.5)
+
+        econ = project_economics(curve, scenario_fleet(scenario), finance)
+
+        assert econ.total_capex_gbp == pytest.approx(6.5 * 1000.0 + (1000.0 + 5.0 * 250.0) + (1000.0 + 0.0))
+
+    def test_the_board_fleets_physics_curve_prices_the_pv_dc_the_simulator_wires(self) -> None:
+        """The board fleet's projected curve carries Σ wired DC of its homes, and its capex prices that DC."""
+        scenario = load_scenarios(SCENARIOS_DIR / "bristol-phase1.yaml")[0]
+        finance = scenario.finance
+        assert finance is not None
+        fleet = scenario_fleet(scenario)
+        wired = sum(wired_dc_capacity_kw(home.pv_config) for home in fleet.homes)
+        assert sum(home.pv_config.capacity_kw for home in fleet.homes) == 430.0
+        assert wired != pytest.approx(430.0), (
+            "the board fleet must wire a DC other than its 430 kWp nameplate, "
+            "or this test cannot tell the two bases apart"
+        )
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            error_target_pct=math.inf,
+            simulate=lambda fleet_config, start, end: make_fleet_results(homes=fleet_config.homes),
+        )
+
+        assert curve.fleet_pv_dc_kw == pytest.approx(wired)
+        installs_gbp = sum(
+            finance.roof_fit_cost_gbp
+            + (0.0 if home.battery_config is None else home.battery_config.capacity_kwh)
+            * finance.battery_cost_per_kwh_gbp
+            + home.pv_config.effective_inverter_capacity_kw * finance.inverter_cost_per_kw_gbp
+            for home in fleet.homes
+        )
+        assert project_economics(curve, fleet, finance).total_capex_gbp == pytest.approx(
+            wired * finance.pv_cost_per_kwp_gbp + installs_gbp
+        )
 
     def test_grant_passthrough(self) -> None:
         """grant_gbp in ProjectEconomics must equal FinanceConfig.grant_gbp."""
@@ -953,10 +1010,10 @@ class TestProjectEconomicsInverterCapex:
     """Tests for the inverter-capex term in project_economics (task #49)."""
 
     def test_default_inverter_cost_capex_bit_identical(self) -> None:
-        """With default inverter cost (0.0), total_capex_gbp equals the 3-term sum exactly.
+        """With default inverter cost (0.0), total_capex_gbp equals the PV term plus the per-home 2-term sum exactly.
 
         The 4th term is eff_inv*0.0 == 0.0 and S+0.0 == S in IEEE-754, so
-        the result is bit-identical to the pre-#49 accumulation.
+        the result is bit-identical to the accumulation without it.
         """
         home_a = make_sized_home(pv_kwp=4.0, battery_kwh=5.0)
         home_b = make_sized_home(pv_kwp=3.0, battery_kwh=None)
@@ -971,18 +1028,16 @@ class TestProjectEconomicsInverterCapex:
 
         econ = project_economics(curve, scenario_fleet(scenario), finance)
 
-        # Accumulate in the same per-home order as project_economics does
-        expected_3term = 0.0
+        # Accumulate in the same order as project_economics does: the PV term plus the per-home sum
+        per_home_gbp = 0.0
         for home in [home_a, home_b]:
-            pv_kwp = home.pv_config.capacity_kw
             batt_kwh = (
                 home.battery_config.capacity_kwh
                 if home.battery_config is not None
                 else 0.0
             )
-            expected_3term += (
-                pv_kwp * 1000.0 + 1000.0 + batt_kwh * 250.0
-            )
+            per_home_gbp += 1000.0 + batt_kwh * 250.0
+        expected_3term = curve.fleet_pv_dc_kw * 1000.0 + per_home_gbp
         # Exact equality: eff_inv*0.0 == 0.0, and S+0.0 == S in IEEE-754
         assert econ.total_capex_gbp == expected_3term
 
