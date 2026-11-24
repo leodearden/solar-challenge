@@ -3,13 +3,15 @@
 
 import math
 import re
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import period_window
+from solar_challenge.config import parse_scenario, period_window
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
@@ -395,12 +397,10 @@ class TestBuilderFormErrors:
             in builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024"})
         )
 
-    def test_each_period_day_that_is_not_a_day_is_listed_start_first(self) -> None:
-        errors = builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024", "end_date": "2024-02-30"})
-
-        assert [error for error in errors if error.startswith("period.")] == [
-            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp",
-            "period.end_date: '2024-02-30' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp",
+    def test_a_period_whose_two_days_are_not_days_is_refused_once_naming_its_start_day(self) -> None:
+        """Reasons are collected per block, not per field: the period's one reason is the reader's first refusal of it."""
+        assert builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024", "end_date": "2024-02-30"}) == [
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
         ]
 
     def test_a_period_whose_last_day_precedes_its_first_is_refused_as_a_scenario_files_is(self) -> None:
@@ -412,7 +412,12 @@ class TestBuilderFormErrors:
         assert [error for error in errors if error.startswith("period.")] == [str(scenario_file_refusal.value)]
 
     def test_a_cleared_period_day_is_listed_once(self) -> None:
-        assert builder_form_errors({**_ACCEPTED_FORM, "end_date": ""}) == ["The period needs end_date"]
+        """The one reason is parse_scenario's refusal of the period, as a scenario file's is refused."""
+        with pytest.raises(ConfigurationError) as scenario_file_refusal:
+            parse_scenario({"period": {"start_date": "2024-06-01"}, "home": {}})
+        assert str(scenario_file_refusal.value) == "period: requires 'end_date'"
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "end_date": ""}) == [str(scenario_file_refusal.value)]
 
     @pytest.mark.parametrize(
         ("changes", "refused_block"),
@@ -448,6 +453,14 @@ class TestBuilderFormErrors:
         assert errors == [pv_reason, str(block_refusal.value)]
 
     def test_a_refused_seg_rate_is_listed_once(self) -> None:
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "seg_rate_pence_per_kwh": -1}) == [str(seg_refusal.value)]
+
+    def test_validation_needs_no_temp_directory(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """The document is judged in memory: with the temp directory missing, so that any temp file fails, the reader's refusal is still the answer."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "absent"))
         with pytest.raises(ConfigurationError) as seg_refusal:
             parse_seg_rate({"rate_pence_per_kwh": -1.0})
 
