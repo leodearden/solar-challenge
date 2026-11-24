@@ -169,7 +169,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "not 0\\.0 <?= value < math\\.inf"
+          pattern: "_(positive|non_negative)_fields|not 0\\.0 <?= value < math\\.inf:"
           paths: ["src/solar_challenge/finance.py"]
           expect: absent
       - name: "community-billing-rate-read"
