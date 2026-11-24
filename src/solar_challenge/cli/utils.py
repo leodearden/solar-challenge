@@ -21,12 +21,17 @@ that runner from --workers and --sequential, as root_invocation says, unless
 whoever invokes the CLI passes a CliInvocation as obj; the root's options leave
 that invocation's runner as it is. `web start` passes it on once create_app
 takes one (task 889).
+
+A command reads its --start and --end as StartOption and EndOption, and applies
+them to its scenario with with_window_options, so each replaces only its own day
+of the scenario's period.
 """
 
 import dataclasses
 from collections.abc import Iterable
+from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Annotated, Any, Callable, Optional, TypeVar
 
 import typer
 from rich.console import Console
@@ -44,11 +49,13 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
@@ -126,6 +133,47 @@ def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential
     if isinstance(obj, CliInvocation):
         return dataclasses.replace(obj, quiet=obj.quiet or quiet)
     raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
+
+
+StartOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--start",
+        formats=["%Y-%m-%d"],
+        help=(
+            "First day to simulate (YYYY-MM-DD), replacing only the start_date of the file's period:; "
+            f"defaults to the file's start_date, else {DEFAULT_FIRST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --start option of a command that simulates a scenario's period: the day with_window_options gives as its first."""
+
+EndOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--end",
+        formats=["%Y-%m-%d"],
+        help=(
+            "Last day to simulate (YYYY-MM-DD), replacing only the end_date of the file's period:; "
+            f"defaults to the file's end_date, else {DEFAULT_LAST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --end option of a command that simulates a scenario's period: the day with_window_options gives as its last."""
+
+
+def with_window_options(
+    scenario: ScenarioConfig, *, start: Optional[datetime], end: Optional[datetime]
+) -> ScenarioConfig:
+    """*scenario* with its period's first day replaced by start's date and its last by end's, each only when given.
+
+    Raises:
+        ConfigurationError: as ScenarioConfig.with_window refuses days that give no window, naming the scenario and both days.
+    """
+    return scenario.with_window(
+        first_day=None if start is None else start.date(),
+        last_day=None if end is None else end.date(),
+    )
 
 
 def verbatim_table_title(title: str) -> Text:

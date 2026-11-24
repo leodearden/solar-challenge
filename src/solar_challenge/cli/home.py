@@ -11,6 +11,8 @@ import typer
 
 from solar_challenge.battery import BatteryConfig, has_battery
 from solar_challenge.cli.utils import (
+    EndOption,
+    StartOption,
     console,
     create_progress,
     create_summary_table,
@@ -20,6 +22,7 @@ from solar_challenge.cli.utils import (
     print_info,
     print_report,
     print_success,
+    with_window_options,
 )
 from solar_challenge.config import ScenarioConfig, load_scenario, parse_scenario
 from solar_challenge.errors import ConfigurationError
@@ -29,7 +32,7 @@ from solar_challenge.location import LOCATION_PRESETS, Location, parse_location
 from solar_challenge.output import export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import refusal
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START, covered_days
+from solar_challenge.timebase import SHORT_WINDOW_START
 
 app = typer.Typer(help="Single home simulation commands")
 
@@ -183,20 +186,8 @@ def run(
             dir_okay=False,
         ),
     ] = None,
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Start date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_FIRST_DAY.isoformat(),
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="End date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_LAST_DAY.isoformat(),
+    start: StartOption = None,
+    end: EndOption = None,
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -257,22 +248,26 @@ def run(
 
     If no config file is provided, uses default values with any CLI overrides.
     """
-    scenario = scenario_for_run(
-        config,
-        pv_kw=pv_kw,
-        battery_kwh=battery_kwh,
-        consumption_kwh=consumption_kwh,
-        location_str=location,
-        system_losses=system_losses,
+    scenario = with_window_options(
+        scenario_for_run(
+            config,
+            pv_kw=pv_kw,
+            battery_kwh=battery_kwh,
+            consumption_kwh=consumption_kwh,
+            location_str=location,
+            system_losses=system_losses,
+        ),
+        start=start,
+        end=end,
     )
     (home_config,) = scenario.simulated_homes()
-    # Parse dates
-    start_date = pd.Timestamp(start, tz=home_config.location.timezone)
-    end_date = pd.Timestamp(end, tz=home_config.location.timezone)
+    start_date, end_date = scenario.simulation_bounds()
+    window = scenario.window()
 
-    days_count = covered_days(start_date.date(), end_date.date())
     cli = invocation(ctx)
-    print_info(cli, f"Simulating {days_count} days from {start} to {end}")
+    print_info(
+        cli, f"Simulating {window.days} days from {window.first_day.isoformat()} to {window.last_day.isoformat()}"
+    )
 
     # Run simulation with progress
     with create_progress(cli) as progress:
