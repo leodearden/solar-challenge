@@ -213,14 +213,14 @@ def fleet_form_from_scenario(document: object) -> ImportedFleetForm:
     fleet = scenario["fleet_distribution"]
     fleet_size_and_seed = _read_fleet_size_and_seed(fleet)
     period = _read_period(scenario.get("period"))
-    read = parse_scenario(scenario)
+    accepted = parse_scenario(scenario)
     form, not_loaded = _read_blocks(
         scenario,
         "",
         {
             "name": _read_name(scenario.get("name")),
             "period": period,
-            "location": _read_location(read.get_location()),
+            "location": _read_location(accepted.get_location()),
             "fleet_distribution": _read_fleet_distribution(fleet, fleet_size_and_seed),
             "tariff": _read_tariff(scenario.get("tariff")),
             "seg": _read_seg(scenario.get("seg")),

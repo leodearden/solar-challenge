@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.fleet_scenario, called directly with fleet forms: the bodies fleet-simulator.js's buildPayload() posts."""
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -322,7 +323,7 @@ class TestParseFleetFormReadsItsDocumentThroughParseScenario:
         ],
     )
     def test_a_refused_tariff_or_seg_is_refused_before_a_refused_fleet_distribution_as_parse_scenario_reads_them(
-        self, key: str, value: Any, read_block: Any
+        self, key: str, value: Any, read_block: Callable[[], object]
     ) -> None:
         """The reader reads the tariff and SEG before the homes source, so a fleet grammar refusal is the later block's."""
         form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
@@ -941,6 +942,18 @@ class TestFleetFormFromScenario:
 
         assert str(refusal.value) == str(expected.value)
         assert "'finanse'" in str(refusal.value)
+
+    def test_a_name_that_is_not_a_string_is_refused_as_parse_scenario_refuses_it(self) -> None:
+        """The reader's refusal runs before the form's own reads of the scenario, so the name the form never holds is refused with its message."""
+        document = {**_FLEET_SCENARIO, "name": 5}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+        assert str(expected.value) == "name: must be a string, got 5", "premise: the reader refuses the name"
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
 
     def test_a_scenario_the_loaders_refuse_is_refused_with_their_message(self) -> None:
         """The loaders' refusal of a scenario is the import's refusal."""
