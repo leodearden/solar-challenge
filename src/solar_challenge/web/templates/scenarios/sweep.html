@@ -151,7 +151,8 @@
         {% endcall %}
     </div>
 
-    <div x-show="sweepResults.length > 0" x-cloak>
+    <!-- Sweep Results: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_sweep_results_table_shows_each_points_row_while_the_browser_renders_no_frame) -->
+    <div hidden :hidden="sweepResults.length === 0">
         {% call panel(title='Sweep Results') %}
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">

@@ -14,8 +14,8 @@ table's header names the parameter the sweep ran, not one selected since, that
 running a sweep drops the requests the sweep before it still has in flight and
 opens no stream for the points that sweep had yet to follow, that an earlier
 sweep's results, arriving after a later sweep's rows show, fill none of them,
-and that the page says why when it loses track of a sweep, even when the
-browser renders no animation frame. A point whose job
+that the results table shows each point's row, and the page says why when it
+loses track of a sweep, even while the browser renders no animation frame. A point whose job
 is cancelled, or which the server no longer tracks, shows that in its row, and
 the page goes on to follow the next point. A point whose final state the page
 cannot read shows failed, and the page goes on to follow the next point. A
@@ -309,6 +309,29 @@ def _results(
 def _result_rows(page: Page) -> Locator:
     """The Sweep Results table's rows, one per sweep point: its rows of cells, which leaves out the header row."""
     return page.get_by_role("row").filter(has=page.get_by_role("cell"))
+
+
+def _wait_until_request_finished(page: Page, is_wanted: Callable[[Request], bool]) -> None:
+    """Return once a request is_wanted accepts has finished, on Playwright's default timeout from this call. A request that finished before the call does not count.
+
+    Not page.wait_for_event: expect_request_finished registers its waiter before the page can dispatch another event, so it cannot miss a request that finishes while the call starts; wait_for_event registers only once it runs.
+    """
+    with page.expect_request_finished(is_wanted):
+        pass
+
+
+def test_the_sweep_results_table_shows_each_points_row_while_the_browser_renders_no_frame(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """Run a two-point sweep while the page's animation frames are withheld, as a loaded host's headless browser can withhold them for seconds: the Sweep Results table still shows a row per point, since the page shows it once the sweep has rows, not at the next frame."""
+    withhold_animation_frames(page)
+    page.goto(live_server + "/scenarios/sweep")
+    with page.expect_request("**/api/jobs/sweep-1-point-1/progress"):
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+
+    rows = _result_rows(page)
+    expect(rows.nth(0).get_by_role("cell")).to_have_text(["1", "-", "-", "-", "pending"])
+    expect(rows.nth(1).get_by_role("cell")).to_have_text(["11", "-", "-", "-", "pending"])
 
 
 def test_a_sweep_point_whose_job_fails_shows_failed_in_its_own_row(
@@ -621,6 +644,18 @@ def _sweep_charts(page: Page) -> Locator:
     return page.get_by_role("region", name="Sweep charts", exact=True)
 
 
+def _wait_until_the_page_has_fetched_the_sweeps_charts(page: Page) -> None:
+    """Return once the page's request for the sweep's charts has finished, which it makes only after following every point to its job's end. If that wait times out, fail naming each row's status and the page's error message, which says why when the page lost track of the sweep."""
+    try:
+        _wait_until_request_finished(page, _is_the_sweep_charts_request)
+    except PlaywrightTimeoutError as timed_out:
+        statuses = [text for row in _result_rows(page).all() for text in _status_badge(row).all_text_contents()]
+        error_message = page.locator("[x-text='errorMsg']").all_text_contents()
+        raise AssertionError(
+            f"the page had not fetched the sweep's charts: its rows' statuses are {statuses}, its error message is {error_message}"
+        ) from timed_out
+
+
 def test_once_every_point_has_ended_the_page_posts_the_finished_points_labelled_with_the_parameter_swept(
     page: Page, live_server: str, sweep_jobs: _SweepJobs
 ) -> None:
@@ -826,10 +861,7 @@ def _each_points_results_fetched(page: Page, job_ids: Sequence[str]) -> Iterator
         try:
             for job_id in job_ids:
                 if job_id not in fetched:
-                    # Not page.wait_for_event: expect_* registers its waiter before the page can dispatch another
-                    # event, so it cannot miss a fetch the record lacks; wait_for_event registers once the loop runs.
-                    with page.expect_request_finished(is_job_request(job_id, "results")):
-                        pass
+                    _wait_until_request_finished(page, is_job_request(job_id, "results"))
         except PlaywrightTimeoutError as timed_out:
             unfetched = [job_id for job_id in job_ids if job_id not in fetched]
             raise AssertionError(f"the page had not finished fetching the results of jobs {unfetched}") from timed_out
@@ -955,17 +987,42 @@ def test_each_points_results_fetched_waits_for_each_jobs_fetch_on_the_default_ti
 # -- A real sweep's charts, drawn from its points' runs ---------------------
 
 
+def test_the_wait_for_the_sweeps_charts_fails_naming_the_rows_statuses_and_the_pages_error_message(
+    page: Page, live_server: str, sweep_jobs: _SweepJobs
+) -> None:
+    """In a browser whose EventSource constructor throws, the page loses track of the sweep and never requests its charts: the wait for them fails with an AssertionError that names the row statuses and the page's own message, not with Playwright's timeout naming the event."""
+    page.add_init_script(_AN_EVENT_SOURCE_THAT_OPENS_NO_STREAMS)
+    page.goto(live_server + "/scenarios/sweep")
+    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    expect(page.get_by_text(f"Lost track of the sweep: {_NO_EVENT_STREAMS_MESSAGE}", exact=True)).to_be_visible()
+    page.set_default_timeout(1000)
+
+    with pytest.raises(AssertionError) as failure:
+        _wait_until_the_page_has_fetched_the_sweeps_charts(page)
+
+    message = str(failure.value)
+    assert f"Lost track of the sweep: {_NO_EVENT_STREAMS_MESSAGE}" in message
+    assert "'pending', 'pending'" in message
+
+
 def test_a_three_point_sweep_draws_one_chart_per_metric_from_its_points_runs(
     page: Page,
     live_server: str,
     release_held_simulations: Callable[[], None],
     page_errors: list[str],
 ) -> None:
-    """The jobs are released before Run, so each point's job ends at once, saving its run through the live server's RunStorage (B12, task 135)."""
+    """The jobs are released before Run, so each point's job ends at once, saving its run through the live server's RunStorage (B12, task 135).
+
+    The test waits for the sweep POST's answer, then for the page's charts request to finish, which the page makes only
+    once each point's row has its job's final status, so each expect covers only the page's own drawing.
+    """
     release_held_simulations()
     page.goto(live_server + "/scenarios/sweep")
     page.get_by_label("Steps", exact=True).fill("3")
-    page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    with page.expect_response("**/api/simulate/sweep") as submitted:
+        page.get_by_role("button", name="Run Parameter Sweep", exact=True).click()
+    assert submitted.value.status == 201, submitted.value.text()
+    _wait_until_the_page_has_fetched_the_sweeps_charts(page)
 
     rows = _result_rows(page)
     for n in range(3):
