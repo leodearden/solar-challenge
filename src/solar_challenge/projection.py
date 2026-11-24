@@ -256,9 +256,12 @@ class ProjectEconomics:
 
     Attributes:
         total_capex_gbp: Total capital expenditure across the fleet (£).
-            4-term build-up: Σ_home(pv_kwp × pv_cost + roof_fit
+            4-term build-up: curve.fleet_pv_dc_kw × pv_cost + Σ_home(roof_fit
             + battery_kwh × battery_cost + eff_inv_kw × inverter_cost).
-            Inverter term is zero when inverter_cost_per_kw_gbp == 0.0 (default).
+            The PV term prices the PV DC the curve's generation came from:
+            Σ wired DC for a physics projection, n_homes × pv_kwp for the
+            spreadsheet curve.  Inverter term is zero when
+            inverter_cost_per_kw_gbp == 0.0 (default).
         grant_gbp: Total grant received by the project (£, passthrough from
             FinanceConfig).
         equity_gbp: Equity portion of the financed amount (£):
@@ -985,11 +988,13 @@ def project_economics(
 
     Algorithm:
     1. Read the fleet's homes, a scenario's simulated homes as
-       ``scenario_fleet(scenario)`` resolves them.
+       ``scenario_fleet(scenario)`` resolves them, for the roof, battery and
+       inverter terms and n_homes.
     2. Compute total_capex_gbp via the 4-term build-up:
-       Σ_home(pv_kwp × pv_cost + roof_fit + battery_kwh × battery_cost
-       + eff_inv_kw × inverter_cost).  Inverter term is zero when
-       inverter_cost_per_kw_gbp == 0.0 (the default).
+       curve.fleet_pv_dc_kw × pv_cost + Σ_home(roof_fit
+       + battery_kwh × battery_cost + eff_inv_kw × inverter_cost).  The PV
+       term prices the PV DC the curve's generation came from.  Inverter term
+       is zero when inverter_cost_per_kw_gbp == 0.0 (the default).
     3. financed = max(capex − grant, 0); equity = financed × equity_fraction;
        debt = financed × (1 − equity_fraction).
     4. annual_debt_service via level annuity (annuity_payment).
@@ -1004,8 +1009,10 @@ def project_economics(
     10. net_surplus_per_home_per_year_gbp = mean(surplus) / n_homes.
 
     Args:
-        curve: MultiYearCurve produced by project_multi_year.
-        fleet: The homes whose install is priced, ``scenario_fleet(scenario)``.
+        curve: MultiYearCurve produced by project_multi_year; its
+            ``fleet_pv_dc_kw`` prices the PV term.
+        fleet: The homes whose roof, battery and inverter are priced,
+            ``scenario_fleet(scenario)``.
         finance: FinanceConfig with cost and finance parameters.
 
     Returns:
@@ -1017,22 +1024,22 @@ def project_economics(
     homes = fleet.homes
     n_homes = len(homes)
 
-    # 2. Capex: 4-term build-up (pv + roof + battery + inverter)
-    total_capex_gbp = 0.0
+    # 2. Capex: the curve's PV DC, plus each home's roof, battery and inverter
+    pv_capex_gbp = curve.fleet_pv_dc_kw * finance.pv_cost_per_kwp_gbp
+    installs_capex_gbp = 0.0
     for home in homes:
-        pv_kwp = home.pv_config.capacity_kw
         batt_kwh = (
             home.battery_config.capacity_kwh
             if home.battery_config is not None
             else 0.0
         )
         eff_inv_kw = home.pv_config.effective_inverter_capacity_kw
-        total_capex_gbp += (
-            pv_kwp * finance.pv_cost_per_kwp_gbp
-            + finance.roof_fit_cost_gbp
+        installs_capex_gbp += (
+            finance.roof_fit_cost_gbp
             + batt_kwh * finance.battery_cost_per_kwh_gbp
             + eff_inv_kw * finance.inverter_cost_per_kw_gbp
         )
+    total_capex_gbp = pv_capex_gbp + installs_capex_gbp
 
     # 3. Grant / equity / debt split
     financed = max(total_capex_gbp - finance.grant_gbp, 0.0)
