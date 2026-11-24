@@ -11,11 +11,6 @@ its entry. docs/prds/errors-leaf.md §7 measured and classified the list.
 No import statement of solar_challenge, at any scope, names the tests package: the wheel
 ships only src/, so such an import fails in every installed copy.
 
-No function of solar_challenge.finance imports a fleet runner: its function-local imports
-from solar_challenge.fleet bind only FleetConfig, which finance builds for the simulate its
-caller passes. Only a composition root constructs a runner or resolves default_runner
-(docs/prds/fleet-execution-policy.md, resolved design decision 1, sketch step ζ and B18).
-
 Outside its web subpackage, no import statement of solar_challenge names a module of that
 subpackage outside a function. Any module of the subpackage may import the web extra at
 module top, and the CLI, scripts/ and the dev-only offline-lane jobs run without that extra.
@@ -69,9 +64,6 @@ _WEB_FIELD_TREE = f"{WEB_SUBPACKAGE}.field_tree"
 _RUNNER_PREFIX = "simulate_"
 _DISPATCH = f"{_PACKAGE}.dispatch"
 _SRC_DIR = REPOSITORY_ROOT / "src"
-_FINANCE = f"{_PACKAGE}.finance"
-_FLEET = f"{_PACKAGE}.fleet"
-_FINANCE_FLEET_NAMES = frozenset({"FleetConfig"})
 
 
 _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
@@ -79,10 +71,6 @@ _CLI_WITHOUT_THE_WEB_EXTRA = Permanent(
     "of the web subpackage may import the extra at module top "
     "(tests/unit/test_dependency_declarations.py), so the CLI reaches the web subpackage only "
     "inside `web start` and `web migrate`"
-)
-_FINANCE_PARTITION = Transitional(
-    "program stream S8, the finance partition "
-    "(plans/review-all-program-solar_challenge-20261014.md)"
 )
 
 ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] = {
@@ -105,10 +93,11 @@ ALLOWED_FUNCTION_LOCAL_IMPORTS: dict[tuple[str, str], Permanent | Transitional] 
         "which imports Flask"
     ),
 
-    ("solar_challenge.finance", "solar_challenge.battery"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.fleet"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.home"): _FINANCE_PARTITION,
-    ("solar_challenge.finance", "solar_challenge.pv"): _FINANCE_PARTITION,
+    ("solar_challenge.finance", "solar_challenge.projection"): Transitional(
+        "S8 ι, task 939: the surface bump moves solve_cost_recovery_rate to "
+        "solar_challenge.projection and deletes finance's frozen wrapper "
+        "(docs/prds/finance-partition.md §5.3)"
+    ),
     ("solar_challenge.load", "solar_challenge.ev"): Transitional(
         "program stream S12, load composition"
     ),
@@ -520,39 +509,6 @@ def test_every_allowed_pair_names_a_contract_or_an_owner() -> None:
     )
 
 
-def test_finance_functions_import_only_fleet_config_from_fleet(
-    real_tree_imports: tuple[_ImportSite, ...],
-) -> None:
-    """Every name a finance function imports from fleet is FleetConfig: finance builds fleets for its caller's simulate and resolves no runner (fleet-execution-policy B18), until no finance function imports from fleet and this guard goes."""
-    from_fleet = [
-        site
-        for site in _function_local_package_imports(real_tree_imports)
-        if site.importer == _FINANCE and site.imported == _FLEET
-    ]
-    assert from_fleet, (
-        f"no function of {_FINANCE} imports from {_FLEET} any more, so this test and "
-        "_FINANCE_FLEET_NAMES go from tests/unit/test_import_structure.py, in the change that "
-        f"drops the ({_FINANCE!r}, {_FLEET!r}) entry of ALLOWED_FUNCTION_LOCAL_IMPORTS; "
-        "test_every_function_local_package_import_is_allowed then refuses any such import"
-    )
-
-    extra = [
-        (site, name)
-        for site in from_fleet
-        for name in site.names or (site.imported,)
-        if name not in _FINANCE_FLEET_NAMES
-    ]
-    found = "\n".join(f"{site}: {name}" for site, name in extra)
-    assert not extra, (
-        f"these imports inside a function of {_FINANCE} bind names from {_FLEET} other than "
-        f"{sorted(_FINANCE_FLEET_NAMES)}:\n{found}\n"
-        "finance builds the FleetConfig it hands its caller's simulate; only a composition root "
-        "constructs a runner or resolves default_runner (docs/prds/fleet-execution-policy.md, "
-        "resolved design decision 1, sketch step ζ and B18). Take the simulator as a required "
-        "`simulate: FleetSimulate` argument instead"
-    )
-
-
 def test_no_import_statement_of_the_package_names_the_test_suite(
     real_tree_imports: tuple[_ImportSite, ...],
 ) -> None:
@@ -834,15 +790,15 @@ def test_an_allowed_pair_no_function_imports_is_reported_stale(tmp_path: Path) -
         tmp_path / "src",
         {
             "finance.py": (
-                "from solar_challenge.battery import compute_soh\n"
+                "from solar_challenge.projection import solve_cost_recovery_rate\n"
                 "\n"
                 "\n"
-                "def aged(homes):\n"
-                "    return compute_soh(homes)\n"
+                "def solve(scenario, finance, simulate):\n"
+                "    return solve_cost_recovery_rate(scenario, finance, simulate=simulate)\n"
             ),
         },
     )
-    pair = ("solar_challenge.finance", "solar_challenge.battery")
+    pair = ("solar_challenge.finance", "solar_challenge.projection")
 
     assert _stale(_function_local_package_imports(_import_sites(src_dir)), {pair}) == [pair]
 

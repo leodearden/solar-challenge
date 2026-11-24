@@ -23,10 +23,11 @@ from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
-    from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
+    from solar_challenge.finance import BillDistribution, CostRecoverySolution
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
     from solar_challenge.optimize import RankedSweep, SensitivityPanel
+    from solar_challenge.projection import ProjectEconomics
 
 
 _WINTER_MONTHS = (12, 1, 2)
@@ -498,12 +499,12 @@ def generate_finance_report(
         bill_spreadsheet: Optional BillDistribution from the spreadsheet
             (override) path; when supplied both are rendered side by side.
         scenario_name: Optional scenario label for the report title.
-        economics: Optional :class:`~solar_challenge.finance.ProjectEconomics`
-            from :func:`~solar_challenge.finance.project_economics`; when
+        economics: Optional :class:`~solar_challenge.projection.ProjectEconomics`
+            from :func:`~solar_challenge.projection.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
             bill block; ``None`` (default) omits it.
         cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
-            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
+            from :func:`~solar_challenge.projection.solve_cost_recovery_rate`; when
             provided, a ``## Cost-Recovery Analysis`` block is appended;
             ``None`` (default) omits it.
         flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`

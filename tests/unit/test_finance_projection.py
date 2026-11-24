@@ -14,9 +14,9 @@ import math
 import pandas as pd
 import pytest
 
-from solar_challenge.finance import MultiYearCurve, project_multi_year
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import calculate_summary
+from solar_challenge.projection import MultiYearCurve, project_multi_year
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,

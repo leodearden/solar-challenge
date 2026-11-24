@@ -34,15 +34,7 @@ import yaml
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import (
-    BillDistribution,
-    FinanceConfig,
-    MultiYearCurve,
-    bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
+from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.gridservices import (
@@ -55,6 +47,13 @@ from solar_challenge.gridservices import (
 )
 from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
+from solar_challenge.projection import (
+    MultiYearCurve,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
@@ -485,7 +484,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 
     Event income (like the flat term) is rate-independent
     (own_use_rate never enters physical dispatch or gridservices computation),
-    so the existing affine reconstruction (finance.py:1789-1802) remains exact.
+    so the existing affine reconstruction (projection.solve_cost_recovery_rate's
+    surplus_at) remains exact.
     """
     scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
@@ -524,10 +524,10 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
     curve_flat0 = project_multi_year(scenario, finance_flat0, simulate=simulate)
     surplus_events = project_economics(
-        curve_events, scenario, finance_events
+        curve_events, scenario_fleet(scenario), finance_events
     ).net_surplus_per_home_per_year_gbp
     surplus_flat0 = project_economics(
-        curve_flat0, scenario, finance_flat0
+        curve_flat0, scenario_fleet(scenario), finance_flat0
     ).net_surplus_per_home_per_year_gbp
     assert surplus_events > surplus_flat0, (
         f"capacity_at_events surplus (£{surplus_events:.4f}/home/yr) must exceed "

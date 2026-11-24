@@ -16,17 +16,18 @@ from typing import TYPE_CHECKING, Iterator, List, Mapping, Optional, Sequence
 
 from solar_challenge.battery import CAPACITY_SETTING_KWH, BatteryConfig, has_battery
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    FinanceConfig,
-    bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
+from solar_challenge.finance import FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesBand
 from solar_challenge.home import HomeConfig, calculate_summary
 from solar_challenge.number_fields import POSITIVE, as_finite_float, read_field
+from solar_challenge.projection import (
+    ScenarioFleet,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 
 if TYPE_CHECKING:
     from solar_challenge.finance import CostRecoverySolution
@@ -81,14 +82,14 @@ class ConfigPoint:
 class ConfigResult:
     """Full evaluation result for one (ConfigPoint, ScenarioConfig) pair.
 
-    Produced by :func:`run_sweep` (one per grid cell).  Combines finance's
+    Produced by :func:`run_sweep` (one per grid cell).  Combines the projection's
     cost-recovery solve with baseline economics so the board can rank configs
     both by householder outlay and by project-economics trade-offs.
 
     Attributes:
         config: The install specification for this grid cell.
         solution: Full :class:`~solar_challenge.finance.CostRecoverySolution`
-            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`.
+            from :func:`~solar_challenge.projection.solve_cost_recovery_rate`.
         representative_outlay_gbp: Representative (median-outlay) home's total
             annual outlay at the solved own-use rate (£).
             == solution.representative_outlay_gbp.
@@ -838,14 +839,13 @@ def _apply_install(home: HomeConfig, point: ConfigPoint) -> HomeConfig:
 
 
 def _age0_baseline_outlay(
-    scenario: ScenarioConfig,
+    fleet: ScenarioFleet,
     finance: FinanceConfig,
     simulate: FleetSimulate,
 ) -> float:
     """Compute representative householder outlay from an age-0 fleet simulation.
 
-    Runs the scenario's
-    :meth:`~solar_challenge.config.ScenarioConfig.simulated_homes`, with all PV
+    Runs the *fleet*'s homes over its window, with all PV
     configs aged to 0.0, using the injected *simulate*, computes per-home
     :class:`~solar_challenge.home.SummaryStatistics`, and returns
     ``bill_distribution(summaries, finance).representative.total_outlay_gbp``.
@@ -856,24 +856,21 @@ def _age0_baseline_outlay(
     floor.
 
     Args:
-        scenario: Fleet scenario (must have at least one home).
+        fleet: The scenario's fleet, ``scenario_fleet(scenario)``.
         finance: FinanceConfig at the configured own_use_rate (not the solved rate).
         simulate: Injected fleet simulator callable.
 
     Returns:
         Representative home's total annual outlay (£).
     """
-    homes = scenario.simulated_homes()
-
     # Age all PV to system_age_years=0.0 (battery left unchanged for age-0 baseline)
     aged_homes = [
         replace(h, pv_config=replace(h.pv_config, system_age_years=0.0))
-        for h in homes
+        for h in fleet.homes
     ]
 
-    start_ts, end_ts = scenario.simulation_bounds()
     fleet_config = FleetConfig(homes=tuple(aged_homes), name="age-0-baseline")
-    fleet_results = simulate(fleet_config, start_ts, end_ts)
+    fleet_results = simulate(fleet_config, fleet.start, fleet.end)
 
     summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
     dist = bill_distribution(summaries, finance)
@@ -887,13 +884,13 @@ def _evaluate_config(
     simulate: FleetSimulate,
     retained_cash_floor_gbp: Optional[float],
 ) -> ConfigResult:
-    """Evaluate one (ConfigPoint, ScenarioConfig) pair with finance's cost-recovery functions.
+    """Evaluate one (ConfigPoint, ScenarioConfig) pair with the projection's cost-recovery functions.
 
     Makes three calls in sequence:
 
-    1. :func:`~solar_challenge.finance.solve_cost_recovery_rate` → *rank* fields.
-    2. :func:`~solar_challenge.finance.project_multi_year` +
-       :func:`~solar_challenge.finance.project_economics` at ``finance.own_use_rate``
+    1. :func:`~solar_challenge.projection.solve_cost_recovery_rate` → *rank* fields.
+    2. :func:`~solar_challenge.projection.project_multi_year` +
+       :func:`~solar_challenge.projection.project_economics` at ``finance.own_use_rate``
        (15 p/kWh) → *baseline surplus* + economics fields.
     3. :func:`_age0_baseline_outlay` → *baseline_outlay* at age 0.
 
@@ -921,16 +918,17 @@ def _evaluate_config(
     if retained_cash_floor_gbp is not None:
         finance = replace(finance, retained_cash_floor_per_home_per_year_gbp=retained_cash_floor_gbp)
         scenario = replace(scenario, finance=finance)
+    fleet = scenario_fleet(scenario)
 
     # 1. RANK: solve cost-recovery rate at the (possibly overridden) floor
     solution = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
 
     # 2. BASELINE + ECON: project at finance.own_use_rate (15p) — floor-independent
     curve = project_multi_year(scenario, finance, simulate=simulate)
-    econ = project_economics(curve, scenario, finance)
+    econ = project_economics(curve, fleet, finance)
 
     # 3. BASELINE OUTLAY: independent age-0 fleet sim at finance.own_use_rate
-    baseline_outlay = _age0_baseline_outlay(scenario, finance, simulate)
+    baseline_outlay = _age0_baseline_outlay(fleet, finance, simulate)
 
     return ConfigResult(
         config=point,
@@ -959,10 +957,10 @@ def run_sweep(
 
     For each (ConfigPoint, ScenarioConfig) pair produced by :func:`enumerate_configs`:
 
-    1. Calls :func:`~solar_challenge.finance.solve_cost_recovery_rate` at the
+    1. Calls :func:`~solar_challenge.projection.solve_cost_recovery_rate` at the
        (possibly overridden) retained-cash floor → *rank* fields.
-    2. Calls :func:`~solar_challenge.finance.project_multi_year` +
-       :func:`~solar_challenge.finance.project_economics` at
+    2. Calls :func:`~solar_challenge.projection.project_multi_year` +
+       :func:`~solar_challenge.projection.project_economics` at
        ``finance.own_use_rate`` (15 p/kWh) → baseline surplus + economics.
     3. Runs an independent age-0 fleet simulation → baseline outlay.
 
@@ -996,9 +994,9 @@ def run_sweep(
     .. note::
         **Simulation cost** — each config triggers up to three independent fleet
         simulations per call to :func:`_evaluate_config`: one inside
-        :func:`~solar_challenge.finance.solve_cost_recovery_rate` (which
-        internally calls :func:`~solar_challenge.finance.project_multi_year` at
-        the solved rate), one explicit :func:`~solar_challenge.finance.project_multi_year`
+        :func:`~solar_challenge.projection.solve_cost_recovery_rate` (which
+        internally calls :func:`~solar_challenge.projection.project_multi_year` at
+        the solved rate), one explicit :func:`~solar_challenge.projection.project_multi_year`
         call at the baseline rate (15 p/kWh), and one age-0 baseline outlay
         simulation.  With the real :meth:`~solar_challenge.fleet.FleetRunner.simulate` (a process pool over
         a 100-home fleet) this is substantial: size grids conservatively or pass

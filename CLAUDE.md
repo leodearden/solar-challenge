@@ -106,7 +106,8 @@ The simulation flows through these core modules:
 
 Built on top of simulation results; this is the board-facing decision layer:
 
-- `finance.py` — Per-householder bills, fleet bill distributions, multi-year projections
+- `finance.py` — Per-householder bills, fleet bill distributions, the home ledger and cash-flow maths
+- `projection.py` — the multi-year projection, project economics and cost-recovery solve, above finance (`scenario_fleet` resolves a scenario's homes and window once)
 - `optimize.py` — Discrete install-config sweeps ranked by cost recovery
 - `flex.py` / `gridservices.py` — Flexibility value model and grid-services event-window pricing
 - `community.py` — Post-hoc peer-to-peer community netting over `FleetResults` (homes are not re-simulated)

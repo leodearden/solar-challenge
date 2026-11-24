@@ -34,13 +34,12 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     bill_distribution,
     householder_bill,
-    project_multi_year,
     refuse_analysis_only_forecasts,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetRunner, aggregate_home_summaries
 from solar_challenge.home import HomeConfig, RunPricing, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.location import Location
+from solar_challenge.projection import project_multi_year, solve_cost_recovery_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import PrefetchedWeather

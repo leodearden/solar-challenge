@@ -21,9 +21,6 @@ from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
     bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import RunPricing, calculate_summary
@@ -34,6 +31,12 @@ from solar_challenge.optimize import (
     enumerate_configs,
     pareto_baseline,
     run_sweep,
+)
+from solar_challenge.projection import (
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
 )
 from solar_challenge.seg import SEGTariff
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
@@ -348,7 +351,7 @@ class TestRunSweepSingleConfig:
         # after _apply_install, e.g. battery fabricated).
         sweep_scenario = configs[0][1]
         curve = project_multi_year(sweep_scenario, finance, simulate=simulate)
-        econ = project_economics(curve, sweep_scenario, finance)
+        econ = project_economics(curve, scenario_fleet(sweep_scenario), finance)
 
         assert cr.baseline_surplus_per_home_gbp == pytest.approx(
             econ.net_surplus_per_home_per_year_gbp

@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from scipy.interpolate import CubicSpline, PchipInterpolator
 
-from solar_challenge.finance import MultiYearCurve, YearPoint, project_multi_year
+from solar_challenge.projection import MultiYearCurve, YearPoint, project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 if TYPE_CHECKING:

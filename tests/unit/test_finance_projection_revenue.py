@@ -21,15 +21,14 @@ import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    FinanceConfig,
+from solar_challenge.finance import FinanceConfig, householder_bill
+from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.home import HomeConfig, RunPricing, SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.projection import (
     YearPoint,
-    householder_bill,
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetConfig, FleetResults
-from solar_challenge.home import HomeConfig, RunPricing, SimulationResults, SummaryStatistics, calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,

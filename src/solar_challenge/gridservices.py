@@ -766,7 +766,7 @@ class GridServicesAtEvents:
 
     Returned by :func:`compute_grid_services_at_events`.  All income figures are
     **net** of the aggregator share: the CBS's grid-services revenue, which
-    :func:`~solar_challenge.finance.project_multi_year` books into fleet revenue.
+    :func:`~solar_challenge.projection.project_multi_year` books into fleet revenue.
 
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event
