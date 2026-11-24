@@ -843,19 +843,41 @@ HOME_BLOCK_KEYS: frozenset[str] = frozenset({
 })
 
 
+def _home_tariff(
+    own: Optional[TariffConfig], fleet_tariff: Optional[TariffConfig], *, block_path: str
+) -> Optional[TariffConfig]:
+    """The tariff of the home at *block_path*: its own, else *fleet_tariff*, refusing an own tariff that differs from *fleet_tariff* by its tariff's path."""
+    if own is None:
+        return fleet_tariff
+    if fleet_tariff is None or own == fleet_tariff:
+        return own
+    raise refusal(
+        child_path(block_path, "tariff"),
+        "differs from the scenario's top-level tariff: block, which a home takes when it sets none; "
+        "set the tariff once, or make the two equal",
+    )
+
+
 def parse_home_block(
-    data: dict[str, Any], location: Location, *, block_path: str = "home"
+    data: dict[str, Any],
+    location: Location,
+    *,
+    block_path: str = "home",
+    fleet_tariff: Optional[TariffConfig] = None,
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
     A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
-    omitted pv or load block reads as an empty one.
+    omitted pv or load block reads as an empty one. A block with no tariff of its own is built
+    with *fleet_tariff*, the scenario's, before HomeConfig checks it.
 
     Raises:
         ConfigurationError: the block is not a mapping; it holds the retired dispatch_strategy
             key, the battery's own setting, null or not, naming the battery's key in its place
             (RETIRED_DISPATCH_STRATEGY_KEY); as each of its blocks' readers refuses that block;
-            or as HomeConfig refuses the home its blocks describe, prefixed by the block's path.
+            its own tariff differs from *fleet_tariff*, naming its tariff's path and the
+            scenario's tariff: block; or as HomeConfig refuses the home its blocks describe,
+            prefixed by the block's path.
     """
     home = refuse_unrecognised_keys(
         block_path, refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY), HOME_BLOCK_KEYS
@@ -871,8 +893,10 @@ def parse_home_block(
             home.get("load", {}), block_path=child_path(block_path, "load")
         ),
         location=location,
-        tariff_config=parse_tariff_config(
-            home.get("tariff"), block_path=child_path(block_path, "tariff")
+        tariff_config=_home_tariff(
+            parse_tariff_config(home.get("tariff"), block_path=child_path(block_path, "tariff")),
+            fleet_tariff,
+            block_path=block_path,
         ),
         heat_pump_config=_parse_heat_pump_config(
             home.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
