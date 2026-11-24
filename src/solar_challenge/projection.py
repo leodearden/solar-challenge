@@ -1226,12 +1226,11 @@ def solve_cost_recovery_rate(
     ``surplus_at(r)`` is affine in *r* by construction: it shifts each year's
     revenue by ``(r − r0)/100 × own_use_y`` and ``project_economics`` is affine
     in per-year revenue.  Two trial rates (r=0, r=retail) therefore recover the
-    line, and the solve is closed-form.  The line equals a re-projection at rate
-    *r* exactly at the simulated nodes, and between them when the rate-independent
-    income nodes (SEG + grid services) are proportional to the own-use nodes (for
-    example zero).  PCHIP is not linear in its node values, so otherwise the
-    reconstruction can differ from a re-projection at *r* between the nodes
-    (docs/cost-recovery-finance-model.md §5).
+    line, and the solve is closed-form.  ``surplus_at(r)`` is exact and
+    independent of the configured rate r0: node selection reads no rate, and
+    each year's revenue is ``r0 × own_use_y / 100 + income_y``, so the shift is
+    a re-projection at *r*, exactly, and the two-point fit's *r** is the
+    re-projected solution whatever r0 is (docs/cost-recovery-finance-model.md §5).
 
     1. Run ``project_fleet`` **once** at the configured rate ``r0`` → base curve.
     2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via

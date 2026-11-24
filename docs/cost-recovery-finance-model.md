@@ -376,7 +376,7 @@ The 0.5.0 tag bills this import at £0: outlay (0 + 219 + 420) × 1.05 = £670.9
 
 ## 4. CBS-Revenue Equation
 
-Source: `projection.py:project_multi_year()`.
+Source: `projection.py:project_fleet()`, which `project_multi_year()` calls on a scenario's fleet.
 
 At each projection year, the CBS fleet revenue is:
 
@@ -456,9 +456,23 @@ of firm spare capacity earns (1.00 × 12 + 0.6 × 3 h × 0.060 £/kWh × 12) × 
 the high band
 (`tests/unit/test_gridservices.py::TestWorkedCapacityAtEventsFigure::test_band_prices_one_kw_of_firm_spare_capacity`).
 An event window that the simulated period never enters prices at £0, and
-`project_multi_year` names it in one `UserWarning` per projection, however many
-ages it prices
+the projection (`project_fleet`, and `project_multi_year`) names it in one
+`UserWarning` per projection, attributed to its caller, however many ages it prices
 (`tests/integration/test_grid_services_events.py::test_a_projection_shows_each_unobserved_window_warning_once`).
+
+**Per-year revenue.** Each simulated age's node holds the fleet's own-use and its
+income, `seg_revenue + grid_services_income`, which reads no own-use rate.  Between
+simulated ages each follows PCHIP through its values at the simulated ages, and each
+year's revenue is
+
+```
+fleet_revenue_gbp_y = own_use_rate_pence_per_kwh × fleet_billed_own_use_kwh_y / 100 + income_y
+```
+
+Revenue itself is not interpolated, so it is affine in the own-use rate in every year,
+and at least 0 whenever the income at every simulated age is, since PCHIP never
+undershoots its values
+(`tests/unit/test_finance_multi_year_curve.py::TestPerYearRevenue`).
 
 **One ledger per home.** Each simulated age sums its homes' ledgers, the ones the §3
 bills charge: `fleet_billed_own_use_kwh`, `seg_revenue`, `YearPoint.fleet_export_kwh`
@@ -468,13 +482,17 @@ import, so the export a projection reports is the export its SEG revenue is pric
 Battery discharge stays the simulated flow, and so does the throughput battery ageing
 integrates from it: discharge is physical throughput, not a billed quantity.
 
-**Node selection.** The adaptive bisection measures each driven metric's PCHIP midpoint
-deviation, as a percentage, against one fixed age-0 scale: own-use and revenue against
-their own magnitude, export and import against the fleet's generation and demand, the
-flows they are parts of.  So a flow that is 0 at age 0, such as the import of an override
-fleet whose own-use is capped at demand, or of a fleet whose battery covers its demand,
-still converges
-(`tests/unit/test_finance_projection_adaptive.py::TestTheDeviationScaleSeesAZeroAtAgeZero`).
+**Node selection.** The adaptive bisection drives four metrics, the fleet's own-use,
+export, import and income, none of which reads the own-use rate, so the rate moves no
+simulated age.  It measures each one's PCHIP midpoint deviation, as a percentage,
+against a scale fixed once the seeds are simulated: own-use and income against their
+largest magnitude at the seed ages, export and import against the largest fleet
+generation and demand there, the flows they are parts of.  So a flow that is 0 at age 0,
+such as the import of an override fleet whose own-use is capped at demand, or of a fleet
+whose battery covers its demand, still converges
+(`tests/unit/test_finance_projection_adaptive.py::TestTheDeviationScaleSeesAZeroAtAgeZero`),
+and so does an income that is £0 at age 0 at a 0 p own-use rate
+(`tests/unit/test_finance_projection_adaptive.py::TestTheIncomeDeviationScaleSeesAZeroAtAgeZero`).
 
 **Override path.** With `self_consumption_override` set, the capped split (§3)
 drives both revenue terms: `own_use_revenue` prices each home's own-use,
@@ -541,14 +559,14 @@ A faded battery stores less, which lowers later years' basis-C own-use and its
 revenue.
 
 **Finite aggregates.** Every simulated age's fleet own-use, export, import and
-revenue, its mean PV and battery state of health, and each home's battery
+income, its mean PV and battery state of health, and each home's battery
 discharge and cumulative battery throughput must be finite, so the PCHIP curves,
 each year's clips and later ages' battery ageing see only finite values.  A home's
 non-finite own-use, export or import is refused by its ledger's L1 (§3, *One ledger
 per home*), at a seed or a bisection-trial age alike, raising `ValueError` naming the
 invariant and each figure it refuses with its value; an infinite import makes basis C
 `inf − inf`, so L1 names the NaN own-use beside the import.  For the aggregates the
-ledger does not hold, the revenue, the mean states of health, and each home's battery
+ledger does not hold, the income, the mean states of health, and each home's battery
 discharge and cumulative throughput, `project_multi_year` refuses the age, raising
 `ValueError` naming the age and each such aggregate with its value
 (`tests/unit/test_finance_projection.py::TestProjectMultiYearRefusesNonFiniteAggregates`).
@@ -613,22 +631,18 @@ Source: `project_economics` (algorithm steps 5, 6 and 10 in its docstring).
 `project_economics` is affine in per-year revenue, so shifting each year's revenue
 by `(r − r0)/100 × own_use_y` gives a surplus that is affine in `r` by construction.
 
-**Exactness.**  PCHIP interpolation is positively homogeneous but **not linear** in
-its node values.  The reconstruction (`rev_y + (r − r0)/100 × own_use_y`, applied to
-the interpolated per-year curve) therefore equals a full re-projection at rate `r`:
-
-- exactly at the simulated nodes, and
-- between them whenever the rate-independent income nodes (SEG + grid services)
-  are proportional to the own-use nodes, for example zero.
-
-Otherwise the two can differ between the nodes.  A synthetic case (own-use
-10,000 / 9,000 / 6,000 kWh and `C` of 500 / 800 / 820 at ages 0 / 12 / 24, `r0` = 15 p,
-solved to `r` = 0) differs by £38.74 in one year.  The solve's closed form is
-exact for the reconstructed line, which is what `solve_cost_recovery_rate` solves.
+**Exactness.**  Node selection reads no rate, and each year's revenue is
+`r0 × own_use_y / 100 + C_y` with `C_y` the PCHIP of the income nodes (§4, *Per-year
+revenue*).  So the reconstruction `rev_y + (r − r0)/100 × own_use_y` is a re-projection
+at rate `r`, exactly, in every year, and the two-point fit's `r*` is the re-projected
+solution whatever the configured `r0` is.  On task 720's nodes (own-use
+10,000 / 9,000 / 6,000 kWh and `C` of £500 / 800 / 820 at ages 0 / 12 / 24), configured
+rates of 0, 15 and 23 p solve to one `r*`, and a re-projection at it meets the floor
+(`tests/unit/test_cost_recovery_solve.py::TestTheSolveIsExactAndIndependentOfTheConfiguredRate`).
 
 The solver uses this affine structure to avoid re-simulating for each trial rate:
 
-1. Run `project_multi_year` **once** at the configured `r0`.
+1. Run `project_fleet` **once** at the configured `r0`.
 2. Evaluate `s0 = net_surplus(0)`, `s_ret = net_surplus(retail)`.
 3. `slope = (s_ret − s0) / retail`.
 4. `r* = (floor − s0) / slope`  (closed-form).
