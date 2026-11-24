@@ -10,8 +10,12 @@ Provides:
   - ``YearPoint`` — frozen dataclass for one year in a multi-year projection.
   - ``MultiYearCurve`` — frozen dataclass for a full multi-year projection curve.
   - ``ProjectEconomics`` — frozen dataclass of project-level economics.
-  - ``MAX_NODES`` — cap on the number of ages ``project_multi_year`` simulates.
-  - ``project_multi_year`` — forward-march driver for adaptive PCHIP projection.
+  - ``FleetProjection`` — frozen dataclass of a fleet's projection curve and
+    its age-0 per-home summaries.
+  - ``MAX_NODES`` — cap on the number of ages a projection interpolates through.
+  - ``project_fleet`` — forward-march driver for adaptive PCHIP projection of a
+    ScenarioFleet.
+  - ``project_multi_year`` — ``project_fleet`` of a scenario's fleet, its curve.
   - ``project_economics`` — project-level financial appraisal of a curve.
   - ``spreadsheet_revenue_curve`` — analytic revenue curve from spreadsheet inputs.
   - ``solve_cost_recovery_rate`` — own-use rate that meets the retained-cash floor.
@@ -22,11 +26,13 @@ functions is set out in ``docs/cost-recovery-finance-model.md``.
 from __future__ import annotations
 
 import dataclasses
+import functools
+import itertools
 import math
 import warnings
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Iterator, List, Mapping, Optional, Sequence
+from typing import Callable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -47,7 +53,8 @@ from solar_challenge.finance import (
     refuse_analysis_only_forecasts,
 )
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
-from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.gridservices import GridServicesModel
+from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
 from solar_challenge.pv import calculate_degradation_factor
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
@@ -213,6 +220,17 @@ class MultiYearCurve:
             )
 
 
+@dataclass(frozen=True)
+class FleetProjection:
+    """A fleet's multi-year projection, and each home's summary of the fleet simulated at age 0."""
+
+    curve: MultiYearCurve
+    """The projection over the asset life."""
+
+    age0_summaries: tuple[SummaryStatistics, ...]
+    """Each home's summary of its simulated window at age 0, in fleet order."""
+
+
 # ---------------------------------------------------------------------------
 # ProjectEconomics — project-level economics result
 # ---------------------------------------------------------------------------
@@ -349,7 +367,7 @@ def _interpolate_per_year(
 
 
 # ---------------------------------------------------------------------------
-# project_multi_year — forward-march driver
+# project_fleet — the adaptive forward-march projection
 # ---------------------------------------------------------------------------
 
 #: Maximum number of simulation nodes before the adaptive loop is capped.
@@ -372,28 +390,28 @@ _PER_HOME_AGGREGATE: Mapping[str, _AggregateShape] = {_AGGREGATE_SHAPE: _Aggrega
 class _NodeData:
     """Aggregates from one simulated fleet age in the forward-march.
 
-    Collected once per :func:`_simulate_age` call and stored in ``sampled_data``
-    (keyed by age).  Each float aggregate gives its :class:`_AggregateShape` in
-    its field metadata, and construction refuses one that is NaN or infinite,
-    naming the age and each such aggregate with its value.
+    Built once per simulated age by :func:`_simulate_node`.  Each float
+    aggregate gives its :class:`_AggregateShape` in its field metadata, and
+    construction refuses one that is NaN or infinite, naming the age and each
+    such aggregate with its value.
     """
 
     age: int
     """System age in calendar years at which the fleet was simulated."""
 
-    fleet_billed_own_use: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_own_use_kwh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet billed own-use, Σ each home's :func:`~solar_challenge.finance.home_ledger` own-use (kWh/yr)."""
 
-    fleet_exp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_export_kwh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid export, Σ each home's ledger export (kWh/yr)."""
 
-    fleet_imp: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_import_kwh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet grid import, Σ each home's ledger import (kWh/yr)."""
 
-    fleet_generation: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_generation_kwh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet generation, Σ each home's ledger generation (kWh/yr): the scale export's interpolation error is measured against."""
 
-    fleet_demand: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
+    fleet_demand_kwh: float = dataclasses.field(metadata=_FLEET_AGGREGATE)
     """Fleet demand, Σ each home's ledger demand (kWh/yr): the scale import's interpolation error is measured against."""
 
     per_home_discharge: tuple[float, ...] = dataclasses.field(metadata=_PER_HOME_AGGREGATE)
@@ -433,10 +451,42 @@ class _NodeData:
                     yield f"{attribute.name}[{i}]", value
 
 
+@dataclass(frozen=True)
+class _SimulatedAge:
+    """One simulated fleet age: its node, each home's summary, and the warnings pricing its grid services raised."""
+
+    node: _NodeData
+
+    summaries: tuple[SummaryStatistics, ...]
+    """Each home's summary of its simulated window, in fleet order."""
+
+    grid_services_warnings: tuple[warnings.WarningMessage, ...]
+    """The warnings pricing this age's grid-services income raised, in the order raised."""
+
+
+@dataclass(frozen=True)
+class _DrivenMetric:
+    """A node aggregate the adaptive bisection interpolates to the error target, and the quantity its deviation is a percentage of."""
+
+    name: str
+    value: Callable[[_NodeData], float]
+    scale_of: Callable[[_NodeData], float]
+
+
+_OWN_USE = _DrivenMetric("own-use", lambda node: node.fleet_own_use_kwh, lambda node: node.fleet_own_use_kwh)
+_EXPORT = _DrivenMetric("export", lambda node: node.fleet_export_kwh, lambda node: node.fleet_generation_kwh)
+_IMPORT = _DrivenMetric("import", lambda node: node.fleet_import_kwh, lambda node: node.fleet_demand_kwh)
+_REVENUE = _DrivenMetric("revenue", lambda node: node.fleet_revenue, lambda node: node.fleet_revenue)
+
+_DRIVEN_METRICS: tuple[_DrivenMetric, ...] = (_OWN_USE, _EXPORT, _IMPORT, _REVENUE)
+"""Every metric the bisection drives.  Export and import are measured against the generation and demand they are
+parts of, so a flow that is 0 at age 0 still has a scale (docs/cost-recovery-finance-model.md §4)."""
+
+
 def _aged_homes(
     homes: Sequence[HomeConfig],
     age: int,
-    cum_throughput: Optional[List[float]] = None,
+    cum_throughput: Optional[Sequence[float]] = None,
 ) -> list[HomeConfig]:
     """Return HomeConfig list with PV system_age_years and battery SOH set to ``age``.
 
@@ -547,40 +597,282 @@ def _refuse_results_without_the_fleets_batteries(
             )
 
 
-def project_multi_year(
-    scenario: ScenarioConfig,
+def _simulate_node(
+    fleet: ScenarioFleet,
+    age: int,
+    throughput: Sequence[float],
+    finance: FinanceConfig,
+    grid_services: GridServicesModel,
+    simulate: FleetSimulate,
+) -> _SimulatedAge:
+    """Simulate *fleet* at *age*, each battery having discharged its *throughput* entry since installation, and total its year.
+
+    Each home's year is one ledger, the one householder_bill bills
+    (docs/cost-recovery-finance-model.md §4); battery discharge, which ageing
+    integrates, stays the simulated flow.  Grid-services income is priced from
+    this age's own simulated fleet, and the warnings that pricing raises are
+    returned, not shown.
+    """
+    aged = _aged_homes(fleet.homes, age, throughput)
+    fleet_config = FleetConfig(homes=tuple(aged), name=f"proj-age-{age}")
+    fleet_results = simulate(fleet_config, fleet.start, fleet.end)
+    _refuse_results_without_the_fleets_batteries(fleet_config, fleet_results)
+
+    summaries = tuple(calculate_summary(r) for r in fleet_results.per_home_results)
+    physics_of_homes = [annualise(s) for s in summaries]
+    ledgers = [home_ledger(physics, finance) for physics in physics_of_homes]
+    fleet_own_use_kwh = sum(ledger.own_use_kwh for ledger in ledgers)
+
+    # CBS fleet revenue (model doc §4), every term over the window's year:
+    #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_own_use_kwh / 100
+    #   seg_revenue     = Σ ledger seg_income_gbp, each home's ledger export at its run's SEG rate
+    #   grid_services   = grid_services.annual_income_gbp(fleet_results), already annual
+    # Grid-charge energy is paid by the householder inside grid import, not a CBS
+    # outgoing (docs/cost-recovery-finance-model.md §4).
+    own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_own_use_kwh / 100.0
+    seg_revenue = sum(ledger.seg_income_gbp for ledger in ledgers)
+    with warnings.catch_warnings(record=True) as raised_by_grid_services:
+        grid_services_income = grid_services.annual_income_gbp(fleet_results)
+
+    pv_sohs = [calculate_degradation_factor(float(age), h.pv_config.degradation_rate_per_year) for h in fleet.homes]
+    # Each simulated battery's SOH is the one _aged_homes gave it; 1.0 for a fleet without batteries.
+    battery_sohs = [h.battery_config.resolved_soh for h in aged if h.battery_config is not None]
+
+    node = _NodeData(
+        age=age,
+        fleet_own_use_kwh=fleet_own_use_kwh,
+        fleet_export_kwh=sum(ledger.export_kwh for ledger in ledgers),
+        fleet_import_kwh=sum(ledger.import_kwh for ledger in ledgers),
+        fleet_generation_kwh=sum(ledger.generation_kwh for ledger in ledgers),
+        fleet_demand_kwh=sum(ledger.demand_kwh for ledger in ledgers),
+        per_home_discharge=tuple(physics.battery_discharge_kwh for physics in physics_of_homes),
+        mean_pv_soh=sum(pv_sohs) / len(pv_sohs),
+        mean_battery_soh=sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0,
+        fleet_revenue=own_use_revenue + seg_revenue + grid_services_income,
+        annualised_from=one_window(summaries),
+        per_home_throughput=tuple(throughput),
+    )
+    return _SimulatedAge(node=node, summaries=summaries, grid_services_warnings=tuple(raised_by_grid_services))
+
+
+_SimulateAt = Callable[[int, Sequence[float]], _SimulatedAge]
+"""One projection's :func:`_simulate_node`, given the age and each battery's throughput to it."""
+
+
+def _nodes_of(simulated: Mapping[int, _SimulatedAge]) -> dict[int, _NodeData]:
+    """The node of each simulated age, keyed by age."""
+    return {age: simulated_age.node for age, simulated_age in simulated.items()}
+
+
+def _simulated_seeds(simulate_at: _SimulateAt, n_homes: int, asset_life: int) -> dict[int, _SimulatedAge]:
+    """The seed ages 0, asset_life // 2 and asset_life - 1 simulated ascending, each aged by :func:`_throughput_at` over the seeds before it."""
+    simulated = {0: simulate_at(0, [0.0] * n_homes)}
+    for age in sorted({asset_life // 2, asset_life - 1} - {0}):
+        simulated[age] = simulate_at(age, _throughput_at(age, _nodes_of(simulated)))
+    return simulated
+
+
+def _per_year(nodes: Sequence[_NodeData], value: Callable[[_NodeData], float], years: int) -> list[float]:
+    """*value* at each of *nodes*, ascending by age, interpolated to every year 0 .. years-1 by :func:`_interpolate_per_year`."""
+    return _interpolate_per_year([node.age for node in nodes], [value(node) for node in nodes], years)
+
+
+def _deviation_scales(seeds: Mapping[int, _NodeData]) -> tuple[float, ...]:
+    """Each driven metric's deviation scale, in :data:`_DRIVEN_METRICS` order: the magnitude of its scale quantity at age 0, floored at 1e-9."""
+    return tuple(max(abs(metric.scale_of(seeds[0])), 1e-9) for metric in _DRIVEN_METRICS)
+
+
+def _midpoint_deviation_pct(curves: Sequence[Sequence[float]], trial: _NodeData, scales: Sequence[float]) -> float:
+    """The largest deviation (%) of the driven curves at *trial*'s age from its simulated values, each against its metric's scale."""
+    return max(
+        abs(curve[trial.age] - metric.value(trial)) / scale * 100.0
+        for metric, curve, scale in zip(_DRIVEN_METRICS, curves, scales, strict=True)
+    )
+
+
+def _bisection_midpoints(ages: Sequence[int]) -> list[int]:
+    """The midpoint of each pair of neighbouring *ages*, ascending, that are more than one year apart."""
+    return [(younger + older) // 2 for younger, older in itertools.pairwise(ages) if older - younger > 1]
+
+
+@dataclass(frozen=True)
+class _NodeSelection:
+    """The ages one projection simulated, those its curve interpolates through, and how close they came to the target."""
+
+    simulated: Mapping[int, _SimulatedAge]
+    """Every age simulated, the seeds first and then the trials in the order the bisection asked for them."""
+
+    accepted_ages: tuple[int, ...]
+    """The ages the curve interpolates through, ascending."""
+
+    max_deviation_pct: float
+    """The last pass's largest midpoint deviation (%), the curve's interp_error_estimate."""
+
+    capped: bool
+    """Whether the bisection stopped at MAX_NODES with a midpoint still above the error target."""
+
+
+def _selected_nodes(
+    seeds: Mapping[int, _SimulatedAge],
+    simulate_at: _SimulateAt,
+    asset_life: int,
+    error_target_pct: float,
+) -> _NodeSelection:
+    """Bisect between the accepted ages until every midpoint is within *error_target_pct*, or MAX_NODES ages are accepted.
+
+    Each pass interpolates the driven metrics through the accepted ages and
+    simulates each midpoint not yet simulated.  It accepts, in age order, each
+    midpoint whose deviation is above the target, stopping mid-pass at
+    MAX_NODES.  Each age is simulated at most once: :func:`_throughput_at`
+    reads only the seeds, so a trial's simulation depends on its age alone.
+    """
+    simulated = dict(seeds)
+    seed_nodes = _nodes_of(seeds)
+    scales = _deviation_scales(seed_nodes)
+    accepted = sorted(seeds)
+    while True:
+        accepted_nodes = [simulated[age].node for age in accepted]
+        curves = [_per_year(accepted_nodes, metric.value, asset_life) for metric in _DRIVEN_METRICS]
+        deviations: dict[int, float] = {}
+        for mid in _bisection_midpoints(accepted):
+            if mid not in simulated:
+                simulated[mid] = simulate_at(mid, _throughput_at(mid, seed_nodes))
+            deviations[mid] = _midpoint_deviation_pct(curves, simulated[mid].node, scales)
+        above_target = [mid for mid, deviation in deviations.items() if deviation > error_target_pct]
+        room = max(MAX_NODES - len(accepted), 0)
+        accepted = sorted([*accepted, *above_target[:room]])
+        if not above_target or len(above_target) > room:
+            return _NodeSelection(
+                simulated=simulated,
+                accepted_ages=tuple(accepted),
+                max_deviation_pct=max(deviations.values(), default=0.0),
+                capped=bool(above_target),
+            )
+
+
+def _assembled_curve(nodes: Sequence[_NodeData], finance: FinanceConfig, interp_error_estimate: float) -> MultiYearCurve:
+    """The curve over *finance*'s asset life through *nodes*, ascending by age from age 0.
+
+    Each year's figure is the PCHIP of its node values, clipped to the range its
+    :class:`YearPoint` field admits.
+    """
+    years = finance.asset_life_years
+    pv_soh = _per_year(nodes, lambda node: node.mean_pv_soh, years)
+    battery_soh = _per_year(nodes, lambda node: node.mean_battery_soh, years)
+    own_use = _per_year(nodes, _OWN_USE.value, years)
+    grid_export = _per_year(nodes, _EXPORT.value, years)
+    grid_import = _per_year(nodes, _IMPORT.value, years)
+    revenue = _per_year(nodes, _REVENUE.value, years)
+    points = tuple(
+        YearPoint(
+            year=y,
+            pv_soh=max(0.0, min(1.0, pv_soh[y])),
+            battery_soh=max(0.0, min(1.0, battery_soh[y])),
+            fleet_billed_own_use_kwh=max(0.0, own_use[y]),
+            fleet_export_kwh=max(0.0, grid_export[y]),
+            fleet_import_kwh=max(0.0, grid_import[y]),
+            fleet_revenue_gbp=revenue[y],
+        )
+        for y in range(years)
+    )
+    return MultiYearCurve(
+        points=points,
+        sampled_ages=tuple(node.age for node in nodes),
+        interp_error_estimate=interp_error_estimate,
+        annualised_from=nodes[0].annualised_from,
+    )
+
+
+def _cap_notices(selection: _NodeSelection, error_target_pct: float) -> tuple[Warning, ...]:
+    """The warning a capped selection's projection shows, or none when the bisection reached its target."""
+    if not selection.capped:
+        return ()
+    return (
+        UserWarning(
+            f"the projection's adaptive bisection reached MAX_NODES ({MAX_NODES}); "
+            f"interp_error_estimate surfaced at {selection.max_deviation_pct:.3f}% "
+            f"(target was {error_target_pct}%)."
+        ),
+    )
+
+
+def _distinct_grid_services_warnings(simulated: Mapping[int, _SimulatedAge]) -> tuple[Warning, ...]:
+    """Each distinct warning pricing grid services raised, by category and text, in the order first raised.
+
+    Each age's grid-services income can raise a warning in the same words as
+    every other age's, e.g. naming an event window the simulated period never
+    enters, so a projection shows each once
+    (docs/prds/grid-services-pricing-model.md §5.4).
+    """
+    distinct: dict[tuple[type[Warning], str], Warning] = {}
+    for simulated_age in simulated.values():
+        for raised in simulated_age.grid_services_warnings:
+            message = raised.message if isinstance(raised.message, Warning) else raised.category(raised.message)
+            distinct.setdefault((raised.category, str(raised.message)), message)
+    return tuple(distinct.values())
+
+
+def _project(
+    fleet: ScenarioFleet,
+    finance: FinanceConfig,
+    simulate: FleetSimulate,
+    error_target_pct: float,
+) -> tuple[FleetProjection, tuple[Warning, ...]]:
+    """Project *fleet* over *finance*'s asset life, with the warnings its caller is to be shown, in order."""
+    refuse_analysis_only_forecasts(fleet.homes)
+    simulate_at: _SimulateAt = functools.partial(
+        _simulate_node, fleet, finance=finance, grid_services=grid_services_model_of(finance), simulate=simulate
+    )
+    asset_life = finance.asset_life_years
+    seeds = _simulated_seeds(simulate_at, len(fleet.homes), asset_life)
+    selection = _selected_nodes(seeds, simulate_at, asset_life, error_target_pct)
+    curve = _assembled_curve(
+        [selection.simulated[age].node for age in selection.accepted_ages], finance, selection.max_deviation_pct
+    )
+    notices = (*_cap_notices(selection, error_target_pct), *_distinct_grid_services_warnings(selection.simulated))
+    return FleetProjection(curve=curve, age0_summaries=selection.simulated[0].summaries), notices
+
+
+def _warn_the_caller(notices: Sequence[Warning]) -> None:
+    """Show each of *notices*, attributed to the caller of the public function that calls this."""
+    for notice in notices:
+        warnings.warn(notice, stacklevel=3)
+
+
+def project_fleet(
+    fleet: ScenarioFleet,
     finance: FinanceConfig,
     *,
-    error_target_pct: float = 1.0,
     simulate: FleetSimulate,
-) -> MultiYearCurve:
-    """Project fleet energy and revenue over the full asset life.
+    error_target_pct: float = 1.0,
+) -> FleetProjection:
+    """Project *fleet*'s energy and revenue over the full asset life.
 
     Performs a forward-march over the asset lifetime, simulating the fleet at
     a set of *sampled ages* (seeded at 0, asset_life//2, asset_life-1 and
-    adaptively refined by the bisection below), then interpolating the
-    resulting per-year curves with PCHIP.  Each sampled age is simulated with
-    every home's battery SOH counting its battery throughput from installation
-    to that age (:func:`_throughput_at`), so ``battery_soh`` never rises.
-    Each sampled age's grid-services income is priced from that age's own
-    simulated fleet by ``grid_services_model_of(finance)``, and is annual by
+    adaptively refined by bisection), then interpolating the resulting
+    per-year curves with PCHIP.  Each sampled age is simulated with every
+    home's battery SOH counting its battery throughput from installation to
+    that age (:func:`_throughput_at`), so ``battery_soh`` never rises.  Each
+    sampled age's grid-services income is priced from that age's own simulated
+    fleet by ``grid_services_model_of(finance)``, and is annual by
     construction.  Each distinct warning that grid-services pricing raises,
     such as one naming an event window the simulated period never enters, is
     shown once per call, however many ages raise it, and is attributed to the
-    caller.
+    caller, as is the warning a bisection capped at :data:`MAX_NODES` shows.
 
     Args:
-        scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
-            them, are simulated over ``simulation_bounds()``.
+        fleet: The ScenarioFleet whose homes are simulated over its ``start``
+            to ``end``, as :func:`scenario_fleet` resolves a scenario.
         finance: FinanceConfig with ``asset_life_years`` and other parameters.
-        error_target_pct: Target maximum PCHIP midpoint deviation (%) before
-            adaptive bisection stops.
         simulate: The fleet simulator each sampled age runs through, such as
             a :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
             Grid-services income is priced from the batteries of the
             ``home_configs`` it returns, so it must return the batteries of the
             ``fleet_config.homes`` it is given, in order and state of health
             aside, as ``FleetRunner.simulate`` does.
+        error_target_pct: Target maximum PCHIP midpoint deviation (%) before
+            adaptive bisection stops.
 
     Note:
         Every returned :class:`YearPoint` is the window's year: each home's
@@ -590,12 +882,14 @@ def project_multi_year(
         the window's annualisation_scale (year_days / days,
         :func:`~solar_challenge.finance.annualise`), so energy fields and ``fleet_revenue_gbp`` stay on
         one basis.  A short window is still one
-        season's sample, so board figures want ``scenario.period`` to cover
+        season's sample, so board figures want the fleet's window to cover
         about one full year.
 
     Returns:
-        :class:`MultiYearCurve` with one :class:`YearPoint` per year and
-        metadata about the sampled ages and interpolation error.
+        :class:`FleetProjection` whose ``curve`` has one :class:`YearPoint`
+        per year and metadata about the sampled ages and interpolation error,
+        and whose ``age0_summaries`` are each home's summary of the fleet
+        simulated at age 0.
 
     Raises:
         ValueError: If ``simulate`` returns, for a sampled age, a FleetResults
@@ -623,222 +917,28 @@ def project_multi_year(
             grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
             :func:`~solar_challenge.finance.refuse_analysis_only_forecasts` refuses it.
     """
-    fleet = scenario_fleet(scenario)
-    homes = fleet.homes
-    refuse_analysis_only_forecasts(homes)
-    start_ts, end_ts = fleet.start, fleet.end
+    projection, notices = _project(fleet, finance, simulate, error_target_pct)
+    _warn_the_caller(notices)
+    return projection
 
-    grid_services_model = grid_services_model_of(finance)
-    # Each age's grid-services income can raise a warning in the same words as every
-    # other age's, e.g. naming an event window the simulated period never enters.
-    # Each distinct one is kept here and shown once after the march
-    # (docs/prds/grid-services-pricing-model.md §5.4).
-    grid_services_warnings: dict[tuple[type[Warning], str], warnings.WarningMessage] = {}
 
-    asset_life = finance.asset_life_years
+def project_multi_year(
+    scenario: ScenarioConfig,
+    finance: FinanceConfig,
+    *,
+    error_target_pct: float = 1.0,
+    simulate: FleetSimulate,
+) -> MultiYearCurve:
+    """Project a scenario's fleet over the full asset life: :func:`project_fleet` of ``scenario_fleet(scenario)``, its curve.
 
-    # ---- Seed nodes ---------------------------------------------------------
-    seed_ages: list[int] = sorted({0, asset_life // 2, asset_life - 1})
-
-    def _simulate_age(
-        age: int,
-        cum_tp: list[float],
-    ) -> _NodeData:
-        """Simulate the fleet at a given age, compute SOH, and return aggregates."""
-        aged = _aged_homes(homes, age, cum_tp)
-        fleet_config = FleetConfig(homes=tuple(aged), name=f"proj-age-{age}")
-        fleet_results = simulate(fleet_config, start_ts, end_ts)
-        _refuse_results_without_the_fleets_batteries(fleet_config, fleet_results)
-
-        per_home_summaries = [calculate_summary(r) for r in fleet_results.per_home_results]
-
-        # Each home's year is one ledger, the one householder_bill bills
-        # (docs/cost-recovery-finance-model.md §4); battery discharge, which
-        # ageing integrates, stays the simulated flow.
-        physics_of_homes = [annualise(s) for s in per_home_summaries]
-        ledgers = [home_ledger(physics, finance) for physics in physics_of_homes]
-        fleet_billed_own_use = sum(ledger.own_use_kwh for ledger in ledgers)
-        fleet_exp = sum(ledger.export_kwh for ledger in ledgers)
-        fleet_imp = sum(ledger.import_kwh for ledger in ledgers)
-        per_home_discharge = tuple(physics.battery_discharge_kwh for physics in physics_of_homes)
-
-        # CBS fleet revenue (model doc §4), every term over the window's year:
-        #   own_use_revenue = own_use_rate_pence_per_kwh × fleet_billed_own_use / 100
-        #   seg_revenue     = Σ ledger seg_income_gbp, each home's ledger export at its run's SEG rate
-        #   grid_services   = grid_services_model.annual_income_gbp(fleet_results), already annual
-        #   fleet_revenue   = own_use_revenue + seg_revenue + grid_services
-        # Grid-charge energy is paid by the householder inside grid import, not a CBS
-        # outgoing (docs/cost-recovery-finance-model.md §4).
-        own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_billed_own_use / 100.0
-        seg_revenue = sum(ledger.seg_income_gbp for ledger in ledgers)
-        with warnings.catch_warnings(record=True) as raised_by_grid_services:
-            grid_services = grid_services_model.annual_income_gbp(fleet_results)
-        for raised in raised_by_grid_services:
-            grid_services_warnings.setdefault((raised.category, str(raised.message)), raised)
-        fleet_revenue = own_use_revenue + seg_revenue + grid_services
-
-        # PV SOH: mean of calculate_degradation_factor over all homes
-        pv_sohs = [
-            calculate_degradation_factor(float(age), h.pv_config.degradation_rate_per_year)
-            for h in homes
-        ]
-        mean_pv_soh = sum(pv_sohs) / len(pv_sohs) if pv_sohs else 1.0
-
-        # Battery SOH: mean of the SOH each simulated battery held, the one _aged_homes gave it (1.0 if no batteries)
-        battery_sohs = [h.battery_config.resolved_soh for h in aged if h.battery_config is not None]
-        mean_battery_soh = sum(battery_sohs) / len(battery_sohs) if battery_sohs else 1.0
-
-        return _NodeData(
-            age=age,
-            fleet_billed_own_use=fleet_billed_own_use,
-            fleet_exp=fleet_exp,
-            fleet_imp=fleet_imp,
-            fleet_generation=sum(ledger.generation_kwh for ledger in ledgers),
-            fleet_demand=sum(ledger.demand_kwh for ledger in ledgers),
-            per_home_discharge=per_home_discharge,
-            mean_pv_soh=mean_pv_soh,
-            mean_battery_soh=mean_battery_soh,
-            fleet_revenue=fleet_revenue,
-            annualised_from=one_window(per_home_summaries),
-            per_home_throughput=tuple(cum_tp),
-        )
-
-    # ---- Seed forward-march: ascending ages, each aged by _throughput_at ----
-    seeds: dict[int, _NodeData] = {0: _simulate_age(0, [0.0] * len(homes))}
-    for age in seed_ages[1:]:
-        seeds[age] = _simulate_age(age, _throughput_at(age, seeds))
-    sampled_data: dict[int, _NodeData] = dict(seeds)
-
-    # ---- Adaptive bisection --------------------------------------
-    # Each metric's midpoint deviation is a percentage of one fixed age-0 scale; export and import are measured against the
-    # generation and demand they are parts of, so a flow that is 0 at age 0 still has a scale (docs/cost-recovery-finance-model.md §4).
-    deviation_scale_own_use: float = max(abs(sampled_data[0].fleet_billed_own_use), 1e-9)
-    deviation_scale_exp: float = max(abs(sampled_data[0].fleet_generation), 1e-9)
-    deviation_scale_imp: float = max(abs(sampled_data[0].fleet_demand), 1e-9)
-    deviation_scale_rev: float = max(abs(sampled_data[0].fleet_revenue), 1e-9)
-    max_deviation: float = 0.0
-    capped: bool = False
-
-    # Trial nodes are memoised by age: _throughput_at reads only the seeds, so a
-    # trial's throughput, and hence its simulation, depends on its age alone.
-    _trial_cache: dict[int, _NodeData] = {}
-
-    while True:
-        current_ages = sorted(sampled_data.keys())
-
-        # Build PCHIP over the current node set for all driven metrics
-        own_use_vals_now = [sampled_data[a].fleet_billed_own_use for a in current_ages]
-        exp_vals_now = [sampled_data[a].fleet_exp for a in current_ages]
-        imp_vals_now = [sampled_data[a].fleet_imp for a in current_ages]
-        rev_vals_now = [sampled_data[a].fleet_revenue for a in current_ages]
-
-        own_use_interp_now = _interpolate_per_year(current_ages, own_use_vals_now, asset_life)
-        exp_interp_now = _interpolate_per_year(current_ages, exp_vals_now, asset_life)
-        imp_interp_now = _interpolate_per_year(current_ages, imp_vals_now, asset_life)
-        rev_interp_now = _interpolate_per_year(current_ages, rev_vals_now, asset_life)
-
-        # Scan adjacent intervals for bisectable midpoints above the error target
-        to_bisect: List[tuple[int, _NodeData]] = []
-        current_max_dev: float = 0.0
-
-        for i_interval in range(len(current_ages) - 1):
-            a_k = current_ages[i_interval]
-            a_k1 = current_ages[i_interval + 1]
-            if a_k1 - a_k <= 1:
-                continue  # width-1 interval — finest resolution
-            mid = (a_k + a_k1) // 2
-            if mid in sampled_data:
-                continue  # already a simulation node
-
-            # Retrieve or compute the trial node at mid (memoised by age to avoid
-            # re-simulating on subsequent passes when intervals haven't changed).
-            if mid not in _trial_cache:
-                _trial_cache[mid] = _simulate_age(mid, _throughput_at(mid, seeds))
-            trial_node = _trial_cache[mid]
-
-            # Max PCHIP deviation across all driven metrics (percentage)
-            dev = max(
-                abs(own_use_interp_now[mid] - trial_node.fleet_billed_own_use) / deviation_scale_own_use * 100.0,
-                abs(exp_interp_now[mid] - trial_node.fleet_exp) / deviation_scale_exp * 100.0,
-                abs(imp_interp_now[mid] - trial_node.fleet_imp) / deviation_scale_imp * 100.0,
-                abs(rev_interp_now[mid] - trial_node.fleet_revenue) / deviation_scale_rev * 100.0,
-            )
-            current_max_dev = max(current_max_dev, dev)
-
-            if dev > error_target_pct:
-                to_bisect.append((mid, trial_node))
-
-        # Always update the convergence invariant with the latest check
-        max_deviation = current_max_dev
-
-        if not to_bisect:
-            break  # All intervals within target — converged
-
-        if len(sampled_data) >= MAX_NODES:
-            # Cannot add any more nodes; surface the remaining error
-            capped = True
-            break
-
-        # Add bisection nodes (stop if we hit the cap mid-iteration)
-        for mid_age, trial_node in to_bisect:
-            if len(sampled_data) >= MAX_NODES:
-                capped = True
-                break
-            sampled_data[mid_age] = trial_node
-
-        if capped:
-            break
-        # Loop: rebuild PCHIP with new nodes → re-check all intervals
-
-    if capped:
-        warnings.warn(
-            f"project_multi_year: adaptive bisection reached MAX_NODES ({MAX_NODES}); "
-            f"interp_error_estimate surfaced at {max_deviation:.3f}% "
-            f"(target was {error_target_pct}%).",
-            UserWarning,
-            stacklevel=2,
-        )
-
-    # ---- Grid-services warnings: each distinct one once per projection ------
-    for raised in grid_services_warnings.values():
-        warnings.warn(raised.message, raised.category, stacklevel=2)
-
-    # ---- Interpolate per-year curves with the converged node set ------------
-    ages_sorted = sorted(sampled_data.keys())
-    own_use_vals = [sampled_data[a].fleet_billed_own_use for a in ages_sorted]
-    exp_vals = [sampled_data[a].fleet_exp for a in ages_sorted]
-    imp_vals = [sampled_data[a].fleet_imp for a in ages_sorted]
-    pv_soh_vals = [sampled_data[a].mean_pv_soh for a in ages_sorted]
-    batt_soh_vals = [sampled_data[a].mean_battery_soh for a in ages_sorted]
-    rev_vals = [sampled_data[a].fleet_revenue for a in ages_sorted]
-
-    own_use_per_year = _interpolate_per_year(ages_sorted, own_use_vals, asset_life)
-    exp_per_year = _interpolate_per_year(ages_sorted, exp_vals, asset_life)
-    imp_per_year = _interpolate_per_year(ages_sorted, imp_vals, asset_life)
-    pv_soh_per_year = _interpolate_per_year(ages_sorted, pv_soh_vals, asset_life)
-    batt_soh_per_year = _interpolate_per_year(ages_sorted, batt_soh_vals, asset_life)
-    rev_per_year = _interpolate_per_year(ages_sorted, rev_vals, asset_life)
-
-    # ---- Assemble YearPoints ------------------------------------------------
-    points = tuple(
-        YearPoint(
-            year=y,
-            pv_soh=max(0.0, min(1.0, pv_soh_per_year[y])),
-            battery_soh=max(0.0, min(1.0, batt_soh_per_year[y])),
-            fleet_billed_own_use_kwh=max(0.0, own_use_per_year[y]),
-            fleet_export_kwh=max(0.0, exp_per_year[y]),
-            fleet_import_kwh=max(0.0, imp_per_year[y]),
-            fleet_revenue_gbp=rev_per_year[y],
-        )
-        for y in range(asset_life)
-    )
-
-    return MultiYearCurve(
-        points=points,
-        sampled_ages=tuple(ages_sorted),
-        interp_error_estimate=max_deviation,
-        annualised_from=sampled_data[0].annualised_from,
-    )
+    The scenario's homes, as ``simulated_homes()`` gives them, are simulated
+    over ``simulation_bounds()``.  The projection's arguments, its warnings,
+    which name this function's caller, and its errors are
+    :func:`project_fleet`'s.
+    """
+    projection, notices = _project(scenario_fleet(scenario), finance, simulate, error_target_pct)
+    _warn_the_caller(notices)
+    return projection.curve
 
 
 # ---------------------------------------------------------------------------
@@ -1121,7 +1221,7 @@ def solve_cost_recovery_rate(
     reconstruction can differ from a re-projection at *r* between the nodes
     (docs/cost-recovery-finance-model.md §5).
 
-    1. Run ``project_multi_year`` **once** at the configured rate ``r0`` → base curve.
+    1. Run ``project_fleet`` **once** at the configured rate ``r0`` → base curve.
     2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via
        ``dataclasses.replace``: ``rev_y' = rev_y + (r - r0)/100 × own_use_y``.
     3. Compute ``s0 = surplus_at(0)``, ``s_ret = surplus_at(retail)``,
@@ -1154,7 +1254,7 @@ def solve_cost_recovery_rate(
             of the ``home_configs`` it returns, so it must return the batteries
             of the ``fleet_config.homes`` it is given, in order and state of
             health aside, as ``FleetRunner.simulate`` does;
-            :func:`project_multi_year` raises ValueError otherwise.
+            :func:`project_fleet` raises ValueError otherwise.
 
     Returns:
         A :class:`~solar_challenge.finance.CostRecoverySolution` with the solved rate and outlay.
@@ -1169,7 +1269,7 @@ def solve_cost_recovery_rate(
 
     # ---- (1) Base curve at the configured r0 ---------------------------------
     r0 = finance.own_use_rate_pence_per_kwh
-    base_curve = project_multi_year(scenario, finance, simulate=simulate)
+    base_curve = project_fleet(fleet, finance, simulate=simulate).curve
 
     # ---- (2) surplus_at(r): rebuild YearPoints with rate-shifted revenue -----
     def surplus_at(r: float) -> float:

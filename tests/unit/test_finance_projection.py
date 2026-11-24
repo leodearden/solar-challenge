@@ -335,7 +335,7 @@ class TestProjectFleet:
             project_fleet(scenario_fleet(scenario), finance)
 
     def test_simulate_and_the_error_target_are_keyword_only(self) -> None:
-        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5)
         simulate, _ = _declining_two_home_simulate(curvature=0.02)
         fleet = scenario_fleet(scenario)
 
@@ -359,7 +359,7 @@ class TestProjectFleet:
         assert capped[0].filename == __file__
 
     def test_a_projection_is_frozen(self) -> None:
-        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5)
         simulate, _ = _declining_two_home_simulate(curvature=0.02)
         projection = project_fleet(scenario_fleet(scenario), finance, simulate=simulate)
 
