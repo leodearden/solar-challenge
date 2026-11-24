@@ -1057,9 +1057,9 @@ own_use_kwh (basis C) = sc_kwh (B-style) − grid_charge_kwh
 
 So the CBS neither bills nor pays for grid-charged energy (§4) and bears only the
 battery round-trip loss, absorbed into the solved rate.  The solved rate therefore
-moves with arbitrage only through basis-C own-use (`fleet_billed_own_use` in `project_multi_year`).
+moves with arbitrage only through basis-C own-use (`YearPoint.fleet_billed_own_use_kwh`).
 
-Gates: `tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation` pins the basis (`fleet_billed_own_use` is basis C on a
+Gates: `tests/integration/test_cost_recovery_calibration.py::TestArbitrageBasisCReconciliation` pins the basis (`YearPoint.fleet_billed_own_use_kwh` is basis C on a
 grid-charging fleet, task-84 §6), and `tests/unit/test_finance_projection_revenue.py::TestGridChargeEnergyPaidOnce` pins that each
 grid-charged kWh is paid once, on householder import.
 `tests/integration/test_cost_recovery_calibration.py::TestFlexLowersSolvedRate::test_arbitrage_lowers_solved_rate` hard-asserts the
@@ -1118,10 +1118,11 @@ its title, with the extrapolated notice (§4, *Annual basis*).
 | VAT | `vat_rate × (import + standing + own_use_payment)` | `bill()` |
 | Total outlay | `(import + standing + own_use_payment) × (1+vat)` | `bill()` |
 | Saving | `baseline_bill − total_outlay` | `bill()` |
-| CBS revenue (no-flex) | `own_use_rate × fleet_billed_own_use / 100` (`fleet_billed_own_use` = Σ_homes `home_ledger` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
+| CBS revenue (no-flex) | `own_use_rate × fleet_billed_own_use_kwh / 100` (`YearPoint.fleet_billed_own_use_kwh` = Σ_homes `home_ledger` own-use: basis C, or the capped override own-use; annualised; §4) | `project_multi_year()` |
 | CBS revenue (full) | `own_use_rev + seg_rev + gs_income` | `project_multi_year()` |
+| Per-year revenue | `own_use_rate × fleet_billed_own_use_kwh_y / 100 + income_y`, income_y the PCHIP of the income nodes (§4) | `project_fleet()` |
 | Grid-charge energy | in householder `import_cost_gbp`; no CBS term (§4) | `householder_bill()` |
-| Solve rate-base | `fleet_billed_own_use` = Σ_homes `home_ledger` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `project_multi_year()` |
+| Solve rate-base | `YearPoint.fleet_billed_own_use_kwh` = Σ_homes `home_ledger` own-use (basis C, or the capped override own-use; annualised; §2, §4, §5) | `project_multi_year()` |
 | Solve | `r* = (floor − s0) / slope` (affine, closed-form) | `solve_cost_recovery_rate()` |
 | Capex | `Σ(pv_kwp×pv_cost + roof_fit + batt_kwh×batt_cost + eff_inv_kw×inv_cost)` | `project_economics()` |
 | Net surplus | `mean(surplus_y) / n_homes` over 25 yr | `project_economics()` |
