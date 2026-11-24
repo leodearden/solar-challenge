@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the fleet page's scenario-file endpoints, POST /api/fleet/export-yaml, POST /api/fleet/import-yaml and GET /api/fleet/presets/<name>, and for its Load Preset menu, which offers the presets GET /api/fleet/presets/<name> loads."""
 
-import dataclasses
 from pathlib import Path
 from unittest.mock import NonCallableMagicMock
 
@@ -16,7 +15,6 @@ from solar_challenge.config import load_fleet_config
 from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet_distribution import parse_fleet_distribution_config
-from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import PRESET_RATES, TariffConfig
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
@@ -63,11 +61,7 @@ class TestExportFleetYAML:
     def test_export_loads_back_through_load_fleet_config_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, name and dates.
-
-        load_fleet_config does not read seg: yet (task 185), so the SEG rate is threaded onto
-        its homes as cli/finance.py threads it, as tests/unit/test_scenario_writer.py does.
-        """
+        """The exported file, read as `finance run` reads it, is the fleet POST /api/simulate/fleet-from-distribution runs for the same form: its homes, its SEG rate among them, its name and dates."""
         export = client.post("/api/fleet/export-yaml", json=_FLEET_FORM_BODY)
         assert export.status_code == 200, export.get_data(as_text=True)
         assert "text/yaml" in export.content_type
@@ -78,8 +72,6 @@ class TestExportFleetYAML:
 
         fleet = load_fleet_config(path)
         document = yaml.safe_load(text)
-        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=parse_seg_rate(document["seg"]))
-        loaded = [dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet.homes]
 
         simulate = client.post("/api/simulate/fleet-from-distribution", json=_FLEET_FORM_BODY)
         assert simulate.status_code == 201, simulate.get_data(as_text=True)
@@ -97,7 +89,7 @@ class TestExportFleetYAML:
             for home in homes
         )
 
-        assert loaded == homes
+        assert list(fleet.homes) == homes
         assert fleet.name == submitted["name"]
         timezone = homes[0].location.timezone
         period = document["period"]
@@ -109,10 +101,7 @@ class TestExportFleetYAML:
     def test_export_writes_a_blocks_other_settings_and_loads_back_as_the_fleet_simulate_runs(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock, tmp_path: Path
     ) -> None:
-        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in fleet_distribution.py's grammar, and the file loads back as the fleet the simulate endpoint runs.
-
-        The form sets no seg, which load_fleet_config does not read yet (task 185).
-        """
+        """A block's settings other than its distribution, a pv.tilt distribution and battery.grid_charging, are exported in fleet_distribution.py's grammar, and the file loads back as the fleet the simulate endpoint runs."""
         tilt = {"type": "uniform", "min": 10.0, "max": 20.0}
         grid_charging = {"target_soc_fraction": 0.5}
         without_seg = {key: value for key, value in _FLEET_FORM_BODY.items() if key != "seg"}

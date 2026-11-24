@@ -11,6 +11,7 @@ pytest.importorskip("flask")
 
 from solar_challenge.config import period_window
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
 from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
@@ -409,6 +410,49 @@ class TestBuilderFormErrors:
         errors = builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024-08-31", "end_date": "2024-06-01"})
 
         assert [error for error in errors if error.startswith("period.")] == [str(scenario_file_refusal.value)]
+
+    def test_a_cleared_period_day_is_listed_once(self) -> None:
+        assert builder_form_errors({**_ACCEPTED_FORM, "end_date": ""}) == ["The period needs end_date"]
+
+    @pytest.mark.parametrize(
+        ("changes", "refused_block"),
+        [
+            pytest.param(
+                {"start_date": "2024-08-31", "end_date": "2024-06-01"},
+                lambda: period_window("2024-08-31", "2024-06-01", timezone="Europe/London"),
+                id="reversed-period",
+            ),
+            pytest.param(
+                {"seg_rate_pence_per_kwh": -1},
+                lambda: parse_seg_rate({"rate_pence_per_kwh": -1.0}),
+                id="negative-seg-rate",
+            ),
+        ],
+    )
+    def test_a_refused_period_or_seg_rate_does_not_hide_a_fleet_reason(
+        self, changes: dict[str, object], refused_block: Callable[[], object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as block_refusal:
+            refused_block()
+        component = FLEET_COMPONENTS["pv"]
+        pv_reason = (
+            f"{component.key}.{component.grammar_key} must be {component.value_range} "
+            f"for every home, got {400.0!r} for home 1"
+        )
+        assert builder_form_errors({**_ACCEPTED_FORM, "pv_capacity_kw": 400}) == [pv_reason], (
+            "premise: the PV alone is refused for home 1"
+        )
+
+        errors = builder_form_errors({**_ACCEPTED_FORM, "pv_capacity_kw": 400, **changes})
+
+        assert errors == [pv_reason, str(block_refusal.value)]
+
+    def test_a_refused_seg_rate_is_listed_once(self) -> None:
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "seg_rate_pence_per_kwh": -1}) == [str(seg_refusal.value)]
+
 
 class TestBothFormsWriteADistributionAlike:
     """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same fleet_distribution.py grammar spec."""

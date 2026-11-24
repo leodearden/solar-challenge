@@ -109,14 +109,14 @@ RETIRED_DISPATCH_STRATEGY_KEY: Mapping[str, str] = MappingProxyType({
 """The home's and the fleet's retired dispatch_strategy key, with why it is refused and what replaces it."""
 
 
-def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
-    """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
-    name = block.get("name")
-    if name is None:
+def read_text(block: Mapping[str, Any], key: str, *, block_path: str) -> str:
+    """Return the text the block at *block_path* sets for *key*, "" when it sets none or a null one, refusing a value that is not a string by its path."""
+    text = block.get(key)
+    if text is None:
         return ""
-    if not isinstance(name, str):
-        raise refusal(child_path(block_path, "name"), f"must be a string, got {name!r}")
-    return name
+    if not isinstance(text, str):
+        raise refusal(child_path(block_path, key), f"must be a string, got {text!r}")
+    return text
 
 
 _Built = TypeVar("_Built")
@@ -695,7 +695,7 @@ def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConf
         block_path,
         TariffConfig.flat_rate,
         rate_per_kwh=data["rate_per_kwh"],
-        name=_read_name(data, block_path=block_path),
+        name=read_text(data, "name", block_path=block_path),
     )
 
 
@@ -739,7 +739,7 @@ def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
         start_time=period["start_time"],
         end_time=period["end_time"],
         rate_per_kwh=period["rate_per_kwh"],
-        name=_read_name(period, block_path=block_path),
+        name=read_text(period, "name", block_path=block_path),
     )
 
 
@@ -756,7 +756,7 @@ def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
         _parse_tariff_period(period, block_path=child_path(block_path, f"periods[{index}]"))
         for index, period in enumerate(periods_data)
     )
-    return constructed(block_path, TariffConfig, periods=periods, name=_read_name(data, block_path=block_path))
+    return constructed(block_path, TariffConfig, periods=periods, name=read_text(data, "name", block_path=block_path))
 
 
 _TARIFF_TYPES: Mapping[str, BlockType[TariffConfig]] = MappingProxyType({
@@ -843,19 +843,41 @@ HOME_BLOCK_KEYS: frozenset[str] = frozenset({
 })
 
 
+def _home_tariff(
+    own: Optional[TariffConfig], fleet_tariff: Optional[TariffConfig], *, block_path: str
+) -> Optional[TariffConfig]:
+    """The tariff of the home at *block_path*: its own, else *fleet_tariff*, refusing an own tariff that differs from *fleet_tariff* by its tariff's path, naming both tariffs."""
+    if own is None:
+        return fleet_tariff
+    if fleet_tariff is None or own == fleet_tariff:
+        return own
+    raise refusal(
+        child_path(block_path, "tariff"),
+        f"{own!r} differs from the scenario's top-level tariff: block, {fleet_tariff!r}, which a home "
+        "takes when it sets none; set the tariff once, or make the two equal",
+    )
+
+
 def parse_home_block(
-    data: dict[str, Any], location: Location, *, block_path: str = "home"
+    data: dict[str, Any],
+    location: Location,
+    *,
+    block_path: str = "home",
+    fleet_tariff: Optional[TariffConfig] = None,
 ) -> HomeConfig:
     """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
 
     A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
-    omitted pv or load block reads as an empty one.
+    omitted pv or load block reads as an empty one. A block with no tariff of its own is built
+    with *fleet_tariff*, the scenario's, before HomeConfig checks it.
 
     Raises:
         ConfigurationError: the block is not a mapping; it holds the retired dispatch_strategy
             key, the battery's own setting, null or not, naming the battery's key in its place
             (RETIRED_DISPATCH_STRATEGY_KEY); as each of its blocks' readers refuses that block;
-            or as HomeConfig refuses the home its blocks describe, prefixed by the block's path.
+            its own tariff differs from *fleet_tariff*, naming its tariff's path and the
+            scenario's tariff: block; or as HomeConfig refuses the home its blocks describe,
+            prefixed by the block's path.
     """
     home = refuse_unrecognised_keys(
         block_path, refuse_retired_keys(block_path, data, RETIRED_DISPATCH_STRATEGY_KEY), HOME_BLOCK_KEYS
@@ -871,8 +893,10 @@ def parse_home_block(
             home.get("load", {}), block_path=child_path(block_path, "load")
         ),
         location=location,
-        tariff_config=parse_tariff_config(
-            home.get("tariff"), block_path=child_path(block_path, "tariff")
+        tariff_config=_home_tariff(
+            parse_tariff_config(home.get("tariff"), block_path=child_path(block_path, "tariff")),
+            fleet_tariff,
+            block_path=block_path,
         ),
         heat_pump_config=_parse_heat_pump_config(
             home.get("heat_pump"), block_path=child_path(block_path, "heat_pump")

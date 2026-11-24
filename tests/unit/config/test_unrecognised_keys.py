@@ -149,16 +149,10 @@ def _parse_every_block(path: Path) -> None:
     as one.
     """
     document = load_config(path)
-    if "home" in document:
-        parse_home_block(document["home"], parse_location_block(document.get("location")))
     if detect_fleet_sweep_spec(document) is not None:
         parse_sweep_fleet_configs(document)
-    elif "fleet_distribution" in document or "homes" in document:
-        load_fleet_config(path)
-    if {"name", "period"} <= document.keys() and ("home" in document or "homes" in document):
+    else:
         load_scenarios(path)
-    parse_seg_rate(document.get("seg"))
-    parse_finance_config(document.get("finance"))
     load_community_config(path)
 
 
@@ -317,21 +311,11 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal(block_path, "capacity_kwp")):
             load(path)
 
-    def test_flat_home_file_names_blocks_from_the_top_level(self, tmp_path: Path) -> None:
-        """A home file without a home: key is itself the home block, so its blocks are named from the top level."""
+    def test_a_flat_home_file_is_refused_naming_home(self, tmp_path: Path) -> None:
+        """The flat home-file form is retired, so a home's block at the top level is refused naming where it goes, before its own keys are read."""
         path = _write(tmp_path, {"pv": {"capacity_kwp": 4.0}})
-        with pytest.raises(ConfigurationError, match=_refusal("pv", "capacity_kwp")):
+        with pytest.raises(ConfigurationError, match=re.escape("pv: ") + ".*home:"):
             load_home_config(path)
-
-    def test_flat_home_file_refusal_lists_location_among_its_keys(self, tmp_path: Path) -> None:
-        """A flat home file recognises the home block's keys and the location: block beside them."""
-        path = _write(tmp_path, {"pv": {"capacity_kw": 4.0}, "batteries": {}})
-        with pytest.raises(ConfigurationError) as refusal:
-            load_home_config(path)
-        assert str(refusal.value) == (
-            "the top level: unrecognised keys 'batteries'; recognised keys: "
-            "battery, ev, heat_pump, load, location, name, pv, tariff"
-        )
 
     @pytest.mark.parametrize(
         "dispatch_strategy",
@@ -341,18 +325,18 @@ class TestHomeBlockKeys:
             pytest.param(None, id="null"),
         ],
     )
-    def test_a_flat_home_files_dispatch_strategy_is_refused_naming_the_batterys(
+    def test_a_top_level_dispatch_strategy_beside_home_is_refused_naming_the_batterys(
         self, tmp_path: Path, dispatch_strategy: object
     ) -> None:
-        """A flat home file is itself a home block, so its retired dispatch_strategy key, of any value, is refused naming the battery's, not as an unrecognised key."""
-        path = _write(tmp_path, {"battery": {"capacity_kwh": 5.0}, "dispatch_strategy": dispatch_strategy})
+        """The scenario retires dispatch_strategy as the home does, so a top-level one, of any value, is refused naming the battery's, not as an unrecognised key."""
+        path = _write(tmp_path, {"home": {"battery": {"capacity_kwh": 5.0}}, "dispatch_strategy": dispatch_strategy})
         with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("dispatch_strategy")):
             load_home_config(path)
 
-    def test_flat_home_file_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
-        """load_home_config reads a flat home file's location: block itself, beside the home keys."""
+    def test_a_home_documents_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
+        """load_home_config reads a home: document's location: block, beside its home: block."""
         location = {"latitude": 52.0, "longitude": -1.5, "name": "Midlands"}
-        path = _write(tmp_path, {"location": location, "pv": {"capacity_kw": 4.0}})
+        path = _write(tmp_path, {"location": location, "home": {"pv": {"capacity_kw": 4.0}}})
         assert load_home_config(path).location.latitude == 52.0
 
     @pytest.mark.parametrize(
@@ -1160,21 +1144,29 @@ class TestScenarioFileBlockKeys:
             pytest.param(
                 {"scenario": {**_SCENARIO, "tariff_config": {"type": "economy_7"}}},
                 "scenario.tariff_config",
-                ("home.tariff", "homes[i].tariff"),
+                ("tariff:",),
                 id="scenario-tariff_config",
             ),
             pytest.param(
                 {**_SCENARIO, "tariff_config": {"type": "economy_7", "rate_per_kwh": 0.30}},
                 "tariff_config",
-                ("home.tariff", "homes[i].tariff"),
+                ("tariff:",),
                 id="tariff_config-a-key-its-type-does-not-read",
+            ),
+            *(
+                pytest.param(document, key, ("home:",), id=f"{form}-{key}")
+                for key in ("pv", "battery", "load", "heat_pump", "ev")
+                for form, document in (
+                    ("beside-home", {**_SCENARIO, key: {}}),
+                    ("flat", {key: {}}),
+                )
             ),
         ],
     )
     def test_a_retired_scenario_key_is_refused_naming_its_path_and_its_replacement(
         self, tmp_path: Path, document: dict[str, Any], key_path: str, replacements: tuple[str, ...]
     ) -> None:
-        """A scenario's output: or tariff_config: is refused whatever it holds, before anything reads it, naming the key's path and what replaces it."""
+        """A scenario's output:, tariff_config: or a home's own block at the top level is refused whatever it holds, before anything reads it, naming the key's path and what replaces it."""
         with pytest.raises(ConfigurationError) as refusal:
             load_scenarios(_write(tmp_path, document))
         message = str(refusal.value)
@@ -1182,12 +1174,34 @@ class TestScenarioFileBlockKeys:
         for replacement in replacements:
             assert replacement in message, (replacement, message)
 
-    def test_a_retired_key_is_refused_before_an_unrecognised_one(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("document", "key_path"),
+        [
+            pytest.param({"scenario": {**_SCENARIO, "bogus": 1, "output": {"csv_path": "r.csv"}}}, "scenario.output", id="output"),
+            pytest.param({"bogus": 1, "pv": {"capacity_kw": 4.0}}, "pv", id="a-flat-home-key"),
+        ],
+    )
+    def test_a_retired_key_is_refused_before_an_unrecognised_one(
+        self, tmp_path: Path, document: dict[str, Any], key_path: str
+    ) -> None:
         """A scenario holding both a retired key and a key no scenario reads is refused for the retired key, whose refusal names what replaces it."""
-        document = {"scenario": {**_SCENARIO, "bogus": 1, "output": {"csv_path": "r.csv"}}}
         with pytest.raises(ConfigurationError) as refusal:
             load_scenarios(_write(tmp_path, document))
-        assert str(refusal.value).startswith("scenario.output: ")
+        assert str(refusal.value).startswith(f"{key_path}: ")
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({**_SCENARIO, "dispatch_strategy": "tou_optimized"}, id="beside-home"),
+            pytest.param({"dispatch_strategy": None, "pv": {"capacity_kw": 4.0}}, id="flat"),
+        ],
+    )
+    def test_a_top_level_dispatch_strategy_is_refused_naming_the_batterys(
+        self, tmp_path: Path, document: dict[str, Any]
+    ) -> None:
+        """The dispatch strategy is the battery's own setting at every level, so the scenario's refusal is the home's."""
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("dispatch_strategy")):
+            load_scenarios(_write(tmp_path, document))
 
     @pytest.mark.parametrize(
         ("document", "label"),
@@ -1204,11 +1218,12 @@ class TestScenarioFileBlockKeys:
     def test_an_unrecognised_scenario_key_is_refused_naming_its_block_and_the_keys_a_scenario_reads(
         self, tmp_path: Path, document: dict[str, Any], label: str
     ) -> None:
-        """A key no scenario reads is refused, naming the scenario's block, the key and the eight keys a scenario reads."""
+        """A key no scenario reads is refused, naming the scenario's block, the key and the twelve keys a scenario reads."""
         with pytest.raises(ConfigurationError, match=_refusal(label, "bogus")) as refusal:
             load_scenarios(_write(tmp_path, document))
         assert str(refusal.value).endswith(
-            "recognised keys: description, finance, home, homes, location, name, period, seg"
+            "recognised keys: community, description, finance, fleet_distribution, flex_band, home, homes, "
+            "location, name, period, seg, tariff"
         )
 
     @pytest.mark.parametrize(

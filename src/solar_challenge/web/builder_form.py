@@ -115,9 +115,9 @@ def builder_form_errors(form: object) -> list[str]:
 
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
-    homes is out of bounds, the scenario readers judge the YAML text the builder previews:
-    load_fleet_config, then each fleet component's value_range on the homes it generates,
-    the seg: reader and the period's dates.
+    homes is out of bounds, the scenario readers judge it: load_fleet_config, with the
+    period and SEG rate left to their own checks, then each fleet component's value_range
+    on the homes it generates, the seg: reader and the period's dates.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
@@ -172,18 +172,20 @@ def _readable(
 
 
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
-    """What the scenario readers refuse in *document*, written as the YAML text the builder previews.
+    """What the scenario readers refuse in *document*, each reason listed once.
 
-    load_fleet_config refuses a scenario with ConfigurationError, or with ValueError from
-    a config it builds, and refuse_homes_outside_ranges refuses, with ConfigurationError,
-    a fleet whose generated homes hold a value outside a component's value_range; each is
-    listed.  Anything else the loader raises is a defect in it, not a refusal, so it
-    propagates.
+    load_fleet_config judges the document written as YAML with its period: and seg: blocks
+    left null, since each of those has its own check, so a bad period or SEG rate hides no
+    fleet reason.  It refuses a scenario with ConfigurationError, or with ValueError from a
+    config it builds, and refuse_homes_outside_ranges refuses, with ConfigurationError, a
+    fleet whose generated homes hold a value outside a component's value_range; each is
+    listed, then the seg: reader's refusal and the period's.  Anything else the loader
+    raises is a defect in it, not a refusal, so it propagates.
     """
     errors: list[str] = []
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "scenario.yaml"
-        path.write_text(scenario_yaml(document), encoding="utf-8")
+        path.write_text(scenario_yaml({**document, "period": None, "seg": None}), encoding="utf-8")
         try:
             fleet = load_fleet_config(path)
             refuse_homes_outside_ranges(fleet.homes)

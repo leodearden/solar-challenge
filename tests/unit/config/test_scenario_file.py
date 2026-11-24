@@ -20,19 +20,24 @@ from solar_challenge.config import (
     load_config_yaml,
     load_fleet_config,
     load_home_config,
+    load_scenario,
     load_scenarios,
+    parse_scenario,
     period_day,
     period_window,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.gridservices import GridServicesBand
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, SimulationWindow
+from tests._flex_band_refusal import flex_band_refusal
 
 
 def _window(first_day: date, last_day: date, timezone: str | None = "Europe/London") -> SimulationWindow:
@@ -207,6 +212,21 @@ class TestScenarioConfig:
                 name="x", period=_FIRST_WEEK, home=_home(), **{field: None}
             )
 
+    def test_holds_a_flex_band_as_the_band_it_names(self) -> None:
+        scenario = ScenarioConfig(name="x", period=_FIRST_WEEK, home=_home(), flex_band="high")
+
+        assert scenario.flex_band is GridServicesBand.HIGH
+
+    def test_has_no_flex_band_unless_given_one(self) -> None:
+        assert ScenarioConfig(name="x", period=_FIRST_WEEK, home=_home()).flex_band is None
+
+    def test_a_flex_band_naming_no_band_is_refused_naming_the_scenario_and_flex_band(self) -> None:
+        with pytest.raises(ConfigurationError) as refused:
+            ScenarioConfig(name="x", period=_FIRST_WEEK, home=_home(), flex_band="medium")
+
+        assert "Scenario 'x' flex_band" in str(refused.value)
+        assert "'medium'" in str(refused.value)
+
 
 class TestSimulatedHomes:
     """simulated_homes() reads the homes a scenario simulates, each given the scenario's SEG rate unless it carries its own tariff."""
@@ -334,7 +354,7 @@ class TestScenarioConfigRefusals:
         self, period: object, type_name: str
     ) -> None:
         with pytest.raises(ConfigurationError, match=_naming("'x'", "period", type_name)):
-            ScenarioConfig(name="x", period=period, home=_home())  # type: ignore[arg-type]
+            ScenarioConfig(name="x", period=period, home=_home())
 
     def test_a_period_at_another_cadence_is_refused_naming_its_cadence_and_one_minute(self) -> None:
         quarter_hourly = dataclasses.replace(_SUMMER, cadence=timedelta(minutes=15))
@@ -766,6 +786,257 @@ def _scenarios_loaded(tmp_path: Path, document: object) -> list[ScenarioConfig]:
     return load_scenarios(path)
 
 
+_ECONOMY_7 = {"type": "economy_7"}
+_FLAT_RATE = {"type": "flat_rate", "rate_per_kwh": 0.25}
+_TWO_HOME_DISTRIBUTION = {"n_homes": 2, "pv": {"capacity_kw": 4.0}}
+_NEW_YORK_BLOCK = {"latitude": 40.71, "longitude": -74.0, "timezone": "America/New_York"}
+
+
+def _parse_refusal(document: object, *, block_path: str = "") -> str:
+    """The message of the ConfigurationError parse_scenario raises reading *document* at *block_path*."""
+    with pytest.raises(ConfigurationError) as refusal:
+        parse_scenario(document, block_path=block_path)
+    return str(refusal.value)
+
+
+class TestParseScenario:
+    """parse_scenario reads one scenario mapping: its scenario-level blocks, then exactly one homes source, each home given the scenario's location and tariff."""
+
+    def test_an_absent_name_and_description_read_as_empty(self) -> None:
+        scenario = parse_scenario({"home": _A_HOME})
+
+        assert (scenario.name, scenario.description) == ("", "")
+
+    def test_a_name_that_is_not_a_string_is_refused_naming_it(self) -> None:
+        assert _parse_refusal({"name": 7, "home": _A_HOME}).startswith("name: must be a string")
+
+    @pytest.mark.parametrize(
+        ("location", "timezone"),
+        [pytest.param(None, "Europe/London", id="bristol"), pytest.param(_NEW_YORK_BLOCK, "America/New_York", id="new-york")],
+    )
+    @pytest.mark.parametrize("period", [pytest.param({}, id="absent"), pytest.param({"period": None}, id="null")])
+    def test_with_no_period_the_window_is_the_default_days_on_the_locations_clock(
+        self, location: dict[str, object] | None, timezone: str, period: dict[str, object]
+    ) -> None:
+        scenario = parse_scenario({"location": location, **period, "home": _A_HOME})
+
+        assert scenario.window() == SimulationWindow(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, timezone)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param({"home": _A_HOME}, id="home"),
+            pytest.param({"homes": [_A_HOME, {}]}, id="homes"),
+            pytest.param({"fleet_distribution": _TWO_HOME_DISTRIBUTION}, id="fleet_distribution"),
+        ],
+    )
+    def test_the_top_level_tariff_and_location_reach_every_home(self, source: dict[str, object]) -> None:
+        scenario = parse_scenario({"location": _NEW_YORK_BLOCK, "tariff": _ECONOMY_7, **source})
+
+        assert scenario.location == parse_location_block(_NEW_YORK_BLOCK)
+        assert scenario.simulated_homes()
+        for home in scenario.simulated_homes():
+            assert home.tariff_config == TariffConfig.economy_7()
+            assert home.location == scenario.location
+
+    @pytest.mark.parametrize(
+        ("block_path", "prefix"),
+        [pytest.param("", "homes[0].tariff: ", id="bare"), pytest.param("scenarios[2]", "scenarios[2].homes[0].tariff: ", id="scenarios")],
+    )
+    def test_a_home_whose_own_tariff_differs_is_refused_naming_its_tariff_and_the_top_level_one(
+        self, block_path: str, prefix: str
+    ) -> None:
+        document = {"tariff": _ECONOMY_7, "homes": [{"tariff": _FLAT_RATE}]}
+
+        message = _parse_refusal(document, block_path=block_path)
+
+        assert message.startswith(prefix)
+        assert "tariff:" in message.removeprefix(prefix)
+
+    def test_the_seg_rate_reaches_every_simulated_home_and_the_stored_homes_keep_none(self) -> None:
+        scenario = parse_scenario({"seg": {"rate_pence_per_kwh": 15.0}, "homes": [_A_HOME, {}]})
+
+        assert scenario.seg_tariff_pence_per_kwh == 15.0
+        assert [home.seg_tariff for home in scenario.simulated_homes()] == [SEGTariff("", 15.0)] * 2
+        assert [home.seg_tariff for home in scenario.homes] == [None, None]
+
+    @pytest.mark.parametrize(
+        ("value", "band"),
+        [
+            pytest.param("central", GridServicesBand.CENTRAL, id="central"),
+            pytest.param("Central", GridServicesBand.CENTRAL, id="any-case"),
+            pytest.param(None, None, id="null"),
+        ],
+    )
+    def test_a_flex_band_reads_as_the_band_it_names(self, value: object, band: GridServicesBand | None) -> None:
+        assert parse_scenario({"flex_band": value, "home": _A_HOME}).flex_band is band
+
+    @pytest.mark.parametrize(
+        ("block_path", "what"), [pytest.param("", "flex_band", id="bare"), pytest.param("scenarios[2]", "scenarios[2].flex_band", id="scenarios")]
+    )
+    @pytest.mark.parametrize("value", [pytest.param(1, id="a-number"), pytest.param("Medium", id="a-word-in-any-case")])
+    def test_a_flex_band_naming_no_band_is_refused_as_the_band_refuses_it_as_written(
+        self, block_path: str, what: str, value: object
+    ) -> None:
+        assert _parse_refusal({"flex_band": value, "home": _A_HOME}, block_path=block_path) == flex_band_refusal(value, what)
+
+    def test_a_community_block_is_recognised_and_reaches_no_home(self) -> None:
+        scenario = parse_scenario({"community": {"sharing_mode": "p2p"}, "home": _A_HOME})
+
+        assert scenario.simulated_homes() == parse_scenario({"home": _A_HOME}).simulated_homes()
+
+    @pytest.mark.parametrize(
+        ("sources", "refusal"),
+        [
+            pytest.param(
+                {"home": _A_HOME, "homes": [_A_HOME]},
+                "the top level: sets 'home', 'homes', but a scenario's homes come from exactly one of "
+                "'home', 'homes', 'fleet_distribution'",
+                id="home-and-homes",
+            ),
+            pytest.param(
+                {"home": _A_HOME, "homes": [_A_HOME], "fleet_distribution": _TWO_HOME_DISTRIBUTION},
+                "the top level: sets 'home', 'homes', 'fleet_distribution', but a scenario's homes come "
+                "from exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="all-three",
+            ),
+            pytest.param(
+                {"homes": [_A_HOME], "fleet_distribution": None},
+                "the top level: sets 'homes', 'fleet_distribution', but a scenario's homes come from "
+                "exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="a-null-source-beside-another",
+            ),
+            pytest.param(
+                {},
+                "the top level: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="none",
+            ),
+        ],
+    )
+    def test_a_scenario_must_give_exactly_one_homes_source(self, sources: dict[str, object], refusal: str) -> None:
+        assert _parse_refusal({"name": "a", **sources}) == refusal
+
+    @pytest.mark.parametrize(
+        ("source", "refusal"),
+        [
+            pytest.param("home", "home: must be a mapping, got NoneType", id="home"),
+            pytest.param("homes", "homes: must be a list, got NoneType", id="homes"),
+            pytest.param("fleet_distribution", "fleet_distribution: must be a mapping, got NoneType", id="fleet_distribution"),
+        ],
+    )
+    def test_a_null_homes_source_is_refused_by_its_reader(self, source: str, refusal: str) -> None:
+        assert _parse_refusal({source: None}) == refusal
+
+    def test_an_empty_homes_list_is_refused(self) -> None:
+        assert _parse_refusal({"homes": []}) == "homes: must list at least one home"
+
+    @pytest.mark.parametrize(
+        ("document", "refused_on"),
+        [
+            pytest.param({"name": 7, "location": {"lat": 1.0}, "home": _A_HOME}, "name: must be a string", id="name-before-location"),
+            pytest.param(
+                {"description": 7, "period": {"start_date": "2024-06-01"}, "home": _A_HOME},
+                "description: must be a string",
+                id="description-before-period",
+            ),
+            pytest.param({"location": {"lat": 1.0}, "tariff": {"type": "economy_8"}, "home": _A_HOME}, "location: ", id="location-before-tariff"),
+            pytest.param(
+                {"tariff": {"type": "economy_8"}, "fleet_distribution": {**_TWO_HOME_DISTRIBUTION, "n_homez": 2}},
+                "tariff.type: ",
+                id="tariff-before-fleet_distribution",
+            ),
+            pytest.param({"flex_band": 1, "homes": 5}, "flex_band must be ", id="flex_band-before-homes"),
+            pytest.param({"flex_band": 1, "home": _A_HOME, "homes": [_A_HOME]}, "flex_band must be ", id="flex_band-before-the-homes-source"),
+        ],
+    )
+    def test_blocks_are_read_in_order_and_the_first_bad_one_is_refused(self, document: dict[str, object], refused_on: str) -> None:
+        assert _parse_refusal(document).startswith(refused_on)
+
+
+_JUNE_WEEK = {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+_ONE_GRAMMAR_BLOCKS = {
+    "location": _NEW_YORK_BLOCK,
+    "period": _JUNE_WEEK,
+    "tariff": _ECONOMY_7,
+    "seg": {"rate_pence_per_kwh": 15.0},
+}
+"""The scenario-level blocks every document form below carries."""
+
+
+class TestEveryDocumentFormReadsThroughOneGrammar:
+    """R1: every document form, and every homes source, gives its homes the same scenario-level blocks."""
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}, id="home"),
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "homes": [_A_HOME, {}]}, id="homes"),
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "fleet_distribution": _TWO_HOME_DISTRIBUTION}, id="fleet_distribution"),
+            pytest.param({"scenario": {**_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}}, id="scenario"),
+            pytest.param(
+                {
+                    "scenarios": [
+                        {**_ONE_GRAMMAR_BLOCKS, "homes": [_A_HOME, {}]},
+                        {**_ONE_GRAMMAR_BLOCKS, "fleet_distribution": _TWO_HOME_DISTRIBUTION},
+                    ]
+                },
+                id="scenarios",
+            ),
+        ],
+    )
+    def test_every_simulated_home_gets_the_location_tariff_and_seg_rate_over_the_period(
+        self, tmp_path: Path, document: dict[str, object]
+    ) -> None:
+        scenarios = _scenarios_loaded(tmp_path, document)
+
+        location = parse_location_block(_NEW_YORK_BLOCK)
+        for scenario in scenarios:
+            assert scenario.window() == _window(date(2024, 6, 1), date(2024, 6, 7), "America/New_York")
+            assert scenario.simulated_homes()
+            for home in scenario.simulated_homes():
+                assert (home.location, home.tariff_config, home.seg_tariff) == (
+                    location,
+                    TariffConfig.economy_7(),
+                    SEGTariff("", 15.0),
+                )
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}, id="bare"),
+            pytest.param({"scenario": {"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}}, id="scenario"),
+        ],
+    )
+    def test_load_scenario_reads_a_bare_or_wrapped_scenario(self, tmp_path: Path, document: dict[str, object]) -> None:
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(document))
+
+        assert load_scenario(path) == parse_scenario({"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME})
+
+    def test_load_scenario_refuses_a_file_of_several_scenarios_naming_how_many(self, tmp_path: Path) -> None:
+        document = {"scenarios": [{"home": _A_HOME}, {"home": _A_HOME}]}
+
+        message = _refusal_loading(tmp_path, load_scenario, document)
+
+        assert message.startswith("scenarios: ")
+        assert "2" in message
+
+    @pytest.mark.parametrize(
+        ("load", "document"),
+        [
+            pytest.param(load_scenario, {"name": "a", "scenario": {"home": _A_HOME}}, id="load_scenario-scenario"),
+            pytest.param(load_scenarios, {"name": "a", "scenario": {"home": _A_HOME}}, id="load_scenarios-scenario"),
+            pytest.param(load_scenarios, {"name": "a", "scenarios": [{"home": _A_HOME}]}, id="load_scenarios-scenarios"),
+        ],
+    )
+    def test_a_wrapper_beside_another_top_level_key_is_refused_naming_that_key(
+        self, tmp_path: Path, load: Callable[[Path], object], document: dict[str, object]
+    ) -> None:
+        message = _refusal_loading(tmp_path, load, document)
+
+        assert message.startswith("the top level: unrecognised keys 'name'")
+
+
 class TestAScenarioDocumentNamesTheBlockItRefuses:
     """Each refusal load_scenarios writes for a scenario document reads '<block label>: <problem>'."""
 
@@ -783,20 +1054,10 @@ class TestAScenarioDocumentNamesTheBlockItRefuses:
                 id="a-period-with-neither-day",
             ),
             pytest.param(
-                {"scenarios": [{"period": _WEEK, "home": _A_HOME}]},
-                "scenarios[0]: requires 'name'",
-                id="no-name",
-            ),
-            pytest.param({"scenario": {"name": "a", "home": _A_HOME}}, "scenario: requires 'period'", id="no-period"),
-            pytest.param(
-                {"scenarios": [{"home": _A_HOME}]}, "scenarios[0]: requires 'name', 'period'", id="neither"
-            ),
-            pytest.param(
                 {"scenario": {"name": "a", "period": _WEEK}},
-                "scenario: requires 'home' or 'homes'",
-                id="no-home-or-homes",
+                "scenario: requires the scenario's homes, from exactly one of 'home', 'homes', 'fleet_distribution'",
+                id="no-homes-source",
             ),
-            pytest.param({"name": "a", "home": _A_HOME}, "the top level: requires 'period'", id="the-bare-form"),
             pytest.param(
                 {"scenario": {"name": "a", "period": _WEEK, "homes": 5}},
                 "scenario.homes: must be a list, got int",
@@ -825,6 +1086,31 @@ class TestAScenarioDocumentNamesTheBlockItRefuses:
 
 class TestAScenarioDocumentsPeriod:
     """load_scenarios reads a document's period as the one-minute window of its days on the scenario location's clock."""
+
+    @pytest.mark.parametrize(
+        ("document", "name", "period"),
+        [
+            pytest.param({"scenarios": [{"period": _WEEK, "home": _A_HOME}]}, "", _FIRST_WEEK, id="no-name"),
+            pytest.param(
+                {"scenario": {"name": "a", "home": _A_HOME}},
+                "a",
+                _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY),
+                id="no-period",
+            ),
+            pytest.param(
+                {"scenarios": [{"home": _A_HOME}]}, "", _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY), id="neither"
+            ),
+            pytest.param(
+                {"name": "a", "home": _A_HOME}, "a", _window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY), id="the-bare-form"
+            ),
+        ],
+    )
+    def test_a_document_without_a_name_or_period_reads_as_unnamed_over_the_default_days(
+        self, tmp_path: Path, document: dict[str, object], name: str, period: SimulationWindow
+    ) -> None:
+        (scenario,) = _scenarios_loaded(tmp_path, document)
+
+        assert (scenario.name, scenario.period) == (name, period)
 
     def test_a_document_with_no_location_simulates_on_bristols_clock(self, tmp_path: Path) -> None:
         (scenario,) = _scenarios_loaded(tmp_path, {"name": "a", "period": _WEEK, "home": _A_HOME})

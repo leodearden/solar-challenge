@@ -24,6 +24,7 @@ from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
 from tests._construction_refusals import prefixed_construction_refusal
+from tests._flex_band_refusal import flex_band_refusal
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
@@ -393,8 +394,8 @@ home:
                 id="home-battery-both-efficiency-forms",
             ),
             pytest.param(
-                "pv: {capacity_kw: 4.0}\nload: {household_occupants: 11}\n",
-                "load: household_occupants must be between 1 and 10, got 11",
+                "home:\n  pv: {capacity_kw: 4.0}\n  load: {household_occupants: 11}\n",
+                "home.load: household_occupants must be between 1 and 10, got 11",
                 id="flat-home",
             ),
             pytest.param(
@@ -448,11 +449,6 @@ home:
                 id="fleet-sweep-tariff",
             ),
             pytest.param(
-                "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n",
-                "scenarios[0]: requires 'period'",
-                id="scenarios",
-            ),
-            pytest.param(
                 "scenario:\n"
                 "  name: winter\n"
                 "  period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
@@ -473,6 +469,86 @@ home:
 
         assert result.exit_code == 1
         assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        ("document", "named"),
+        [
+            pytest.param("homes: [{}]\nfinanse: {}\n", ("the top level: unrecognised keys 'finanse'",), id="a-misspelt-block"),
+            pytest.param("pv: {capacity_kw: 4.0}\n", ("pv: ", "home:"), id="a-flat-home-file"),
+            pytest.param(
+                "home: {}\nhomes: [{}]\n",
+                (
+                    "the top level: sets 'home', 'homes', but a scenario's homes come from exactly one of "
+                    "'home', 'homes', 'fleet_distribution'",
+                ),
+                id="home-and-homes",
+            ),
+            pytest.param("name: a\n", ("the top level: ", "'home'", "'homes'", "'fleet_distribution'"), id="no-homes"),
+            pytest.param("homes: [{}]\nflex_band: 1\n", (flex_band_refusal(1),), id="a-flex-band-naming-no-band"),
+            pytest.param(
+                "fleet_distribution:\n  n_homez: 2\n  pv: {capacity_kw: 4.0}\ntariff: {type: economy_8}\nfinanse: {}\n",
+                ("the top level: unrecognised keys 'finanse'",),
+                id="a-fleet-distribution-file-bad-in-a-key-and-its-block",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "  n_homez: 2\ntariff: {type: economy_8}\nfinanse: {}\n",
+                ("the top level: unrecognised keys 'finanse'",),
+                id="a-sweep-bad-in-a-key-and-its-block",
+            ),
+            pytest.param(
+                "tariff: {type: economy_7}\nhomes:\n  - tariff: {type: flat_rate, rate_per_kwh: 0.25}\n",
+                ("homes[0].tariff: ", "tariff:"),
+                id="a-home-tariff-other-than-the-scenarios",
+            ),
+        ],
+    )
+    def test_a_file_the_scenario_grammar_refuses_is_an_error_row_naming_why(
+        self, tmp_path: Path, document: str, named: tuple[str, ...]
+    ) -> None:
+        """R2: `validate config` reads every document form through the one scenario grammar."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert error_row.startswith(f"ERROR {named[0]}"), error_row
+        for name in named[1:]:
+            assert name in error_row, (name, error_row)
+
+    @pytest.mark.parametrize(
+        ("document", "refusal"),
+        [
+            pytest.param(
+                "homes: [{}]\ncommunity: {sharing_mode: p2p, mode: p2p}\n",
+                "community: unrecognised keys 'mode'",
+                id="a-community-key-it-does-not-read",
+            ),
+            pytest.param(
+                _SWEEP_FLEET + "tariff: {type: economy_7}\nfinanse: {}\n",
+                "the top level: unrecognised keys 'finanse'",
+                id="a-sweeps-misspelt-block",
+            ),
+        ],
+    )
+    def test_every_block_of_the_file_is_read_as_the_commands_read_it(
+        self, tmp_path: Path, document: str, refusal: str
+    ) -> None:
+        """`validate config` reads the file's community: block, and a YAML sweep's top level through the scenario grammar."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        assert text[text.index("ERROR"):].startswith(f"ERROR {refusal}"), text
+
+    def test_a_sweep_with_a_tariff_and_a_seg_rate_is_valid(self, tmp_path: Path) -> None:
+        result = self._validate_config(
+            tmp_path, _SWEEP_FLEET + "tariff: {type: economy_7}\nseg: {rate_pence_per_kwh: 4.1}\n"
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "OK Configuration is valid" in table_text(result.stdout)
 
     def test_a_homes_value_that_is_no_list_exits_as_a_refusal_not_a_traceback(self, tmp_path: Path) -> None:
         """R2: homes: 5 was a TypeError, which the command does not catch, so it escaped with a traceback."""
@@ -502,8 +578,8 @@ home:
                 id="homes-entry-pv-capacity-boolean",
             ),
             pytest.param(
-                "pv: {capacity_kw: 4.0, azimuth: south}\n",
-                "pv",
+                "home:\n  pv: {capacity_kw: 4.0, azimuth: south}\n",
+                "home.pv",
                 lambda: PVConfig(capacity_kw=4.0, azimuth="south"),
                 id="flat-home-pv-azimuth-word",
             ),
@@ -615,7 +691,7 @@ home:
     @pytest.mark.parametrize(
         "document",
         [
-            pytest.param("pv: {capacity_kw: 4.0}\n", id="flat-home"),
+            pytest.param("home:\n  pv: {capacity_kw: 4.0}\n", id="home"),
             pytest.param(
                 "homes:\n  - {}\n  - pv: {capacity_kw: 6.0}\n", id="homes-list"
             ),
@@ -635,6 +711,9 @@ home:
                 "    period: {start_date: '2024-01-01', end_date: '2024-01-07'}\n"
                 "    home: {pv: {capacity_kw: 4.0}}\n",
                 id="scenarios",
+            ),
+            pytest.param(
+                "scenarios:\n  - name: winter\n    home: {pv: {capacity_kw: 4.0}}\n", id="scenarios-without-a-period"
             ),
         ],
     )
@@ -790,7 +869,7 @@ home:
             pytest.param(
                 "tariff_config",
                 {"type": "economy_7"},
-                ("scenario.tariff_config", "home.tariff"),
+                ("scenario.tariff_config", "tariff:"),
                 id="tariff_config",
             ),
             pytest.param("bogus", 1, ("scenario", "'bogus'"), id="unrecognised"),
@@ -1173,10 +1252,10 @@ home:
         error_row = text[text.index("ERROR"):]
         assert re.search(retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy"), error_row), error_row
 
-    def test_a_flat_home_files_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
-        """A flat home file is itself a home block, so `validate config` reports its retired dispatch_strategy key naming where it goes."""
+    def test_a_top_level_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
+        """The dispatch strategy is the battery's own setting at every level, so `validate config` reports a top-level one naming where it goes."""
         result = self._validate_config(
-            tmp_path, "pv: {capacity_kw: 4.0}\nbattery: {capacity_kwh: 5.0}\ndispatch_strategy: tou_optimized\n"
+            tmp_path, "home: {pv: {capacity_kw: 4.0}, battery: {capacity_kwh: 5.0}}\ndispatch_strategy: tou_optimized\n"
         )
 
         assert result.exit_code == 1
