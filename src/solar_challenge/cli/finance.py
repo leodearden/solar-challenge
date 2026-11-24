@@ -23,12 +23,8 @@ from solar_challenge.finance import (
     BillDistribution,
     CostRecoverySolution,
     FinanceConfig,
-    ProjectEconomics,
     bill_distribution,
     grid_services_model_of,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate, reusing
@@ -41,6 +37,13 @@ from solar_challenge.gridservices import (
 )
 from solar_challenge.home import calculate_summary
 from solar_challenge.output import generate_finance_report
+from solar_challenge.projection import (
+    ProjectEconomics,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 from solar_challenge.scenario_blocks import (
     parse_finance_config,
     parse_seg_rate,
@@ -135,7 +138,7 @@ def _project_level_economics(
     """The project-level economics (DSCR/IRR/payback) of *scenario_config*'s fleet under *finance*, its simulations run by *simulate*, after printing *cli*'s status line announcing them."""
     print_info(cli, "Computing project-level economics (DSCR/IRR/payback)…")
     curve = project_multi_year(scenario_config, finance, simulate=simulate)
-    return project_economics(curve, scenario_config, finance)
+    return project_economics(curve, scenario_fleet(scenario_config), finance)
 
 
 def _cost_recovery_solution(
