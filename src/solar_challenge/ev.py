@@ -3,8 +3,8 @@
 
 import math
 from dataclasses import dataclass
-from enum import Enum
-from typing import TypeAlias
+from enum import StrEnum
+from typing import TypeAlias, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -16,11 +16,29 @@ from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
 
 _MinuteFlags: TypeAlias = np.ndarray[tuple[int], np.dtype[np.bool_]]
 
+_Word = TypeVar("_Word", bound=StrEnum)
 
-class EVChargerType(str, Enum):
-    """Standard UK domestic EV charger types.
 
-    Values represent typical charging power ratings:
+def _member_named(vocabulary: type[_Word], value: object, *, field: str) -> _Word:
+    """The member of *vocabulary* that *value* names: a member's value, exactly, or a member itself.
+
+    Raises:
+        ConfigurationError: If *value* is anything else; the message names *field*,
+            the members' values in order and *value*.
+    """
+    if isinstance(value, str):
+        try:
+            return vocabulary(value)
+        except ValueError:
+            pass
+    raise ConfigurationError.must_be(
+        field, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+    )
+
+
+class EVChargerType(StrEnum):
+    """Standard UK domestic EV charger types, each valued as its rating's label.
+
     - SLOW: 3.6 kW single-phase (slow/granny charger)
     - FAST: 7 kW single-phase (typical home wallbox)
     - RAPID: 22 kW three-phase (high-power home installation)
@@ -30,11 +48,27 @@ class EVChargerType(str, Enum):
     FAST = "7kW"
     RAPID = "22kW"
 
+    @classmethod
+    def parse(cls, value: object, *, field: str) -> "EVChargerType":
+        """Return the charger type *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, field=field)
+
+    @property
+    def power_kw(self) -> float:
+        """The charger's power rating in kW."""
+        return _CHARGER_POWER_KW[self]
+
+
+_CHARGER_POWER_KW: dict[EVChargerType, float] = {
+    EVChargerType.SLOW: 3.6,
+    EVChargerType.FAST: 7.0,
+    EVChargerType.RAPID: 22.0,
+}
 
 CHARGER_TYPES: tuple[str, ...] = tuple(charger.value for charger in EVChargerType)
 
 
-class SmartChargingMode(str, Enum):
+class SmartChargingMode(StrEnum):
     """Smart charging scheduling strategies.
 
     - NONE: Dumb charging - start immediately on arrival
@@ -45,6 +79,11 @@ class SmartChargingMode(str, Enum):
     NONE = "none"
     SOLAR = "solar"
     OFF_PEAK = "off_peak"
+
+    @classmethod
+    def parse(cls, value: object, *, field: str) -> "SmartChargingMode":
+        """Return the mode *value* names, refusing any other value as :func:`_member_named` does."""
+        return _member_named(cls, value, field=field)
 
 
 _PREFERRED_WINDOWS: dict[SmartChargingMode, tuple[tuple[int, int], ...]] = {
@@ -67,17 +106,20 @@ class EVConfig:
     """Configuration for electric vehicle charging.
 
     Construction reads the hours as whole numbers and the required charge as a finite
-    number, and holds what it read. It refuses a value outside its range, an unknown
-    charger type or smart charging mode, or a charge the stay cannot deliver, with a
-    ConfigurationError.
+    number, and the charger type and smart charging mode as their EVChargerType and
+    SmartChargingMode members, and holds what it read; a member reads as its string. It
+    refuses a value outside its range, a charger type or smart charging mode that names no
+    member, by the field's name and its allowed values, or a charge the stay cannot
+    deliver, with a ConfigurationError.
 
     Attributes:
-        charger_type: Charger power rating (3.6kW, 7kW, or 22kW)
+        charger_type: Charger power rating (3.6kW, 7kW, or 22kW), held as its EVChargerType
         arrival_hour: Hour of day when EV arrives home (0-23), default 18, 6pm
         departure_hour: Hour of day when EV departs (0-23), default 7am
         required_charge_kwh: Energy required per day in kWh, default 35 kWh
             (typical UK EV doing ~100 miles/day at 3.5 miles/kWh)
-        smart_charging_mode: Charging schedule optimization strategy
+        smart_charging_mode: Charging schedule optimization strategy, held as its
+            SmartChargingMode
         name: Optional identifier for the EV configuration
     """
 
@@ -89,26 +131,18 @@ class EVConfig:
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Read each number setting, then refuse an unknown charger type or mode, or a charge the stay cannot deliver."""
+        """Read each number setting, then the charger type and mode as their members, then refuse a charge the stay cannot deliver."""
         read_field(self, "arrival_hour", as_whole_number, _HOUR_OF_DAY)
         read_field(self, "departure_hour", as_whole_number, _HOUR_OF_DAY)
         read_field(self, "required_charge_kwh", as_finite_float, Interval(0, 100, low_open=True))
+        object.__setattr__(self, "charger_type", EVChargerType.parse(self.charger_type, field="charger_type"))
+        object.__setattr__(
+            self,
+            "smart_charging_mode",
+            SmartChargingMode.parse(self.smart_charging_mode, field="smart_charging_mode"),
+        )
 
-        if self.charger_type not in CHARGER_TYPES:
-            raise ConfigurationError(
-                f"Charger type must be one of {list(CHARGER_TYPES)}, got '{self.charger_type}'"
-            )
-
-        # Validate smart_charging_mode
-        valid_modes = ["none", "solar", "off_peak"]
-        if self.smart_charging_mode not in valid_modes:
-            raise ConfigurationError(
-                f"Smart charging mode must be one of {valid_modes}, "
-                f"got '{self.smart_charging_mode}'"
-            )
-
-        # Validate that there's enough time to charge
-        charger_power_kw = self._parse_charger_power()
+        charger_power_kw = self.get_charger_power_kw()
         available_hours = self._calculate_available_hours()
         max_charge_kwh = charger_power_kw * available_hours
 
@@ -118,15 +152,6 @@ class EVConfig:
                 f"charger in {available_hours:.1f} hours (max: {max_charge_kwh:.1f} kWh). "
                 "Either reduce required_charge_kwh or adjust arrival/departure hours."
             )
-
-    def _parse_charger_power(self) -> float:
-        """Extract charger power in kW from charger_type string.
-
-        Returns:
-            Charger power in kW
-        """
-        # Parse "3.6kW" -> 3.6
-        return float(self.charger_type.replace("kW", ""))
 
     def _calculate_available_hours(self) -> float:
         """Calculate available charging hours between arrival and departure.
@@ -147,7 +172,7 @@ class EVConfig:
         Returns:
             Charger power in kW
         """
-        return self._parse_charger_power()
+        return EVChargerType(self.charger_type).power_kw
 
     def get_available_charging_hours(self) -> float:
         """Get available charging window in hours.
