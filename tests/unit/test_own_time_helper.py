@@ -43,9 +43,6 @@ _GRANDCHILD = 3
 
 _SCRIPTED_TIME_CEILING_SECS = 1000.0
 
-# How long a real process may take to reach a state the test waits for, on a host however busy.
-_SETTLES_WITHIN_SECS = 60.0
-
 _REAL_PROCESS_LIFETIME_SECS = 30
 
 # A budget of own time no short command's start-up spends, however busy the host, since time queued for a CPU is
@@ -247,21 +244,6 @@ def test_a_reading_never_reports_a_negative_own_time() -> None:
     assert reading.own == 0.0
 
 
-def _members_once_asleep(group: int, pids: Callable[[], set[int]]) -> Mapping[int, MemberSnapshot]:
-    """LINUX_HOST's members of *group* once each of *pids*, asked anew at every poll, is one in state S.
-
-    Fail if they never are within _SETTLES_WITHIN_SECS, as a process the host keeps queued may take a while to sleep.
-    """
-    deadline = time.monotonic() + _SETTLES_WITHIN_SECS
-    while True:
-        members, expected = LINUX_HOST.members(group), pids()
-        if expected and all(pid in members and members[pid].state == "S" for pid in expected):
-            return members
-        if time.monotonic() > deadline:
-            pytest.fail(f"{sorted(expected)} were not all asleep in group {group} within {_SETTLES_WITHIN_SECS:g} s: {members}")
-        time.sleep(0.05)
-
-
 def _kill_and_reap(leader: subprocess.Popen[bytes]) -> None:
     """SIGKILL *leader*'s whole group and reap the leader."""
     with contextlib.suppress(ProcessLookupError):
@@ -269,24 +251,28 @@ def _kill_and_reap(leader: subprocess.Popen[bytes]) -> None:
     leader.wait()
 
 
+def _number_printed_by(process: subprocess.Popen[bytes]) -> int:
+    """The number *process* prints as the first line of its stdout, once it has printed it."""
+    assert process.stdout is not None, "the process's stdout is not a pipe"
+    line = process.stdout.readline()
+    assert line.strip().isdigit(), f"process {process.pid} printed {line!r}, not a number"
+    return int(line)
+
+
 @_on_linux
-def test_the_host_reads_every_member_of_a_real_group(tmp_path: Path) -> None:
-    """The group's leader, a shell, starts a background sleep, a grandchild of this process, and waits on it.
+def test_the_host_reads_every_member_of_a_real_group() -> None:
+    """The group's leader, a shell, starts a background sleep, a grandchild of this process, prints its pid and
+    waits on it."""
+    script = f"sleep {_REAL_PROCESS_LIFETIME_SECS} & echo $!; wait"
+    with subprocess.Popen(["sh", "-c", script], stdout=subprocess.PIPE, process_group=0) as leader:
+        try:
+            grandchild = _number_printed_by(leader)
+            members = LINUX_HOST.members(leader.pid)
+        finally:
+            _kill_and_reap(leader)
 
-    The shell writes the sleep's pid to a .part file and renames it, so the pid file appears whole or not at all.
-    """
-    pid_file = tmp_path / "grandchild.pid"
-    part, whole = shlex.quote(f"{pid_file}.part"), shlex.quote(str(pid_file))
-    script = f"sleep {_REAL_PROCESS_LIFETIME_SECS} & echo $! > {part} && mv {part} {whole}; wait"
-    leader = subprocess.Popen(["sh", "-c", script], process_group=0)
-    try:
-        members = _members_once_asleep(
-            leader.pid, lambda: {leader.pid, int(pid_file.read_text())} if pid_file.exists() else set()
-        )
-
-        assert os.getpid() not in members
-    finally:
-        _kill_and_reap(leader)
+    assert {leader.pid, grandchild} <= members.keys()
+    assert os.getpid() not in members
 
 
 @_on_linux
