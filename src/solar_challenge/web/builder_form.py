@@ -3,23 +3,20 @@
 
 The builder posts one flat form, the one scenario-builder.js's getFormData() builds.
 A field the form leaves out, or sends as null or '' (a cleared input), is left out
-of the block that carries it, so the loaders report or default it as they would
-for a hand-written scenario file.  The tariff: and seg: blocks carry nothing but
+of the block that carries it, so config.parse_scenario reports or defaults it as it
+would for a hand-written scenario file.  The tariff: and seg: blocks carry nothing but
 their rate, so a form without the import or SEG rate writes that block as null:
 a scenario with no tariff, or no SEG.
 """
 
-import tempfile
 from collections.abc import Callable, Mapping
-from pathlib import Path
 from typing import Any, Optional
 
-from solar_challenge.config import load_fleet_config, period_day, period_window
+from solar_challenge.config import ScenarioConfig, parse_scenario
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.location import LOCATION_PRESETS, Location
+from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float, as_whole_number
-from solar_challenge.scenario_blocks import parse_seg_rate
-from solar_challenge.scenario_writer import location_block, scenario_yaml
+from solar_challenge.scenario_writer import location_block
 from solar_challenge.web.fleet_components import (
     FLEET_COMPONENTS,
     ComponentLimits,
@@ -115,9 +112,10 @@ def builder_form_errors(form: object) -> list[str]:
 
     A form that is not a JSON object has that one reason.  For any other, the dashboard's
     own limits come first.  Then the form becomes its scenario, and, unless its number of
-    homes is out of bounds, the scenario readers judge it: load_fleet_config, with the
-    period and SEG rate left to their own checks, then each fleet component's value_range
-    on the homes it generates, the seg: reader and the period's dates.
+    homes is out of bounds, config.parse_scenario judges that document in memory, one
+    reason per block: a refused fleet is the one reason; an accepted fleet's homes' value_range
+    reasons come before the reader's refusal of the period or SEG rate, so neither hides a
+    fleet reason.
     """
     try:
         form = require_json_object(form, _BUILDER_FORM)
@@ -142,7 +140,7 @@ def _dashboard_limit_errors(fields: Mapping[str, Any]) -> list[str]:
     """The dashboard's own rules: a scenario name, and 1 to MAX_FLEET_HOMES homes.
 
     A value its number reader refuses is left to scenario_from_builder_form to report.
-    Each fleet component's value_range is checked on the homes the loader generates, by
+    Each fleet component's value_range is checked on the homes parse_scenario generates, by
     _scenario_reader_errors, so a fixed value and a drawn one are bounded alike.
     """
     errors: list[str] = []
@@ -172,51 +170,39 @@ def _readable(
 
 
 def _scenario_reader_errors(document: Mapping[str, Any]) -> list[str]:
-    """What the scenario readers refuse in *document*, each reason listed once.
+    """What config.parse_scenario refuses in *document*, judged in memory, one reason per block.
 
-    load_fleet_config judges the document written as YAML with its period: and seg: blocks
-    left null, since each of those has its own check, so a bad period or SEG rate hides no
-    fleet reason.  It refuses a scenario with ConfigurationError, or with ValueError from a
-    config it builds, and refuse_homes_outside_ranges refuses, with ConfigurationError, a
-    fleet whose generated homes hold a value outside a component's value_range; each is
-    listed, then the seg: reader's refusal and the period's.  Anything else the loader
+    An accepted document has its homes' value_range reasons alone.  A refused one has the
+    reasons _fleet_reasons_beside gives beside its refusal.  The reader refuses a scenario
+    with ConfigurationError, or with ValueError from a config it builds; anything else it
     raises is a defect in it, not a refusal, so it propagates.
     """
-    errors: list[str] = []
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "scenario.yaml"
-        path.write_text(scenario_yaml({**document, "period": None, "seg": None}), encoding="utf-8")
-        try:
-            fleet = load_fleet_config(path)
-            refuse_homes_outside_ranges(fleet.homes)
-        except (ConfigurationError, ValueError) as exc:
-            errors.append(str(exc))
     try:
-        parse_seg_rate(document["seg"])
-    except ConfigurationError as exc:
-        errors.append(str(exc))
-    errors.extend(_period_errors(document["period"]))
-    return errors
+        scenario = parse_scenario(document)
+    except (ConfigurationError, ValueError) as refusal:
+        return _fleet_reasons_beside(document, str(refusal))
+    return _range_errors(scenario)
 
 
-def _period_errors(period: Mapping[str, str]) -> list[str]:
-    """What keeps the period: block from giving the simulated dates: a date it lacks, each one that is not a day period_day reads, or else days period_window refuses, such as a last day before the first.
+def _fleet_reasons_beside(document: Mapping[str, Any], refusal: str) -> list[str]:
+    """The reasons for *document*, which parse_scenario refused with *refusal*: its fleet's, read with the period: and seg: blocks left null, then *refusal*.
 
-    period_window reads the days on Bristol's clock, a scenario's when it sets no location; no zone changes whether two days give a window.
+    The reader reads a null period as the default window and a null seg as no rate.  A
+    refused fleet is the one reason.  An accepted one gives its homes' value_range reasons,
+    then *refusal*, which can then only be the period's or the SEG rate's, the blocks the
+    reader reads before the homes, so neither hides a fleet reason.
     """
-    missing = [key for key in ("start_date", "end_date") if key not in period]
-    if missing:
-        return [f"The period needs {' and '.join(missing)}"]
-    errors: list[str] = []
-    for key in ("start_date", "end_date"):
-        try:
-            period_day(period[key], f"period.{key}")
-        except ConfigurationError as exc:
-            errors.append(str(exc))
-    if errors:
-        return errors
     try:
-        period_window(period["start_date"], period["end_date"], timezone=Location.bristol().timezone)
+        fleet = parse_scenario({**document, "period": None, "seg": None})
+    except (ConfigurationError, ValueError) as exc:
+        return [str(exc)]
+    return [*_range_errors(fleet), refusal]
+
+
+def _range_errors(scenario: ScenarioConfig) -> list[str]:
+    """refuse_homes_outside_ranges' refusal of *scenario*'s homes, a value outside a fleet component's value_range; none when it accepts them."""
+    try:
+        refuse_homes_outside_ranges(scenario.simulated_homes())
     except ConfigurationError as exc:
         return [str(exc)]
     return []
