@@ -17,7 +17,8 @@ from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import console
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
-from solar_challenge.gridservices import EventWindow
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.gridservices import EventWindow, GridServicesBand
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_blocks import parse_tariff_config
@@ -271,6 +272,13 @@ def _committed_battery_sweep_with_multiplier(**multiplier: float) -> str:
     return yaml.safe_dump(document)
 
 
+def _band_refusal(value: object) -> str:
+    """The message GridServicesBand.parse refuses *value* with as a file's flex_band."""
+    with pytest.raises(ConfigurationError) as refusal:
+        GridServicesBand.parse(value, what="flex_band")
+    return str(refusal.value)
+
+
 def _scenario_document_holding(block: str, setting: Any) -> str:
     """A scenario: document of one 4 kW PV home for a week, the scenario also carrying a *block* block set to *setting*."""
     return yaml.safe_dump(
@@ -468,6 +476,35 @@ home:
 
         assert result.exit_code == 1
         assert f"ERROR {refusal}" in table_text(result.stdout)
+
+    @pytest.mark.parametrize(
+        ("document", "named"),
+        [
+            pytest.param("homes: [{}]\nfinanse: {}\n", ("the top level: unrecognised keys 'finanse'",), id="a-misspelt-block"),
+            pytest.param("pv: {capacity_kw: 4.0}\n", ("pv: ", "home:"), id="a-flat-home-file"),
+            pytest.param("home: {}\nhomes: [{}]\n", ("the top level: ", "'home'", "'homes'"), id="home-and-homes"),
+            pytest.param("name: a\n", ("the top level: ", "'home'", "'homes'", "'fleet_distribution'"), id="no-homes"),
+            pytest.param("homes: [{}]\nflex_band: 1\n", (_band_refusal(1),), id="a-flex-band-naming-no-band"),
+            pytest.param(
+                "tariff: {type: economy_7}\nhomes:\n  - tariff: {type: flat_rate, rate_per_kwh: 0.25}\n",
+                ("homes[0].tariff: ", "tariff:"),
+                id="a-home-tariff-other-than-the-scenarios",
+            ),
+        ],
+    )
+    def test_a_file_the_scenario_grammar_refuses_is_an_error_row_naming_why(
+        self, tmp_path: Path, document: str, named: tuple[str, ...]
+    ) -> None:
+        """R2: `validate config` reads every document form through the one scenario grammar."""
+        result = self._validate_config(tmp_path, document)
+
+        assert result.exit_code == 1
+        text = table_text(result.stdout)
+        assert "ERROR" in text
+        error_row = text[text.index("ERROR"):]
+        assert error_row.startswith(f"ERROR {named[0]}"), error_row
+        for name in named[1:]:
+            assert name in error_row, (name, error_row)
 
     def test_a_homes_value_that_is_no_list_exits_as_a_refusal_not_a_traceback(self, tmp_path: Path) -> None:
         """R2: homes: 5 was a TypeError, which the command does not catch, so it escaped with a traceback."""
@@ -1171,10 +1208,10 @@ home:
         error_row = text[text.index("ERROR"):]
         assert re.search(retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy"), error_row), error_row
 
-    def test_a_flat_home_files_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
-        """A flat home file is itself a home block, so `validate config` reports its retired dispatch_strategy key naming where it goes."""
+    def test_a_top_level_dispatch_strategy_is_an_error_row_naming_the_batterys(self, tmp_path: Path) -> None:
+        """The dispatch strategy is the battery's own setting at every level, so `validate config` reports a top-level one naming where it goes."""
         result = self._validate_config(
-            tmp_path, "pv: {capacity_kw: 4.0}\nbattery: {capacity_kwh: 5.0}\ndispatch_strategy: tou_optimized\n"
+            tmp_path, "home: {pv: {capacity_kw: 4.0}, battery: {capacity_kwh: 5.0}}\ndispatch_strategy: tou_optimized\n"
         )
 
         assert result.exit_code == 1

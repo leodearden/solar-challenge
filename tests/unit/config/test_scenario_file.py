@@ -20,6 +20,7 @@ from solar_challenge.config import (
     load_config_yaml,
     load_fleet_config,
     load_home_config,
+    load_scenario,
     load_scenarios,
     parse_scenario,
     period_day,
@@ -924,6 +925,90 @@ class TestParseScenario:
     )
     def test_blocks_are_read_in_order_and_the_first_bad_one_is_refused(self, document: dict[str, object], refused_on: str) -> None:
         assert _parse_refusal(document).startswith(refused_on)
+
+
+_JUNE_WEEK = {"start_date": "2024-06-01", "end_date": "2024-06-07"}
+_ONE_GRAMMAR_BLOCKS = {
+    "location": _NEW_YORK_BLOCK,
+    "period": _JUNE_WEEK,
+    "tariff": _ECONOMY_7,
+    "seg": {"rate_pence_per_kwh": 15.0},
+}
+"""The scenario-level blocks every document form below carries."""
+
+
+class TestEveryDocumentFormReadsThroughOneGrammar:
+    """R1: every document form, and every homes source, gives its homes the same scenario-level blocks."""
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}, id="home"),
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "homes": [_A_HOME, {}]}, id="homes"),
+            pytest.param({**_ONE_GRAMMAR_BLOCKS, "fleet_distribution": _TWO_HOME_DISTRIBUTION}, id="fleet_distribution"),
+            pytest.param({"scenario": {**_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}}, id="scenario"),
+            pytest.param(
+                {
+                    "scenarios": [
+                        {**_ONE_GRAMMAR_BLOCKS, "homes": [_A_HOME, {}]},
+                        {**_ONE_GRAMMAR_BLOCKS, "fleet_distribution": _TWO_HOME_DISTRIBUTION},
+                    ]
+                },
+                id="scenarios",
+            ),
+        ],
+    )
+    def test_every_simulated_home_gets_the_location_tariff_and_seg_rate_over_the_period(
+        self, tmp_path: Path, document: dict[str, object]
+    ) -> None:
+        scenarios = _scenarios_loaded(tmp_path, document)
+
+        location = parse_location_block(_NEW_YORK_BLOCK)
+        for scenario in scenarios:
+            assert scenario.window() == _window(date(2024, 6, 1), date(2024, 6, 7), "America/New_York")
+            assert scenario.simulated_homes()
+            for home in scenario.simulated_homes():
+                assert (home.location, home.tariff_config, home.seg_tariff) == (
+                    location,
+                    TariffConfig.economy_7(),
+                    SEGTariff("", 15.0),
+                )
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}, id="bare"),
+            pytest.param({"scenario": {"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME}}, id="scenario"),
+        ],
+    )
+    def test_load_scenario_reads_a_bare_or_wrapped_scenario(self, tmp_path: Path, document: dict[str, object]) -> None:
+        path = tmp_path / "scenario.json"
+        path.write_text(json.dumps(document))
+
+        assert load_scenario(path) == parse_scenario({"name": "a", **_ONE_GRAMMAR_BLOCKS, "home": _A_HOME})
+
+    def test_load_scenario_refuses_a_file_of_several_scenarios_naming_how_many(self, tmp_path: Path) -> None:
+        document = {"scenarios": [{"home": _A_HOME}, {"home": _A_HOME}]}
+
+        message = _refusal_loading(tmp_path, load_scenario, document)
+
+        assert message.startswith("scenarios: ")
+        assert "2" in message
+
+    @pytest.mark.parametrize(
+        ("load", "document"),
+        [
+            pytest.param(load_scenario, {"name": "a", "scenario": {"home": _A_HOME}}, id="load_scenario-scenario"),
+            pytest.param(load_scenarios, {"name": "a", "scenario": {"home": _A_HOME}}, id="load_scenarios-scenario"),
+            pytest.param(load_scenarios, {"name": "a", "scenarios": [{"home": _A_HOME}]}, id="load_scenarios-scenarios"),
+        ],
+    )
+    def test_a_wrapper_beside_another_top_level_key_is_refused_naming_that_key(
+        self, tmp_path: Path, load: Callable[[Path], object], document: dict[str, object]
+    ) -> None:
+        message = _refusal_loading(tmp_path, load, document)
+
+        assert message.startswith("the top level: unrecognised keys 'name'")
 
 
 class TestAScenarioDocumentNamesTheBlockItRefuses:

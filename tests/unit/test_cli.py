@@ -1030,6 +1030,38 @@ class TestHomeRunReportPricesExportOnce:
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetRunPricesExportAtTheFilesSegRate:
+    """R4: `fleet run` books a fleet file's export at its seg: rate, which reaches every home it reads."""
+
+    def test_the_grid_export_revenue_is_the_export_at_the_seg_rate(self) -> None:
+        rate_pence_per_kwh = 15.0
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "homes": [
+                        {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400, "use_stochastic": False}}
+                    ],
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        text = table_text(result.stdout)
+        export = re.search(r"Grid Export ([0-9.]+) kWh", text)
+        revenue = re.search(r"Grid Export Revenue £([0-9.]+)", text)
+        assert export is not None and revenue is not None, text
+        export_kwh = float(export[1])
+        assert export_kwh > 0
+        # The table rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(revenue[1]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
 class TestReportsPrintNamesVerbatim:
     """Tests that the report commands print the names a config gives exactly as written."""
 

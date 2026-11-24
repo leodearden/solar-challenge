@@ -32,6 +32,7 @@ from solar_challenge.scenario_blocks import (
     parse_dispatch_strategy_config,
     parse_home_block,
 )
+from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._non_booleans import NON_BOOLEANS
@@ -629,6 +630,32 @@ class TestLoadHomeConfig:
         assert home.battery_config is not None
         assert home.battery_config.capacity_kwh == 10.0
         assert home.load_config.annual_consumption_kwh == 4000
+
+    def test_a_home_document_loads_a_home_exporting_at_its_seg_rate(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"seg": {"rate_pence_per_kwh": 15.0}, "home": {"pv": {"capacity_kw": 4.0}}}))
+
+        assert load_home_config(path).seg_tariff == SEGTariff("", 15.0)
+
+    def test_a_fleet_document_is_refused_naming_its_homes_and_the_fleet_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "fleet.json"
+        path.write_text(json.dumps({"homes": [{}, {}]}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert "fleet of 2 homes" in str(refused.value)
+        assert "load_fleet_config" in str(refused.value)
+
+    def test_a_flat_home_file_is_refused_naming_home(self, tmp_path: Path) -> None:
+        path = tmp_path / "home.json"
+        path.write_text(json.dumps({"pv": {"capacity_kw": 9}}))
+
+        with pytest.raises(ConfigurationError) as refused:
+            load_home_config(path)
+
+        assert str(refused.value).startswith("pv: ")
+        assert "home:" in str(refused.value)
 
     def test_load_home_without_battery(self, tmp_path: Path) -> None:
         """Test loading home without battery."""

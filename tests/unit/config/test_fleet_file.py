@@ -21,6 +21,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.fleet_distribution import SweepSpec
 from solar_challenge.pv import calculate_degradation_factor
+from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
 from tests._repository_paths import SCENARIOS_DIR
 from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
@@ -97,6 +98,47 @@ fleet_distribution:
 
         with pytest.raises(ConfigurationError, match=re.escape("location: requires 'longitude'")):
             load_fleet_config(path)
+
+
+_A_HOME = {"pv": {"capacity_kw": 4.0}}
+
+
+def _fleet_loaded(tmp_path: Path, document: Mapping[str, Any]) -> FleetConfig:
+    """The fleet load_fleet_config reads from *document*, written as YAML."""
+    path = tmp_path / "fleet.yaml"
+    path.write_text(yaml.safe_dump(dict(document)))
+    return load_fleet_config(path)
+
+
+class TestLoadFleetConfigReadsTheScenariosTopLevelBlocks:
+    """load_fleet_config is the fleet projection of parse_scenario: every home gets the file's tariff and SEG rate, and every top-level key is read or refused."""
+
+    def test_a_homes_file_gives_every_home_its_top_level_tariff(self, tmp_path: Path) -> None:
+        fleet = _fleet_loaded(tmp_path, {"tariff": {"type": "economy_7"}, "homes": [_A_HOME, {}]})
+
+        assert [home.tariff_config for home in fleet.homes] == [TariffConfig.economy_7()] * 2
+
+    @pytest.mark.parametrize(
+        "homes",
+        [
+            pytest.param({"homes": [_A_HOME, {}]}, id="homes"),
+            pytest.param({"fleet_distribution": {"n_homes": 2, "pv": {"capacity_kw": 4.0}}}, id="fleet_distribution"),
+        ],
+    )
+    def test_every_home_exports_at_the_files_seg_rate(self, tmp_path: Path, homes: dict[str, Any]) -> None:
+        fleet = _fleet_loaded(tmp_path, {"seg": {"rate_pence_per_kwh": 15.0}, **homes})
+
+        assert [home.seg_tariff for home in fleet.homes] == [SEGTariff("", 15.0)] * 2
+
+    def test_a_top_level_key_no_scenario_reads_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigurationError, match=re.escape("the top level: unrecognised keys 'finanse'")):
+            _fleet_loaded(tmp_path, {"finanse": {}, "homes": [_A_HOME]})
+
+    def test_a_home_document_loads_as_a_one_home_fleet_named_by_its_name(self, tmp_path: Path) -> None:
+        fleet = _fleet_loaded(tmp_path, {"name": "Solo", "home": _A_HOME})
+
+        assert fleet.name == "Solo"
+        assert [home.pv_config.capacity_kw for home in fleet.homes] == [4.0]
 
 
 class TestBristolPhase1Scenario:
@@ -725,6 +767,7 @@ class TestParseSweepFleetConfigs:
         assert [value for value, _ in points] == [1.25, 2.5]
         for _, fleet in points:
             for home in fleet.homes:
+                assert home.seg_tariff == SEGTariff("", 4.1)
                 assert home.tariff_config == TariffConfig.economy_7(off_peak_rate=0.09, peak_rate=0.25)
                 assert home.battery_config is not None
                 assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
@@ -751,6 +794,15 @@ class TestParseSweepFleetConfigs:
                 {"homes": [{"pv": {"capacity_kw": _PV_KW}}]},
                 re.escape("the top level: requires 'fleet_distribution'"),
                 id="no-fleet-distribution",
+            ),
+            pytest.param(
+                _fleet_file(
+                    _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}),
+                    tariff=_ECONOMY_7,
+                    finanse={},
+                ),
+                re.escape("the top level: unrecognised keys 'finanse'"),
+                id="a-key-no-scenario-reads",
             ),
             pytest.param(
                 _fleet_file(5.0, tariff=_ECONOMY_7),

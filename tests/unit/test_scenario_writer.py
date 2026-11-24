@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import pytest
-import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
@@ -34,7 +33,6 @@ from solar_challenge.scenario_blocks import (
     LOCATION_BLOCK,
     PV_BLOCK,
     ComponentBlock,
-    parse_seg_rate,
 )
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.seg import SEGTariff
@@ -175,10 +173,10 @@ def _through_home_run(tmp_path: Path) -> tuple[object, object]:
 
 
 def _through_load_home_config(tmp_path: Path) -> tuple[object, object]:
-    """The home load_home_config reads back, and the home written, without the SEG tariff it does not read."""
+    """The home load_home_config reads back, and the home written, its SEG tariff unnamed: a seg: block names none."""
     home = _every_grammar_field_home()
     loaded = load_home_config(_written(home_scenario(home, name="Nine kW home"), tmp_path))
-    return loaded, dataclasses.replace(home, seg_tariff=None)
+    return loaded, dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0))
 
 
 def _through_load_scenarios(tmp_path: Path) -> tuple[object, object]:
@@ -196,10 +194,12 @@ def _through_load_scenarios(tmp_path: Path) -> tuple[object, object]:
 
 
 def _through_load_fleet_config(tmp_path: Path) -> tuple[object, object]:
-    """The homes load_fleet_config reads back, and the homes written, without the SEG tariff it does not read."""
+    """The homes load_fleet_config reads back, and the homes written, their SEG tariff unnamed: a seg: block names none."""
     homes = _two_every_key_homes()
     fleet = load_fleet_config(_written(fleet_scenario(homes, name="Fleet run"), tmp_path))
-    return fleet.homes, tuple(dataclasses.replace(home, seg_tariff=None) for home in homes)
+    return fleet.homes, tuple(
+        dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0)) for home in homes
+    )
 
 
 @pytest.mark.parametrize(
@@ -440,20 +440,29 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
     assert fleet.name == "Fleet run"
 
 
-def test_a_fleet_seg_block_carries_the_rate_its_homes_share() -> None:
-    """The homes' SEG tariffs share a rate but not a name, which no seg: block carries.
-
-    load_fleet_config does not read seg: yet (pending task 185), so the block is
-    checked through the SEG reader that finance and optimize use.
-    """
+def test_a_fleet_seg_block_carries_the_rate_its_homes_share(tmp_path: Path) -> None:
+    """The homes' SEG tariffs share a rate but not a name, which no seg: block carries."""
     homes = [
         _home(3.0, seg_tariff=SEGTariff(name="Octopus Energy", rate_pence_per_kwh=4.1)),
         _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.1)),
     ]
 
-    text = scenario_yaml(fleet_scenario(homes, name="SEG fleet"))
+    fleet = load_fleet_config(_written(fleet_scenario(homes, name="SEG fleet"), tmp_path))
 
-    assert parse_seg_rate(yaml.safe_load(text)["seg"]) == 4.1
+    assert [home.seg_tariff for home in fleet.homes] == [SEGTariff(name="", rate_pence_per_kwh=4.1)] * 2
+
+
+_UNNAMED_SEG_HOME = _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0))
+
+
+def test_a_fleet_exporting_at_an_unnamed_seg_rate_reads_back_equal(tmp_path: Path) -> None:
+    fleet = load_fleet_config(_written(fleet_scenario([_UNNAMED_SEG_HOME] * 2, name="SEG fleet"), tmp_path))
+
+    assert fleet.homes == (_UNNAMED_SEG_HOME, _UNNAMED_SEG_HOME)
+
+
+def test_a_home_exporting_at_an_unnamed_seg_rate_reads_back_equal(tmp_path: Path) -> None:
+    assert load_home_config(_written(home_scenario(_UNNAMED_SEG_HOME, name="SEG home"), tmp_path)) == _UNNAMED_SEG_HOME
 
 
 @pytest.mark.parametrize(
