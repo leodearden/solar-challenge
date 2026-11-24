@@ -472,15 +472,14 @@ class _SimulatedAge:
 class _DrivenMetric:
     """A node aggregate the adaptive bisection interpolates to the error target, and the quantity its deviation is a percentage of."""
 
-    name: str
     value: Callable[[_NodeData], float]
     scale_of: Callable[[_NodeData], float]
 
 
-_OWN_USE = _DrivenMetric("own-use", lambda node: node.fleet_own_use_kwh, lambda node: node.fleet_own_use_kwh)
-_EXPORT = _DrivenMetric("export", lambda node: node.fleet_export_kwh, lambda node: node.fleet_generation_kwh)
-_IMPORT = _DrivenMetric("import", lambda node: node.fleet_import_kwh, lambda node: node.fleet_demand_kwh)
-_INCOME = _DrivenMetric("income", lambda node: node.fleet_income_gbp, lambda node: node.fleet_income_gbp)
+_OWN_USE = _DrivenMetric(value=lambda node: node.fleet_own_use_kwh, scale_of=lambda node: node.fleet_own_use_kwh)
+_EXPORT = _DrivenMetric(value=lambda node: node.fleet_export_kwh, scale_of=lambda node: node.fleet_generation_kwh)
+_IMPORT = _DrivenMetric(value=lambda node: node.fleet_import_kwh, scale_of=lambda node: node.fleet_demand_kwh)
+_INCOME = _DrivenMetric(value=lambda node: node.fleet_income_gbp, scale_of=lambda node: node.fleet_income_gbp)
 
 _DRIVEN_METRICS: tuple[_DrivenMetric, ...] = (_OWN_USE, _EXPORT, _IMPORT, _INCOME)
 """Every metric the bisection drives, none of which reads the own-use rate.  Export and import are measured against
