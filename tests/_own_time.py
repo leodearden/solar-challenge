@@ -1,14 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Bound a real child's process group by its own time, with the wall clock only a backstop.
 
+A group's members are the threads of its processes, each queued for a CPU on its own.
 A group's own time is the wall-clock time since a wait began, less the time its
 members spent queued for a CPU: the run delay Linux credits each one in
-/proc/PID/schedstat, and a bound on any queue stint it has not credited yet. Time a
-member spends running or blocked counts, so a hung command still fails its budget;
-time the host keeps it runnable but off a CPU does not, so a crowded host fails a
-wait only at its wall-clock limit, WALL_LIMIT_IN_BUDGETS budgets long. The whole
-process group is metered because a command such as `npm run build:css` does its work
-in grandchildren while each parent sleeps. It reads /proc, so it is Linux-only.
+/proc/PID/task/TID/schedstat, and a bound on any queue stint it has not credited yet.
+Time a member spends running or blocked counts, so a hung command still fails its
+budget; time the host keeps it runnable but off a CPU does not, so a crowded host
+fails a wait only at its wall-clock limit, WALL_LIMIT_IN_BUDGETS budgets long. Every
+thread of the whole group is metered because a command such as `npm run build:css`
+does its work in grandchildren while each parent sleeps, and node does some of its
+work, such as npm ci's file writes, on helper threads while its main thread waits on
+them. Members queued at once each count their own run delay, which can only make a
+wait more lenient. It reads /proc, so it is Linux-only.
 
 Use run_on_own_time in place of `subprocess.run(..., timeout=...)` for a real child.
 """
@@ -35,10 +39,10 @@ _POLL_INTERVAL_SECS = 0.25
 
 @dataclass(frozen=True)
 class MemberSnapshot:
-    """One group member's times and state at one reading.
+    """One group member's times and state at one reading; the member is one thread of a process in the group.
 
-    *on_cpu* and *run_delay* are the seconds its main thread has spent on a CPU, and
-    been credited as run delay, since it started; *state* is its proc(5) state letter.
+    *on_cpu* and *run_delay* are the seconds it has spent on a CPU, and been credited
+    as run delay, since it started; *state* is its proc(5) state letter.
     """
 
     on_cpu: float
@@ -60,7 +64,7 @@ class GroupHost(Protocol):
     def wall(self) -> float: ...
 
     def members(self, group: int) -> Mapping[int, MemberSnapshot]:
-        """Each live process whose process group is *group*, by pid.
+        """Each live thread of each process whose process group is *group*, by thread id, a main thread's being its pid.
 
         Each one's state is read before its times, so the run delay in its times
         counts all the time a member seen not runnable had spent queued by that read.
@@ -79,8 +83,9 @@ class _LinuxHost:
     def members(self, group: int) -> dict[int, MemberSnapshot]:
         members: dict[int, MemberSnapshot] = {}
         for pid in _pids_in_group(group):
-            with contextlib.suppress(FileNotFoundError, ProcessLookupError):
-                members[pid] = _snapshot(pid)
+            for thread in _thread_directories(pid):
+                with contextlib.suppress(FileNotFoundError, ProcessLookupError):
+                    members[int(thread.name)] = _snapshot(thread)
         return members
 
     def sleep(self, seconds: float) -> None:
@@ -100,11 +105,19 @@ def _pids_in_group(group: int) -> list[int]:
     return pids
 
 
-def _snapshot(pid: int) -> MemberSnapshot:
-    """The process *pid*'s state, read first, then its times."""
-    # The state follows the process's name, which is in parentheses and may itself hold spaces and ')'.
-    state = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()[0]
-    on_cpu_ns, run_delay_ns, _ = Path(f"/proc/{pid}/schedstat").read_text().split()
+def _thread_directories(pid: int) -> list[Path]:
+    """The /proc directory of each thread of the process *pid*, none once the process has gone."""
+    try:
+        return list(Path(f"/proc/{pid}/task").iterdir())
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+
+
+def _snapshot(thread: Path) -> MemberSnapshot:
+    """The state of the thread whose /proc directory is *thread*, read first, then its times."""
+    # The state follows the thread's name, which is in parentheses and may itself hold spaces and ')'.
+    state = (thread / "stat").read_text().rpartition(")")[2].split()[0]
+    on_cpu_ns, run_delay_ns, _ = (thread / "schedstat").read_text().split()
     return MemberSnapshot(on_cpu=int(on_cpu_ns) / 1e9, run_delay=int(run_delay_ns) / 1e9, state=state)
 
 
@@ -178,7 +191,7 @@ class _MemberRecord:
 
 @dataclass(frozen=True)
 class _GroupMeter:
-    """The readings of one wait: a record of every member it has seen, by pid, and its latest *reading*."""
+    """The readings of one wait: a record of every member it has seen, by thread id, and its latest *reading*."""
 
     records: Mapping[int, _MemberRecord]
     reading: Reading
@@ -186,7 +199,7 @@ class _GroupMeter:
     @classmethod
     def starting_from(cls, members: Mapping[int, MemberSnapshot]) -> _GroupMeter:
         """The meter when the wait takes *members* as their baselines, before any time has passed."""
-        records = {pid: _MemberRecord(snapshot, snapshot, read_at=0.0, uncredited=0.0) for pid, snapshot in members.items()}
+        records = {tid: _MemberRecord(snapshot, snapshot, read_at=0.0, uncredited=0.0) for tid, snapshot in members.items()}
         return cls(records, Reading(elapsed=0.0, on_cpu=0.0, run_delay=0.0, uncredited=0.0))
 
     def after_reading(self, members: Mapping[int, MemberSnapshot], *, elapsed: float) -> _GroupMeter:
@@ -195,7 +208,7 @@ class _GroupMeter:
         A member absent from *members* keeps its record, so the run delay it was
         credited still counts, but it has no uncredited time.
         """
-        present = {pid: self._record_of(pid).after(snapshot, elapsed) for pid, snapshot in members.items()}
+        present = {tid: self._record_of(tid).after(snapshot, elapsed) for tid, snapshot in members.items()}
         records = {**self.records, **present}
         reading = Reading(
             elapsed=elapsed,
@@ -205,10 +218,10 @@ class _GroupMeter:
         )
         return _GroupMeter(records, reading)
 
-    def _record_of(self, pid: int) -> _MemberRecord:
-        """The record of the member *pid*; for one not seen before, born since the wait's latest reading, a newborn's."""
+    def _record_of(self, tid: int) -> _MemberRecord:
+        """The record of the member *tid*; for one not seen before, born since the wait's latest reading, a newborn's."""
         newborn = _MemberRecord(_AT_BIRTH, _AT_BIRTH, read_at=self.reading.elapsed, uncredited=0.0)
-        return self.records.get(pid, newborn)
+        return self.records.get(tid, newborn)
 
 
 class OwnTimeExceeded(TimeoutError):

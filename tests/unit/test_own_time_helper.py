@@ -35,7 +35,7 @@ from tests._own_time import (
     wait_on_own_time,
 )
 
-_on_linux = pytest.mark.skipif(sys.platform != "linux", reason="LINUX_HOST reads /proc/PID/stat and /proc/PID/schedstat")
+_on_linux = pytest.mark.skipif(sys.platform != "linux", reason="LINUX_HOST reads each thread's stat and schedstat under /proc")
 
 _ANY_GROUP = 1
 _LEADER = 1
@@ -276,8 +276,27 @@ def test_the_host_reads_every_member_of_a_real_group() -> None:
 
 
 @_on_linux
+def test_the_host_reads_every_thread_of_a_process_in_the_group_as_a_member() -> None:
+    """The process, Python, starts a second thread that blocks and prints that thread's id, as node runs npm ci's
+    file writes on helper threads while its main thread waits on them."""
+    script = (
+        "import threading; blocked = threading.Event(); "
+        "thread = threading.Thread(target=blocked.wait, daemon=True); thread.start(); "
+        "print(thread.native_id, flush=True); blocked.wait()"
+    )
+    with subprocess.Popen([sys.executable, "-I", "-c", script], stdout=subprocess.PIPE, process_group=0) as process:
+        try:
+            thread = _number_printed_by(process)
+            members = LINUX_HOST.members(process.pid)
+        finally:
+            _kill_and_reap(process)
+
+    assert {process.pid, thread} <= members.keys()
+
+
+@_on_linux
 def test_the_host_reads_the_state_of_a_member_named_with_a_space_and_a_parenthesis(tmp_path: Path) -> None:
-    """/proc/PID/stat gives the process's name, in parentheses, before its state, so the member's name holds ') '.
+    """A thread's stat file gives its name, in parentheses, before its state, so the member's name holds ') '.
 
     The member exits at once and stays unreaped, so its state is Z.
     """
