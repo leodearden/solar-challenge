@@ -77,11 +77,9 @@
 
         {% call accordion_section('period', 'Period') %}
                 <div class="flex flex-wrap gap-2 mb-3">
-                    <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Full Year</button>
-                    <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Summer</button>
-                    <button @click="setPeriod('winter')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">Winter</button>
-                    <button @click="setPeriod('month')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Month</button>
-                    <button @click="setPeriod('week')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">1 Week</button>
+                    {% for title in page_limits.period_presets %}
+                    <button @click='setPeriod({{ title|tojson }})' class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">{{ title }}</button>
+                    {% endfor %}
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
@@ -128,11 +126,11 @@
         {% call accordion_section('fleet', 'Fleet Distribution', spacing_class='space-y-5') %}
                 <div>
                     <label for="builder_n_homes" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
-                    <input id="builder_n_homes" type="number" min="1" max="10000" x-model="n_homes"
+                    <input id="builder_n_homes" type="number" min="{{ page_limits.fleet_size.low }}" max="{{ page_limits.fleet_size.high }}" x-model="n_homes"
                         class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-primary-500">
                 </div>
 
-                {% for component in fleet_components.values() %}
+                {% for component in page_limits.components.values() %}
                 {{ distribution_card(component) }}
                 {% endfor %}
         {% endcall %}

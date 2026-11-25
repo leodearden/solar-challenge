@@ -1,7 +1,9 @@
 """Tests for weather data handling."""
 
+import errno
 import hashlib
 import json
+import os
 import pickle
 import re
 import shutil
@@ -216,11 +218,52 @@ class TestWeatherCache:
             shutil.copy2(KEY_VERSION_2_ENTRY_DIR / name, cache.cache_dir / name)
         return names
 
-    def test_cache_directory_created(self, temp_cache_dir):
-        """Cache directory is created if it doesn't exist."""
-        new_cache_dir = temp_cache_dir / "new_cache"
-        WeatherCache(cache_dir=new_cache_dir)
-        assert new_cache_dir.exists()
+    def test_constructing_a_cache_leaves_its_directory_absent_until_the_first_put(
+        self, tmp_path, bristol, sample_weather_data
+    ):
+        """Constructing a cache creates neither its directory nor the directory's parent, and get, invalidate and
+        clear read the absent directory as an empty cache, creating nothing either; the first put creates the
+        directory, its parent included, and stores the entry there."""
+        cache_dir = tmp_path / "absent" / "weather"
+
+        cache = WeatherCache(cache_dir=cache_dir)
+
+        assert not cache_dir.parent.exists()
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        assert not cache_dir.parent.exists()
+
+        cache.put(sample_weather_data, "tmy", bristol)
+
+        assert len(list(cache_dir.iterdir())) == 1
+        pd.testing.assert_frame_equal(cache.get("tmy", bristol), sample_weather_data)
+
+    @pytest.mark.parametrize(
+        ("directory_parts", "put_error"),
+        [
+            pytest.param(("file", "weather"), NotADirectoryError, id="its directory under a regular file"),
+            pytest.param(("file",), FileExistsError, id="its directory a regular file"),
+        ],
+    )
+    def test_a_regular_file_in_its_directorys_place_reads_as_an_empty_cache_and_put_raises_oserror(
+        self, tmp_path, bristol, sample_weather_data, directory_parts, put_error
+    ):
+        """A regular file where the cache directory, or a parent of it, should be leaves no entry file anywhere, so
+        get, invalidate and clear read the cache as empty, as for an absent directory, and put raises the OSError
+        its mkdir raises; the regular file is left as it was."""
+        regular_file = tmp_path / "file"
+        regular_file.write_text("kept")
+        cache = WeatherCache(cache_dir=tmp_path.joinpath(*directory_parts))
+
+        assert cache.get("tmy", bristol) is None
+        assert cache.invalidate("tmy", bristol) is False
+        assert cache.clear() == 0
+        with pytest.raises(put_error):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert regular_file.read_text() == "kept"
+        assert list(tmp_path.iterdir()) == [regular_file]
 
     def test_put_and_get_tmy(self, cache, bristol, sample_weather_data):
         """Data can be stored and retrieved from cache."""
@@ -375,17 +418,19 @@ class TestWeatherCache:
             pytest.param(_ZonePandasCannotLocalizeIn(), id="a zone pandas can convert to but not localize in"),
         ],
     )
-    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, cache, bristol, tz):
+    def test_put_refuses_an_index_in_a_timezone_get_could_not_restore(self, tmp_path, bristol, tz):
         """put refuses a frame indexed in a timezone whose str, from which get restores it, names none: its
-        ValueError names that str, and put leaves no file, so a get finds no entry. The index is built at UTC
-        and converted to tz, because pandas cannot localize wall times in some such zones."""
+        ValueError names that str, and put creates nothing, not even the cache's absent directory, so a get finds
+        no entry. The index is built at UTC and converted to tz, because pandas cannot localize wall times in some
+        such zones."""
+        cache = WeatherCache(cache_dir=tmp_path / "absent")
         index = pd.date_range("2024-06-21", periods=48, freq="h", tz="UTC").tz_convert(tz)
         frame = pd.DataFrame({"ghi": np.linspace(0.0, 870.0, len(index))}, index=index)
 
         with pytest.raises(ValueError, match=re.escape(str(index.tz))):
             cache.put(frame, "tmy", bristol)
 
-        assert list(cache.cache_dir.iterdir()) == []
+        assert not cache.cache_dir.exists()
         assert cache.get("tmy", bristol) is None
 
     def test_get_refuses_an_entry_recording_a_timezone_it_could_not_restore(self, cache, bristol):
@@ -460,6 +505,23 @@ class TestWeatherCache:
         assert list(cache.cache_dir.iterdir()) == []
         assert cache.get("tmy", bristol) is None
 
+    def test_a_put_that_cannot_replace_the_entrys_path_raises_oserror_leaving_the_path_as_it_was_and_no_staged_file(
+        self, cache, bristol, sample_weather_data
+    ):
+        """put's last step replaces what lies at the entry's path with the file it has written. When that fails, as
+        onto a non-empty directory, put raises OSError, leaving the directory as it was and no staged file beside it."""
+        cache.put(sample_weather_data, "tmy", bristol)
+        [entry] = cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+        (entry / "kept").write_text("kept")
+
+        with pytest.raises(IsADirectoryError):
+            cache.put(sample_weather_data, "tmy", bristol)
+
+        assert list(cache.cache_dir.iterdir()) == [entry]
+        assert [(file.name, file.read_text()) for file in entry.iterdir()] == [("kept", "kept")]
+
     def test_clear_removes_all(self, cache, bristol, sample_weather_data):
         """Clear removes all cached data."""
         cache.put(sample_weather_data, "tmy", bristol)
@@ -491,14 +553,18 @@ class TestWeatherCacheDirectory:
     """
 
     def test_given_no_directory_it_uses_the_one_the_variable_names(self, monkeypatch, tmp_path):
-        """WeatherCache() uses the directory the variable names, and creates it."""
+        """WeatherCache() uses the directory the variable names, which its first put creates."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         cache = WeatherCache()
 
         assert cache.cache_dir == tmp_path / "named"
-        assert (tmp_path / "named").is_dir()
+        assert not (tmp_path / "named").exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "named").iterdir())) == 1
 
     @pytest.mark.parametrize(
         "clear_variable",
@@ -510,23 +576,49 @@ class TestWeatherCacheDirectory:
     def test_given_no_directory_it_uses_the_default_when_the_variable_is_unset_or_empty(
         self, monkeypatch, tmp_path, clear_variable
     ):
-        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, and creates it."""
+        """WeatherCache() uses DEFAULT_CACHE_DIR, under the working directory, which its first put creates."""
         monkeypatch.chdir(tmp_path)
         clear_variable(monkeypatch)
 
         cache = WeatherCache()
 
         assert cache.cache_dir == DEFAULT_CACHE_DIR
-        assert (tmp_path / DEFAULT_CACHE_DIR).is_dir()
+        assert not (tmp_path / DEFAULT_CACHE_DIR).exists()
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / DEFAULT_CACHE_DIR).iterdir())) == 1
 
     def test_given_a_directory_it_ignores_the_variable(self, monkeypatch, tmp_path):
-        """WeatherCache(cache_dir=...) uses the directory it is given and never creates the one the variable names."""
+        """WeatherCache(cache_dir=...) uses the directory it is given: its first put creates that one, never the one
+        the variable names."""
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         cache = WeatherCache(cache_dir=tmp_path / "given")
 
         assert cache.cache_dir == tmp_path / "given"
+
+        cache.put(synthetic_june_weather("2024-06-21"), "tmy", Location.bristol())
+
+        assert len(list((tmp_path / "given").iterdir())) == 1
         assert not (tmp_path / "named").exists()
+
+
+def _cache_whose_directory_is_a_symlink_to_nowhere(tmp_path):
+    """A cache whose get finds no entry and whose put's mkdir raises FileExistsError for the link, even as root.
+
+    Not a read-only directory, which root can write.
+    """
+    cache_dir = tmp_path / "weather"
+    cache_dir.symlink_to(tmp_path / "nowhere", target_is_directory=True)
+    return WeatherCache(cache_dir=cache_dir)
+
+
+def _cache_whose_directory_lies_under_a_regular_file(tmp_path):
+    """A cache whose get finds no entry and whose put's mkdir raises NotADirectoryError, even as root."""
+    regular_file = tmp_path / "file"
+    regular_file.touch()
+    return WeatherCache(cache_dir=regular_file / "weather")
 
 
 class TestPvgisTmy:
@@ -597,6 +689,22 @@ class TestPvgisTmy:
         pvgis_requests.hourly.assert_called_once()
         pd.testing.assert_frame_equal(seeded_cache.get("tmy", Location.bristol()), fetched, check_exact=True)
 
+    def test_an_entry_path_its_cache_cannot_open_raises_the_oserror_and_fetches_nothing(
+        self, seeded_cache, pvgis_requests
+    ):
+        """get passes on the OSError its cache's get raises for an entry path it cannot open for a reason other than
+        the path's absence, naming the path, and requests nothing from PVGIS. A directory at the path is the cause
+        used, since opening one raises even as root, where a cache directory with no permissions would not."""
+        [entry] = seeded_cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+
+        with pytest.raises(IsADirectoryError, match=re.escape(str(entry))):
+            PvgisTmy(seeded_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_not_called()
+        pvgis_requests.hourly.assert_not_called()
+
     def test_a_miss_fetches_once_puts_and_serves_later_gets_from_its_cache(
         self, tmp_path, weather_cache, pvgis_requests
     ):
@@ -616,6 +724,51 @@ class TestPvgisTmy:
         pvgis_requests.tmy.side_effect = AssertionError("the TMY was requested again")
         pvgis_requests.hourly.side_effect = AssertionError("the series was requested again")
         pd.testing.assert_frame_equal(PvgisTmy(cache).get(bristol), first, check_exact=True)
+
+    @pytest.mark.parametrize(
+        ("make_cache", "put_errno"),
+        [
+            pytest.param(
+                _cache_whose_directory_is_a_symlink_to_nowhere, errno.EEXIST, id="its directory a symlink to nowhere"
+            ),
+            pytest.param(
+                _cache_whose_directory_lies_under_a_regular_file, errno.ENOTDIR, id="its directory under a regular file"
+            ),
+        ],
+    )
+    def test_a_put_its_cache_cannot_make_returns_the_fetched_tmy_with_a_warning_naming_the_directory(
+        self, tmp_path, pvgis_requests, make_cache, put_errno
+    ):
+        """A get whose put its cache cannot make, as where the cache directory cannot be created, returns the scaled
+        TMY it fetched, with a UserWarning attributed to get's caller that names the directory and the OSError's
+        reason, and caches nothing. A cache directory under a regular file is one, since its get finds no entry and
+        so fetches, instead of raising."""
+        cache = make_cache(tmp_path)
+
+        with pytest.warns(UserWarning, match=re.escape(str(cache.cache_dir))) as raised:
+            fetched = PvgisTmy(cache).get(Location.bristol())
+
+        assert fetched["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pvgis_requests.tmy.assert_called_once()
+        pvgis_requests.hourly.assert_called_once()
+        [warning] = [w for w in raised if str(cache.cache_dir) in str(w.message)]
+        assert os.strerror(put_errno) in str(warning.message)
+        assert warning.filename == __file__
+        assert not cache.cache_dir.exists()
+
+    def test_after_a_put_its_cache_cannot_make_the_next_get_fetches_again(self, tmp_path, pvgis_requests):
+        """A get whose put its cache could not make leaves nothing cached, so the next get fetches the scaled TMY
+        from PVGIS again, and returns the same frame."""
+        weather = PvgisTmy(_cache_whose_directory_is_a_symlink_to_nowhere(tmp_path))
+
+        with pytest.warns(UserWarning):
+            first = weather.get(Location.bristol())
+        with pytest.warns(UserWarning):
+            second = weather.get(Location.bristol())
+
+        assert pvgis_requests.tmy.call_count == 2
+        assert pvgis_requests.hourly.call_count == 2
+        pd.testing.assert_frame_equal(first, second, check_exact=True)
 
     def test_with_no_cache_it_fetches_on_every_get_and_writes_nothing(self, weather_cache, pvgis_requests):
         """PvgisTmy(None) requests both PVGIS answers on every get and puts nothing, not even in the weather_cache
@@ -672,6 +825,15 @@ class TestDefaultWeather:
         monkeypatch.setenv(CACHE_DIR_VARIABLE, str(tmp_path / "named"))
 
         assert get_weather_cache() is installed_cache
+
+    def test_default_weather_with_none_installed_creates_no_directory(self, no_cache_installed, tmp_path):
+        """With no cache installed, neither default_weather() nor get_weather_cache() writes anything under the
+        working directory, so a composition root that builds the default provider writes nothing before its first
+        put."""
+        default_weather()
+        get_weather_cache()
+
+        assert list(tmp_path.iterdir()) == []
 
     def test_default_weather_reads_the_installed_cache(self, installed_cache, pvgis_requests):
         """default_weather() serves the TMY the installed cache holds, exactly, and requests nothing from PVGIS."""

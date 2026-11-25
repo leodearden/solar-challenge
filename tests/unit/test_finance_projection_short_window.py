@@ -16,9 +16,10 @@ from collections.abc import Sequence
 import pytest
 
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.finance import householder_bill, project_multi_year
+from solar_challenge.finance import householder_bill
 from solar_challenge.fleet import FleetResults
-from solar_challenge.home import HomeConfig, calculate_summary
+from solar_challenge.home import HomeConfig, RunPricing, calculate_summary
+from solar_challenge.projection import project_multi_year
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance
 
 
@@ -26,7 +27,7 @@ _SHORT_WINDOW_DAYS = 3
 
 
 def _fleet_over(homes: Sequence[HomeConfig], window_days: int) -> FleetResults:
-    """*homes* over *window_days* days from 2021-01-01 at the daily rates of a 365-day year of 3,000 kWh self-consumed, 1,000 exported, 500 imported, 800 discharged and £150 of SEG income."""
+    """*homes* over *window_days* days from 2021-01-01 at the daily rates of a 365-day year of 3,000 kWh self-consumed, 1,000 exported, 500 imported and 800 discharged, the export earning £150 of SEG income at 15 p/kWh."""
     share_of_year = window_days / 365
     return make_fleet_results(
         homes=homes,
@@ -34,7 +35,7 @@ def _fleet_over(homes: Sequence[HomeConfig], window_days: int) -> FleetResults:
         export_kwh=1000.0 * share_of_year,
         import_kwh=500.0 * share_of_year,
         discharge_kwh=800.0 * share_of_year,
-        export_revenue_gbp=150.0 * share_of_year,
+        pricing=RunPricing(None, 15.0),
         days=window_days,
     )
 
@@ -138,9 +139,8 @@ class TestProjectMultiYearAnnualisesShortWindow:
             bills = [
                 householder_bill(
                     s,
-                    annual_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
+                    window_self_consumption_kwh=s.total_demand_kwh - s.total_grid_import_kwh,
                     finance=finance,
-                    simulation_days=s.simulation_days,
                 )
                 for s in summaries
             ]

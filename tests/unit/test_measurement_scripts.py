@@ -2,10 +2,11 @@
 """Offline smoke tests of the measurement scripts the docs say to re-measure with.
 
 docs/pv-inverter-string-matching.md, docs/tmy-irradiation-scaling.md,
-docs/pv-system-losses.md, docs/scheduled-charge-windows.md and
-review/briefing.yaml's key_decisions say to re-measure their figures with
-scripts/measure_mppt_window.py, scripts/measure_tmy_irradiation.py,
-scripts/measure_pv_performance_ratio.py and scripts/measure_charge_window_bills.py.
+docs/pv-system-losses.md, docs/scheduled-charge-windows.md,
+docs/grid-charge-forecast.md and review/briefing.yaml's key_decisions say to
+re-measure their figures with scripts/measure_mppt_window.py,
+scripts/measure_tmy_irradiation.py, scripts/measure_pv_performance_ratio.py,
+scripts/measure_charge_window_bills.py and scripts/measure_grid_charge_forecast.py.
 """
 
 import dataclasses
@@ -21,8 +22,12 @@ import pytest
 from pvlib.modelchain import ModelChain
 
 import solar_challenge
-from solar_challenge.finance import BillBreakdown
-from solar_challenge.home import SummaryStatistics
+from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.dispatch import GRID_CHARGE_FORECASTS
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import BillBreakdown, bill_distribution
+from solar_challenge.fleet import FleetRunner
+from solar_challenge.home import SummaryStatistics, simulate_home
 from solar_challenge.location import Location
 from solar_challenge.pv import (
     PVConfig,
@@ -33,15 +38,19 @@ from solar_challenge.pv import (
     usable_cec_inverters,
     wired_dc_capacity_kw,
 )
+from solar_challenge.scenario_blocks import parse_finance_config, parse_seg_rate
+from solar_challenge.seg import SEGTariff
 from solar_challenge.weather import (
     CACHE_DIR_VARIABLE,
     CLIMATE_YEARS,
     DEFAULT_CACHE_DIR,
     IRRADIANCE_COLUMNS,
+    PvgisTmy,
     WeatherCache,
 )
 from tests import _synthetic_weather
 from tests._bristol_arbitrage_home import bristol_arbitrage_home
+from tests._repository_paths import SCENARIOS_DIR
 from tests._scripts import load_script
 from tests._seeded_tmy import ClearJuneDays
 from tests._synthetic_weather import sunless_weather, synthetic_june_weather, weather_for
@@ -513,3 +522,194 @@ class TestMeasureChargeWindowBills:
 
         assert f"read from the cache in {tmp_path / 'weather'}" in capsys.readouterr().out
         assert not (working / DEFAULT_CACHE_DIR).exists()
+
+
+_FLEX_SCENARIO = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
+
+_FORECAST_FIRST_DAY = pd.Timestamp("2024-05-31")
+_FORECAST_LAST_DAY = pd.Timestamp("2024-06-01")
+"""The last day of spring and the first of summer, so the figures have a MAM and a JJA column; both lie in the trailing forecast's 14-day warm-up."""
+
+_FORECAST_HOMES = 2
+
+
+@pytest.fixture(scope="module")
+def grid_charge_forecast() -> ModuleType:
+    """scripts/measure_grid_charge_forecast.py."""
+    return load_script("measure_grid_charge_forecast")
+
+
+@pytest.fixture(scope="module")
+def flex_weather_cache(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A weather cache holding a TMY of clear June days as the TMY at the board scenario's location, so the script fetches nothing."""
+    location = load_fleet_config(_FLEX_SCENARIO).homes[0].location
+    cache_dir = tmp_path_factory.mktemp("weather-cache")
+    WeatherCache(cache_dir).put(_synthetic_weather.synthetic_tmy(), "tmy", location)
+    return cache_dir
+
+
+@pytest.fixture(scope="module")
+def forecast_arms(grid_charge_forecast: ModuleType, flex_weather_cache: Path) -> list[Any]:
+    """measure_grid_charge_forecast's arms for the board scenario's first two homes over the two days, run in turn on flex_weather_cache's TMY."""
+    scenario = grid_charge_forecast.read_scenario(
+        _FLEX_SCENARIO, start=_FORECAST_FIRST_DAY, end=_FORECAST_LAST_DAY, homes=_FORECAST_HOMES
+    )
+    weather = PvgisTmy(WeatherCache(flex_weather_cache))
+    return list(grid_charge_forecast.measure(scenario, FleetRunner(weather, simulate_home, parallel=False)))
+
+
+def _per_home_means(arm: Any) -> dict[str, float | None]:
+    """Each figure the report gives arm, by its column: the mean over arm's homes, and None for a householder bill finance refused."""
+    summaries = [home.summary for home in arm.homes]
+    bill = arm.householder_bill
+    return {
+        "MAM net £": statistics.fmean(home.net_cost_by_season_gbp["MAM"] for home in arm.homes),
+        "JJA net £": statistics.fmean(home.net_cost_by_season_gbp["JJA"] for home in arm.homes),
+        "Window net £": statistics.fmean(summary.net_cost_gbp for summary in summaries),
+        "Grid charge kWh": statistics.fmean(summary.total_grid_charge_kwh for summary in summaries),
+        "Export kWh": statistics.fmean(summary.total_grid_export_kwh for summary in summaries),
+        "Householder bill £/yr": bill if isinstance(bill, float) else None,
+    }
+
+
+def _cell(value: float | None, sign: str = "") -> str:
+    """value as the report prints it, to two places, with a + on a positive delta when sign is '+'; 'refused' for None."""
+    return "refused" if value is None else f"{value:{sign}.2f}"
+
+
+def _markdown_tables(report: str) -> list[list[dict[str, str]]]:
+    """Each markdown table of report, in order, as its rows, each cell keyed by its column's header."""
+    tables: list[list[dict[str, str]]] = []
+    block: list[list[str]] = []
+    for line in [*report.splitlines(), ""]:
+        if line.startswith("|"):
+            block.append([cell.strip() for cell in line.strip().strip("|").split("|")])
+        elif block:
+            header, _separator, *rows = block
+            tables.append([dict(zip(header, row, strict=True)) for row in rows])
+            block = []
+    return tables
+
+
+class TestMeasureGridChargeForecast:
+    """measure_grid_charge_forecast runs the board fleet under each grid-charge forecast (scripts/measure_grid_charge_forecast.py, docs/grid-charge-forecast.md)."""
+
+    def test_it_reads_the_homes_the_finance_cli_simulates_and_bills_for_the_scenario(
+        self, grid_charge_forecast: ModuleType
+    ) -> None:
+        """solar-challenge finance run simulates the fleet's homes each exporting at the scenario's SEG rate, and bills them under its finance: block."""
+        raw = load_config(_FLEX_SCENARIO)
+        seg_rate = parse_seg_rate(raw["seg"])
+        assert seg_rate is not None
+        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
+
+        scenario = grid_charge_forecast.read_scenario(
+            _FLEX_SCENARIO, start=_FORECAST_FIRST_DAY, end=_FORECAST_LAST_DAY, homes=_FORECAST_HOMES
+        )
+
+        assert scenario.simulated_homes() == tuple(
+            dataclasses.replace(home, seg_tariff=seg_tariff)
+            for home in load_fleet_config(_FLEX_SCENARIO).homes[:_FORECAST_HOMES]
+        )
+        assert scenario.finance == parse_finance_config(raw["finance"])
+        assert scenario.simulation_bounds() == (
+            pd.Timestamp("2024-05-31", tz="Europe/London"),
+            pd.Timestamp("2024-06-01", tz="Europe/London"),
+        )
+
+    @_QUIET_DIODE_SOLVER
+    def test_it_runs_every_home_under_each_forecast_in_order(self, forecast_arms: list[Any]) -> None:
+        assert [arm.forecast for arm in forecast_arms] == list(GRID_CHARGE_FORECASTS)
+        for arm in forecast_arms:
+            assert [home.summary.grid_charge_forecast for home in arm.homes] == [arm.forecast] * _FORECAST_HOMES
+
+    @_QUIET_DIODE_SOLVER
+    def test_each_homes_net_cost_in_each_season_adds_up_to_its_net_cost_over_the_window(
+        self, forecast_arms: list[Any]
+    ) -> None:
+        """Net cost is import cost less export revenue, as calculate_summary's net_cost_gbp is."""
+        for arm in forecast_arms:
+            for home in arm.homes:
+                assert list(home.net_cost_by_season_gbp) == ["MAM", "JJA"], arm.forecast
+                assert sum(home.net_cost_by_season_gbp.values()) == pytest.approx(
+                    home.summary.net_cost_gbp, rel=1e-9, abs=1e-9
+                ), arm.forecast
+
+    @_QUIET_DIODE_SOLVER
+    def test_the_householder_bill_is_bill_distributions_mean_which_finance_refuses_perfect_foresight(
+        self, grid_charge_forecast: ModuleType, forecast_arms: list[Any]
+    ) -> None:
+        finance = parse_finance_config(load_config(_FLEX_SCENARIO)["finance"])
+        assert finance is not None
+
+        for arm in forecast_arms:
+            summaries = [home.summary for home in arm.homes]
+            if arm.forecast == "perfect_foresight":
+                with pytest.raises(ConfigurationError, match="perfect_foresight") as refusal:
+                    bill_distribution(summaries, finance)
+                assert arm.householder_bill == grid_charge_forecast.Refused(str(refusal.value))
+            else:
+                assert arm.householder_bill == bill_distribution(
+                    summaries, finance
+                ).mean_gbp, arm.forecast
+
+    @_QUIET_DIODE_SOLVER
+    def test_trailing_14_days_runs_as_pv_blind_until_it_has_14_days_of_history(
+        self, forecast_arms: list[Any]
+    ) -> None:
+        arms = {arm.forecast: arm for arm in forecast_arms}
+
+        for pv_blind, trailing in zip(arms["pv_blind"].homes, arms["trailing_14_days"].homes, strict=True):
+            assert dataclasses.replace(trailing.summary, grid_charge_forecast="pv_blind") == pv_blind.summary
+            assert trailing.net_cost_by_season_gbp == pv_blind.net_cost_by_season_gbp
+
+    @_QUIET_DIODE_SOLVER
+    def test_perfect_foresight_grid_charges_less_than_pv_blind_on_sunny_days(self, forecast_arms: list[Any]) -> None:
+        """The clear days' PV refills the battery, stranding grid charge that perfect foresight leaves out."""
+        arms = {arm.forecast: arm for arm in forecast_arms}
+
+        for pv_blind, foresight in zip(arms["pv_blind"].homes, arms["perfect_foresight"].homes, strict=True):
+            assert foresight.summary.total_grid_charge_kwh < pv_blind.summary.total_grid_charge_kwh
+
+    @_QUIET_DIODE_SOLVER
+    def test_main_prints_each_forecasts_per_home_means_and_their_deltas_and_what_they_were_measured_on_offline(
+        self,
+        grid_charge_forecast: ModuleType,
+        flex_weather_cache: Path,
+        forecast_arms: list[Any],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """main's runs are forecast_arms' runs, which are deterministic, so its tables are their figures."""
+        grid_charge_forecast.main(
+            [
+                "--cache-dir", str(flex_weather_cache),
+                "--start", "2024-05-31",
+                "--end", "2024-06-01",
+                "--homes", str(_FORECAST_HOMES),
+                "--no-parallel",
+            ]
+        )
+        report = capsys.readouterr().out
+
+        assert solar_challenge.__version__ in report
+        assert f"read from the cache in {flex_weather_cache}" in report
+        assert "2024-05-31 to 2024-06-01" in report
+        means, deltas = _markdown_tables(report)
+        figures = {arm.forecast: _per_home_means(arm) for arm in forecast_arms}
+        baseline = figures["pv_blind"]
+        assert means == [
+            {"Forecast": forecast, **{column: _cell(value) for column, value in figures[forecast].items()}}
+            for forecast in GRID_CHARGE_FORECASTS
+        ]
+        assert deltas == [
+            {
+                "Forecast": forecast,
+                **{
+                    column: _cell(None if value is None or baseline[column] is None else value - baseline[column], "+")
+                    for column, value in figures[forecast].items()
+                },
+            }
+            for forecast in GRID_CHARGE_FORECASTS
+        ]
+        refused = {arm.forecast: arm.householder_bill for arm in forecast_arms}["perfect_foresight"]
+        assert refused.reason in report

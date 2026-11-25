@@ -1,11 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Web dashboard commands."""
 
+import functools
 from typing import Annotated
 
 import typer
 
-from solar_challenge.cli.utils import handle_errors, print_error, print_info, print_report, status_console
+from solar_challenge.cli.utils import (
+    CliInvocation,
+    handle_errors,
+    invocation,
+    print_error,
+    print_info,
+    print_report,
+    print_status,
+)
 
 app = typer.Typer(help="Web dashboard commands")
 
@@ -13,6 +22,7 @@ app = typer.Typer(help="Web dashboard commands")
 @app.command()
 @handle_errors
 def start(
+    ctx: typer.Context,
     host: Annotated[
         str,
         typer.Option(
@@ -40,10 +50,15 @@ def start(
     Launches a local web server hosting the interactive dashboard for
     visualising solar PV and battery simulation results.
 
-    Stopping the server drops the simulations still queued; those already
-    running finish before the process exits. Under --debug, stopping the
+    Stopping the server drops the simulations still queued and lets those
+    already running finish; the store stays locked until they have, so
+    another `web start` is refused meanwhile. Under --debug, stopping the
     server ends the running simulations too, and the next start marks their
     runs failed.
+
+    A fleet simulation runs its homes in parallel, on as many worker
+    processes as the root's --workers gives, unless the root's --sequential
+    runs them one after another in the server's process.
 
     One dashboard at a time may use the store under ~/.solar-challenge; while
     another holds it, this command exits with an error naming the lock file
@@ -68,29 +83,30 @@ def start(
     if debug and not started_by_reloader_watcher():
         run_reloader_watcher(host, port)
     else:
-        _serve(host, port, debug)
+        _serve(invocation(ctx), host, port, debug)
 
 
-def _serve(host: str, port: int, debug: bool) -> None:
-    """Build the dashboard, which takes its store, and serve it on *host* and *port* until stopped; exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
-    from solar_challenge.web import create_app
-    from solar_challenge.web.jobs import shutdown_all_managers
+def _serve(cli: CliInvocation, host: str, port: int, debug: bool) -> None:
+    """Build the dashboard, which takes its store and runs its jobs on cli's runner, and serve it on *host* and *port* until stopped, printing cli's status lines; then close it. Exit 1 if this process cannot take the store, or the store is at another schema version or cannot be read."""
+    from solar_challenge.web.app import create_app
+    from solar_challenge.web.dashboard import dashboard_of
+    from solar_challenge.web.jobs import JobManager
     from solar_challenge.web.schema import SchemaVersionMismatch, StoreUnreadable
     from solar_challenge.web.store_lock import StoreLockError
 
     try:
-        flask_app = create_app()
+        flask_app = create_app(jobs=functools.partial(JobManager, runner=cli.runner))
     except (StoreLockError, SchemaVersionMismatch, StoreUnreadable) as refused:
         print_error(str(refused))
         raise typer.Exit(1) from refused
 
-    print_info(f"Starting web dashboard at http://{host}:{port}")
-    status_console.print("  Press [bold]Ctrl+C[/bold] to stop the server.")
+    print_info(cli, f"Starting web dashboard at http://{host}:{port}")
+    print_status(cli, "  Press ", ("Ctrl+C", "bold"), " to stop the server.")
 
     try:
         flask_app.run(host=host, port=port, debug=debug)
     finally:
-        shutdown_all_managers()
+        dashboard_of(flask_app).close()
 
 
 @app.command()
@@ -113,9 +129,11 @@ def migrate() -> None:
     its run ran by, naming the run, the document, the field, the value it
     held and the value it holds now; and each run it cannot migrate, which it
     leaves as it was, naming its run, document and field. It reads a run's
-    JSON documents, not its time series, which have no format version: a run
-    whose time series is damaged is migrated, and refused naming it when it is
-    loaded.
+    JSON documents, and its time series only for a run saved before summaries
+    carried a window, whose summaries' windows it reads from them. Such a run
+    whose time series is missing or damaged cannot be migrated and is printed
+    as one it cannot migrate. Any other run whose time series is damaged is
+    migrated, and refused naming it when it is loaded.
 
     It refuses, changing nothing and exiting with an error: a store another
     dashboard holds, naming its lock file; a store a newer solar-challenge

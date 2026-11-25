@@ -1,12 +1,12 @@
 # Bristol Arbitrage Demo — TOU Grid-Charging Economics Scenario
 #
 # Demonstrates battery arbitrage with Economy 7 pricing:
-# - Grid-charges overnight at off-peak rate (0.09 £/kWh, 00:30–07:30)
-# - Discharges into the evening peak (0.25 £/kWh), reducing net cost
+# - Grid-charges overnight at Economy 7's off-peak rate
+# - Discharges into its evening peak, reducing net cost
 #
-# dispatch_strategy: tou_optimized routes through the function path
-# (simulate_timestep_tou + compute_grid_charge_power_kw in flow.py).
-# No battery.dispatch_strategy block — that would select the strategy path instead.
+# The battery's dispatch_strategy block, strategy_type: tou_optimized with no
+# peak_hours, dispatches it with TOUOptimizedStrategy on Economy 7's clock: it
+# grid-charges in the tariff's cheap minutes and discharges in its dear ones.
 #
 # use_stochastic: false gives the deterministic Elexon Profile Class 1 load
 # with a real evening peak at 18:00, ensuring the battery cycles fully on
@@ -15,8 +15,8 @@
 name: Bristol Arbitrage Demo
 description: >
   Single-home Economy 7 grid-charging arbitrage demonstration.
-  Charges battery overnight at 0.09 £/kWh, discharges into 0.25 £/kWh evening peak.
-  Run with dispatch_strategy: tou_optimized to activate the arbitrage controller.
+  Charges battery overnight at Economy 7's off-peak rate, discharges into its evening peak.
+  Its battery's dispatch_strategy, tou_optimized on Economy 7's clock, runs the arbitrage controller.
 
 location:
   latitude: 51.45
@@ -40,26 +40,22 @@ home:
     capacity_kwh: 5.0
     max_charge_kw: 2.5
     max_discharge_kw: 2.5
+    # tou_optimized with no peak_hours dispatches on Economy 7's clock
+    dispatch_strategy:
+      strategy_type: tou_optimized
     grid_charging:
       target_soc_fraction: 0.9
-    # No dispatch_strategy block here — use the function path (tou_optimized)
 
   load:
     annual_consumption_kwh: 3400
     use_stochastic: false
 
+  # Economy 7 at its preset rates (tariff.PRESET_RATES) and off-peak window; set
+  # off_peak_rate, peak_rate, off_peak_start or off_peak_end to override.
   tariff:
     type: economy_7
-    off_peak_rate: 0.09
-    peak_rate: 0.25
-    off_peak_start: "00:30"
-    off_peak_end: "07:30"
-
-  dispatch_strategy: tou_optimized
 
 # SEG export pricing for real (non-zero PV) runs.
-# The CLI home/fleet run paths thread this into HomeConfig.seg_tariff automatically.
-# Callers using load_scenarios().home directly must wire ScenarioConfig.seg_tariff_pence_per_kwh
-# into HomeConfig.seg_tariff manually (e.g. via dataclasses.replace).
+# Every home without its own SEG tariff exports at this rate (ScenarioConfig.simulated_homes()).
 seg:
   rate_pence_per_kwh: 15.0

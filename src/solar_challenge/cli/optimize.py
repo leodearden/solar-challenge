@@ -10,17 +10,14 @@ import dataclasses
 from pathlib import Path
 from typing import Annotated, Optional
 
-import pandas as pd
 import typer
 
-from solar_challenge.cli.utils import CliFleetSimulator, handle_errors, print_info, print_report
+from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
-    parse_seg_rate,
+    period_window,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, grid_services_model_of
@@ -32,8 +29,13 @@ from solar_challenge.optimize import (
     sensitivity_panel,
 )
 from solar_challenge.output import generate_config_ranking_report
+from solar_challenge.projection import fewest_simulated_ages
+from solar_challenge.scenario_blocks import (
+    parse_finance_config,
+    parse_seg_rate,
+)
 from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -104,33 +106,29 @@ def _flat_rate_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
 
 def _resolve_sensitivity_aliases(
     requested: Optional[tuple[str, ...]], pricing: GridServicesModel
-) -> tuple[str, ...]:
-    """The sensitivity axes to sweep under *pricing*: *requested*, or _DEFAULT_SENSITIVITY_ALIASES when it is None.
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The sensitivity axes to sweep under *pricing*, paired with the default's axes left out of them.
 
-    Under an events configuration the default omits each axis that sweeps
-    _FLAT_RATE_KNOB, with a note on stderr naming it.
+    They are *requested*, leaving out none, or _DEFAULT_SENSITIVITY_ALIASES when
+    it is None. Under an events configuration the default leaves out each axis
+    that sweeps _FLAT_RATE_KNOB.
 
     Raises:
         ConfigurationError: If *pricing* is an events configuration and
             *requested* names an axis that sweeps _FLAT_RATE_KNOB.
     """
     if not isinstance(pricing, GridServicesEventsConfig):
-        return _DEFAULT_SENSITIVITY_ALIASES if requested is None else requested
+        return (_DEFAULT_SENSITIVITY_ALIASES if requested is None else requested), ()
     if requested is None:
         omitted = _flat_rate_aliases(_DEFAULT_SENSITIVITY_ALIASES)
-        for alias in omitted:
-            print_info(
-                f"Sensitivity axis {alias} omitted from the default: it sweeps "
-                f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
-            )
-        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias not in omitted)
+        return tuple(alias for alias in _DEFAULT_SENSITIVITY_ALIASES if alias not in omitted), omitted
     refused = _flat_rate_aliases(requested)
     if refused:
         raise ConfigurationError(
             f"--sensitivity names {', '.join(refused)}, which sweeps "
             f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}; drop it from --sensitivity"
         )
-    return requested
+    return requested, ()
 
 
 def _with_grid_services_kw(
@@ -228,7 +226,7 @@ def configs(
             "--start",
             help=(
                 "Simulation start date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                "block if present; defaults to the scenario period start or 2024-01-01."
+                f"block if present; defaults to the scenario period start or {DEFAULT_FIRST_DAY.isoformat()}."
             ),
         ),
     ] = None,
@@ -238,7 +236,7 @@ def configs(
             "--end",
             help=(
                 "Simulation end date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                "block if present; defaults to the scenario period end or 2024-12-31."
+                f"block if present; defaults to the scenario period end or {DEFAULT_LAST_DAY.isoformat()}."
             ),
         ),
     ] = None,
@@ -248,7 +246,7 @@ def configs(
     Enumerates homogeneous-install scenarios over the cartesian product of
     PV/battery/inverter capacity dimensions, solves the CBS cost-recovery rate
     for each config, ranks by householder outlay, and renders a two-table
-    markdown report (cost-recovery rank + fixed-15p trade-off).
+    markdown report (cost-recovery rank + configured-rate trade-off).
 
     When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
     panel is appended showing which cost assumptions most affect the top-ranked
@@ -266,6 +264,8 @@ def configs(
             --retained-floor 27 --sensitivity retained_floor,grid_services \\
             --start 2024-01-01 --end 2024-01-07
     """
+    cli = invocation(ctx)
+
     # ---- Parse dim lists ----------------------------------------------------
     pv_list = _parse_float_list(pv, "pv")
     battery_list = _parse_float_list(battery, "battery")
@@ -285,7 +285,13 @@ def configs(
 
     pricing = grid_services_model_of(finance)
     finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
-    sensitivity_axes = _resolve_sensitivity_aliases(requested_sensitivity, pricing)
+    sensitivity_axes, left_out_of_the_default = _resolve_sensitivity_aliases(requested_sensitivity, pricing)
+    for alias in left_out_of_the_default:
+        print_info(
+            cli,
+            f"Sensitivity axis {alias} omitted from the default: it sweeps "
+            f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
+        )
 
     # ---- Load fleet config --------------------------------------------------
     fleet_config = load_fleet_config(scenario)
@@ -294,59 +300,56 @@ def configs(
     seg_rate = parse_seg_rate(raw.get("seg"))
     if seg_rate is not None:
         seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-        homes_with_seg = [
+        homes_with_seg = tuple(
             dataclasses.replace(home, seg_tariff=seg_tariff)
             for home in fleet_config.homes
-        ]
+        )
         fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
 
-    # ---- Resolve start/end: CLI args override scenario period; fall back to
-    #      2024-01-01 / 2024-12-31 when neither is present. ---------------
+    # ---- Build base ScenarioConfig: CLI args override scenario period; fall
+    #      back to timebase's default window when neither is present. -----
     loc = fleet_config.homes[0].location
     _scenario_period: dict[str, str] = raw.get("period", {}) or {}
-    _start_str = start or _scenario_period.get("start_date", "2024-01-01")
-    _end_str = end or _scenario_period.get("end_date", "2024-12-31")
-    start_date = pd.Timestamp(_start_str, tz=loc.timezone)
-    end_date = pd.Timestamp(_end_str, tz=loc.timezone)
-    days = covered_days(start_date.date(), end_date.date())
+    _start_str = start or _scenario_period.get("start_date", DEFAULT_FIRST_DAY.isoformat())
+    _end_str = end or _scenario_period.get("end_date", DEFAULT_LAST_DAY.isoformat())
+    base = ScenarioConfig(
+        name=raw.get("name", str(scenario)),
+        period=period_window(_start_str, _end_str, timezone=loc.timezone),
+        homes=fleet_config.homes,
+        location=loc,
+        finance=finance,
+    )
+    if seg_rate is not None:
+        base = dataclasses.replace(base, seg_tariff_pence_per_kwh=seg_rate)
+    days = base.period.days
     n_homes = len(fleet_config.homes)
 
     n_configs = len(pv_list) * len(battery_list) * len(inverter_list)
     print_info(
+        cli,
         f"Sweeping {len(pv_list)}×{len(battery_list)}×{len(inverter_list)} "
         f"={n_configs} configs "
         f"over {n_homes} homes for {days} days…"
     )
 
     _LARGE_SWEEP_THRESHOLD = 100_000
-    if n_configs * n_homes * days > _LARGE_SWEEP_THRESHOLD:
+    ages = fewest_simulated_ages(finance.asset_life_years)
+    home_days = n_configs * ages * n_homes * days
+    if home_days > _LARGE_SWEEP_THRESHOLD:
         print_info(
-            f"⚠  Large sweep: {n_configs} config(s) × {n_homes} home(s) × {days} day(s) "
-            f"≈ {n_configs * n_homes * days:,} home-days. "
+            cli,
+            f"⚠  Large sweep: {n_configs} config(s) × at least {ages} simulated age(s) per projection × "
+            f"{n_homes} home(s) × {days} day(s) ≈ {home_days:,} home-days. "
             "For exploratory runs, use --start / --end to limit the simulation window "
             "(e.g. --start 2024-01-01 --end 2024-01-07)."
         )
-
-    # ---- Build base ScenarioConfig ------------------------------------------
-    base = ScenarioConfig(
-        name=raw.get("name", str(scenario)),
-        period=SimulationPeriod(
-            start_date=_start_str,
-            end_date=_end_str,
-        ),
-        homes=tuple(fleet_config.homes),
-        location=loc,
-        finance=finance,
-    )
-    if seg_rate is not None:
-        base = dataclasses.replace(base, seg_tariff_pence_per_kwh=seg_rate)
 
     # ---- Enumerate configs --------------------------------------------------
     all_configs = enumerate_configs(base, pv_list, battery_list, inverter_list)
 
     # ---- Run sweep ----------------------------------------------------------
-    print_info("Solving cost-recovery rates…")
-    simulate = ctx.ensure_object(CliFleetSimulator).simulate
+    print_info(cli, "Solving cost-recovery rates…")
+    simulate = cli.runner.simulate
     ranked = run_sweep(all_configs, retained_cash_floor_gbp=retained_floor, simulate=simulate)
 
     # Report sweep summary so the user knows what to expect in the report.
@@ -354,6 +357,7 @@ def configs(
     n_infeasible = len(ranked.infeasible)
     if n_feasible:
         print_info(
+            cli,
             f"Sweep complete: {n_feasible} feasible config(s), "
             f"{n_infeasible} infeasible config(s)."
         )
@@ -362,6 +366,7 @@ def configs(
         # empty rank and infeasible list.  sensitivity_panel is NOT called
         # (it requires a feasible baseline) — see the guard below.
         print_info(
+            cli,
             f"No feasible configurations found "
             f"({n_infeasible} config(s) exceeded the retail rate). "
             "Check the finance block or try lower capex / higher grid-services values."
@@ -372,7 +377,7 @@ def configs(
     if sensitivity_axes and ranked.cheapest_feasible is not None:
         knobs = [_SENSITIVITY_ALIAS_MAP[alias] for alias in sensitivity_axes]
         axes_map: dict[str, tuple[float, ...]] = {knob: SENSITIVITY_BANDS[knob] for knob in knobs}
-        print_info(f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
+        print_info(cli, f"Computing sensitivity panel for axes: {list(sensitivity_axes)}…")
         panel = sensitivity_panel(
             all_configs,
             axes_map,
@@ -383,6 +388,7 @@ def configs(
         # Explicit user message when axes were requested but there is no feasible
         # baseline — sensitivity_panel would raise immediately, so we skip it.
         print_info(
+            cli,
             "Sensitivity panel skipped: no feasible baseline config found "
             "(sensitivity requires at least one feasible config)."
         )

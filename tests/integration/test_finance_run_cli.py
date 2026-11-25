@@ -3,16 +3,20 @@
 """Offline tests of how `finance run` composes its one report from --assumptions, --project and --cost-recovery, with the fleet simulator injected through Click's context object."""
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import yaml
+from typer.testing import Result
 
 from solar_challenge.fleet import FleetConfig, FleetResults
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from solar_challenge.home import simulate_home
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results, make_fleet_results_of
+from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 _PROJECT_HEADING = "## Project Economics"
 _COST_RECOVERY_HEADING = "## Cost-Recovery Analysis"
@@ -31,11 +35,13 @@ def _write_scenario(
     *,
     self_consumption_override: float | None = None,
     seg_rate: float | None = None,
+    tariff: dict[str, object] | None = None,
 ) -> Path:
     """Write a scenario of two battery-less homes to *directory*, and return its path.
 
-    Its finance block carries *self_consumption_override* and the scenario has a
-    top-level SEG rate of *seg_rate*, each only when given.
+    Its finance block carries *self_consumption_override*, the scenario has a
+    top-level SEG rate of *seg_rate*, and its top-level tariff: block, which every
+    home it generates is priced at, is *tariff*, each only when given.
     """
     finance: dict[str, float] = {"standing_charge_pence_per_day": 28.0}
     if self_consumption_override is not None:
@@ -54,6 +60,8 @@ def _write_scenario(
     }
     if seg_rate is not None:
         scenario["seg"] = {"rate_pence_per_kwh": seg_rate}
+    if tariff is not None:
+        scenario["tariff"] = tariff
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "scenario.yaml"
     path.write_text(yaml.safe_dump(scenario))
@@ -199,7 +207,7 @@ def test_without_economics_flags_the_fleet_is_simulated_once(
     """finance run simulates its fleet once, for its bill, when neither --project nor --cost-recovery asks for more."""
     simulator = _RecordingSimulator(fleet_results)
 
-    result = invoke_cli(["finance", "run", str(_write_scenario(tmp_path))], simulator)
+    result = invoke_cli(["finance", "run", str(_write_scenario(tmp_path))], answering(simulator))
 
     assert result.exit_code == 0, result.output
     assert len(simulator.requests) == 1
@@ -214,7 +222,7 @@ def test_the_simulator_receives_the_fleet_paid_the_scenarios_seg_rate_over_the_w
 
     result = invoke_cli(
         ["finance", "run", str(scenario), "--start", "2024-06-01", "--end", "2024-06-07"],
-        simulator,
+        answering(simulator),
     )
 
     assert result.exit_code == 0, result.output
@@ -226,3 +234,56 @@ def test_the_simulator_receives_the_fleet_paid_the_scenarios_seg_rate_over_the_w
     assert start == pd.Timestamp("2024-06-01", tz="Europe/London")
     assert end == pd.Timestamp("2024-06-07", tz="Europe/London")
     assert "Simulating fleet of 2 homes for 7 days…" in " ".join(result.stderr.split())
+
+
+_MIDSUMMER = "2024-06-21"
+
+
+def _simulated_on_a_clear_midsummer_day(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+    """Each home of *fleet_config* simulated by simulate_home from *start* to *end* on a clear 21 June's weather."""
+    weather = synthetic_june_weather(_MIDSUMMER)
+    return make_fleet_results_of(
+        [simulate_home(home, start, end, weather=weather_for(home, weather)) for home in fleet_config.homes],
+        homes=fleet_config.homes,
+    )
+
+
+def _import_cost_cell(report: str) -> str:
+    """The one cell of the report's Import Cost row after its label: a single bill's import cost."""
+    rows = [line for line in report.splitlines() if line.startswith("| Import Cost |")]
+    assert len(rows) == 1, report
+    (cell,) = [cell.strip() for cell in rows[0].strip("|").split("|")][1:]
+    return cell
+
+
+def _finance_run_on_midsummer(scenario: Path) -> tuple[Result, list[str]]:
+    """`finance run` of *scenario* over 21 June, its homes simulated by simulate_home, and the message of every warning it raised."""
+    with warnings.catch_warnings(record=True) as raised:
+        warnings.simplefilter("always")
+        result = invoke_cli(
+            ["finance", "run", str(scenario), "--start", _MIDSUMMER, "--end", _MIDSUMMER],
+            answering(_simulated_on_a_clear_midsummer_day),
+        )
+    return result, [str(warning.message) for warning in raised]
+
+
+def test_a_scenarios_zero_tariff_bills_its_homes_no_import_and_warns_of_no_missing_tariff(tmp_path: Path) -> None:
+    """The scenario's £0 flat tariff prices every home's simulated run, so `finance run` bills their import at £0 rather than at retail."""
+    scenario = _write_scenario(tmp_path, seg_rate=4.1, tariff={"type": "flat_rate", "rate_per_kwh": 0.0})
+
+    result, raised = _finance_run_on_midsummer(scenario)
+
+    assert result.exit_code == 0, result.output
+    assert _import_cost_cell(result.stdout) == "£0.00"
+    assert not [message for message in raised if "no tariff configured" in message]
+    assert "no tariff configured" not in result.output
+
+
+def test_a_scenario_without_a_tariff_bills_its_homes_import_at_retail_and_warns(tmp_path: Path) -> None:
+    scenario = _write_scenario(tmp_path, seg_rate=4.1)
+
+    result, raised = _finance_run_on_midsummer(scenario)
+
+    assert result.exit_code == 0, result.output
+    assert _import_cost_cell(result.stdout) != "£0.00"
+    assert [message for message in raised if "no tariff configured" in message]

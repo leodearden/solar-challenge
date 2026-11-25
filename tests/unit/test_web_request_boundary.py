@@ -10,9 +10,9 @@ pytest.importorskip("flask")
 
 from flask import Flask
 
-from solar_challenge.config import parse_location_block
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import Location, parse_location
+from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
     read_location,
@@ -153,7 +153,7 @@ class TestRefuseUnencodableText:
 
 
 class TestReadLocation:
-    """read_location reads a string as location.parse_location reads it and a JSON object as config.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
+    """read_location reads a string as location.parse_location reads it and a JSON object as scenario_blocks.parse_location_block reads a location: block, carrying each grammar's refusal as raised; any other JSON value is refused naming its type."""
 
     @pytest.mark.parametrize(
         "text",
@@ -186,7 +186,7 @@ class TestReadLocation:
             pytest.param("londn", parse_location, "'londn'", id="unknown-place"),
             pytest.param("95,0", parse_location, "latitude", id="latitude-above-90"),
             pytest.param(
-                {"latitude": 50}, parse_location_block, "location.longitude", id="object-without-longitude"
+                {"latitude": 50}, parse_location_block, "location: requires 'longitude'", id="object-without-longitude"
             ),
         ],
     )

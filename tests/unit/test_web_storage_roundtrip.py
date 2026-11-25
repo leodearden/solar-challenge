@@ -7,8 +7,11 @@ Tests cover:
 - total_grid_charge_kwh survives a home roundtrip, and a summary saved without it
   loads it as 0.0
 - A summary's window survives home and fleet roundtrips and is stored as ISO 8601
-  text; a summary saved without one loads it as None, and one whose simulation_days
-  is not its window's days is refused
+  text; a current-format summary without one is refused naming it, and so is one
+  holding a simulation_days, which is no field of SummaryStatistics
+- A summary's pricing survives home and fleet roundtrips, and a summary saved
+  without one loads it as None
+- A stored summary whose battery discharge exceeds its self-consumption is refused
 - completed_at timestamp differs from created_at
 - Full home and fleet roundtrip with all fields populated
 - Tuple-typed config fields (a TOU tariff's periods) survive home and fleet roundtrips
@@ -49,17 +52,19 @@ pytest.importorskip("flask")
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.dispatch import (
     GridChargeConfig,
+    GridChargeForecast,
     PeakShavingStrategyConfig,
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
 from solar_challenge.fleet import FleetResults, FleetSummary
-from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
+from solar_challenge.home import HomeConfig, RunPricing, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
@@ -121,6 +126,10 @@ def _make_simulation_results(
     )
 
 
+_ONE_JUNE_DAY = SimulationWindow(date(2024, 6, 1), date(2024, 6, 1), timedelta(minutes=1), "Europe/London")
+"""The window of _make_simulation_results' rows: 1 June 2024 on a Europe/London minute clock."""
+
+
 def _make_summary(
     include_heat_pump: bool = False,
     strategy_name: str = "self_consumption",
@@ -139,7 +148,7 @@ def _make_summary(
         self_consumption_ratio=0.6,
         grid_dependency_ratio=0.25,
         export_ratio=0.4,
-        simulation_days=1,
+        window=_ONE_JUNE_DAY,
         total_import_cost_gbp=5.0,
         total_export_revenue_gbp=3.0,
         net_cost_gbp=2.0,
@@ -189,8 +198,8 @@ def _fleet_results_with_a_later_home_demand_made_nan(first_name: str, later_name
 
 
 def _json_field_tree(obj: Any) -> Any:
-    """Return a dataclass's field tree as JSON gives it back."""
-    return json.loads(json.dumps(dataclasses.asdict(obj)))
+    """Return a dataclass's field tree, as field_tree writes it, as JSON gives it back."""
+    return json.loads(json.dumps(field_tree(obj)))
 
 
 def _read_json(path: Path) -> Any:
@@ -380,13 +389,13 @@ _NAIVE_HALF_HOURLY_WINDOW = SimulationWindow(
 
 def _make_summary_over(window: SimulationWindow) -> SummaryStatistics:
     """_make_summary's summary, computed over *window*: simulation_days is its days."""
-    return dataclasses.replace(_make_summary(), simulation_days=window.days, window=window)
+    return dataclasses.replace(_make_summary(), window=window)
 
 
 class TestSummaryWindowRoundtrip:
-    """A summary keeps its window when reloaded, stored as ISO 8601 text; a summary
-    saved before the field existed loads it as None, and one whose simulation_days is
-    not its window's days is refused."""
+    """A summary keeps its window when reloaded, stored as ISO 8601 text; a summary.json
+    in the current format without its window is refused naming it, and one holding a
+    simulation_days, which SummaryStatistics derives from its window, is refused naming that."""
 
     @pytest.mark.parametrize(
         "window",
@@ -451,9 +460,10 @@ class TestSummaryWindowRoundtrip:
         assert _read_json(summary_path)["window"] == stored_window
         assert json.loads(run.summary_json)["window"] == stored_window
 
-    def test_summary_saved_without_a_window_loads_none(self, storage: RunStorage) -> None:
-        """Every summary.json written before the window field existed lacks its key, and the
-        field's default reads it with no RunDocumentStep."""
+    def test_a_current_format_summary_without_its_window_is_refused_naming_it(self, storage: RunStorage) -> None:
+        """Only a summary saved before the window field existed lacks its key, and v5 sets it as it brings
+        such a run forward (tests/unit/test_web_run_document_steps.py); a run in the current format is not
+        brought forward."""
         storage.save_home_run(
             run_id="no-window-001",
             config=_make_home_config(),
@@ -466,15 +476,15 @@ class TestSummaryWindowRoundtrip:
         del stored["window"]
         summary_path.write_text(json.dumps(stored, indent=2))
 
-        loaded_summary = storage.load_run("no-window-001").summary
+        with pytest.raises(StoredRunUnreadable) as refused:
+            storage.load_run("no-window-001")
 
-        assert loaded_summary.window is None
-        assert loaded_summary.simulation_days == 61
+        assert (refused.value.document, refused.value.field) == ("summary.json", "window")
 
-    def test_a_stored_summary_whose_days_disagree_with_its_window_is_refused(
+    def test_a_current_format_summary_holding_a_simulation_days_is_refused_as_no_field_of_summary_statistics(
         self, storage: RunStorage
     ) -> None:
-        """SummaryStatistics refuses it as it loads, as it refuses it at construction, naming both."""
+        """A summary's simulation_days is its window's days, which a save does not write."""
         storage.save_home_run(
             run_id="window-days-001",
             config=_make_home_config(),
@@ -484,11 +494,204 @@ class TestSummaryWindowRoundtrip:
         )
         summary_path = stored_run_dir(storage, "window-days-001") / "summary.json"
         stored = _read_json(summary_path)
-        stored["simulation_days"] = 62
+        assert "simulation_days" not in stored
+        stored["simulation_days"] = 61
         summary_path.write_text(json.dumps(stored, indent=2))
 
-        with pytest.raises(StoredRunUnreadable, match=r"simulation_days=62 for a window of 61 days") as refused:
+        with pytest.raises(StoredRunUnreadable) as refused:
             storage.load_run("window-days-001")
+
+        assert (refused.value.document, refused.value.field, refused.value.reason) == (
+            "summary.json",
+            "simulation_days",
+            "is not a field of SummaryStatistics",
+        )
+
+
+class TestSummaryPricingRoundtrip:
+    """A summary keeps how its run was priced when reloaded; a summary saved before the
+    field existed loads it as None."""
+
+    @pytest.mark.parametrize(
+        "pricing",
+        [
+            pytest.param(RunPricing(0.0, 15.0), id="zero-tariff-with-seg"),
+            pytest.param(RunPricing(None, None), id="unpriced"),
+            pytest.param(RunPricing(0.245, None), id="tariff-without-seg"),
+        ],
+    )
+    def test_home_run_reloads_its_summarys_pricing(self, storage: RunStorage, pricing: RunPricing) -> None:
+        storage.save_home_run(
+            run_id="pricing-home-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), pricing=pricing),
+            name="Saved Run",
+        )
+
+        loaded_summary = storage.load_run("pricing-home-001").summary
+
+        assert loaded_summary.pricing == pricing
+
+    def test_fleet_run_reloads_each_home_summarys_pricing(self, storage: RunStorage) -> None:
+        pricings = [RunPricing(0.0, 15.0), RunPricing(0.245, None)]
+        storage.save_fleet_run(
+            run_id="pricing-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results() for _ in pricings],
+                home_configs=[_make_home_config(f"Home {i}") for i, _ in enumerate(pricings)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=len(pricings)),
+            per_home_summaries=[dataclasses.replace(_make_summary(), pricing=pricing) for pricing in pricings],
+            name="Saved Run",
+        )
+
+        loaded_home_summaries = storage.load_run("pricing-fleet-001").home_summaries
+
+        assert [summary.pricing for summary in loaded_home_summaries] == pricings
+
+    def test_summary_saved_without_pricing_loads_none(self, storage: RunStorage) -> None:
+        """Every summary.json written before the pricing field existed lacks its key, and the
+        field's default reads it with no RunDocumentStep."""
+        storage.save_home_run(
+            run_id="no-pricing-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), pricing=RunPricing(0.245, 4.1)),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-pricing-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["pricing"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded_summary = storage.load_run("no-pricing-001").summary
+
+        assert loaded_summary.pricing is None
+
+
+class TestGridChargeForecastRoundtrip:
+    """A stored run keeps the forecast that sized its grid charge, on its summary and on the
+    results rebuilt from its time series; a summary saved before the field existed loads None."""
+
+    def test_home_run_reloads_its_forecast_on_the_summary_and_the_results(self, storage: RunStorage) -> None:
+        storage.save_home_run(
+            run_id="forecast-home-001",
+            config=_make_home_config(),
+            results=dataclasses.replace(_make_simulation_results(), grid_charge_forecast="trailing_14_days"),
+            summary=dataclasses.replace(_make_summary(), grid_charge_forecast="trailing_14_days"),
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecast-home-001")
+
+        assert loaded.summary.grid_charge_forecast == "trailing_14_days"
+        assert loaded.results.grid_charge_forecast == "trailing_14_days"
+
+    def test_fleet_run_reloads_each_homes_forecast_on_its_results(self, storage: RunStorage) -> None:
+        forecasts: list[GridChargeForecast | None] = ["pv_blind", None]
+        storage.save_fleet_run(
+            run_id="forecast-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[
+                    dataclasses.replace(_make_simulation_results(), grid_charge_forecast=forecast)
+                    for forecast in forecasts
+                ],
+                home_configs=[_make_home_config(f"Home {i}") for i, _ in enumerate(forecasts)],
+            ),
+            fleet_summary=_make_fleet_summary(n_homes=len(forecasts)),
+            per_home_summaries=[
+                dataclasses.replace(_make_summary(), grid_charge_forecast=forecast) for forecast in forecasts
+            ],
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecast-fleet-001")
+
+        assert [results.grid_charge_forecast for results in loaded.fleet_results.per_home_results] == forecasts
+
+    def test_fleet_run_reloads_its_fleet_summarys_forecasts(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(
+                _make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind", "trailing_14_days")
+            ),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+
+        loaded = storage.load_run("forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ("pv_blind", "trailing_14_days")
+
+    def test_fleet_summary_saved_without_its_forecasts_loads_none(self, storage: RunStorage) -> None:
+        storage.save_fleet_run(
+            run_id="no-forecasts-fleet-001",
+            fleet_results=FleetResults(
+                per_home_results=[_make_simulation_results()],
+                home_configs=[_make_home_config()],
+            ),
+            fleet_summary=dataclasses.replace(_make_fleet_summary(n_homes=1), grid_charge_forecasts=("pv_blind",)),
+            per_home_summaries=[_make_summary()],
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-forecasts-fleet-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["grid_charge_forecasts"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded = storage.load_run("no-forecasts-fleet-001")
+
+        assert loaded.summary.grid_charge_forecasts == ()
+
+    def test_summary_saved_without_a_forecast_loads_none(self, storage: RunStorage) -> None:
+        """Every summary.json written before the field existed lacks its key, and the field's
+        default reads it with no RunDocumentStep: those runs were all PV-blind or did not
+        grid-charge."""
+        storage.save_home_run(
+            run_id="no-forecast-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=dataclasses.replace(_make_summary(), grid_charge_forecast="pv_blind"),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "no-forecast-001") / "summary.json"
+        stored = _read_json(summary_path)
+        del stored["grid_charge_forecast"]
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        loaded = storage.load_run("no-forecast-001")
+
+        assert loaded.summary.grid_charge_forecast is None
+        assert loaded.results.grid_charge_forecast is None
+
+
+class TestStoredSummaryDischargeBound:
+    """SummaryStatistics refuses, as a run loads, a stored summary whose battery discharge is more than the self-consumption that counts it."""
+
+    def test_a_stored_summary_whose_discharge_exceeds_its_self_consumption_is_refused(
+        self, storage: RunStorage
+    ) -> None:
+        storage.save_home_run(
+            run_id="discharge-bound-001",
+            config=_make_home_config(),
+            results=_make_simulation_results(),
+            summary=_make_summary(),
+            name="Saved Run",
+        )
+        summary_path = stored_run_dir(storage, "discharge-bound-001") / "summary.json"
+        stored = _read_json(summary_path)
+        stored["total_battery_discharge_kwh"] = 61.0
+        summary_path.write_text(json.dumps(stored, indent=2))
+
+        with pytest.raises(
+            StoredRunUnreadable, match=r"total_battery_discharge_kwh=61\.0, total_self_consumption_kwh=60\.0"
+        ) as refused:
+            storage.load_run("discharge-bound-001")
 
         assert refused.value.document == "summary.json"
 
@@ -717,7 +920,29 @@ class TestTupleFieldRoundtrip:
 
         loaded_fleet = storage.load_run("tou-fleet-001").fleet_results
 
-        assert loaded_fleet.home_configs == home_configs
+        assert loaded_fleet.home_configs == tuple(home_configs)
+
+    def test_a_fleet_saved_from_lists_loads_with_tuple_fields_holding_its_homes(self, storage: RunStorage) -> None:
+        """A fleet built from lists is held, and loads back, as tuples of its homes' configs and results."""
+        home_configs = [_make_home_config(f"Home {i}") for i in range(2)]
+        home_results = [_make_simulation_results(_make_index()) for _ in range(2)]
+
+        storage.save_fleet_run(
+            run_id="list-built-fleet",
+            fleet_results=FleetResults(per_home_results=home_results, home_configs=home_configs),
+            fleet_summary=_make_fleet_summary(n_homes=2),
+            per_home_summaries=[_make_summary() for _ in range(2)],
+            name="Saved Run",
+        )
+
+        loaded_fleet = storage.load_run("list-built-fleet").fleet_results
+
+        assert type(loaded_fleet.home_configs) is tuple
+        assert type(loaded_fleet.per_home_results) is tuple
+        assert loaded_fleet.home_configs == tuple(home_configs)
+        for loaded, saved in zip(loaded_fleet.per_home_results, home_results, strict=True):
+            pd.testing.assert_series_equal(loaded.generation, saved.generation, check_names=False, check_freq=False)
+            pd.testing.assert_series_equal(loaded.demand, saved.demand, check_names=False, check_freq=False)
 
 
 class TestEveryFieldShapeRoundtrip:
@@ -760,7 +985,7 @@ class TestEveryFieldShapeRoundtrip:
 
         loaded_fleet = storage.load_run("every-shape-fleet").fleet_results
 
-        assert loaded_fleet.home_configs == home_configs
+        assert loaded_fleet.home_configs == tuple(home_configs)
 
 
 class TestPersistedJson:
@@ -969,9 +1194,10 @@ _GRID_CHARGE_TO_80_PERCENT = GridChargeConfig(target_soc_fraction=0.8)
 _DISPATCHED_BATTERY_SETTINGS = (
     pytest.param(SelfConsumptionStrategyConfig(), None, id="self_consumption"),
     pytest.param(TOUOptimizedStrategyConfig(peak_hours=((16, 19),)), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized"),
+    pytest.param(TOUOptimizedStrategyConfig(), _GRID_CHARGE_TO_80_PERCENT, id="tou_optimized-on-the-tariff-clock"),
     pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), _GRID_CHARGE_TO_80_PERCENT, id="peak_shaving"),
 )
-"""One example of each dispatch strategy, with grid charging to 0.8 for those that charge from the grid."""
+"""One example of each dispatch strategy, tou_optimized both with peak_hours and on the tariff's clock, with grid charging to 0.8 for those that charge from the grid."""
 
 
 def _dispatching_home(

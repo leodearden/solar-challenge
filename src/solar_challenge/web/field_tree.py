@@ -12,7 +12,8 @@ one of a Literal's values), an unknown union tag, or a dataclass that refuses it
 refused with a FieldTreeRefused naming the value's dotted path, with [i] for an item and None
 for the root, and the reason. A missing field that has a default takes it.
 without_unknown_keys drops each key the reader would refuse as one no field has, reporting each
-as an UnknownKey.
+as an UnknownKey, unless its predicate, asked with the dataclass whose object holds the key,
+spares it.
 
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
@@ -31,7 +32,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import date, timedelta
 from types import MappingProxyType, UnionType
-from typing import Any, Literal, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeAlias, TypeVar, Union, assert_never, get_args, get_origin, get_type_hints
 
 import pandas as pd
 
@@ -119,12 +120,25 @@ def read_field_tree(content: Any, cls: type[T]) -> T:
     return value
 
 
-def without_unknown_keys(content: Any, cls: type) -> tuple[Any, tuple[UnknownKey, ...]]:
-    """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has; and each dropped key, in the content's order.
+DropsUnknownKey: TypeAlias = Callable[[type, str], bool]
+"""Whether without_unknown_keys drops a key no field has: asked with the dataclass whose object holds the key, and the key."""
 
-    It is walked as read_field_tree reads it, and is not itself changed.
+
+def _every_key(owner: type, key: str) -> bool:
+    """The predicate that drops every unknown key, whichever dataclass's object holds it."""
+    return True
+
+
+def without_unknown_keys(
+    content: Any, cls: type, *, drops: DropsUnknownKey = _every_key
+) -> tuple[Any, tuple[UnknownKey, ...]]:
+    """*content*, decoded JSON read as a *cls*, without each key no field of its dataclass has that *drops* drops; and each dropped key, in the content's order.
+
+    *drops* is asked of each such key at any depth; a key it spares is kept as it is,
+    unreported. By default every such key is dropped. The
+    content is walked as read_field_tree reads it, and is not itself changed.
     """
-    return _without_unknown_keys(content, cls, None)
+    return _without_unknown_keys(content, cls, None, drops)
 
 
 @dataclass(frozen=True)
@@ -426,13 +440,15 @@ def _float_can_hold(number: int | float) -> bool:
     return True
 
 
-def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tuple[Any, tuple[UnknownKey, ...]]:
-    """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has; and each dropped key, an UnknownKey.
+def _without_unknown_keys(
+    value: Any, annotation: Any, path: str | None, drops: DropsUnknownKey
+) -> tuple[Any, tuple[UnknownKey, ...]]:
+    """*value*, decoded JSON at *path* in its document, without each key no field of its dataclass has that *drops* drops; and each dropped key, an UnknownKey.
 
     *value* is walked by its _shape, as _read reads it: a dataclass's object keeps the keys its
-    fields name, its tag's included, and an array's items and an object's values are walked in
-    their order. A value _shape refuses is kept whole, for the strict reader to refuse. *value*
-    itself is not changed.
+    fields name, its tag's included, and each other key *drops* spares, and an array's items and
+    an object's values are walked in their order. A value _shape refuses is kept whole, for the
+    strict reader to refuse. *value* itself is not changed.
     """
     try:
         shape = _shape(value, annotation, path)
@@ -440,11 +456,11 @@ def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tupl
         return value, ()
     match shape:
         case _DataclassObject():
-            return _dataclass_object_without_unknown_keys(shape)
+            return _dataclass_object_without_unknown_keys(shape, drops)
         case _Array(items=items):
-            return _each_without_unknown_keys(items)
+            return _each_without_unknown_keys(items, drops)
         case _Mapping(entries=entries):
-            values, dropped = _each_without_unknown_keys(child for _, child in entries)
+            values, dropped = _each_without_unknown_keys((child for _, child in entries), drops)
             return dict(zip((key for key, _ in entries), values, strict=True)), dropped
         case _Leaf():
             return value, ()
@@ -452,22 +468,28 @@ def _without_unknown_keys(value: Any, annotation: Any, path: str | None) -> tupl
             assert_never(shape)
 
 
-def _dataclass_object_without_unknown_keys(obj: _DataclassObject) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
-    """The object *obj* without each key no field of its dataclass has, each field's value walked; and each dropped key, in the object's order."""
+def _dataclass_object_without_unknown_keys(
+    obj: _DataclassObject, drops: DropsUnknownKey
+) -> tuple[dict[str, Any], tuple[UnknownKey, ...]]:
+    """The object *obj* without each key no field of its dataclass has that *drops* drops, each field's value walked; and each dropped key, in the object's order."""
     kept: dict[str, Any] = {}
     dropped: list[UnknownKey] = []
     for key, member in obj.members:
-        if isinstance(member, UnknownKey):
+        if not isinstance(member, UnknownKey):
+            kept[key], dropped_within = _without_unknown_keys(member.value, member.annotation, member.path, drops)
+            dropped.extend(dropped_within)
+        elif drops(obj.cls, key):
             dropped.append(member)
         else:
-            kept[key], dropped_within = _without_unknown_keys(member.value, member.annotation, member.path)
-            dropped.extend(dropped_within)
+            kept[key] = member.value
     return kept, tuple(dropped)
 
 
-def _each_without_unknown_keys(children: Iterable[_Child]) -> tuple[list[Any], tuple[UnknownKey, ...]]:
-    """Each of *children*'s values without the keys no field has, in order; and each key dropped within them, in order."""
-    walked = [_without_unknown_keys(child.value, child.annotation, child.path) for child in children]
+def _each_without_unknown_keys(
+    children: Iterable[_Child], drops: DropsUnknownKey
+) -> tuple[list[Any], tuple[UnknownKey, ...]]:
+    """Each of *children*'s values without the keys no field has that *drops* drops, in order; and each key dropped within them, in order."""
+    walked = [_without_unknown_keys(child.value, child.annotation, child.path, drops) for child in children]
     return [content for content, _ in walked], tuple(key for _, dropped in walked for key in dropped)
 
 

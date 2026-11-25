@@ -152,7 +152,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "delivery_baseline"
+          pattern: "fields\\(GridServicesEventsConfig\\)"
           paths: ["src/solar_challenge/config.py", "src/solar_challenge/scenario_blocks.py"]
           expect: present
       - name: "breakdown-carries-the-reliability-capacities"
@@ -340,7 +340,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "class GridServicesBand\\(str, Enum\\)"
+          pattern: "class GridServicesBand\\(StrEnum\\)"
           paths: ["src/solar_challenge/gridservices.py"]
           expect: present
       - name: "events-local-band-set-deleted"

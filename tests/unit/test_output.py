@@ -11,7 +11,8 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.community import CommunityConfig, simulate_community
 from solar_challenge.finance import BillDistribution
-from solar_challenge.home import SimulationResults, calculate_summary, simulate_home
+from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
+from solar_challenge.home import RunPricing, SimulationResults, calculate_summary, simulate_home
 from solar_challenge.optimize import RankedSweep
 from solar_challenge.output import (
     CommunityMetrics,
@@ -21,13 +22,14 @@ from solar_challenge.output import (
     calculate_seasonal_metrics,
     compute_community_metrics,
     export_to_csv,
+    generate_community_report,
     generate_config_ranking_report,
     generate_finance_report,
     generate_summary_report,
 )
 from solar_challenge.timebase import SimulationWindow
 from tests._factories import make_bill_distribution, make_config_result, make_ranked_sweep
-from tests._finance_builders import make_fleet_results_of, make_home_config, make_window
+from tests._finance_builders import make_fleet_results_of, make_home_config, make_sim_results, make_window
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
 
@@ -199,6 +201,48 @@ class TestGenerateSummaryReport:
         assert "Grid Import Cost" in report
         assert "Grid Export Revenue" in report
         assert "Net Cost" in report
+
+    def test_a_seg_priced_run_names_its_seg_rate_after_its_grid_export_revenue(self):
+        """The Financial table of a run whose export a SEG priced names that rate on the row after Grid Export Revenue."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=15.0))
+
+        lines = generate_summary_report(results, "Home").splitlines()
+
+        financial_table = lines[lines.index("## Financial (£)") :]
+        export_revenue_at = next(i for i, line in enumerate(financial_table) if line.startswith("| Grid Export Revenue |"))
+        assert financial_table[export_revenue_at + 1] == "| SEG Rate | 15.0 p/kWh |"
+        assert not any(line.startswith("## ") for line in financial_table[1:export_revenue_at])
+
+    def test_a_run_a_seg_priced_at_nothing_names_its_zero_rate(self):
+        """A SEG rate of 0.0 p priced the run, so the report names it."""
+        results = make_sim_results(pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=0.0))
+
+        assert "| SEG Rate | 0.0 p/kWh |" in generate_summary_report(results, "Home").splitlines()
+
+    @pytest.mark.parametrize(
+        "pricing",
+        [RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=None), None],
+        ids=["no-seg-rate", "no-pricing"],
+    )
+    def test_a_run_no_seg_priced_names_no_seg_rate(self, pricing):
+        """A run whose export no SEG priced, or whose pricing is not recorded, has no SEG Rate row."""
+        report = generate_summary_report(make_sim_results(pricing=pricing), "Home")
+
+        assert "SEG Rate" not in report
+
+    @pytest.mark.parametrize("seg_rate_pence_per_kwh", [15.0, 0.0, None])
+    def test_no_report_has_a_second_seg_revenue_section(self, seg_rate_pence_per_kwh):
+        """The run's export revenue is its one SEG figure: no report repeats it in a SEG Revenue section."""
+        results = make_sim_results(
+            pricing=RunPricing(import_tariff_mean_rate_gbp_per_kwh=None, seg_rate_pence_per_kwh=seg_rate_pence_per_kwh)
+        )
+
+        assert "## SEG Revenue" not in generate_summary_report(results, "Home")
+
+    def test_generate_summary_report_takes_no_seg_rate(self):
+        """The rate the report names is the one the run was priced at, so it takes none from its caller."""
+        with pytest.raises(TypeError):
+            generate_summary_report(make_sim_results(), "Home", seg_tariff_pence_per_kwh=15.0)
 
 
 class TestSeasonalBreakdowns:
@@ -453,15 +497,107 @@ class TestPeriodTotalsAndPeaks:
         assert frame["peak_demand_kw"].max() == pytest.approx(summary.peak_demand_kw)
 
 
-def _annualised_from(window: SimulationWindow | None) -> BillDistribution:
+def _annualised_from(window: SimulationWindow) -> BillDistribution:
     """make_bill_distribution's distribution, its yearly figures annualised from *window*."""
     return replace(make_bill_distribution(), annualised_from=window)
 
 
-def _one_config_sweep(window: SimulationWindow | None) -> RankedSweep:
+def _one_config_sweep(window: SimulationWindow) -> RankedSweep:
     """A sweep of one feasible config, whose outlay's yearly figures are annualised from *window*."""
     cr = make_config_result(outlay=_annualised_from(window))
     return make_ranked_sweep((cr,))
+
+
+_TRAILING_NOTICE = (
+    "*Battery grid charging in cheap periods was sized by the trailing_14_days forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
+)
+_PV_BLIND_AND_TRAILING_NOTICE = (
+    "*Battery grid charging in cheap periods was sized by the pv_blind forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['pv_blind']}; and by the trailing_14_days forecast: "
+    f"{GRID_CHARGE_FORECAST_LABELS['trailing_14_days']}.*\n\n"
+)
+
+
+def _sized_by(*forecasts: str) -> BillDistribution:
+    """make_bill_distribution's distribution, its homes' grid charge sized by *forecasts*."""
+    return replace(make_bill_distribution(), grid_charge_forecasts=forecasts)
+
+
+class TestGridChargeForecastNotice:
+    """Every report of results whose grid charge a forecast sized says, under its first heading, which forecast and what it is."""
+
+    def test_a_summary_report_names_its_runs_forecast_under_its_title(self, sample_results: SimulationResults) -> None:
+        report = generate_summary_report(replace(sample_results, grid_charge_forecast="trailing_14_days"))
+
+        assert report.startswith("# Simulation Report\n\n" + _TRAILING_NOTICE + "## Simulation Period")
+
+    def test_a_summary_report_of_a_run_that_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
+    ) -> None:
+        report = generate_summary_report(sample_results)
+
+        assert report.startswith("# Simulation Report\n\n## Simulation Period")
+        assert "sized by" not in report
+
+    @pytest.mark.parametrize("side_by_side", [False, True], ids=["physics-only", "side-by-side"])
+    def test_a_finance_report_names_each_forecast_under_its_title(self, side_by_side: bool) -> None:
+        dist = _sized_by("pv_blind", "trailing_14_days")
+
+        report = generate_finance_report(dist, dist if side_by_side else None, scenario_name="Bristol")
+
+        assert report.startswith("# Finance Report: Bristol\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Householder Bill")
+
+    def test_a_finance_report_gives_the_forecast_notice_after_the_extrapolation_notice(self) -> None:
+        dist = replace(_sized_by("trailing_14_days"), annualised_from=make_window(days=2, first_day=date(2024, 3, 31)))
+
+        report = generate_finance_report(dist, scenario_name="Bristol")
+
+        assert report.startswith(
+            "# Finance Report: Bristol\n\n"
+            "*Yearly figures are extrapolated ×183.000 from a 2-day window (2024-03-31 to 2024-04-01), "
+            "not whole calendar years.*\n\n" + _TRAILING_NOTICE + "## Householder Bill"
+        )
+
+    def test_a_finance_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
+        report = generate_finance_report(_sized_by(), scenario_name="Bristol")
+
+        assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
+        assert "sized by" not in report
+
+    def test_a_ranking_report_names_its_outlays_forecasts_under_its_first_heading(self) -> None:
+        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by("pv_blind", "trailing_14_days")),))
+
+        assert generate_config_ranking_report(sweep).startswith(
+            "## Cost-Recovery Rank\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "| Config"
+        )
+
+    def test_a_ranking_report_whose_homes_did_not_grid_charge_has_no_notice(self) -> None:
+        sweep = make_ranked_sweep((make_config_result(outlay=_sized_by()),))
+
+        assert generate_config_ranking_report(sweep).startswith("## Cost-Recovery Rank\n\n| Config")
+
+    def test_a_community_report_names_its_homes_forecasts_under_its_title(self, sample_results: SimulationResults) -> None:
+        """Its baseline is the homes' own grid flows, which their forecasts sized."""
+        fleet = make_fleet_results_of(
+            [replace(sample_results, grid_charge_forecast=each) for each in ("trailing_14_days", None, "pv_blind")]
+        )
+
+        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+
+        assert report.startswith(
+            "# Community Energy Sharing Report\n\n" + _PV_BLIND_AND_TRAILING_NOTICE + "## Sharing Mode"
+        )
+
+    def test_a_community_report_whose_homes_did_not_grid_charge_has_no_notice(
+        self, sample_results: SimulationResults
+    ) -> None:
+        fleet = make_fleet_results_of([sample_results, sample_results])
+
+        report = generate_community_report(simulate_community(fleet, CommunityConfig(sharing_mode="p2p")))
+
+        assert report.startswith("# Community Energy Sharing Report\n\n## Sharing Mode")
+        assert "sized by" not in report
 
 
 class TestExtrapolationNotice:
@@ -487,12 +623,9 @@ class TestExtrapolationNotice:
         [
             pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
             pytest.param(make_window(days=731, first_day=date(2023, 1, 1)), id="two-calendar-years"),
-            pytest.param(None, id="hand-built"),
         ],
     )
-    def test_a_finance_report_from_whole_calendar_years_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
-    ) -> None:
+    def test_a_finance_report_from_whole_calendar_years_has_no_notice(self, window: SimulationWindow) -> None:
         report = generate_finance_report(_annualised_from(window), scenario_name="Bristol")
 
         assert report == generate_finance_report(make_bill_distribution(), scenario_name="Bristol")
@@ -508,17 +641,8 @@ class TestExtrapolationNotice:
             "| Config"
         )
 
-    @pytest.mark.parametrize(
-        "window",
-        [
-            pytest.param(make_window(days=365, first_day=date(2023, 1, 1)), id="calendar-year-2023"),
-            pytest.param(None, id="hand-built"),
-        ],
-    )
-    def test_a_ranking_report_from_a_whole_calendar_year_or_no_window_has_no_notice(
-        self, window: SimulationWindow | None
-    ) -> None:
-        report = generate_config_ranking_report(_one_config_sweep(window))
+    def test_a_ranking_report_from_a_whole_calendar_year_has_no_notice(self) -> None:
+        report = generate_config_ranking_report(_one_config_sweep(make_window(days=365, first_day=date(2023, 1, 1))))
 
         assert "extrapolated" not in report
         assert report.startswith("## Cost-Recovery Rank\n\n| Config")

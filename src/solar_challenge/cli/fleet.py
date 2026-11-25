@@ -20,13 +20,13 @@ from solar_challenge.cli.utils import (
     create_summary_table,
     fleet_summary_rows,
     handle_errors,
+    invocation,
     print_info,
     print_success,
     print_warning,
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
-    SweepSpec,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
@@ -39,13 +39,12 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
-    FleetRunner,
     HomesDone,
     calculate_fleet_summary,
-    default_runner,
 )
+from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
-from solar_challenge.timebase import covered_days
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, covered_days
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -122,6 +121,7 @@ def _period_in_fleet_timezone(
 @app.command()
 @handle_errors
 def run(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -136,14 +136,14 @@ def run(
             "--start",
             help="Start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="End date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     output: Annotated[
         Optional[Path],
         typer.Option(
@@ -151,20 +151,6 @@ def run(
             help="Output CSV file path for aggregate results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
     community_report: Annotated[
         Optional[Path],
         typer.Option(
@@ -179,7 +165,7 @@ def run(
     The config file should define a list of homes with their PV, battery,
     and load configurations.
     """
-    runner = _runner(workers, sequential)
+    cli = invocation(ctx)
     fleet_config = load_fleet_config(config)
     community_config = load_community_config(config)
     n_homes = len(fleet_config.homes)
@@ -187,11 +173,11 @@ def run(
     start_date, end_date = _period_in_fleet_timezone(fleet_config, start, end)
 
     days = covered_days(start_date.date(), end_date.date())
-    print_info(f"Simulating fleet of {n_homes} homes for {days} days")
+    print_info(cli, f"Simulating fleet of {n_homes} homes for {days} days")
 
-    with create_fleet_progress() as progress:
+    with create_fleet_progress(cli) as progress:
         task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
-        results = runner.simulate(fleet_config, start_date, end_date, progress=_homes_done_on(progress, task))
+        results = cli.runner.simulate(fleet_config, start_date, end_date, progress=_homes_done_on(progress, task))
 
     summary = calculate_fleet_summary(results)
 
@@ -201,7 +187,7 @@ def run(
 
     if output is not None:
         _export_fleet_results(results, output)
-        print_success(f"Aggregate results saved to {output}")
+        print_success(cli, f"Aggregate results saved to {output}")
 
     # Community sharing layer
     if community_config is not None:
@@ -209,7 +195,7 @@ def run(
         _print_community_section(community_results)
         if community_report is not None:
             community_report.write_text(generate_community_report(community_results))
-            print_success(f"Community report saved to {community_report}")
+            print_success(cli, f"Community report saved to {community_report}")
     else:
         if community_report is not None:
             print_warning(
@@ -220,6 +206,7 @@ def run(
 @app.command()
 @handle_errors
 def sweep(
+    ctx: typer.Context,
     config: Annotated[
         Path,
         typer.Argument(
@@ -234,14 +221,14 @@ def sweep(
             "--start",
             help="Start date (YYYY-MM-DD)",
         ),
-    ] = "2024-01-01",
+    ] = DEFAULT_FIRST_DAY.isoformat(),
     end: Annotated[
         str,
         typer.Option(
             "--end",
             help="End date (YYYY-MM-DD)",
         ),
-    ] = "2024-12-31",
+    ] = DEFAULT_LAST_DAY.isoformat(),
     param: Annotated[
         Optional[str],
         typer.Option(
@@ -284,20 +271,6 @@ def sweep(
             help="Output directory for sweep results",
         ),
     ] = None,
-    workers: Annotated[
-        Optional[int],
-        typer.Option(
-            "--workers", "-w",
-            help="Number of parallel workers per simulation",
-        ),
-    ] = None,
-    sequential: Annotated[
-        bool,
-        typer.Option(
-            "--sequential",
-            help="Disable parallelization",
-        ),
-    ] = False,
 ) -> None:
     """Run parameter sweep over fleet configuration.
 
@@ -337,18 +310,25 @@ def sweep(
         solar-challenge fleet sweep config.yaml \\
             --param BATTERY_RATIO --min 0.1 --max 4.0 --steps 10
     """
-    runner = _runner(workers, sequential)
+    cli = invocation(ctx)
     raw_config = load_config(config)
 
     if "fleet_distribution" not in raw_config:
         raise ConfigurationError("Sweep requires fleet_distribution config")
 
     if param is None:
-        param_name, sweep_configs = _yaml_sweep(raw_config)
+        source = "YAML"
+        param_name, sweep_spec, sweep_configs = _yaml_sweep(raw_config)
     else:
-        param_name, sweep_configs = _param_sweep(
+        source = "CLI"
+        param_name, sweep_spec, sweep_configs = _param_sweep(
             raw_config, param, min_val, max_val, steps, mode
         )
+    print_info(
+        cli,
+        f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
+        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
+    )
 
     start_date, end_date = _period_in_fleet_timezone(sweep_configs[0][1], start, end)
 
@@ -360,15 +340,15 @@ def sweep(
     n_sweeps = len(sweep_configs)
     total_homes = sum(len(cfg.homes) for _, cfg in sweep_configs)
 
-    print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
+    print_info(cli, f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
 
     sweep_results: dict[int, FleetResults] = {}
-    with create_fleet_progress() as progress:
+    with create_fleet_progress(cli) as progress:
         task = progress.add_task(
             f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
             total=total_homes
         )
-        for index, fleet_results in runner.simulate_each(
+        for index, fleet_results in cli.runner.simulate_each(
             [fleet for _, fleet in sweep_configs], start_date, end_date, progress=_homes_done_on(progress, task)
         ):
             sweep_results[index] = fleet_results
@@ -388,7 +368,7 @@ def sweep(
         summary_df = pd.DataFrame(results_summary)
         summary_file = output_dir / "sweep_summary.csv"
         summary_df.to_csv(summary_file, index=False)
-        print_success(f"Sweep summary saved to {summary_file}")
+        print_success(cli, f"Sweep summary saved to {summary_file}")
 
 
 def _param_sweep(
@@ -398,16 +378,12 @@ def _param_sweep(
     max_val: Optional[float],
     steps: int,
     mode: str,
-) -> tuple[str, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, param, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
+) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, param, its spec, and each sweep value with the fleet raw_config builds when that value replaces ${param}."""
     if min_val is None or max_val is None:
         raise ConfigurationError("CLI sweep requires --min and --max values")
-    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
-    print_info(
-        f"CLI sweep: {param} from {min_val} to {max_val} "
-        f"({steps} steps, {mode})"
-    )
-    return param, [
+    sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=SweepMode.parse(mode))
+    return param, sweep_spec, [
         (
             value,
             dataclasses.replace(
@@ -421,25 +397,15 @@ def _param_sweep(
 
 def _yaml_sweep(
     raw_config: Mapping[str, Any],
-) -> tuple[str, list[tuple[float, FleetConfig]]]:
-    """The name of the sweep, multiplier, and each sweep value with the fleet raw_config's YAML-defined sweep builds for it."""
-    param_name = "multiplier"
+) -> tuple[str, SweepSpec, list[tuple[float, FleetConfig]]]:
+    """The name of the sweep, multiplier, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the fleet that sweep builds for it."""
     sweep_spec = detect_fleet_sweep_spec(raw_config)
     if sweep_spec is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
-    print_info(
-        f"YAML sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
-        f"({sweep_spec.steps} steps, {sweep_spec.mode})"
-    )
-    return param_name, parse_sweep_fleet_configs(raw_config)
-
-
-def _runner(workers: Optional[int], sequential: bool) -> FleetRunner:
-    """The default runner, simulating homes in turn when sequential, else in parallel on workers workers, None meaning as many as the homes need, up to the CPUs."""
-    return dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
+    return "multiplier", sweep_spec, parse_sweep_fleet_configs(raw_config)
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:

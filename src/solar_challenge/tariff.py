@@ -6,16 +6,18 @@ flat-rate tariffs, and preset UK tariff configurations.
 """
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time
 from functools import cached_property
+from types import MappingProxyType
 
+import numpy as np
 import pandas as pd
 
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
-from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR
+from solar_challenge.timebase import MINUTES_PER_DAY, MINUTES_PER_HOUR, minutes_of_day
 
 
 def _minute_of_day(clock: time | datetime) -> int:
@@ -175,6 +177,31 @@ def _tiling_refusal(
 
 
 @dataclass(frozen=True)
+class PresetRates:
+    """An economy preset's default rates.
+
+    Attributes:
+        off_peak_rate: Off-peak rate in £/kWh, at least 0 and finite
+        peak_rate: Peak rate in £/kWh, at least 0 and finite
+    """
+
+    off_peak_rate: float
+    peak_rate: float
+
+    def __post_init__(self) -> None:
+        """Read both rates through number_fields, holding the floats read, as TariffPeriod reads its rate."""
+        read_field(self, "off_peak_rate", as_finite_float, NON_NEGATIVE)
+        read_field(self, "peak_rate", as_finite_float, NON_NEGATIVE)
+
+
+#: Each economy preset's default rates, what a preset tariff built without rates is charged, keyed by the scenario grammar's tariff type.
+PRESET_RATES: Mapping[str, PresetRates] = MappingProxyType({
+    "economy_7": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+    "economy_10": PresetRates(off_peak_rate=0.13, peak_rate=0.35),
+})
+
+
+@dataclass(frozen=True)
 class TariffConfig:
     """Configuration for an electricity tariff.
 
@@ -213,12 +240,6 @@ class TariffConfig:
         return max(period.rate_per_kwh for period in self.periods)
 
     @cached_property
-    def mean_period_rate(self) -> float:
-        """Mean of the period rates in £/kWh, each period counted once whatever its length."""
-        rates = [period.rate_per_kwh for period in self.periods]
-        return sum(rates) / len(rates)
-
-    @cached_property
     def cheap_minutes_of_day(self) -> frozenset[int]:
         """The minutes of the local day, 0 to 1439, whose rate is below peak_rate and at or below the duration-weighted mean rate; a tariff whose minutes share one rate has none."""
         weighted_mean_rate = math.fsum(self._rate_by_minute) / MINUTES_PER_DAY
@@ -238,6 +259,11 @@ class TariffConfig:
             Rate in £/kWh
         """
         return self._rate_by_minute[_minute_of_day(timestamp)]
+
+    def rates_for(self, index: pd.DatetimeIndex) -> np.ndarray:
+        """The rate in £/kWh at each timestamp of index, in order, as float64: get_rate's rate at that timestamp's wall-clock minute, from the same minute table."""
+        rates: np.ndarray = np.asarray(self._rate_by_minute, dtype=np.float64)[minutes_of_day(index)]
+        return rates
 
     def is_cheap_at(self, timestamp: datetime) -> bool:
         """Whether the timestamp's wall-clock minute is one of cheap_minutes_of_day."""
@@ -269,8 +295,8 @@ class TariffConfig:
     @classmethod
     def economy_7(
         cls,
-        off_peak_rate: float = 0.09,
-        peak_rate: float = 0.25,
+        off_peak_rate: float = PRESET_RATES["economy_7"].off_peak_rate,
+        peak_rate: float = PRESET_RATES["economy_7"].peak_rate,
         off_peak_start: str = "00:30",
         off_peak_end: str = "07:30",
     ) -> "TariffConfig":
@@ -280,8 +306,8 @@ class TariffConfig:
         typically 00:30-07:30 (times vary by region).
 
         Args:
-            off_peak_rate: Off-peak rate in £/kWh (default: 0.09)
-            peak_rate: Peak rate in £/kWh (default: 0.25)
+            off_peak_rate: Off-peak rate in £/kWh (default: PRESET_RATES["economy_7"].off_peak_rate)
+            peak_rate: Peak rate in £/kWh (default: PRESET_RATES["economy_7"].peak_rate)
             off_peak_start: Off-peak period start time HH:MM (default: "00:30")
             off_peak_end: Off-peak period end time HH:MM (default: "07:30")
 
@@ -309,8 +335,8 @@ class TariffConfig:
     @classmethod
     def economy_10(
         cls,
-        off_peak_rate: float = 0.08,
-        peak_rate: float = 0.27,
+        off_peak_rate: float = PRESET_RATES["economy_10"].off_peak_rate,
+        peak_rate: float = PRESET_RATES["economy_10"].peak_rate,
         night_start: str = "00:00",
         night_end: str = "05:00",
         afternoon_start: str = "13:00",
@@ -324,8 +350,8 @@ class TariffConfig:
         night, afternoon, and evening periods.
 
         Args:
-            off_peak_rate: Off-peak rate in £/kWh (default: 0.08)
-            peak_rate: Peak rate in £/kWh (default: 0.27)
+            off_peak_rate: Off-peak rate in £/kWh (default: PRESET_RATES["economy_10"].off_peak_rate)
+            peak_rate: Peak rate in £/kWh (default: PRESET_RATES["economy_10"].peak_rate)
             night_start: Night off-peak start (default: "00:00")
             night_end: Night off-peak end (default: "05:00")
             afternoon_start: Afternoon off-peak start (default: "13:00")
@@ -400,7 +426,7 @@ def calculate_bill(
         tariff: Tariff configuration with rate periods
 
     Returns:
-        Total bill cost in £
+        Total bill cost in £, NaN if any energy is missing, as NaN or pd.NA
 
     Raises:
         ValueError: If energy_kwh doesn't have a DatetimeIndex
@@ -408,13 +434,8 @@ def calculate_bill(
     if not isinstance(energy_kwh.index, pd.DatetimeIndex):
         raise ValueError("energy_kwh must have a DatetimeIndex")
 
-    total_cost = 0.0
-
-    for timestamp, energy in energy_kwh.items():
-        rate = tariff.get_rate(timestamp)
-        total_cost += energy * rate
-
-    return total_cost
+    energy = energy_kwh.to_numpy(dtype=np.float64, na_value=np.nan)
+    return float(np.sum(energy * tariff.rates_for(energy_kwh.index)))
 
 
 def FlatRateTariff(rate_per_kwh: float, name: str = "") -> TariffConfig:

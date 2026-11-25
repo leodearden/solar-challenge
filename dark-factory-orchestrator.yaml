@@ -19,8 +19,8 @@ escalation:
   queue_dir: "data/escalations"
   port: 8106
 
-# Verify commands run in a fresh worktree via `uv run --locked`.
-test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e"
+# Verify commands run in a fresh worktree via `uv run --locked`; restart tier.
+test_command: "uv run --locked --extra dev --extra web pytest -m 'not slow' --ignore=tests/e2e -n auto --dist loadgroup"
 lint_command: "true"
 type_check_command: "uv run --locked --extra dev --extra web mypy src/solar_challenge"
 
@@ -41,6 +41,11 @@ verify_runners:
 verify_host_policy: prefer_remote
 verify_drift_check_every_n_lands: 10
 verify_cross_check_remote_green: false
+# Caps test_command's -n auto. Uncapped, auto takes one worker per host core, and every
+# concurrent verify on the shared workstation does so at once (Leo 2026-11-24: 8).
+# Green tier: mcp__escalation__reload_config applies it with no restart.
+verify_env:
+  PYTEST_XDIST_AUTO_NUM_WORKERS: "8"
 verify_env_probes:
   - key: uv
     argv: ["uv", "--version"]
@@ -73,7 +78,7 @@ git:
       outage_probe: "uv run --locked --extra dev python scripts/outage_probe.py pypi"
       outage_probe_timeout_secs: 180
     - name: e2e
-      command: "PLAYWRIGHT_SKIP_BROWSER_GC=1 timeout -k 60 600 uv run --locked --extra dev --extra web --extra e2e playwright install chromium-headless-shell && timeout -k 60 1800 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider"
+      command: "PLAYWRIGHT_SKIP_BROWSER_GC=1 timeout -k 60 600 uv run --locked --extra dev --extra web --extra e2e playwright install chromium-headless-shell && timeout -k 60 18000 uv run --locked --extra dev --extra web --extra e2e pytest -n 0 tests/e2e -m 'not slow' -p no:cacheprovider"
       fix_task_priority: "medium"
     - name: pvgis
       command: "timeout -k 60 600 uv run --locked --extra dev pytest -n 0 tests/integration/test_pvgis.py -p no:cacheprovider"

@@ -7,17 +7,24 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import MISSING, dataclass, field, fields
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
-from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import EVConfig, require_tariff_for_smart_charging
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
+from solar_challenge.dispatch import (
+    DispatchStrategy,
+    GridChargeForecast,
+    SelfConsumptionStrategyConfig,
+    build_dispatch_strategy,
+)
+from solar_challenge.ev import EVConfig, RowWeights, generate_ev_charging_profile, require_tariff_for_smart_charging
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.grid_charge_forecast import grid_charge_ceilings_kwh
 from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load, reference_year_lengths
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
+from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
 from solar_challenge.seg import SEGTariff, calculate_seg_revenue
 from solar_challenge.tariff import TariffConfig
@@ -26,21 +33,6 @@ from solar_challenge.weather import WeatherProvider, align_tmy_to_index
 
 
 _YEAR_LENGTHS_IN_HOURS = reference_year_lengths(rows_per_day=24)
-
-
-HOME_DISPATCH_STRATEGIES: tuple[str, ...] = ("greedy", "tou_optimized")
-"""The values of HomeConfig.dispatch_strategy, the dispatch a home asks for by name."""
-
-
-def refuse_unknown_home_dispatch_strategy(value: object, *, field: str) -> str:
-    """Return *value*, given for the home dispatch strategy that *field* names, refusing it unless it is one of HOME_DISPATCH_STRATEGIES.
-
-    Raises:
-        ConfigurationError: "Invalid <field> <value!r>; valid values: [...]".
-    """
-    if not isinstance(value, str) or value not in HOME_DISPATCH_STRATEGIES:
-        raise ConfigurationError(f"Invalid {field} {value!r}; valid values: {sorted(HOME_DISPATCH_STRATEGIES)}")
-    return value
 
 
 @dataclass(frozen=True)
@@ -56,14 +48,14 @@ class HomeConfig:
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
-        dispatch_strategy: Battery dispatch strategy, one of HOME_DISPATCH_STRATEGIES
 
     Raises:
-        ConfigurationError: dispatch_strategy is not one of HOME_DISPATCH_STRATEGIES; or
-            ev_config's smart_charging_mode is 'off_peak' and there is no tariff_config whose
-            cheap minutes it charges in (require_tariff_for_smart_charging); or the home has a
-            battery whose dispatch would ignore a setting: tou_optimized with no tariff to
-            dispatch by, or grid_charging its strategy refuses (build_dispatch_strategy).
+        ConfigurationError: ev_config's smart_charging_mode is 'off_peak' and there is no
+            tariff_config whose cheap minutes it charges in (require_tariff_for_smart_charging);
+            or the home has a battery whose dispatch strategy build_dispatch_strategy refuses:
+            tou_optimized on the tariff's clock with no tariff; grid_charging the strategy would
+            ignore, a tariff with no cheap period included; or tou_optimized whose peak_hours
+            reach a cheap minute of tariff_config.
     """
 
     pv_config: PVConfig
@@ -74,7 +66,6 @@ class HomeConfig:
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
-    dispatch_strategy: str = "greedy"
     seg_tariff: Optional[SEGTariff] = None
     """Smart Export Guarantee tariff for pricing grid exports.
 
@@ -83,42 +74,23 @@ class HomeConfig:
     """
 
     def __post_init__(self) -> None:
-        refuse_unknown_home_dispatch_strategy(self.dispatch_strategy, field="dispatch_strategy")
         if self.ev_config is not None:
             require_tariff_for_smart_charging(self.ev_config, self.tariff_config)
-        if self.battery_config is None:
-            return
-        if _runs_tariff_tou(self):
-            if self.tariff_config is None:
-                raise ConfigurationError(
-                    "dispatch_strategy 'tou_optimized' dispatches the battery by the tariff's rates, "
-                    "but there is no tariff; add a tariff or use dispatch_strategy 'greedy'"
-                )
-            return
-        _configured_strategy(self)
+        if self.battery_config is not None:
+            _battery_strategy(self, self.battery_config)
 
 
-def _runs_tariff_tou(config: HomeConfig) -> bool:
-    """Whether the home asks for the tariff-rate TOU path: tou_optimized, and its battery, if any, names no strategy of its own.
-
-    The home runs that path only when it has a tariff.
-    """
-    return config.dispatch_strategy == "tou_optimized" and (
-        config.battery_config is None or config.battery_config.dispatch_strategy is None
-    )
-
-
-def _configured_strategy(config: HomeConfig) -> DispatchStrategy:
-    """The strategy the home's battery names, self-consumption when it names none or there is no battery, built for its grid_charging at the home's tariff.
+def _battery_strategy(config: HomeConfig, battery: BatteryConfig) -> DispatchStrategy:
+    """A new instance of battery's dispatch strategy, built for its grid_charging at the home's tariff.
 
     Raises:
-        ConfigurationError: build_dispatch_strategy refuses the battery's grid_charging, which
-            the strategy would ignore.
+        ConfigurationError: build_dispatch_strategy's refusals: tou_optimized on the tariff's
+            clock with no tariff; peak_hours that reach a cheap minute of the tariff; or
+            grid_charging the strategy would ignore.
     """
-    battery = config.battery_config
     return build_dispatch_strategy(
-        (None if battery is None else battery.dispatch_strategy) or SelfConsumptionStrategyConfig(),
-        grid_charging=None if battery is None else battery.grid_charging,
+        battery.dispatch_strategy,
+        grid_charging=battery.grid_charging,
         tariff=config.tariff_config,
     )
 
@@ -198,6 +170,32 @@ def _refuse_unless_a_number_in_every_row(column: str, series: pd.Series) -> None
 
 
 @dataclass(frozen=True)
+class RunPricing:
+    """How simulate_home priced a run's grid flows.
+
+    A rate is None when no tariff, or no SEG tariff, priced its flow. A £0 tariff is 0.0,
+    and priced.
+
+    Attributes:
+        import_tariff_mean_rate_gbp_per_kwh: The import tariff's rate in £/kWh, time-weighted
+            over the run's rows
+        seg_rate_pence_per_kwh: The SEG rate in pence/kWh that the run's export earned
+
+    Raises:
+        ConfigurationError: A ValueError naming the field and the value, for a set rate that is
+            not a finite number of at least 0.
+    """
+
+    import_tariff_mean_rate_gbp_per_kwh: Optional[float]
+    seg_rate_pence_per_kwh: Optional[float]
+
+    def __post_init__(self) -> None:
+        """Read each set rate as a finite number of at least 0, holding the float read, as SEGTariff reads its rate."""
+        read_field(self, "import_tariff_mean_rate_gbp_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
+        read_field(self, "seg_rate_pence_per_kwh", as_finite_float, NON_NEGATIVE, optional=True)
+
+
+@dataclass(frozen=True)
 class SimulationResults:
     """Comprehensive results from a home simulation.
 
@@ -212,7 +210,7 @@ class SimulationResults:
 
     Each amount series, every series but the battery_soc and tariff_rate levels,
     holds a number in every row, as the run's totals sum every row's amount.
-    Construction, after its dtype refusal, and per_minute_amounts, total_amounts
+    Construction, after its dtype refusal, and per_step_amounts, total_amounts
     and to_dataframe, since a series can still be written in place, refuse the
     first amount series holding a NaN, or an NA in a nullable series, with
     SeriesRefused, naming its column, how many of its rows hold no number and
@@ -222,7 +220,7 @@ class SimulationResults:
         generation: PV generation in kW
         demand: Load demand in kW
         self_consumption: Demand met on site, by PV used directly and by battery discharge, in kW
-        battery_charge: Power into battery in kW
+        battery_charge: Power the battery drew from the bus to charge, before its charge losses, in kW
         battery_discharge: Power out of battery in kW
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
@@ -232,8 +230,13 @@ class SimulationResults:
         tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
         heat_pump_load: Optional heat pump electrical load in kW (None if no heat pump)
-        grid_charge: Optional power stored in the battery from the grid in kW, a part of
+        grid_charge: Optional power the battery drew from the grid in kW, a part of
             both battery_charge and grid_import (None when tariff_config is None)
+        pricing: How the run's grid flows were priced (None for results simulate_home did
+            not make, e.g. from_dataframe's)
+        grid_charge_forecast: The forecast that sized the run's grid charge in cheap
+            periods, its battery's GridChargeConfig.forecast (None when the run did not
+            grid-charge)
     """
 
     generation: pd.Series = field(metadata=_power("generation_kw", "generation_kwh"))
@@ -253,6 +256,8 @@ class SimulationResults:
     # (None when tariff_config is None).
     grid_charge_cost: Optional[pd.Series] = field(default=None, metadata=_money("grid_charge_cost_gbp"))
     grid_charge: Optional[pd.Series] = field(default=None, metadata=_power("grid_charge_kw", "grid_charge_kwh"))
+    pricing: Optional[RunPricing] = None
+    grid_charge_forecast: Optional[GridChargeForecast] = None
 
     def __post_init__(self) -> None:
         """Name each set series after its column, without renaming the series it was built from.
@@ -311,7 +316,7 @@ class SimulationResults:
         for _, series, amount in self._series_with_amounts():
             yield amount.column, amount.row_amounts(series, window)
 
-    def per_minute_amounts(self) -> pd.DataFrame:
+    def per_step_amounts(self) -> pd.DataFrame:
         """Each row's energy in kWh, window.row_energy_kwh of its kW, and money in £, one column per amount, so a period's totals are its column sums.
 
         The battery state of charge and the tariff rate have no column, as neither adds up over
@@ -325,7 +330,7 @@ class SimulationResults:
         return pd.concat(dict(self._amount_series()), axis=1)
 
     def total_amounts(self) -> dict[str, float]:
-        """The run's total of each amount: per_minute_amounts' column sums, keyed by column.
+        """The run's total of each amount: per_step_amounts' column sums, keyed by column.
 
         Raises:
             ValueError: As window does, for an index no window describes.
@@ -351,8 +356,10 @@ class SimulationResults:
         )
 
     @classmethod
-    def from_dataframe(cls, frame: pd.DataFrame, *, strategy_name: str) -> "SimulationResults":
-        """Build the results whose to_dataframe() is frame, simulated under strategy_name.
+    def from_dataframe(
+        cls, frame: pd.DataFrame, *, strategy_name: str, grid_charge_forecast: Optional[GridChargeForecast] = None
+    ) -> "SimulationResults":
+        """Build the results whose to_dataframe() is frame, simulated under strategy_name, its grid charge sized by grid_charge_forecast.
 
         Optional series whose column is absent are None.
 
@@ -376,11 +383,12 @@ class SimulationResults:
             raise ValueError(f"frame lacks required series columns: {', '.join(missing_columns)}")
         return cls(
             strategy_name=strategy_name,
+            grid_charge_forecast=grid_charge_forecast,
             **{name: frame[column] for name, column in cls._series_columns() if column in frame.columns},
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 
@@ -393,32 +401,42 @@ class SummaryStatistics:
     total_grid_import_kwh: float
     total_grid_export_kwh: float
     total_battery_charge_kwh: float
+    # Energy the battery delivered to the home's bus, after its discharge losses: a part of
+    # total_self_consumption_kwh, which counts it.
     total_battery_discharge_kwh: float
     peak_generation_kw: float
     peak_demand_kw: float
     self_consumption_ratio: float  # self_consumption / generation
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
-    simulation_days: int
+    # The window the totals were computed over, as calculate_summary takes it from the results.
+    window: SimulationWindow
     total_import_cost_gbp: float  # total cost of grid imports in £
     total_export_revenue_gbp: float  # total revenue from grid exports in £
     net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
-    seg_revenue_gbp: Optional[float] = None
     total_heat_pump_load_kwh: Optional[float] = None  # total heat pump consumption
     peak_heat_pump_load_kw: Optional[float] = None  # peak heat pump load
     heat_pump_load_ratio: Optional[float] = None  # heat_pump_load / total_demand
     # Slice of total_import_cost_gbp spent charging the battery from the grid: householder
     # import, informational, in no CBS equation (docs/cost-recovery-finance-model.md §4).
     total_grid_charge_cost_gbp: float = 0.0
-    # Energy the battery stored from the grid: a part of both total_battery_charge_kwh and
-    # total_grid_import_kwh.
+    # Energy the battery drew from the grid, before its charge losses: a part of both
+    # total_battery_charge_kwh and total_grid_import_kwh.
     total_grid_charge_kwh: float = 0.0
-    # The window the totals were computed over, whose days simulation_days is.
-    window: Optional[SimulationWindow] = None
+    # How the run's grid flows were priced, None when that is unknown.
+    pricing: Optional[RunPricing] = None
+    # The forecast that sized the run's grid charge in cheap periods; None when the run did
+    # not grid-charge, or its stored summary predates the field.
+    grid_charge_forecast: Optional[GridChargeForecast] = None
 
     def __post_init__(self) -> None:
-        """Refuse a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and, when a window is set, a simulation_days other than its days."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, and a total_battery_discharge_kwh above the self-consumption that counts it."""
+        if not isinstance(self.window, SimulationWindow):
+            raise ValueError(
+                "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
+                f"calculate_summary takes from the results: got window={self.window!r}"
+            )
         grid_charge = self.total_grid_charge_kwh
         if not (0.0 <= grid_charge <= self.total_battery_charge_kwh and grid_charge <= self.total_grid_import_kwh):
             raise ValueError(
@@ -428,27 +446,33 @@ class SummaryStatistics:
                 f"total_battery_charge_kwh={self.total_battery_charge_kwh!r}, "
                 f"total_grid_import_kwh={self.total_grid_import_kwh!r}"
             )
-        window = self.window
-        if window is not None and self.simulation_days != window.days:
+        discharge = self.total_battery_discharge_kwh
+        if not discharge <= self.total_self_consumption_kwh:
             raise ValueError(
-                "SummaryStatistics' simulation_days is the number of calendar days its window covers: "
-                f"got simulation_days={self.simulation_days!r} for a window of {window.days} days, "
-                f"{window.first_day.isoformat()} to {window.last_day.isoformat()}"
+                "SummaryStatistics' total_battery_discharge_kwh is a part of total_self_consumption_kwh, which "
+                "counts the battery's discharge, so it is at most it: "
+                f"got total_battery_discharge_kwh={discharge!r}, "
+                f"total_self_consumption_kwh={self.total_self_consumption_kwh!r}"
             )
 
     @property
+    def simulation_days(self) -> int:
+        """The number of calendar days the summary's window covers."""
+        return self.window.days
+
+    @property
     def total_pv_charge_kwh(self) -> float:
-        """Energy the battery stored from PV, in kWh: its total charge less the part it stored from the grid."""
+        """Energy the battery drew from PV, in kWh: its total charge less the part it drew from the grid."""
         return self.total_battery_charge_kwh - self.total_grid_charge_kwh
 
     @property
     def total_direct_self_consumption_kwh(self) -> float:
-        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too."""
+        """PV the home used directly, in kWh: its self-consumption less the battery's discharge, which self-consumption counts too, so at least 0."""
         return self.total_self_consumption_kwh - self.total_battery_discharge_kwh
 
     @property
     def total_grid_to_demand_kwh(self) -> float:
-        """Grid import that met demand, in kWh: the total import less the part the battery stored."""
+        """Grid import that met demand, in kWh: the total import less the part the battery drew."""
         return self.total_grid_import_kwh - self.total_grid_charge_kwh
 
 
@@ -491,7 +515,7 @@ def _hourly_weather(config: HomeConfig, weather: WeatherProvider) -> pd.DataFram
 
 @dataclass(frozen=True)
 class _Demand:
-    """A run's demand in kW on its minutes: the household's load, EV charging included, plus any heat pump's load.
+    """A run's demand in kW on its minutes: the household's load, plus any EV's charging, plus any heat pump's load.
 
     heat_pump_kw is None without a heat pump.
     """
@@ -515,21 +539,39 @@ def _heat_pump_load(
     )
 
 
-def _demand(config: HomeConfig, weather: pd.DataFrame, window: SimulationWindow) -> _Demand:
-    """The home's demand on window's rows, with any heat pump run on weather."""
-    household_kw = generate_load_profile(
-        config.load_config, window, ev_config=config.ev_config, tariff=config.tariff_config
-    )
+def _generation_on(minute_generation: pd.Series) -> RowWeights:
+    """The home's PV generation in kW on whatever rows it is given, read from its TMY-year *minute_generation* by UTC time of year."""
+
+    def generation_kw(rows: pd.DatetimeIndex) -> np.ndarray:
+        on_rows: np.ndarray = align_tmy_to_index(minute_generation, rows).to_numpy()
+        return on_rows
+
+    return generation_kw
+
+
+def _demand(
+    config: HomeConfig, weather: pd.DataFrame, minute_generation: pd.Series, window: SimulationWindow
+) -> _Demand:
+    """The home's demand on window's rows: its household's, plus any EV's charging, a solar EV's in the most of *minute_generation*, plus any heat pump's, run on weather."""
+    demand_kw = generate_load_profile(config.load_config, window)
+    if config.ev_config is not None:
+        demand_kw = demand_kw + generate_ev_charging_profile(
+            config.ev_config,
+            window,
+            tariff=config.tariff_config,
+            generation_kw=_generation_on(minute_generation),
+        )
     if config.heat_pump_config is None:
-        return _Demand(household_kw, None)
-    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], household_kw.index)
-    return _Demand(household_kw + heat_pump_kw, heat_pump_kw)
+        return _Demand(demand_kw, None)
+    heat_pump_kw = _heat_pump_load(config.heat_pump_config, weather["temp_air"], demand_kw.index)
+    return _Demand(demand_kw + heat_pump_kw, heat_pump_kw)
 
 
-_Timestep = Callable[[Optional[Battery], pd.Timestamp, float, float], EnergyFlowResult]
+_Timestep = Callable[[Optional[Battery], datetime.datetime, float, float, Optional[float]], EnergyFlowResult]
 """One row of a run's dispatch, which charges and discharges the run's battery, if it has one.
 
-From that battery and the row's timestamp, generation in kW and demand in kW, to the row's flows.
+From that battery and the row's timestamp, generation in kW, demand in kW and useful-charge
+ceiling in kWh (None when the row's grid charge has none), to the row's flows.
 """
 
 
@@ -541,38 +583,42 @@ class _DispatchPath:
     timestep: _Timestep
 
 
-def _tariff_tou_timestep(tariff: TariffConfig, step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, dispatched at the tariff's rates by simulate_timestep_tou."""
-
-    def timestep(
-        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
-    ) -> EnergyFlowResult:
-        return simulate_timestep_tou(
-            generation_kw=generation_kw,
-            demand_kw=demand_kw,
-            battery=battery,
-            timestamp=timestamp,
-            tariff=tariff,
-            timestep_minutes=step_minutes,
-        )
-
-    return timestep
-
-
 def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig], step_minutes: float) -> _Timestep:
-    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates."""
+    """Each row, step_minutes long, dispatched by strategy through simulate_timestep, which grid-charges by tariff's rates up to the row's useful-charge ceiling."""
 
     def timestep(
-        battery: Optional[Battery], timestamp: pd.Timestamp, generation_kw: float, demand_kw: float
+        battery: Optional[Battery],
+        timestamp: datetime.datetime,
+        generation_kw: float,
+        demand_kw: float,
+        ceiling_kwh: Optional[float],
     ) -> EnergyFlowResult:
         return simulate_timestep(
             generation_kw=generation_kw,
             demand_kw=demand_kw,
             battery=battery,
             timestep_minutes=step_minutes,
-            timestamp=timestamp.to_pydatetime(),
+            timestamp=timestamp,
             strategy=strategy,
             tariff=tariff,
+            useful_charge_ceiling_kwh=ceiling_kwh,
+        )
+
+    return timestep
+
+
+def _settling_timestep(step_minutes: float) -> _Timestep:
+    """Each row, step_minutes long, of a run with no battery, which simulate_timestep only settles with the grid; the row's ceiling has nothing to cap."""
+
+    def timestep(
+        battery: Optional[Battery],
+        timestamp: datetime.datetime,
+        generation_kw: float,
+        demand_kw: float,
+        ceiling_kwh: Optional[float],
+    ) -> EnergyFlowResult:
+        return simulate_timestep(
+            generation_kw=generation_kw, demand_kw=demand_kw, battery=None, timestep_minutes=step_minutes
         )
 
     return timestep
@@ -581,19 +627,37 @@ def _strategy_timestep(strategy: DispatchStrategy, tariff: Optional[TariffConfig
 def _dispatch_path(
     config: HomeConfig, step_minutes: float, strategy: Optional[DispatchStrategy] = None
 ) -> _DispatchPath:
-    """How the home dispatches each row, step_minutes long.
+    """How the home dispatches each row, step_minutes long, at its tariff.
 
-    A given strategy dispatches it, at the home's tariff. Without one, the home takes the
-    tariff-rate TOU path when it asks for tou_optimized, has a tariff and its battery names no
-    strategy of its own; otherwise its battery's strategy, self-consumption by default.
+    A home with a battery runs strategy when given, else its battery's _battery_strategy. A home
+    with no battery runs none: it only settles each row, and is named after strategy when given,
+    else after self-consumption.
     """
-    tariff = config.tariff_config
-    if strategy is not None:
-        return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
-    if _runs_tariff_tou(config) and tariff is not None:
-        return _DispatchPath("tou_optimized", _tariff_tou_timestep(tariff, step_minutes))
-    strategy = _configured_strategy(config)
-    return _DispatchPath(strategy.name, _strategy_timestep(strategy, tariff, step_minutes))
+    if config.battery_config is None:
+        name = strategy.name if strategy is not None else SelfConsumptionStrategyConfig().strategy_type
+        return _DispatchPath(name, _settling_timestep(step_minutes))
+    if strategy is None:
+        strategy = _battery_strategy(config, config.battery_config)
+    return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
+
+
+def _grid_charge_forecast(config: HomeConfig) -> Optional[GridChargeForecast]:
+    """The forecast that sizes the home's grid charge in cheap periods: its battery's, None when its battery does not grid-charge."""
+    battery = config.battery_config
+    return None if battery is None or battery.grid_charging is None else battery.grid_charging.forecast
+
+
+def _grid_charge_ceilings(
+    config: HomeConfig, generation_kw: pd.Series, demand_kw: pd.Series
+) -> tuple[Optional[float], ...]:
+    """Each row's useful-charge ceiling, from the run's generation and demand, under the forecast that sizes the home's grid charge.
+
+    Every row's is None when the home's battery does not grid-charge at a tariff.
+    """
+    battery, tariff = config.battery_config, config.tariff_config
+    if battery is None or battery.grid_charging is None or tariff is None:
+        return (None,) * len(generation_kw)
+    return grid_charge_ceilings_kwh(battery.grid_charging.forecast, generation_kw, demand_kw, battery, tariff)
 
 
 def _row_flows(
@@ -601,9 +665,10 @@ def _row_flows(
     battery_config: Optional[BatteryConfig],
     generation_kw: pd.Series,
     demand_kw: pd.Series,
+    ceilings_kwh: Sequence[Optional[float]],
     validate_balance: bool,
 ) -> list[EnergyFlowResult]:
-    """Each row's flows, in order, from timestep run on that row's generation and demand.
+    """Each row's flows, in order, from timestep run on that row's generation, demand and useful-charge ceiling.
 
     The run's battery, built from battery_config when it is set, carries its state of charge
     from each row to the next. With validate_balance, each row's flows are checked for
@@ -611,8 +676,10 @@ def _row_flows(
     """
     battery = None if battery_config is None else Battery(battery_config)
     flows: list[EnergyFlowResult] = []
-    for timestamp, generation, demand in zip(demand_kw.index, generation_kw, demand_kw, strict=True):
-        flow = timestep(battery, timestamp, float(generation), float(demand))
+    for timestamp, generation, demand, ceiling in zip(
+        demand_kw.index.to_pydatetime(), generation_kw, demand_kw, ceilings_kwh, strict=True
+    ):
+        flow = timestep(battery, timestamp, float(generation), float(demand), ceiling)
         if validate_balance:
             validate_energy_balance(flow)
         flows.append(flow)
@@ -643,15 +710,11 @@ def _price_imports(
             import_cost=pd.Series([0.0] * len(flows), index=rows),
             grid_charge_cost=None,
         )
-    rates = [tariff.get_rate(timestamp) for timestamp in rows]
+    rates = tariff.rates_for(rows)
     return _ImportPricing(
         tariff_rate=pd.Series(rates, index=rows),
-        import_cost=pd.Series(
-            [flow.grid_import * rate for flow, rate in zip(flows, rates, strict=True)], index=rows
-        ),
-        grid_charge_cost=pd.Series(
-            [flow.grid_charge * rate for flow, rate in zip(flows, rates, strict=True)], index=rows
-        ),
+        import_cost=pd.Series([flow.grid_import for flow in flows], index=rows) * rates,
+        grid_charge_cost=pd.Series([flow.grid_charge for flow in flows], index=rows) * rates,
     )
 
 
@@ -666,6 +729,19 @@ def _export_revenue(
     return pd.Series([calculate_seg_revenue(flow.grid_export, seg_tariff) for flow in flows], index=rows)
 
 
+def _run_pricing(config: HomeConfig, tariff_rate: pd.Series) -> RunPricing:
+    """How config's tariffs priced the run whose rows' import rates are tariff_rate.
+
+    The rows are the run's evenly spaced minutes, so their mean rate is the tariff's
+    time-weighted mean over the run.
+    """
+    seg_tariff = config.seg_tariff
+    return RunPricing(
+        import_tariff_mean_rate_gbp_per_kwh=None if config.tariff_config is None else float(tariff_rate.mean()),
+        seg_rate_pence_per_kwh=None if seg_tariff is None else seg_tariff.rate_pence_per_kwh,
+    )
+
+
 def _results(
     flows: Sequence[EnergyFlowResult],
     rows: pd.DatetimeIndex,
@@ -675,10 +751,13 @@ def _results(
     export_revenue: pd.Series,
     heat_pump_load: Optional[pd.Series],
     strategy_name: str,
+    pricing: RunPricing,
+    grid_charge_forecast: Optional[GridChargeForecast],
 ) -> SimulationResults:
     """The run's results on its rows, each lasting step_hours hours.
 
-    Each flow's power in kW, the battery's state of charge in kWh, and the run's prices.
+    Each flow's power in kW, the battery's state of charge in kWh, the run's prices,
+    pricing, how they were priced, and grid_charge_forecast, what sized its grid charge.
     """
     kw_per_kwh = 1 / step_hours
 
@@ -701,6 +780,8 @@ def _results(
         heat_pump_load=heat_pump_load,
         grid_charge_cost=import_pricing.grid_charge_cost,
         grid_charge=None if import_pricing.grid_charge_cost is None else power_kw(lambda flow: flow.grid_charge),
+        pricing=pricing,
+        grid_charge_forecast=grid_charge_forecast,
     )
 
 
@@ -710,8 +791,8 @@ def _local_date(moment: pd.Timestamp, timezone: str) -> datetime.date:
     return local_date
 
 
-def _run_window(location: Location, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationWindow:
-    """The run's window: the dates of start_date and end_date on location's clock, both counted, at one minute."""
+def run_window(location: Location, start_date: pd.Timestamp, end_date: pd.Timestamp) -> SimulationWindow:
+    """The window simulate_home runs a home at location over: the dates of start_date and end_date on location's clock, a naive moment read as already on it, both counted, at one minute."""
     return SimulationWindow(
         _local_date(start_date, location.timezone),
         _local_date(end_date, location.timezone),
@@ -744,16 +825,30 @@ def simulate_home(
             so with a heat pump configured the weather must be one year of
             hourly rows, 8760 to 8784 (365 to 366 days).
         strategy: The dispatch strategy to run the battery under in place of
-            the one config selects; None runs config's. It is driven through
+            the one config selects; None runs its battery's own
+            (_battery_strategy). It is driven through
             flow.simulate_timestep with config's tariff, so it is offered a
             GridChargeContext exactly when a configured strategy is: with a
-            tariff and battery_config.grid_charging. The results'
-            strategy_name is its name.
+            tariff and battery_config.grid_charging, each row's carrying the
+            same useful-charge ceiling. The results' strategy_name is its name.
+
+    The home's demand is its household's load plus any EV's charging, which
+    generate_ev_charging_profile places on the home's tariff, a 'solar' EV
+    on the home's own PV generation, plus any heat pump's load.
+
+    Each cheap period's grid charge fills the battery to its target, or to
+    the period's useful-charge ceiling when that is lower: grid_charge_ceilings_kwh
+    under battery_config.grid_charging's forecast, from the run's generation and
+    demand (docs/grid-charge-forecast.md). Under 'pv_blind' no period has a
+    ceiling.
 
     Returns:
         SimulationResults with every time series on the run's window's rows:
         one a minute on config.location's clock, from the first day's local
-        midnight up to the midnight after the last day
+        midnight up to the midnight after the last day; their pricing records
+        the rates config's tariffs priced the run's grid flows at, and their
+        grid_charge_forecast the forecast that sized its grid charge, None
+        when the battery does not grid-charge
 
     Raises:
         ValueError: If end_date's date is before start_date's, naming both;
@@ -763,16 +858,19 @@ def simulate_home(
             PrefetchedWeather refuses it. Whatever else weather.get raises,
             e.g. PvgisTmy's WeatherDataError, propagates too.
     """
-    window = _run_window(config.location, start_date, end_date)
+    window = run_window(config.location, start_date, end_date)
     rows = window.rows()
     hourly_weather = _hourly_weather(config, weather)
     minute_generation = interpolate_to_minute_resolution(
         simulate_pv_output(config.pv_config, config.location, hourly_weather)
     )
-    demand = _demand(config, hourly_weather, window)
+    demand = _demand(config, hourly_weather, minute_generation, window)
     generation_kw = align_tmy_to_index(minute_generation, rows)
     dispatch = _dispatch_path(config, window.step_minutes, strategy)
-    flows = _row_flows(dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, validate_balance)
+    ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
+    flows = _row_flows(
+        dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, ceilings_kwh, validate_balance
+    )
     import_pricing = _price_imports(config.tariff_config, flows, rows)
     export_revenue = _export_revenue(config.seg_tariff, flows, rows)
     if config.tariff_config is not None and config.seg_tariff is None:
@@ -790,50 +888,21 @@ def simulate_home(
         export_revenue=export_revenue,
         heat_pump_load=demand.heat_pump_kw,
         strategy_name=dispatch.strategy_name,
+        pricing=_run_pricing(config, import_pricing.tariff_rate),
+        grid_charge_forecast=_grid_charge_forecast(config),
     )
 
 
-def calculate_summary(
-    results: SimulationResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> SummaryStatistics:
+def calculate_summary(results: SimulationResults) -> SummaryStatistics:
     """Calculate summary statistics from simulation results.
 
     Args:
         results: Simulation results with time series
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, ``seg_revenue_gbp`` is computed from total grid export
-            via ``calculate_seg_revenue``.  Must be >= 0; negative values raise
-            ``ValueError`` (enforced by ``SEGTariff`` validation — a behaviour
-            change from the previous inline formula that silently returned a
-            negative number).
 
     Returns:
         SummaryStatistics with totals and ratios, carrying the window its results
-        cover, whose calendar days are its simulation_days
-
-    Notes:
-        **Two-path SEG design** — ``total_export_revenue_gbp`` and
-        ``seg_revenue_gbp`` are independent figures that can legitimately differ:
-
-        * ``total_export_revenue_gbp`` is always ``results.export_revenue.sum()``.
-          When ``simulate_home`` was called with ``HomeConfig.seg_tariff`` set,
-          every export timestep was already priced at that SEG rate, so
-          ``total_export_revenue_gbp`` already reflects SEG pricing and is the
-          authoritative revenue figure for that simulation.
-
-        * ``seg_revenue_gbp`` is an *additional*, independent recalculation
-          driven by ``seg_tariff_pence_per_kwh``.  This path exists for callers
-          (``fleet.py``, ``output.py``) that build ``SimulationResults`` by hand
-          and need a standalone SEG revenue figure without access to a
-          ``HomeConfig``.
-
-        **Recommended usage when** ``HomeConfig.seg_tariff`` **was set:**
-        read ``total_export_revenue_gbp`` for the authoritative revenue and do
-        *not* pass ``seg_tariff_pence_per_kwh`` — or pass the same rate as a
-        consistency cross-check.  Passing a *different* rate will produce
-        ``seg_revenue_gbp != total_export_revenue_gbp``, which is not an error
-        but may mislead callers that compare the two.
+        cover, whose calendar days are its simulation_days, the results' pricing and
+        the forecast that sized their grid charge
     """
     totals = results.total_amounts()
     total_gen = totals["generation_kwh"]
@@ -852,16 +921,6 @@ def calculate_summary(
     total_export_revenue = totals["export_revenue_gbp"]
     net_cost = total_import_cost - total_export_revenue
 
-    # Calculate SEG revenue if tariff is provided.
-    # Routed through SEGTariff + calculate_seg_revenue — single source of SEG math.
-    # SEGTariff validates rate >= 0; negative values raise ValueError here.
-    seg_revenue_gbp: Optional[float] = None
-    if seg_tariff_pence_per_kwh is not None:
-        seg_revenue_gbp = calculate_seg_revenue(
-            total_export,
-            SEGTariff(name="", rate_pence_per_kwh=seg_tariff_pence_per_kwh),
-        )
-
     # Grid-charge cost: the slice of total_import_cost spent charging the battery from the grid
     total_grid_charge_cost = totals["grid_charge_cost_gbp"] if results.grid_charge_cost is not None else 0.0
     total_grid_charge = totals["grid_charge_kwh"] if results.grid_charge is not None else 0.0
@@ -875,7 +934,6 @@ def calculate_summary(
         peak_heat_pump_kw = float(results.heat_pump_load.max())
         heat_pump_ratio = heat_pump_load_ratio(heat_pump_load_kwh=total_heat_pump_kwh, demand_kwh=total_demand)
 
-    window = results.window
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -889,16 +947,16 @@ def calculate_summary(
         self_consumption_ratio=self_consumption_ratio(self_consumption_kwh=total_self, generation_kwh=total_gen),
         grid_dependency_ratio=grid_dependency_ratio(grid_import_kwh=total_import, demand_kwh=total_demand),
         export_ratio=_share(total_export, total_gen),
-        simulation_days=window.days,
+        window=results.window,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
         net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
-        seg_revenue_gbp=seg_revenue_gbp,
         total_heat_pump_load_kwh=total_heat_pump_kwh,
         peak_heat_pump_load_kw=peak_heat_pump_kw,
         heat_pump_load_ratio=heat_pump_ratio,
         total_grid_charge_cost_gbp=total_grid_charge_cost,
         total_grid_charge_kwh=total_grid_charge,
-        window=window,
+        pricing=results.pricing,
+        grid_charge_forecast=results.grid_charge_forecast,
     )

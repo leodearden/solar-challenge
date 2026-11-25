@@ -13,6 +13,8 @@ them.
 import pytest
 from playwright.sync_api import Locator, Page, expect
 
+from tests.e2e._css_transitions import finish_the_css_transitions
+
 # The desktop sidebar is only visible at lg breakpoint (>= 1024px).
 # Playwright's default viewport (1280x720) satisfies this.
 
@@ -244,12 +246,11 @@ _RECORD_HOW_THE_SIDEBAR_LOADS = r"""(() => {
     const describe = target => target === sidebar() ? 'sidebar'
         : target.contains(content()) ? 'main column'
         : `${target.tagName.toLowerCase()}.${(target.getAttribute('class') || '').trim().split(/\s+/).join('.')} in the sidebar`;
-    const documentTransitions = () => document.getAnimations().filter(animation => animation instanceof CSSTransition);
-    const transitions = () => documentTransitions()
+    const transitions = () => document.getAnimations()
+        .filter(animation => animation instanceof CSSTransition)
         .filter(({effect: {target}}) => sidebar().contains(target) || target.contains(content()))
         .map(transition => `${describe(transition.effect.target)} ${transition.transitionProperty}`);
-    const finishTransitions = () => documentTransitions().forEach(transition => transition.finish());
-    window.sidebarProbe = {drawn, transitions, finishTransitions, load: {}};
+    window.sidebarProbe = {drawn, transitions, load: {}};
     document.addEventListener('readystatechange', () => {
         if (document.readyState === 'interactive') window.sidebarProbe.load.before_alpine = drawn();
     });
@@ -287,12 +288,18 @@ def _finish_the_transitions_and_read_the_layout(page: Page) -> dict[str, object]
     slide, which a loaded host can withhold for seconds. The page is one _open_with_the_sidebar_stored
     opened. No transition is left running, so the probe's transitions() reads empty afterwards.
     """
-    return page.evaluate("() => { window.sidebarProbe.finishTransitions(); return window.sidebarProbe.drawn().layout; }")
+    finish_the_css_transitions(page)
+    return page.evaluate("() => window.sidebarProbe.drawn().layout")
 
 
-def _highlighted_groups_once_nothing_transitions(page: Page) -> list[str]:
-    """The labels of the desktop sidebar's highlighted group buttons, read once no transition is running, so a colour fade under way is not read as a highlight half drawn."""
-    page.wait_for_function("() => window.sidebarProbe.transitions().length === 0")
+def _finish_the_transitions_and_read_the_highlighted_groups(page: Page) -> list[str]:
+    """Finish every CSS transition in the page, then return the labels of the desktop sidebar's highlighted group buttons.
+
+    Finishing moves a colour fade under way to its end value, so the read returns the settled
+    highlight, not one half drawn, and needs none of the frames a loaded host can withhold for
+    seconds. The page is one _open_with_the_sidebar_stored opened.
+    """
+    finish_the_css_transitions(page)
     return page.evaluate("() => window.sidebarProbe.drawn().highlighted_groups")
 
 
@@ -386,9 +393,9 @@ def test_a_group_opened_from_its_button_is_highlighted_until_closed_and_the_curr
     expect(_sidebar_toggle(page)).to_have_attribute("title", "Collapse sidebar")
     scenarios = _desktop_sidebar(page).get_by_role("button", name="Scenarios")
 
-    highlighted_groups = [_highlighted_groups_once_nothing_transitions(page)]
+    highlighted_groups = [_finish_the_transitions_and_read_the_highlighted_groups(page)]
     for _ in range(2):
         scenarios.press("Enter")
-        highlighted_groups.append(_highlighted_groups_once_nothing_transitions(page))
+        highlighted_groups.append(_finish_the_transitions_and_read_the_highlighted_groups(page))
 
     assert highlighted_groups == [["Simulate"], ["Simulate", "Scenarios"], ["Simulate"]]

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -21,16 +22,21 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
-    parse_finance_config,
 )
-from solar_challenge.finance import FinanceConfig, project_economics, project_multi_year
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.gridservices import GRID_SERVICES_RATE_BANDS, GridServicesEventsConfig
-from solar_challenge.home import HomeConfig, SimulationResults
+from solar_challenge.home import HomeConfig, RunPricing, SimulationResults
 from solar_challenge.load import LoadConfig
+from solar_challenge.projection import (
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+)
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import make_fleet_results_of
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
@@ -87,6 +93,7 @@ def _make_synthetic_sim_results(n_steps: int = 8760) -> SimulationResults:
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
         grid_charge_cost=None,
+        pricing=RunPricing(None, None),
     )
 
 
@@ -127,7 +134,7 @@ def _surplus_at(
 ) -> float:
     """Return mean_fleet_surplus_per_year_gbp from project_economics."""
     curve = project_multi_year(scenario, finance, simulate=simulate)
-    return project_economics(curve, scenario, finance).mean_fleet_surplus_per_year_gbp
+    return project_economics(curve, scenario_fleet(scenario), finance).mean_fleet_surplus_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +334,7 @@ def test_battery_and_no_battery_home_differ_by_flex_increment() -> None:
     home_b = HomeConfig(pv_config=pv, load_config=load, battery_config=None)
     homes = [home_a, home_b]
 
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+    period = SimulationWindow(date(2024, 1, 1), date(2024, 12, 31), ONE_MINUTE, "Europe/London")
     scenario = ScenarioConfig(
         name="Hermetic-BattVsNoBatt",
         period=period,

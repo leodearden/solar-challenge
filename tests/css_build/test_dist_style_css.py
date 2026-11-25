@@ -46,6 +46,7 @@ from xml.etree import ElementTree
 
 import pytest
 
+from tests._own_time import run_on_own_time
 from tests._repository_paths import REPOSITORY_ROOT
 from tests._tailwindcss_license_copies import TAILWINDCSS_LICENSE_COPIES
 
@@ -63,36 +64,35 @@ _TAILWINDCSS_PACKAGE = Path("node_modules", "tailwindcss")
 # The built-in palette the recolour test names as the accent.
 _RECOLOURED_ACCENT = "blue"
 
-# Only so a hung npm or node fails the tests by name. npm ci downloads every package the lock records, while a
-# run, such as a build or a palette read, only runs installed ones, so each has its own bound. npm ci's bound and
-# every run's together fit inside the css-build lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml),
-# whose kill would file css-build::nonzero-exit.
-_NPM_CI_TIMEOUT_SECS = 240
-_RUN_TIMEOUT_SECS = 40
+# Only so a hung npm or node fails the tests by name. Each bound is a budget of the child's own time
+# (tests/_own_time.py), so time the lane's nice-19 run spends queued for a CPU never counts. npm ci downloads every
+# package the lock records, while a run, such as a build or a palette read, only runs installed ones, so each has its
+# own budget. When the module's run is not queued, npm ci's budget and every run's together fit inside the css-build
+# lane job's `timeout -k 60 600` (dark-factory-orchestrator.yaml), so a hung child fails by name before that kill,
+# which would file css-build::unconfirmable. Under queueing, a budget of own time takes longer than its seconds of wall
+# time to spend, so the lane's wall-clock kill, not a budget, may end a hung run.
+_NPM_CI_OWN_TIME_SECS = 240
+_RUN_OWN_TIME_SECS = 40
 
 # The most lines of a diff a failure shows.
 _DIFF_LINES = 40
 
 
 def _npm_run(
-    args: list[str], cwd: Path, cache: Path, *, timeout_secs: float = _RUN_TIMEOUT_SECS
+    args: list[str], cwd: Path, cache: Path, *, own_time_secs: float = _RUN_OWN_TIME_SECS
 ) -> subprocess.CompletedProcess[str]:
-    """Run npm with *args* in *cwd*, with *cache* as its cache, for at most *timeout_secs*.
+    """Run npm with *args* in *cwd*, with *cache* as its cache, on a budget of *own_time_secs* of its own time.
 
     Return the finished run, its output as text.
     """
-    return subprocess.run(
-        ["npm", *args],
-        cwd=cwd,
-        env={**os.environ, "npm_config_cache": str(cache)},
-        capture_output=True,
-        text=True,
-        timeout=timeout_secs,
+    return run_on_own_time(
+        ["npm", *args], cwd=cwd, env={**os.environ, "npm_config_cache": str(cache)}, budget_secs=own_time_secs
     )
 
 
-def _npm(args: list[str], cwd: Path, cache: Path, *, timeout_secs: float = _RUN_TIMEOUT_SECS) -> None:
-    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds within *timeout_secs*.
+def _npm(args: list[str], cwd: Path, cache: Path, *, own_time_secs: float = _RUN_OWN_TIME_SECS) -> None:
+    """Run npm with *args* in *cwd*, with *cache* as its cache, and fail unless it succeeds within *own_time_secs*
+    of its own time.
 
     npm_config_cache reaches every npm call and the npx that build:css runs, so
     nothing writes ~/.npm, which a sandboxed agent cannot write. A missing npm
@@ -100,7 +100,7 @@ def _npm(args: list[str], cwd: Path, cache: Path, *, timeout_secs: float = _RUN_
     green with static/dist unchecked.
     """
     command = shlex.join(["npm", *args])
-    result = _npm_run(args, cwd, cache, timeout_secs=timeout_secs)
+    result = _npm_run(args, cwd, cache, own_time_secs=own_time_secs)
     assert result.returncode == 0, (
         f"`{command}` exited {result.returncode} in a scratch copy of the web package; "
         f"npm's stderr:\n{result.stderr}\nnpm's stdout:\n{result.stdout}"
@@ -137,7 +137,7 @@ def _drawn_colours(svg: Path) -> set[str]:
 def _built_in_palette_500(palette: str, web_package: Path) -> str:
     """Return the 500 shade of Tailwind's built-in *palette*, read from the tailwindcss installed in *web_package*."""
     command = ["node", "--print", f'require("tailwindcss/colors")[{json.dumps(palette)}][500]']
-    result = subprocess.run(command, cwd=web_package, capture_output=True, text=True, timeout=_RUN_TIMEOUT_SECS)
+    result = run_on_own_time(command, budget_secs=_RUN_OWN_TIME_SECS, cwd=web_package)
     assert result.returncode == 0, (
         f"`{shlex.join(command)}` exited {result.returncode} in a scratch copy of the web package; "
         f"node's stderr:\n{result.stderr}"
@@ -190,7 +190,7 @@ def scratch_web_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """
     scratch = tmp_path_factory.mktemp("css-build")
     web_package = _copy_web_package(scratch)
-    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache", timeout_secs=_NPM_CI_TIMEOUT_SECS)
+    _npm(["ci", "--no-audit", "--no-fund"], web_package, scratch / "npm-cache", own_time_secs=_NPM_CI_OWN_TIME_SECS)
     return web_package
 
 

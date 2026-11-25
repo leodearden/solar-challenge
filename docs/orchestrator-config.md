@@ -57,6 +57,19 @@ per-worktree `.venv`.
   silently losing their coverage. `tests/unit/test_per_task_verify.py` guards this. The
   type-check command takes the extra so `web/*` modules type-check against their real
   dependencies.
+- **`-n auto --dist loadgroup`.** The test command runs the suite on pytest-xdist workers,
+  `--dist loadgroup` asking for the tests that share an `xdist_group` on one worker (CLAUDE.md's
+  parallel-suite bullet says whether it does). The interpreter-matrix and newest-releases lanes
+  run the same command verbatim. The flags live in the test command, not in pyproject's addopts,
+  so an agent's or a person's pytest run stays serial: under addopts, every run rooted at the
+  repo took a worker per host core (2026-11-24: load ~300 on 32 cores; task 1683, as
+  solar-challenge-platform's task 1723 chose before it). `verify_env`'s
+  `PYTEST_XDIST_AUTO_NUM_WORKERS` caps what `auto` takes in the verify, and a reload applies it
+  with no restart; `verify_env` does not reach agents' own runs. dark-factory's serial recovery
+  strips `-n` and `--dist` from the command before it adds `-p no:xdist`, and its admission `-n`
+  knob (`verify_admission_pytest_n`) is left at its no-op default, so neither adds a second
+  `-n`. The test command is restart tier: a reload reports it under `restart_required`, and the
+  orchestrator runs its old command until it restarts.
 - **`lint_command: "true"`.** A no-op: the lint runs in the test suite. `docs/lint-gate.md`
   says why.
 
@@ -109,12 +122,20 @@ environment. If PyPI is out of reach while `uv.lock` pins a file this host's uv 
 the job's own sync fails, and so does the probe's: the lane reads a broken probe, so the red
 goes to its confirm and is filed, with a broken-probe escalation beside it.
 
-Each job passes `-n 0`, so its suite runs serially whatever workers pyproject's addopts ask
-for, as `tests/unit/test_offline_lane_contracts.py` checks. On a worker per core, each worker
+Each job passes `-n 0`, so its suite runs serially even if pyproject's addopts, or a
+`PYTEST_ADDOPTS` the lane inherits, ask for workers, as
+`tests/unit/test_offline_lane_contracts.py` checks. On a worker per core, each worker
 would repeat its suite's module-scoped work, which asks a live service or builds (pvgis' TMY,
 css-build's `npm ci`), the interpreter-matrix cases would run at once, each a verify over every
-core, and the e2e tests, which share one live server in session order, would be split across
-workers.
+core, and each e2e worker would start its own live server and Chromium. No e2e test needs
+another's session state, so the suite passes when split over workers, by test or by file. But
+on a loaded host the workers' pages starve one another past their `Page.goto` and `expect`
+waits, and a small count does not avoid it (task 1540 measured four workers). A serial run
+flakes on a loaded host too, and the lane files each failure its serial confirm clears as flake
+debt, so the e2e job stays serial until a worker count is shown to flake no more than a serial
+run does. The e2e suite also enforces serial runs itself, as
+`tests/unit/test_e2e_suite_runs_serially.py` checks: `tests/e2e/conftest.py` resolves `-n auto`
+to no workers, so even a command that passes `-n auto` runs it serially.
 
 - **`interpreter-matrix`.** The verify suite on each Python minor `requires-python` admits,
   except the `.python-version` pin. Its probe asks PyPI, whose files a case's locked sync
@@ -131,12 +152,25 @@ workers.
   nothing, and `PLAYWRIGHT_SKIP_BROWSER_GC=1` stops it deleting other installs' browsers in
   turn. `LaneCommand` has no timeout field and the lane is single-flight, so without the
   `timeout` prefix on each step a hung download or browser run would stall every later lane
-  run. Each prefix is sized as a generous multiple of its step's run, not at the run. Only a
-  missing browser sends the install to the download host, and an outage there fails it, which
-  the lane files as `e2e::nonzero-exit`: the job declares no outage probe, since its suite needs
-  no live service. The lane contract probes collect only the suite step
-  (`tests/_lane_collection.py::collect_lane_job`), so no verify runs the install, and
-  `tests/unit/test_e2e_lane.py` checks that the job keeps it.
+  run. Each prefix is sized as a generous multiple of its step's run, not at the run. The suite
+  step runs its tests serially, at the lane's idle priority, so its run grows with the host's
+  load as well as with the suite. Its `timeout` gives each test it collects the per-test budget
+  `tests/unit/test_e2e_lane.py` states, and that test fails the per-task verify once the suite
+  outgrows the bound, rather than the lane killing a green run before pytest reports. That
+  budget follows the slowest pace a lane pass has been measured at, with headroom, not a typical
+  pace (task 1569 measured the lane's own passes), because a serial run slows steeply as the
+  host's load rises: a budget below the pace the lane meets would let the suite outgrow the
+  bound while that test stays green. No check compares a lane pass's pace with the budget. A
+  pass slower than the budget that still ends inside the bound raises nothing, so a slower pace
+  first shows when the step's `timeout` kills passes and the lane files a task for them that
+  names no test. Whoever triages that task reads each pass's pace from the record directories
+  it names, as task 1570's triage did. A pace slower than the budget is the cue to raise the
+  budget and the step's `timeout` together. A raised `timeout` reaches the running lane only
+  when the orchestrator reloads its config. Only a missing browser sends the install to the
+  download host, and an outage there fails it, which the lane files as `e2e::unconfirmable`: the
+  job declares no outage probe, since its suite needs no live service. The lane contract probes
+  collect only the suite step (`tests/_lane_collection.py::collect_lane_job`), so no verify runs
+  the install, and `tests/unit/test_e2e_lane.py` checks that the job keeps it.
 - **`pvgis`.** The PVGIS contract tests, `tests/integration/test_pvgis.py`. They check PVGIS's
   live TMY, so a change in PVGIS or pvlib is seen and an outage is never a silent green. One of
   them also checks that the Bristol TMY committed under `tests/fixtures/weather_cache`, which

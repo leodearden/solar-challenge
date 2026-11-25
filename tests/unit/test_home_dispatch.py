@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the dispatch paths simulate_home runs a home under: which one runs, as named by its results' strategy_name, and what each one's results carry, the home's demand and a battery discharge that is part of their self-consumption.
 
-A home whose dispatch_strategy is tou_optimized runs the tariff-rate TOU path when it has a tariff
-and its battery, if any, names no strategy of its own. Otherwise it runs its battery's strategy,
-self-consumption by default. A strategy given to simulate_home runs in place of either.
+A home's battery is dispatched by its own strategy when it names one, else by self-consumption. A
+home with no battery runs no strategy, and its results name self-consumption. A strategy given to
+simulate_home runs in place of the configured one, names the results of a home with no battery too,
+and is handed each row's instant on the location's clock, as a python datetime.
 """
 
 import dataclasses
@@ -12,14 +13,20 @@ import datetime
 import pandas as pd
 import pytest
 from solar_challenge.battery import BatteryConfig
-from solar_challenge.dispatch import PeakShavingStrategyConfig, SelfConsumptionStrategy, TOUOptimizedStrategyConfig
-from solar_challenge.errors import ConfigurationError
+from solar_challenge.dispatch import (
+    DispatchDecision,
+    DispatchStrategy,
+    GridChargeContext,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategy,
+    SelfConsumptionStrategyConfig,
+    TOUOptimizedStrategyConfig,
+    build_dispatch_strategy,
+)
 from solar_challenge.home import (
-    HOME_DISPATCH_STRATEGIES,
     HomeConfig,
     SimulationResults,
     calculate_summary,
-    refuse_unknown_home_dispatch_strategy,
     simulate_home,
 )
 from solar_challenge.load import LoadConfig, generate_load_profile
@@ -33,11 +40,16 @@ from tests._synthetic_weather import sunless_weather, synthetic_june_weather, we
 _TOU_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
     load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
-    battery_config=BatteryConfig(capacity_kwh=5.0),
+    battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
     tariff_config=TariffConfig.economy_7(),
     seg_tariff=SEG_PRESETS["Octopus"],
-    dispatch_strategy="tou_optimized",
 )
+"""A home on Economy 7 whose battery dispatches tou_optimized on the tariff's clock."""
+
+_SELF_CONSUMPTION_HOME = dataclasses.replace(
+    _TOU_HOME, battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=SelfConsumptionStrategyConfig())
+)
+"""_TOU_HOME with a battery that dispatches self-consumption."""
 
 
 def _simulate_june_21(home: HomeConfig) -> SimulationResults:
@@ -48,22 +60,18 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
 @pytest.mark.parametrize(
     ("home", "strategy_name"),
     [
-        pytest.param(_TOU_HOME, "tou_optimized", id="tou_optimized-with-a-tariff"),
+        pytest.param(_TOU_HOME, "tou_optimized", id="battery-tou_optimized-on-the-tariffs-clock"),
         pytest.param(
             dataclasses.replace(_TOU_HOME, battery_config=None),
-            "tou_optimized",
-            id="tou_optimized-with-a-tariff-and-no-battery",
+            "self_consumption",
+            id="no-battery-with-a-tariff",
         ),
         pytest.param(
             dataclasses.replace(_TOU_HOME, tariff_config=None, battery_config=None),
             "self_consumption",
-            id="tou_optimized-without-a-tariff-or-a-battery",
+            id="no-battery-and-no-tariff",
         ),
-        pytest.param(
-            dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"),
-            "self_consumption",
-            id="greedy-with-a-tariff",
-        ),
+        pytest.param(_SELF_CONSUMPTION_HOME, "self_consumption", id="battery-self_consumption-with-a-tariff"),
         pytest.param(
             dataclasses.replace(
                 _TOU_HOME,
@@ -73,29 +81,38 @@ def _simulate_june_21(home: HomeConfig) -> SimulationResults:
                 ),
             ),
             "peak_shaving",
-            id="tou_optimized-whose-battery-names-peak_shaving",
+            id="battery-peak_shaving",
         ),
         pytest.param(
             dataclasses.replace(
                 _TOU_HOME,
-                dispatch_strategy="greedy",
                 battery_config=BatteryConfig(
                     capacity_kwh=5.0,
                     dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 20),)),
                 ),
             ),
             "tou_optimized",
-            id="greedy-whose-battery-names-tou_optimized",
+            id="battery-tou_optimized-in-its-own-peak-hours",
         ),
     ],
 )
 def test_results_name_the_dispatch_selected_for_the_home(home, strategy_name):
-    """Each home's results name the dispatch selected for it: the tariff-rate TOU path, or its battery's strategy."""
+    """Each home's results name the dispatch selected for it: its battery's strategy, or self-consumption when it has no battery."""
     assert _simulate_june_21(home).strategy_name == strategy_name
 
 
+def test_a_strategy_given_to_simulate_home_names_the_results_of_a_home_with_no_battery():
+    day = pd.Timestamp("2024-06-21")
+    home = dataclasses.replace(_TOU_HOME, battery_config=None)
+    given = build_dispatch_strategy(TOUOptimizedStrategyConfig(), grid_charging=None, tariff=home.tariff_config)
+
+    results = simulate_home(home, day, day, weather=weather_for(home, synthetic_june_weather(day)), strategy=given)
+
+    assert results.strategy_name == "tou_optimized"
+
+
 def test_a_strategy_given_to_simulate_home_dispatches_the_run_in_place_of_the_configured_one():
-    """_TOU_HOME alone runs the tariff-rate TOU path; given SelfConsumptionStrategy, its run is the greedy home's, row for row."""
+    """_TOU_HOME alone runs tou_optimized on its tariff's clock; given SelfConsumptionStrategy, its run is _SELF_CONSUMPTION_HOME's, row for row."""
     day = pd.Timestamp("2024-06-21")
 
     given = simulate_home(
@@ -109,8 +126,59 @@ def test_a_strategy_given_to_simulate_home_dispatches_the_run_in_place_of_the_co
     assert given.strategy_name == "self_consumption"
     pd.testing.assert_frame_equal(
         given.to_dataframe(),
-        _simulate_june_21(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy")).to_dataframe(),
+        _simulate_june_21(_SELF_CONSUMPTION_HOME).to_dataframe(),
     )
+
+
+class _TimestampRecordingStrategy(DispatchStrategy):
+    """Decides as the strategy it wraps, under its name, and records the timestamp of each decision, in order."""
+
+    def __init__(self, wrapped: DispatchStrategy) -> None:
+        self._wrapped = wrapped
+        self.timestamps: list[datetime.datetime] = []
+
+    @property
+    def name(self) -> str:
+        return self._wrapped.name
+
+    def decide_action(
+        self,
+        timestamp: datetime.datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float,
+        *,
+        grid_charge_ctx: GridChargeContext | None = None,
+    ) -> DispatchDecision:
+        self.timestamps.append(timestamp)
+        return self._wrapped.decide_action(
+            timestamp,
+            generation_kw,
+            demand_kw,
+            battery_soc_kwh,
+            battery_capacity_kwh,
+            timestep_minutes,
+            grid_charge_ctx=grid_charge_ctx,
+        )
+
+
+def test_a_strategy_given_to_simulate_home_is_handed_each_rows_own_instant_on_the_locations_clock_in_row_order():
+    """On a BST day, where UTC's wall clock reads an hour behind the location's, the strategy decides once per row, in row order, at the row's own wall-clock minute and UTC offset, each handed as a python datetime, not a pd.Timestamp."""
+    day = pd.Timestamp("2024-06-21")
+    recording = _TimestampRecordingStrategy(SelfConsumptionStrategy())
+
+    results = simulate_home(
+        _TOU_HOME, day, day, weather=weather_for(_TOU_HOME, synthetic_june_weather(day)), strategy=recording
+    )
+
+    rows = results.demand.index
+    assert {row.utcoffset() for row in rows} == {datetime.timedelta(hours=1)}
+    assert [(t.date(), t.hour, t.minute, t.utcoffset()) for t in recording.timestamps] == [
+        (row.date(), row.hour, row.minute, row.utcoffset()) for row in rows
+    ]
+    assert {type(t) for t in recording.timestamps} == {datetime.datetime}
 
 
 def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_does_not():
@@ -119,7 +187,7 @@ def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_
     The run named self_consumption spends it whenever demand exceeds generation, at the cheap rate too.
     """
     tou = _simulate_june_21(_TOU_HOME)
-    self_consumption = _simulate_june_21(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"))
+    self_consumption = _simulate_june_21(_SELF_CONSUMPTION_HOME)
 
     cheap = tou.tariff_rate < tou.tariff_rate.max()
     assert (tou.strategy_name, self_consumption.strategy_name) == ("tou_optimized", "self_consumption")
@@ -131,14 +199,14 @@ def test_tou_optimized_saves_the_battery_for_the_dear_rate_and_self_consumption_
 @pytest.mark.parametrize(
     ("home", "strategy_name"),
     [
-        pytest.param(_TOU_HOME, "tou_optimized", id="tariff-tou-path"),
-        pytest.param(dataclasses.replace(_TOU_HOME, dispatch_strategy="greedy"), "self_consumption", id="strategy-path"),
+        pytest.param(_TOU_HOME, "tou_optimized", id="battery-tou_optimized"),
+        pytest.param(_SELF_CONSUMPTION_HOME, "self_consumption", id="battery-self_consumption"),
     ],
 )
 def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_kw_in_hours(home, strategy_name):
     """Each row's demand comes back at the kW its load profile asked for only while each engine call is handed the row's step in minutes and the results turn each row's kWh back into kW over the same step in hours.
 
-    So it fails if either engine call is handed step_hours where step_minutes belongs, or if the
+    So it fails if the engine call is handed step_hours where step_minutes belongs, or if the
     conversion multiplies by step_hours.
     """
     day = datetime.date(2024, 6, 21)
@@ -146,7 +214,7 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
 
     results = _simulate_june_21(home)
 
-    load_profile = generate_load_profile(home.load_config, window, ev_config=home.ev_config)
+    load_profile = generate_load_profile(home.load_config, window)
     assert results.strategy_name == strategy_name
     assert (results.battery_charge > 0).any()
     assert (results.battery_discharge > 0).any()
@@ -154,10 +222,12 @@ def test_each_dispatch_path_steps_the_engine_in_minutes_and_converts_its_kwh_to_
     pd.testing.assert_series_equal(results.demand, load_profile, check_names=False, rtol=1e-12, atol=0.0)
 
 
+_SUNLESS_SEPTEMBER_BATTERY = BatteryConfig(capacity_kwh=10.0, discharge_efficiency=0.975)
+
 _SUNLESS_SEPTEMBER_HOME = HomeConfig(
     pv_config=PVConfig(capacity_kw=4.0),
     load_config=LoadConfig(annual_consumption_kwh=5000.0, seed=11),
-    battery_config=BatteryConfig(capacity_kwh=10.0, discharge_efficiency=0.975),
+    battery_config=_SUNLESS_SEPTEMBER_BATTERY,
     location=Location.bristol(),
 )
 
@@ -165,16 +235,18 @@ _SUNLESS_SEPTEMBER_HOME = HomeConfig(
 @pytest.mark.parametrize(
     ("home", "strategy_name"),
     [
-        pytest.param(_SUNLESS_SEPTEMBER_HOME, "self_consumption", id="strategy-path"),
+        pytest.param(_SUNLESS_SEPTEMBER_HOME, "self_consumption", id="battery-self_consumption"),
         pytest.param(
             dataclasses.replace(
                 _SUNLESS_SEPTEMBER_HOME,
+                battery_config=dataclasses.replace(
+                    _SUNLESS_SEPTEMBER_BATTERY, dispatch_strategy=TOUOptimizedStrategyConfig()
+                ),
                 tariff_config=TariffConfig.flat_rate(0.25),
                 seg_tariff=SEG_PRESETS["Octopus"],
-                dispatch_strategy="tou_optimized",
             ),
             "tou_optimized",
-            id="tariff-tou-path",
+            id="battery-tou_optimized",
         ),
     ],
 )
@@ -195,33 +267,3 @@ def test_on_a_sunless_day_each_dispatch_path_discharges_no_more_than_the_self_co
     assert (results.generation == 0.0).all()
     assert (results.battery_discharge <= results.self_consumption).all()
     assert summary.total_battery_discharge_kwh <= summary.total_self_consumption_kwh
-
-
-def test_a_home_dispatches_by_name_greedy_or_tou_optimized() -> None:
-    assert HOME_DISPATCH_STRATEGIES == ("greedy", "tou_optimized")
-
-
-@pytest.mark.parametrize("battery", [BatteryConfig(capacity_kwh=5.0), None], ids=["a-battery", "no-battery"])
-@pytest.mark.parametrize("value", ["tou_optimised", "self_consumption", None, 3], ids=repr)
-def test_a_home_dispatch_strategy_it_cannot_dispatch_by_is_refused(value: object, battery: BatteryConfig | None) -> None:
-    with pytest.raises(ConfigurationError) as refused:
-        HomeConfig(
-            pv_config=PVConfig(capacity_kw=4.0),
-            load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
-            battery_config=battery,
-            dispatch_strategy=value,
-        )
-
-    for named in ["dispatch_strategy", repr(value), "'greedy'", "'tou_optimized'"]:
-        assert named in str(refused.value), (named, str(refused.value))
-
-
-@pytest.mark.parametrize("value", ["tou_optimised", "", None, 3, {"strategy_type": "tou_optimized"}], ids=repr)
-def test_the_home_dispatch_vocabulary_refusal_names_the_field_the_value_and_the_valid_values(value: object) -> None:
-    """The one refusal HomeConfig, FleetDistributionConfig and the scenario grammar's block reader each raise, under the field it is given."""
-    with pytest.raises(ConfigurationError) as refused:
-        refuse_unknown_home_dispatch_strategy(value, field="homes[2].dispatch_strategy")
-
-    assert str(refused.value) == (
-        f"Invalid homes[2].dispatch_strategy {value!r}; valid values: ['greedy', 'tou_optimized']"
-    )

@@ -5,35 +5,34 @@ import re
 from collections.abc import Callable
 from datetime import date, timedelta
 from operator import attrgetter
+from typing import NamedTuple
 
 import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVWATTS_DEFAULT_SYSTEM_LOSSES, PVConfig
 from solar_challenge.seg import SEG_PRESETS, SEGTariff
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, SHORT_WINDOW_START
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_DAYS, MAX_WINDOW_DAYS
 from solar_challenge.web.request_boundary import (
     NotAJsonObject,
     read_location,
     require_encodable_text,
 )
 from solar_challenge.web.simulation_params import (
-    DAYS_WINDOW_START,
-    FULL_YEAR_END,
-    FULL_YEAR_START,
-    MAX_DAYS,
-    MAX_WINDOW_DAYS,
     parse_date_range,
     parse_home_config,
     parse_seg_tariff,
     with_default_days,
 )
 from tests._falsy_json_values import FALSY_NON_NULL_VALUES
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 from tests._whole_number_forms import WHOLE_NUMBER, WHOLE_NUMBER_FORMS
@@ -114,10 +113,10 @@ class TestParseDateRange:
         assert end == "2024-12-31"
 
     def test_days_max_days_runs_the_full_year(self) -> None:
-        """days=MAX_DAYS, the most days a body may send, is the full-year sentinel, so it runs FULL_YEAR_START to FULL_YEAR_END."""
+        """days=MAX_DAYS, the most days a body may send, is the full-year sentinel, so it runs DEFAULT_FIRST_DAY to DEFAULT_LAST_DAY."""
         assert parse_date_range({"days": MAX_DAYS}) == (
-            FULL_YEAR_START.isoformat(),
-            FULL_YEAR_END.isoformat(),
+            DEFAULT_FIRST_DAY.isoformat(),
+            DEFAULT_LAST_DAY.isoformat(),
         )
 
     @pytest.mark.parametrize(
@@ -132,7 +131,7 @@ class TestParseDateRange:
     def test_days_longer_than_the_rest_of_the_year_run_past_full_year_end(
         self, days: int, window: tuple[str, str]
     ) -> None:
-        """A days other than the sentinel runs that many days from DAYS_WINDOW_START, on past FULL_YEAR_END when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
+        """A days other than the sentinel runs that many days from SHORT_WINDOW_START, on past DEFAULT_LAST_DAY when it is longer than the rest of the year; docs/web-ui-design.md (Simulation window) says why."""
         assert parse_date_range({"days": days}) == window
 
     def test_full_leap_year_is_the_longest_start_end_window(self) -> None:
@@ -154,21 +153,21 @@ class TestParseDateRange:
         [
             pytest.param(
                 {"days": 30},
-                (DAYS_WINDOW_START, DAYS_WINDOW_START + timedelta(days=29)),
+                (SHORT_WINDOW_START, SHORT_WINDOW_START + timedelta(days=29)),
                 id="days",
             ),
             pytest.param(
-                {"end": "2024-03-01"}, (FULL_YEAR_START, date(2024, 3, 1)), id="end-only"
+                {"end": "2024-03-01"}, (DEFAULT_FIRST_DAY, date(2024, 3, 1)), id="end-only"
             ),
             pytest.param(
-                {"start": "2024-03-01"}, (date(2024, 3, 1), FULL_YEAR_END), id="start-only"
+                {"start": "2024-03-01"}, (date(2024, 3, 1), DEFAULT_LAST_DAY), id="start-only"
             ),
         ],
     )
     def test_published_anchors_match_the_windows_parse_date_range_returns(
         self, data: dict, window: tuple[date, date]
     ) -> None:
-        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from DAYS_WINDOW_START, a lone end starts at FULL_YEAR_START and a lone start ends at FULL_YEAR_END."""
+        """parse_date_range's windows start or end at the published anchors, which the assistant's tool descriptions state: days count from SHORT_WINDOW_START, a lone end starts at DEFAULT_FIRST_DAY and a lone start ends at DEFAULT_LAST_DAY."""
         assert parse_date_range(data) == (window[0].isoformat(), window[1].isoformat())
 
     @pytest.mark.parametrize(
@@ -451,7 +450,7 @@ class TestParseHomeConfigName:
 
 
 class TestParseSegTariff:
-    """parse_seg_tariff adapts config.parse_seg_rate; tests/unit/config/test_tariff_blocks.py::TestScenarioSegBlock covers that grammar case by case."""
+    """parse_seg_tariff adapts scenario_blocks.parse_seg_rate; tests/unit/config/test_tariff_blocks.py::TestScenarioSegBlock covers that grammar case by case."""
 
     def test_absent_seg_is_no_tariff(self) -> None:
         """A null seg value, like an absent one, means no SEG."""
@@ -542,6 +541,12 @@ class TestParseHomeConfigCapabilities:
         assert home_config.battery_config.dispatch_strategy is not None
         assert home_config.battery_config.dispatch_strategy.strategy_type == "self_consumption"
 
+    def test_a_null_dispatch_strategy_builds_a_battery_that_dispatches_self_consumption(self) -> None:
+        """A null dispatch_strategy names no strategy, so the battery takes BatteryConfig's, with no refusal."""
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, "dispatch_strategy": None})
+        assert home_config.battery_config is not None
+        assert home_config.battery_config.dispatch_strategy == SelfConsumptionStrategyConfig()
+
     def test_valid_dispatch_strategy_without_battery_makes_no_battery(self) -> None:
         """A valid dispatch_strategy makes no battery when there is none."""
         payload = {
@@ -586,12 +591,22 @@ class TestParseHomeConfigHeatPumpBlock:
         )
 
 
-# Each nested block's key, and the HomeConfig field its parsed value fills.
-NESTED_BLOCK_FIELDS: dict[str, Callable[[HomeConfig], object]] = {
-    "heat_pump": attrgetter("heat_pump_config"),
-    "seg": attrgetter("seg_tariff"),
-    "tariff": attrgetter("tariff_config"),
-    "dispatch_strategy": attrgetter("battery_config.dispatch_strategy"),
+class NestedBlock(NamedTuple):
+    """The HomeConfig field a nested block's parsed value fills, and the value it holds when the block is null or left out."""
+
+    field: Callable[[HomeConfig], object]
+    when_none: object
+
+
+# Each nested block, by its key: no heat pump, SEG or tariff when it is null or left out, and a
+# battery naming no strategy, which dispatches BatteryConfig's self-consumption.
+NESTED_BLOCKS: dict[str, NestedBlock] = {
+    "heat_pump": NestedBlock(attrgetter("heat_pump_config"), None),
+    "seg": NestedBlock(attrgetter("seg_tariff"), None),
+    "tariff": NestedBlock(attrgetter("tariff_config"), None),
+    "dispatch_strategy": NestedBlock(
+        attrgetter("battery_config.dispatch_strategy"), SelfConsumptionStrategyConfig()
+    ),
 }
 
 
@@ -602,23 +617,23 @@ class TestParseHomeConfigNestedBlockPresence:
     """
 
     @pytest.mark.parametrize(
-        ("key", "parsed_block"),
-        [pytest.param(key, field, id=key) for key, field in NESTED_BLOCK_FIELDS.items()],
+        ("key", "block"),
+        [pytest.param(key, block, id=key) for key, block in NESTED_BLOCKS.items()],
     )
-    def test_null_block_means_none(
-        self, key: str, parsed_block: Callable[[HomeConfig], object]
-    ) -> None:
-        """A null block, like an absent one, means none."""
-        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
-        assert parsed_block(home_config) is None
+    def test_null_block_means_none_as_an_absent_one_does(self, key: str, block: NestedBlock) -> None:
+        """A null block, like an absent one, means none: no heat pump, SEG or tariff, and a battery that names no strategy, so dispatches self-consumption."""
+        assert key not in VALID_HOME_PAYLOAD, "premise: the payload leaves the block out"
+        with_null, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, key: None})
+        without, _start, _end, _name = parse_home_config(VALID_HOME_PAYLOAD)
+        assert (block.field(with_null), block.field(without)) == (block.when_none, block.when_none)
 
     @pytest.mark.parametrize(("value", "type_name"), FALSY_NON_NULL_VALUES)
-    @pytest.mark.parametrize("key", list(NESTED_BLOCK_FIELDS))
+    @pytest.mark.parametrize("key", list(NESTED_BLOCKS))
     def test_falsy_block_is_refused_naming_it_and_its_type(
         self, key: str, value: object, type_name: str
     ) -> None:
         """A falsy value other than null is not a mapping, so it is refused with a ValueError naming the block and the type sent."""
-        with pytest.raises(ValueError, match=re.escape(f"{key} must be a mapping, got {type_name}")):
+        with pytest.raises(ValueError, match=re.escape(non_mapping_block_refusal(key, type_name))):
             parse_home_config({**VALID_HOME_PAYLOAD, key: value})
 
     @pytest.mark.parametrize("key", ["seg", "tariff", "dispatch_strategy"])
@@ -650,7 +665,6 @@ class TestParseHomeConfigBatteryEfficiency:
         )
         battery = home_config.battery_config
         assert battery is not None
-        assert battery.efficiency is None
         assert battery.charge_efficiency == battery.discharge_efficiency == math.sqrt(round_trip)
         assert battery == BatteryConfig(capacity_kwh=5.0).with_round_trip(round_trip)
         assert battery.charge_efficiency * battery.discharge_efficiency == pytest.approx(round_trip)
@@ -775,31 +789,59 @@ class TestParseHomeConfigNumberFields:
         )
 
 
-class TestParseHomeConfigConsumptionRange:
-    """A sent consumption_kwh is refused outside the fleet load component's fixed range, either end included."""
+#: Each home body field a fleet component's value_range bounds, with that component's key.
+_RANGED_HOME_FIELDS = [
+    pytest.param("pv_kw", "pv", id="pv_kw"),
+    pytest.param("battery_kwh", "battery", id="battery_kwh"),
+    pytest.param("consumption_kwh", "load", id="consumption_kwh"),
+]
+
+
+@pytest.mark.parametrize(("field", "key"), _RANGED_HOME_FIELDS)
+class TestParseHomeConfigComponentRanges:
+    """A sent pv_kw, battery_kwh or consumption_kwh is refused outside its fleet component's value_range, either end included (L2)."""
 
     @pytest.mark.parametrize("beyond", ["below", "above"])
-    def test_consumption_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
-        self, beyond: str
+    def test_a_value_beyond_the_range_is_refused_naming_the_field_the_range_and_the_value_sent(
+        self, field: str, key: str, beyond: str
     ) -> None:
         """One float step beyond either end is refused."""
-        low, high = FLEET_COMPONENTS["load"].fixed_range
-        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
-        with pytest.raises(ValueError) as exc_info:
-            parse_home_config({**VALID_HOME_PAYLOAD, "consumption_kwh": value})
-        assert str(exc_info.value) == f"consumption_kwh must be between {low} and {high}, got {value!r}"
+        value_range = FLEET_COMPONENTS[key].value_range
+        value = (
+            math.nextafter(value_range.low, -math.inf)
+            if beyond == "below"
+            else math.nextafter(value_range.high, math.inf)
+        )
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert str(exc_info.value) == (
+            f"{field} must be between {value_range.low} and {value_range.high}, got {value!r}"
+        )
 
     @pytest.mark.parametrize("end", ["low", "high"])
-    def test_consumption_at_either_end_of_the_range_is_the_homes_annual_consumption(
-        self, end: str
+    def test_a_value_at_either_end_of_the_range_is_the_homes_value(
+        self, field: str, key: str, end: str
     ) -> None:
-        """Either end is accepted as the home's annual consumption."""
-        low, high = FLEET_COMPONENTS["load"].fixed_range
-        value = low if end == "low" else high
-        home_config, _start, _end, _name = parse_home_config(
-            {**VALID_HOME_PAYLOAD, "consumption_kwh": value}
-        )
-        assert home_config.load_config.annual_consumption_kwh == value
+        """Either end is accepted as the home's value; a battery of 0 kWh is no battery, whose value reads None."""
+        component = FLEET_COMPONENTS[key]
+        value = getattr(component.value_range, end)
+        home_config, _start, _end, _name = parse_home_config({**VALID_HOME_PAYLOAD, field: value})
+        assert component.value_of(home_config) == (value or None)
+
+
+class TestParseHomeConfigRangeRefusals:
+    """The refusals a value_range gives the home body's values the home page sends."""
+
+    def test_a_battery_of_500_kwh_is_refused_naming_battery_kwh_and_its_range(self) -> None:
+        """P1: a battery beyond any home's was accepted before the battery component's range bounded it."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "battery_kwh": 500})
+        assert str(exc_info.value) == "battery_kwh must be between 0 and 100, got 500"
+
+    def test_a_pv_capacity_of_50_kw_is_refused_naming_pv_kw_and_its_range(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_home_config({**VALID_HOME_PAYLOAD, "pv_kw": 50})
+        assert str(exc_info.value) == "pv_kw must be between 0.5 and 20, got 50"
 
 
 class TestParseHomeConfigPVAge:

@@ -124,15 +124,37 @@ that write notes never wait on each other for a doc;
 note into its notes in this section and deletes the files. A change to an exported
 signature, to the constructor of a class outside `__all__` that the frozen
 surface names, to which of the dataclass parameters `eq`, `order`,
-`unsafe_hash` and `frozen` either kind of class sets, to an exported container
+`unsafe_hash` and `frozen` either kind of class sets, to whether either kind of
+class's instances match a positional class pattern, hold a `__dict__` or take a
+weakref, to an exported container
 constant's keys or length, or the type of a value or item it holds, or to
 either kind of class's public members, must also edit `FROZEN_SURFACE`,
 `FROZEN_CLOSURE` or `FROZEN_MEMBERS` in `tests/unit/test_public_api_surface.py`,
 which fails until it does.
 
+**Release windows.** A rename or retirement of a frozen name lands only inside
+an open release window: a `### solar-challenge-vX.Y.Z` subsection at the end of
+this section whose first line says the window is open. Its release note is a
+file under `docs/unreleased/domain-library-consumption/`, as the paragraph above
+says, never a line in the window's section. The window closes with the release
+commit that bumps the version, which folds the notes into the window's section.
+The tag is cut on that commit's merge, pushed, and checked with
+`git ls-remote`, as the push rule above says.
+
 Bumping the pin in a consuming project is a **deliberate, reviewed consumer
 commit** (not an automatic update).  The tag convention makes the intent of
 each bump self-documenting in git history.
+
+### solar-challenge-v0.6.0
+
+The release window is open: task 986 opened it. The release commit folds the
+note files into the groups below.
+
+**Breaking** — each entry: what changed (task N); what a consumer writes instead.
+
+**Results that move** — each entry: which figure moves and by how much where measured (task N).
+
+**Additive** — each entry (task N).
 
 ---
 
@@ -162,14 +184,13 @@ cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 ```
 
 Accessing a name from any other public submodule (`battery`, `community`,
-`dispatch`, `finance`, `flow`, `gridservices`, `load`, `location`, `seg`,
-`tariff`) leaves `pvlib` unloaded;
+`dispatch`, `errors`, `finance`, `flow`, `gridservices`, `load`, `location`,
+`seg`, `tariff`) leaves `pvlib` unloaded;
 `tests/unit/test_public_api_surface.py::test_the_first_access_of_a_public_name_loads_pvlib_exactly_for_the_listed_submodules`
 pins this split.  Consumers that want to avoid the pvlib cost must not touch the
 `config`, `fleet`, `home`, `pv` or `weather` symbols.  Accessing a name does not
-run it: a function that imports one of those submodules at call time, as a
-`finance` function may when it runs its default simulation, loads `pvlib` when
-called.
+run it, so a function of any other submodule can still load `pvlib` when called,
+by importing one of those submodules at call time.
 
 ### Network I/O
 
@@ -206,13 +227,17 @@ The authoritative public surface is `solar_challenge.__all__`, defined in
 `src/solar_challenge/__init__.py`.  It is frozen by
 `tests/unit/test_public_api_surface.py`, whose `FROZEN_SURFACE` pins every
 public name and that name's signature and, for a dataclass, which of `eq`,
-`order`, `unsafe_hash` and `frozen` it sets.  For a constant, `FROZEN_SURFACE`
+`order`, `unsafe_hash` and `frozen` it sets.  For every class but an Enum, it
+also pins whether a positional class pattern matches its instances
+(`match_args`), whether they hold no `__dict__` (`slots`) and whether they take a
+weakref (`weakref_slot`).  For a constant, `FROZEN_SURFACE`
 pins its type and, for a mapping, list or tuple, its keys or length and the type
 of each value or item.  The file's `FROZEN_MEMBERS` pins the public methods,
 properties, class constants, and declared instance attributes of every exported
 class and of every class outside `__all__` that the frozen surface names.  The
 same file's `FROZEN_CLOSURE` pins the constructor of each
-such class and, for a dataclass, which of those four parameters it sets;
+such class, for a dataclass which of those four parameters it sets, and, for
+every such class but an Enum, those three qualifiers of its instances;
 consumers import such a class, such as `HomeConfig`, from its module.
 Importing the package fails with a `RuntimeError` naming the offending name when
 its tables disagree: a name that `__all__` lists twice, a name that `__all__`

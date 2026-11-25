@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Unit tests for tests/_collect_only.py's collect(), the collect-only probe the orchestrator contract tests share.
+"""Unit tests for tests/_collect_only.py's collect(), the collect-only probe the orchestrator contract tests share, and for its uv premise, uv_is_installed() and the requires_uv marker built on it.
 
 They pin that the command runs verbatim and only collects, keeps its project's ini addopts in force,
 receives each extra pytest arg whole, and runs in the environment it is given, that environment's
@@ -7,7 +7,7 @@ PYTHONPATH kept; that what it collected is read from the collection-report plugi
 its output, with each test's file and parametrize id and each module or directory skipped at
 collection with its skip reason, and a run that wrote no report never reads as an empty collection,
 nor a command that runs pytest twice as its last session alone; and that a failed run's description carries pytest's error report however long the listing or the
-command's stderr, and the output of a command that failed before pytest started.
+command's stderr, and the output of a command that failed before pytest started; and that a collection saved and loaded back is the same collection.
 That no process a hung collect started outlives it is pinned with every other probe's,
 in tests/unit/test_command_runner_helper.py::test_no_process_a_hung_probe_started_outlives_it.
 """
@@ -20,7 +20,14 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tests._collect_only import COLLECTION_REPORT_PLUGIN, COLLECTION_REPORT_PLUGIN_DIRECTORY, CollectedTest, collect
+from tests._collect_only import (
+    COLLECTION_REPORT_PLUGIN,
+    COLLECTION_REPORT_PLUGIN_DIRECTORY,
+    CollectedTest,
+    Collection,
+    collect,
+    uv_is_installed,
+)
 from tests._command_runner import ShellCommand
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
@@ -41,10 +48,22 @@ _ABSENT_PACKAGE = "a_package_this_probe_never_installs"
 
 _SKIP_AT_IMPORT = f"import pytest\n\npytest.importorskip({_ABSENT_PACKAGE!r})\n\n\n"
 
+_MODULE_REQUIRING_UV = "from tests._collect_only import requires_uv\n\n\n@requires_uv\ndef test_case():\n    pass\n"
+
 
 def _module_of_failing_tests(*names: str) -> str:
     """Return the source of a test module defining one test per name in *names*, each failing if run."""
     return "".join(f"def {name}():\n    raise AssertionError('collect-only ran {name}')\n\n\n" for name in names)
+
+
+def _path_of_one_directory(directory: Path, *, holding_uv: bool) -> str:
+    """Make *directory*, holding an executable file named uv if *holding_uv*, and return a PATH of it alone."""
+    directory.mkdir()
+    if holding_uv:
+        uv = directory / "uv"
+        uv.touch()
+        uv.chmod(0o755)
+    return str(directory)
 
 
 @pytest.fixture
@@ -270,6 +289,66 @@ def test_a_collection_that_selects_nothing_is_an_empty_report_not_a_missing_one(
     assert collection.report.tests == (), collection.describe()
 
 
+def test_a_saved_collection_loads_back_equal_to_the_collection_and_described_alike(tmp_path: Path) -> None:
+    """Its report holds a parametrised test, a test that is not, and a module skipped at collection, so each kind of entry makes the round trip."""
+    project = tmp_path / "project"
+    (project / "sub").mkdir(parents=True)
+    (project / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    (project / "sub" / "test_ids.py").write_text(
+        textwrap.dedent(
+            """\
+            import pytest
+
+
+            @pytest.mark.parametrize("minor", ["3.12", "3.13"])
+            def test_matrix(minor):
+                raise AssertionError("collect-only ran test_matrix")
+
+
+            def test_plain():
+                raise AssertionError("collect-only ran test_plain")
+            """
+        ),
+        encoding="utf-8",
+    )
+    (project / "test_needs_absent.py").write_text(
+        _SKIP_AT_IMPORT + _module_of_failing_tests("test_case"), encoding="utf-8"
+    )
+
+    collection = collect(ShellCommand(_PYTEST, project))
+    assert collection.returncode == pytest.ExitCode.OK, collection.describe()
+    report = collection.written_report()
+    assert any(test.parametrize_id is not None for test in report.tests), (
+        "the collection holds no parametrised test, so the round trip cannot show its parametrize id survives\n"
+        f"{collection.describe()}"
+    )
+    assert report.skipped_collectors, (
+        f"the collection skipped no collector, so the round trip cannot show a skip survives\n{collection.describe()}"
+    )
+
+    collection.save(tmp_path / "collection.json")
+    loaded = Collection.load(tmp_path / "collection.json")
+
+    assert loaded == collection
+    assert loaded.describe() == collection.describe()
+
+
+def test_a_saved_collection_that_wrote_no_report_loads_back_without_one_and_reading_its_node_ids_still_fails_naming_its_command(
+    tmp_path: Path,
+) -> None:
+    """So a run that wrote no report never reads as an empty collection once loaded back, either."""
+    collection = collect(ShellCommand("false", tmp_path))
+    collection.save(tmp_path / "collection.json")
+
+    loaded = Collection.load(tmp_path / "collection.json")
+
+    assert loaded == collection
+    assert loaded.report is None, loaded.describe()
+    with pytest.raises(AssertionError) as failure:
+        loaded.node_ids()
+    assert repr("false") in str(failure.value)
+
+
 def test_a_command_that_runs_pytest_twice_fails_rather_than_reporting_only_its_last_session(tmp_path: Path) -> None:
     """A report describes one session: replacing the first session's report would drop its tests unseen."""
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
@@ -336,3 +415,36 @@ def test_a_command_that_fails_before_pytest_starts_is_described_by_its_output(tm
     description = collect(ShellCommand(command, tmp_path)).describe()
 
     assert _STARTUP_ERROR_MESSAGE in description, description
+
+
+def test_uv_is_installed_follows_the_path_it_is_called_under(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "without-uv", holding_uv=False))
+    assert not uv_is_installed()
+
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "with-uv", holding_uv=True))
+    assert uv_is_installed()
+
+
+@pytest.mark.parametrize(
+    ("holding_uv", "outcomes", "summary_line"),
+    [
+        pytest.param(True, {"passed": 1}, "PASSED test_requiring_uv.py::test_case", id="uv-on-path"),
+        pytest.param(False, {"skipped": 1}, "SKIPPED *uv is not installed*", id="no-uv-on-path"),
+    ],
+)
+def test_requires_uv_skips_its_test_exactly_where_uv_is_not_installed(
+    pytester_importing_test_helpers: pytest.Pytester,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    holding_uv: bool,
+    outcomes: dict[str, int],
+    summary_line: str,
+) -> None:
+    """requires_uv reads PATH when its module is imported, so each case is a session started under a PATH of its own."""
+    monkeypatch.setenv("PATH", _path_of_one_directory(tmp_path / "path", holding_uv=holding_uv))
+    pytester_importing_test_helpers.makepyfile(test_requiring_uv=_MODULE_REQUIRING_UV)
+
+    result = pytester_importing_test_helpers.runpytest_subprocess("-p", "no:cacheprovider", "-rA")
+
+    result.assert_outcomes(**outcomes)
+    result.stdout.fnmatch_lines([summary_line])

@@ -16,12 +16,10 @@ import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    FinanceConfig,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.home import RunPricing
+from solar_challenge.projection import project_multi_year, solve_cost_recovery_rate
 from solar_challenge.seg import SEGTariff
 from tests._finance_builders import make_fleet_results_of, make_home_config, make_period, make_sim_results
 
@@ -36,9 +34,9 @@ def _seg_aware_fleet_results_factory(
 
     Every home self-consumes *self_kwh*, exports *export_kwh* and imports
     *import_kwh* over *days* days.  A home with a tariff earns export_kwh × rate/100,
-    and a home without one earns nothing, as in simulate_home.  _annualise_physics
-    scales the totals to 365 days.  Callers write
-    ``simulate=_seg_aware_fleet_results_factory()``.
+    and a home without one earns nothing, each priced and recorded as simulate_home
+    prices and records it.  finance.annualise scales the totals to 365 days.
+    Callers write ``simulate=_seg_aware_fleet_results_factory()``.
     """
 
     def _simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
@@ -48,10 +46,8 @@ def _seg_aware_fleet_results_factory(
                     self_kwh=self_kwh,
                     export_kwh=export_kwh,
                     import_kwh=import_kwh,
-                    export_revenue_gbp=(
-                        0.0
-                        if home.seg_tariff is None
-                        else export_kwh * home.seg_tariff.rate_pence_per_kwh / 100.0
+                    pricing=RunPricing(
+                        None, None if home.seg_tariff is None else home.seg_tariff.rate_pence_per_kwh
                     ),
                     days=days,
                 )

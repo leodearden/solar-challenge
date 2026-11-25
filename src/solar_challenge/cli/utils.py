@@ -3,27 +3,35 @@
 
 A command prints its product (a results table, a template or a report) on
 stdout, through console and print_report, and nothing else there. Status
-messages and progress print on stderr through status_console, and warnings
-and errors through error_console, so redirecting stdout captures the product
-alone. Print the product after any progress display stops: while one runs on
-a terminal, Rich routes sys.stdout writes through it to stderr.
+messages and progress print on stderr through the status helpers (print_status,
+print_info, print_success, create_progress and create_fleet_progress), and
+warnings and errors through error_console, so redirecting stdout captures the
+product alone. Print the product after any progress display stops: while one
+runs on a terminal, Rich routes sys.stdout writes through it to stderr.
 
---quiet calls set_status_quiet, which silences status_console: status
-messages go unprinted and progress displays stay off, while products,
-warnings and errors print as ever.
+The status helpers take the command's invocation. While it is quiet (--quiet,
+or an injected quiet invocation) they print nothing and progress displays stay
+off; products, warnings and errors print either way.
 
-`finance run` and `optimize configs` read their fleet simulator from Click's
-context object, ctx.ensure_object(CliFleetSimulator).simulate:
-fleet.default_runner().simulate, unless whoever invokes the CLI passes another
-CliFleetSimulator as obj. `fleet run` and `fleet sweep` read none; they build
-a fleet.FleetRunner from their --workers and --sequential.
+What one invocation runs with travels as Click's context object, a
+CliInvocation. Every command that simulates (`home run`, `home quick`,
+`fleet run`, `fleet sweep`, `finance run` and `optimize configs`) reads its
+runner from the invocation, invocation(ctx).runner. The root callback builds
+that runner from --workers and --sequential, as root_invocation says, unless
+whoever invokes the CLI passes a CliInvocation as obj; the root's options leave
+that invocation's runner as it is. `web start` passes it on once create_app
+takes one (task 889).
+
+A command reads its --start and --end as StartOption and EndOption, and applies
+them to its scenario with with_window_options, so each replaces only its own day
+of the scenario's period.
 """
 
 import dataclasses
 from collections.abc import Iterable
+from datetime import datetime
 from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Annotated, Any, Callable, Optional, TypeVar
 
 import typer
 from rich.console import Console
@@ -41,25 +49,23 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from solar_challenge.battery import has_battery
-from solar_challenge.config import load_config
+from solar_challenge.config import ScenarioConfig
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.fleet import FleetSimulate, FleetSummary, default_runner
+from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
-from solar_challenge.location import parse_location
-from solar_challenge.scenario_writer import location_block
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 from solar_challenge.weather import WeatherDataError
 
 console = Console()
-status_console = Console(stderr=True)
 error_console = Console(stderr=True)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 
 def handle_errors(func: F) -> F:
-    """Decorator to handle common errors and display user-friendly messages."""
+    """Decorator that reports an error the user can act on as its label and text on stderr and exits 1, rather than as a traceback; Ctrl-C exits 130."""
 
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -70,6 +76,9 @@ def handle_errors(func: F) -> F:
             raise typer.Exit(1) from e
         except FileNotFoundError as e:
             _print_error_verbatim("File not found", e)
+            raise typer.Exit(1) from e
+        except OSError as e:
+            _print_error_verbatim("System error", e)
             raise typer.Exit(1) from e
         except ValueError as e:
             _print_error_verbatim("Invalid value", e)
@@ -95,73 +104,84 @@ def _print_verbatim(target: Console, *parts: str | tuple[str, str]) -> None:
 
 
 @dataclasses.dataclass(frozen=True)
-class CliFleetSimulator:
-    """Fleet simulator a command reads from Click's context object."""
+class CliInvocation:
+    """What one CLI invocation runs with, on Click's context object.
 
-    simulate: FleetSimulate = dataclasses.field(default_factory=lambda: default_runner().simulate)
+    Attributes:
+        runner: Runs every simulation of the commands that simulate
+        quiet: Whether the invocation's status messages and progress go unprinted
+    """
+
+    runner: FleetSimulator = dataclasses.field(default_factory=default_runner)
+    quiet: bool = False
 
 
-def load_config_with_overrides(
-    config_path: Optional[Path],
-    pv_kw: Optional[float] = None,
-    battery_kwh: Optional[float] = None,
-    consumption_kwh: Optional[float] = None,
-    location_str: Optional[str] = None,
-    system_losses: Optional[float] = None,
-) -> dict[str, Any]:
-    """Load config file and apply CLI overrides.
+def invocation(ctx: typer.Context) -> CliInvocation:
+    """The CliInvocation ctx's command runs with: its context object, else a default CliInvocation()."""
+    return ctx.ensure_object(CliInvocation)
 
-    Args:
-        config_path: Path to config file (optional)
-        pv_kw: Override PV capacity
-        battery_kwh: Override battery capacity
-        consumption_kwh: Override annual consumption
-        location_str: Override location, a location in location.parse_location's grammar:
-            a preset name or 'lat,lon[,alt]'
-        system_losses: Override PV system losses, set as the home's pv: block system_losses
-            key, which PVConfig range-checks
 
-    Returns:
-        Config dict with overrides applied
+def root_invocation(obj: object, *, quiet: bool, workers: int | None, sequential: bool) -> CliInvocation:
+    """The invocation the root's options make of obj: with none, default_runner() with parallel=not sequential and max_workers=workers, quiet as quiet says; an injected CliInvocation keeps its runner, and is quiet if it already is or quiet says so.
 
     Raises:
-        ConfigurationError: From has_battery, naming --battery-kwh, if battery_kwh is
-            negative or not finite; and from location.parse_location, for a location_str
-            it refuses
+        TypeError: obj is neither None nor a CliInvocation, naming CliInvocation and obj's type
     """
-    if config_path is not None:
-        config = load_config(config_path)
-    else:
-        config = {}
+    if obj is None:
+        runner = dataclasses.replace(default_runner(), parallel=not sequential, max_workers=workers)
+        return CliInvocation(runner=runner, quiet=quiet)
+    if isinstance(obj, CliInvocation):
+        return dataclasses.replace(obj, quiet=obj.quiet or quiet)
+    raise TypeError(f"The CLI's context object must be a CliInvocation or None, got a {type(obj).__name__}")
 
-    # Ensure nested structure exists
-    if "home" not in config:
-        config["home"] = {}
-    if "pv" not in config["home"]:
-        config["home"]["pv"] = {}
-    if "load" not in config["home"]:
-        config["home"]["load"] = {}
 
-    # Apply overrides
-    if pv_kw is not None:
-        config["home"]["pv"]["capacity_kw"] = pv_kw
+StartOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--start",
+        formats=["%Y-%m-%d"],
+        help=(
+            "First day to simulate (YYYY-MM-DD), replacing only the start_date of the file's period:; "
+            f"defaults to the file's start_date, else {DEFAULT_FIRST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --start option of a command that simulates a scenario's period: the day with_window_options gives as its first."""
 
-    if system_losses is not None:
-        config["home"]["pv"]["system_losses"] = system_losses
+EndOption = Annotated[
+    Optional[datetime],
+    typer.Option(
+        "--end",
+        formats=["%Y-%m-%d"],
+        help=(
+            "Last day to simulate (YYYY-MM-DD), replacing only the end_date of the file's period:; "
+            f"defaults to the file's end_date, else {DEFAULT_LAST_DAY.isoformat()}"
+        ),
+    ),
+]
+"""The --end option of a command that simulates a scenario's period: the day with_window_options gives as its last."""
 
-    if battery_kwh is not None:
-        if has_battery(battery_kwh, "--battery-kwh"):
-            config["home"]["battery"] = {"capacity_kwh": battery_kwh}
-        else:
-            config["home"].pop("battery", None)
 
-    if consumption_kwh is not None:
-        config["home"]["load"]["annual_consumption_kwh"] = consumption_kwh
+def with_window_options(
+    scenario: ScenarioConfig, *, start: Optional[datetime], end: Optional[datetime]
+) -> ScenarioConfig:
+    """*scenario* with its period's first day replaced by start's date and its last by end's, each only when given.
 
-    if location_str is not None:
-        config["location"] = location_block(parse_location(location_str))
-
-    return config
+    Raises:
+        ConfigurationError: for days that give no window, naming each flag given with its
+            day, then the reason ScenarioConfig.with_window refuses the window for.
+    """
+    first_day = None if start is None else start.date()
+    last_day = None if end is None else end.date()
+    try:
+        return scenario.with_window(first_day=first_day, last_day=last_day)
+    except ConfigurationError as exc:
+        given = " ".join(
+            f"{flag} {day.isoformat()}"
+            for flag, day in (("--start", first_day), ("--end", last_day))
+            if day is not None
+        )
+        raise ConfigurationError(f"{given}: {exc.__cause__ or exc}") from exc
 
 
 def verbatim_table_title(title: str) -> Text:
@@ -198,13 +218,13 @@ def home_summary_rows(summary: SummaryStatistics) -> tuple[tuple[str, str], ...]
             import_cost_gbp=summary.total_import_cost_gbp,
             export_revenue_gbp=summary.total_export_revenue_gbp,
             net_cost_gbp=summary.net_cost_gbp,
-            seg_revenue_gbp=summary.seg_revenue_gbp,
         ),
+        *_grid_charge_forecast_rows(distinct_grid_charge_forecasts([summary.grid_charge_forecast])),
     )
 
 
 def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
-    """The (metric, value) rows `fleet run` prints for a fleet's summary: the fleet's totals, then, after a blank row, the spread of its homes' generation and self-consumption ratios."""
+    """The (metric, value) rows `fleet run` prints for a fleet's summary: the fleet's totals and the forecasts that sized its grid charge, then, after a blank row, the spread of its homes' generation and self-consumption ratios."""
     return (
         *_energy_total_rows(summary),
         ("Self-Consumption Ratio", f"{summary.fleet_self_consumption_ratio:.1%}"),
@@ -215,8 +235,8 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
             import_cost_gbp=summary.total_import_cost_gbp,
             export_revenue_gbp=summary.total_export_revenue_gbp,
             net_cost_gbp=summary.total_net_cost_gbp,
-            seg_revenue_gbp=summary.total_seg_revenue_gbp,
         ),
+        *_grid_charge_forecast_rows(summary.grid_charge_forecasts),
         ("", ""),
         (
             "Per-Home Generation (min/max)",
@@ -237,6 +257,11 @@ def fleet_summary_rows(summary: FleetSummary) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _grid_charge_forecast_rows(forecasts: tuple[GridChargeForecast, ...]) -> tuple[tuple[str, str], ...]:
+    """The Grid-charge forecast row naming *forecasts*, the forecasts that sized a summary's grid charge; none when nothing grid-charged."""
+    return (("Grid-charge forecast", ", ".join(forecasts)),) if forecasts else ()
+
+
 def _energy_total_rows(summary: SummaryStatistics | FleetSummary) -> tuple[tuple[str, str], ...]:
     """The Total Generation, Total Demand, Self-Consumption, Grid Import and Grid Export rows of a summary's energy totals."""
     return (
@@ -253,40 +278,40 @@ def _money_rows(
     import_cost_gbp: float | None,
     export_revenue_gbp: float | None,
     net_cost_gbp: float | None,
-    seg_revenue_gbp: float | None,
 ) -> tuple[tuple[str, str], ...]:
-    """The Grid Import Cost, Grid Export Revenue, Net Cost and SEG Revenue rows, each only when its amount is not None."""
+    """The Grid Import Cost, Grid Export Revenue and Net Cost rows, each only when its amount is not None."""
     amounts = (
         ("Grid Import Cost", import_cost_gbp),
         ("Grid Export Revenue", export_revenue_gbp),
         ("Net Cost", net_cost_gbp),
-        ("SEG Revenue", seg_revenue_gbp),
     )
     return tuple((metric, f"£{amount:.2f}") for metric, amount in amounts if amount is not None)
 
 
-def set_status_quiet(quiet: bool) -> None:
-    """Silence status messages and progress on stderr while quiet is True, and print them again once it is False; products, warnings and errors print either way."""
-    status_console.quiet = quiet
+def _status_console(cli: CliInvocation) -> Console:
+    """A console on stderr that prints nothing while cli is quiet, built for each status call, so no console outlives the invocation it prints for."""
+    return Console(stderr=True, quiet=cli.quiet)
 
 
-def _status_progress(*columns: str | ProgressColumn) -> Progress:
-    """A progress display of columns on status_console, off while that console is quiet, so it never captures what else a command writes to stdout or stderr."""
-    return Progress(*columns, console=status_console, disable=status_console.quiet)
+def _status_progress(cli: CliInvocation, *columns: str | ProgressColumn) -> Progress:
+    """A progress display of columns on stderr, off while cli is quiet, so a quiet display never captures what else a command writes to stdout or stderr."""
+    return Progress(*columns, console=_status_console(cli), disable=cli.quiet)
 
 
-def create_progress() -> Progress:
-    """Create a Rich progress bar for simulations, printed on stderr."""
+def create_progress(cli: CliInvocation) -> Progress:
+    """Create a Rich progress bar for cli's simulations, printed on stderr."""
     return _status_progress(
+        cli,
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         TimeElapsedColumn(),
     )
 
 
-def create_fleet_progress() -> Progress:
-    """Progress bar with ETA for fleet simulations, printed on stderr."""
+def create_fleet_progress(cli: CliInvocation) -> Progress:
+    """Progress bar with ETA for cli's fleet simulations, printed on stderr."""
     return _status_progress(
+        cli,
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -298,9 +323,14 @@ def create_fleet_progress() -> Progress:
     )
 
 
-def print_success(message: str) -> None:
-    """Print message in green on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "green"))
+def print_status(cli: CliInvocation, *parts: str | tuple[str, str]) -> None:
+    """Print parts side by side on stderr exactly as they are, unless cli is quiet; a (text, style) part is printed in that style."""
+    _print_verbatim(_status_console(cli), *parts)
+
+
+def print_success(cli: CliInvocation, message: str) -> None:
+    """Print message in green on stderr, exactly as it is, unless cli is quiet."""
+    print_status(cli, (message, "green"))
 
 
 def print_warning(message: str) -> None:
@@ -313,9 +343,9 @@ def print_error(message: str) -> None:
     _print_verbatim(error_console, (message, "red"))
 
 
-def print_info(message: str) -> None:
-    """Print message in blue on stderr, exactly as it is."""
-    _print_verbatim(status_console, (message, "blue"))
+def print_info(cli: CliInvocation, message: str) -> None:
+    """Print message in blue on stderr, exactly as it is, unless cli is quiet."""
+    print_status(cli, (message, "blue"))
 
 
 def print_report(report: str) -> None:

@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import yaml
 
 from tests._collect_only import collect
 from tests._command_runner import (
@@ -32,6 +31,7 @@ from tests._command_runner import (
     run_command,
 )
 from tests._orchestrator_config import OrchestratorCommand, lane_command, verify_command
+from tests._throwaway_lane_project import PROBE_JOB, throwaway_lane_project
 from tests._verify_suite import run_verify_suite
 
 _PROBE_VARIABLE = "COMMAND_RUNNER_PROBE"
@@ -102,17 +102,6 @@ class _CommandOfAnotherType:
     role: VerifyRole | None
 
 
-def _project_with_a_lane_job_and_a_test_command(project_root: Path, command: str) -> Path:
-    """Make *project_root* a throwaway project whose lane job, named probe, and test_command each run *command*."""
-    (project_root / "dark-factory-orchestrator.yaml").write_text(
-        yaml.safe_dump(
-            {"test_command": command, "git": {"offline_lane_commands": [{"name": "probe", "command": command}]}}
-        ),
-        encoding="utf-8",
-    )
-    return project_root
-
-
 def _hang(directory: Path, pid_file: Path) -> str:
     """Write a hang script into *directory* and return the command that runs it.
 
@@ -145,7 +134,7 @@ def _hang_in_collect(hang: str, directory: Path, timeout_secs: float) -> None:
 
 def _hang_in_run_verify_suite(hang: str, directory: Path, timeout_secs: float) -> None:
     """The hang is the test_command of a throwaway project in *directory*."""
-    project_root = _project_with_a_lane_job_and_a_test_command(directory, hang)
+    project_root = throwaway_lane_project(directory, hang, test_command=hang)
     with pytest.raises(pytest.fail.Exception):
         run_verify_suite(project_root, os.environ, variant="in a probe", timeout_secs=timeout_secs)
 
@@ -285,7 +274,7 @@ def test_given_no_environment_the_command_runs_in_this_process_environment(
 @pytest.mark.parametrize(
     ("command_of", "role"),
     [
-        pytest.param(lambda project_root: lane_command(project_root, "probe"), "offline", id="lane-job"),
+        pytest.param(lambda project_root: lane_command(project_root, PROBE_JOB), "offline", id="lane-job"),
         pytest.param(lambda project_root: verify_command(project_root, "test_command"), "task", id="verify-slot"),
     ],
 )
@@ -294,7 +283,7 @@ def test_an_orchestrator_command_runs_in_the_role_dark_factory_sets_for_it_over_
 ) -> None:
     """As dark-factory stamps DF_VERIFY_ROLE over whatever environment the command would otherwise inherit."""
     monkeypatch.setenv("DF_VERIFY_ROLE", "merge")
-    project_root = _project_with_a_lane_job_and_a_test_command(tmp_path, _ECHO_ROLE)
+    project_root = throwaway_lane_project(tmp_path, _ECHO_ROLE, test_command=_ECHO_ROLE)
 
     result = run_command(command_of(project_root), timeout_secs=60)
 

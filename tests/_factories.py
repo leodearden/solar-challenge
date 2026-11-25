@@ -31,6 +31,10 @@ from typing import Optional
 
 from solar_challenge.finance import BillBreakdown, BillDistribution, CostRecoverySolution
 from solar_challenge.optimize import ConfigPoint, ConfigResult, RankedSweep
+from solar_challenge.timebase import SimulationWindow
+
+from tests._finance_builders import make_window
+
 
 DEFAULT_VAT_RATE = 0.05
 """VAT rate the default line items are internally consistent with."""
@@ -80,30 +84,34 @@ def make_bill_breakdown(
 def make_bill_distribution(
     *,
     representative: Optional[BillBreakdown] = None,
-    per_home_net_bill_gbp: Optional[tuple[float, ...]] = None,
+    per_home_total_outlay_gbp: Optional[tuple[float, ...]] = None,
     min_gbp: float = 367.5,
     mean_gbp: float = 367.5,
     median_gbp: float = 367.5,
     max_gbp: float = 367.5,
+    annualised_from: SimulationWindow = make_window(),
 ) -> BillDistribution:
-    """Build a synthetic BillDistribution around *representative*.
+    """Build a synthetic BillDistribution around *representative*, annualised from *annualised_from*.
 
     Defaults to the single-home degenerate distribution: one home, every
-    statistic equal to the representative's ``total_outlay_gbp``.
+    statistic equal to the representative's ``total_outlay_gbp``, annualised
+    from make_window()'s whole calendar year, so a report of it gives no
+    extrapolation notice.
     """
     rep = representative if representative is not None else make_bill_breakdown()
     per_home = (
-        per_home_net_bill_gbp
-        if per_home_net_bill_gbp is not None
+        per_home_total_outlay_gbp
+        if per_home_total_outlay_gbp is not None
         else (rep.total_outlay_gbp,)
     )
     return BillDistribution(
         representative=rep,
-        per_home_net_bill_gbp=per_home,
+        per_home_total_outlay_gbp=per_home,
         min_gbp=min_gbp,
         mean_gbp=mean_gbp,
         median_gbp=median_gbp,
         max_gbp=max_gbp,
+        annualised_from=annualised_from,
     )
 
 
@@ -193,6 +201,7 @@ def make_config_result(
     min_dscr: float = 1.5,
     equity_irr: float = 0.08,
     payback_years: Optional[float] = 12.0,
+    baseline_own_use_rate_pence_per_kwh: float = 15.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
 ) -> ConfigResult:
@@ -223,6 +232,7 @@ def make_config_result(
         min_dscr=min_dscr,
         equity_irr=equity_irr,
         payback_years=payback_years,
+        baseline_own_use_rate_pence_per_kwh=baseline_own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay_gbp,
         baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
     )

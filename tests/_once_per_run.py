@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._project_temp_root import worker_run_basetemp
+
 
 def built_once(directory: Path, build: Callable[[Path], object]) -> Path:
     """Return *directory* once *build* has built it, calling build only if no call, in this process or another, has yet.
@@ -73,15 +75,8 @@ def _beside(directory: Path, suffix: str) -> Path:
 def run_shared_path(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory, name: str) -> Path:
     """Return the path *name* in the directory that this pytest run alone holds and all its processes share.
 
-    On an xdist worker that is the parent of the worker's basetemp, the controller's basetemp, which the
-    controller made for this run. In a session without workers it is the session's own basetemp, never its
-    parent, which other runs share, as /tmp/pytest-of-<user> is when no --basetemp is given.
+    On an xdist worker that is the controller's basetemp, the run's (tests/_project_temp_root.py's
+    worker_run_basetemp). In a session without workers it is the session's own basetemp, never its parent, which
+    other runs share, as the temp root's pytest-of-<user> is when no --basetemp is given.
     """
-    if _on_an_xdist_worker(request):
-        return tmp_path_factory.getbasetemp().parent / name
-    return tmp_path_factory.getbasetemp() / name
-
-
-def _on_an_xdist_worker(request: pytest.FixtureRequest) -> bool:
-    """Whether *request*'s session is a pytest-xdist worker's, read from its config as xdist's own is_xdist_worker reads it."""
-    return hasattr(request.config, "workerinput")
+    return (worker_run_basetemp(request.config) or tmp_path_factory.getbasetemp()) / name

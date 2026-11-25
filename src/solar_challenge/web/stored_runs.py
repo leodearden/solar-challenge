@@ -31,12 +31,31 @@ records each run's type, are RunStorage's: nothing here reads SQL or Flask.
 
 The documents are in the format of version RUN_FORMAT_VERSION, the version of the last step
 in RUN_DOCUMENT_STEPS. Each RunDocumentStep brings a run's JSON documents, read as
-read_run_documents reads them, from the version before its own to its own. Its apply is
-pure, and applying it to its own result changes nothing and drops nothing. v2, the first,
+read_run_documents reads them with a StoredTimeSeries, a read-only accessor of the run's time
+series, from the version before its own to its own. Its apply is pure, and applying it to its
+own result changes nothing and drops nothing. v2, the first,
 drops each key a document's dataclass does not have, by without_unknown_keys, as the reader
 skipped such keys before runs carried a format version, and reports each dropped value that is
 not null. v3 reads each stored home's dispatch as it ran before HomeConfig refused a setting its
-dispatch ignores, and reports each value it rewrites, with the value it holds now.
+dispatch ignores, and reports each value it rewrites, with the value it holds now. v4 drops each
+battery's grid_charging that its run ignored on a tariff with no cheap period, one whose periods
+all charge the same rate, and reports each value it rewrites the same way. v5 sets each summary
+saved before summaries carried a window to the window of its run's stored time series, as
+calculate_summary took it from the same results' index, and drops each summary's simulation_days,
+reporting only a day count other than its window's days; v2 keeps a summary's simulation_days
+for it, as _RETIRED_KEYS_A_LATER_STEP_READS names. v6 drops each fleet summary's
+total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, a second copy of its export revenue,
+reporting each value that is not null; v2 keeps the pair for it the same way. v7 drops each
+stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency were
+derived from, wherever the battery is, reporting each value that is not null; v2 keeps a
+battery's efficiency for it the same way. v8 moves each stored home's dispatch_strategy into its
+battery, whose own setting it is: a battery naming no strategy whose home asked for tou_optimized
+takes tou_optimized on its tariff's clock, as the home ran, reported with the value it holds now,
+and every other battery that names no strategy names self_consumption, the dispatch it ran,
+unreported; then it drops every home's key, unreported. v2 keeps a home's dispatch_strategy for
+v3 and v8 the same way. v9 drops each stored home summary's seg_revenue_gbp, a home run's summary
+and each fleet home summary, reporting each value that is not null; v2 keeps it for v9 the same
+way.
 documents_in_current_format folds every step over a legacy run's documents in memory.
 `solar-challenge web migrate` brings the stored runs' files and runs rows forward through
 bring_run_documents_forward, by each step after the format they are in up to a later one, and
@@ -72,10 +91,18 @@ from typing import Any, Literal, TypeVar, get_args
 
 import pandas as pd
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SeriesRefused, SimulationResults, SummaryStatistics
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario
-from solar_challenge.web.field_tree import FieldTreeRefused, field_tree, read_field_tree, without_unknown_keys
+from solar_challenge.timebase import SimulationWindow
+from solar_challenge.web.field_tree import (
+    DropsUnknownKey,
+    FieldTreeRefused,
+    field_tree,
+    read_field_tree,
+    without_unknown_keys,
+)
 from solar_challenge.web.run_names import is_run_name
 from solar_challenge.web.stored_json import UndecodableJson, decoded_json
 
@@ -251,7 +278,7 @@ class StoredHomeRun:
         (run_dir / _FORMAT_DOCUMENT).unlink(missing_ok=True)
         _write_json(run_dir / _CONFIG_DOCUMENT, config_document)
         _write_json(run_dir / _SUMMARY_DOCUMENT, summary_document)
-        frame.to_parquet(run_dir / "data.parquet", engine="pyarrow")
+        frame.to_parquet(run_dir / _HOME_TIME_SERIES, engine="pyarrow")
         _write_format_marker(run_dir, RUN_FORMAT_VERSION)
 
     def export_frame(self) -> pd.DataFrame:
@@ -279,7 +306,7 @@ class StoredFleetRun:
 
     def config_document(self) -> dict[str, Any]:
         """The run's config.json document: each home's HomeConfig field tree, in the fleet's order, and their count."""
-        homes = tuple(self.fleet_results.home_configs)
+        homes = self.fleet_results.home_configs
         return field_tree(FleetRunConfig(homes=homes, n_homes=len(homes)))
 
     def summary_document(self) -> dict[str, Any]:
@@ -324,6 +351,8 @@ StoredRun = StoredHomeRun | StoredFleetRun
 
 
 _HOMES_DIR = "homes"
+_HOME_TIME_SERIES = "data.parquet"
+"""The name, in a home run's directory, of the run's time series."""
 
 
 def _home_time_series(index: int) -> str:
@@ -424,22 +453,55 @@ def _write_format_marker(run_dir: Path, format_version: int) -> None:
 
 
 @dataclass(frozen=True)
+class StoredTimeSeries:
+    """A stored run's time series as a run-document step reads them: the run's id and its directory, None when the run has none.
+
+    It reads a series' file only when asked, and writes nothing.
+    """
+
+    run_id: str
+    run_dir: Path | None
+
+    def window(self, name: str) -> SimulationWindow:
+        """The window of the run's time series *name*, e.g. "data.parquet": SimulationWindow.of_index of that file's index, its columns left unread.
+
+        Raises:
+            StoredRunUnreadable: The run has no directory, or the file is missing, cannot be
+                read, or has an index SimulationWindow.of_index refuses, as _read_time_series
+                refuses it; the field is None.
+        """
+        return _read_time_series(self.run_dir, self.run_id, name, _window_of_the_index)
+
+
+def _window_of_the_index(path: Path) -> SimulationWindow:
+    """The window SimulationWindow.of_index reads from the index of the parquet at *path*, none of its columns read.
+
+    Raises:
+        ValueError: SimulationWindow.of_index refuses the index, or the file is not a parquet.
+        OSError: The file cannot be read.
+    """
+    return SimulationWindow.of_index(pd.read_parquet(path, engine="pyarrow", columns=[]).index)
+
+
+@dataclass(frozen=True)
 class StoredRunDocuments:
-    """The JSON documents of one stored run, each a StoredDocument that names itself.
+    """A stored run as a run-document step reads it: its JSON documents, each a StoredDocument that names itself, and a read-only accessor of its time series.
 
     config is the run's config document and summary its summary document: config.json and
     summary.json in its directory, or runs.config_json and runs.summary_json in its runs row.
-    home_summaries are a fleet run's homes' summary documents, in the fleet's order, and empty
-    for a home run or a runs row. A document's content is None where its source holds none,
-    e.g. the summary column of a run not yet finished.
+    time_series is the run's StoredTimeSeries, bound to its directory, whose files a step
+    reads only when it needs one. home_summaries are a fleet run's homes' summary documents, in
+    the fleet's order, and empty for a home run or a runs row. A document's content is None
+    where its source holds none, e.g. the summary column of a run not yet finished.
     """
 
     config: StoredDocument
     summary: StoredDocument
+    time_series: StoredTimeSeries
     home_summaries: tuple[StoredDocument, ...] = ()
 
     def changed_from(self, earlier: "StoredRunDocuments") -> tuple[StoredDocument, ...]:
-        """Each of these documents whose content differs from the same document's in *earlier*, the run's documents before a step brought them forward."""
+        """Each of these JSON documents whose content differs from the same document's in *earlier*, the run's documents before a step brought them forward."""
         now = (self.config, self.summary, *self.home_summaries)
         before = (earlier.config, earlier.summary, *earlier.home_summaries)
         return tuple(document for document, was in zip(now, before, strict=True) if document.content != was.content)
@@ -459,7 +521,7 @@ def read_run_documents(run_dir: Path, run_id: str, run_type: RunType) -> StoredR
 
 
 def _home_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
-    """The JSON documents of home run *run_id* that *run_dir* holds, as StoredHomeRun.write lays them out: config.json and summary.json.
+    """The JSON documents of home run *run_id* that *run_dir* holds, as StoredHomeRun.write lays them out: config.json and summary.json, with its time series in *run_dir*.
 
     Raises:
         StoredRunUnreadable: A document is missing or is not JSON, naming it.
@@ -467,13 +529,15 @@ def _home_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     return StoredRunDocuments(
         config=_json_document(run_dir, run_id, _CONFIG_DOCUMENT),
         summary=_json_document(run_dir, run_id, _SUMMARY_DOCUMENT),
+        time_series=StoredTimeSeries(run_id, run_dir),
     )
 
 
 def _fleet_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     """The JSON documents of fleet run *run_id* that *run_dir* holds, as StoredFleetRun.write lays them out.
 
-    Those are config.json, summary.json and, in homes/, the summary of each home its config holds.
+    Those are config.json, summary.json and, in homes/, the summary of each home its config
+    holds, with its time series in *run_dir*.
 
     Raises:
         StoredRunUnreadable: A document is missing or is not JSON, naming it; or the config holds
@@ -483,6 +547,7 @@ def _fleet_run_documents(run_dir: Path, run_id: str) -> StoredRunDocuments:
     return StoredRunDocuments(
         config=config,
         summary=_json_document(run_dir, run_id, _SUMMARY_DOCUMENT),
+        time_series=StoredTimeSeries(run_id, run_dir),
         home_summaries=tuple(_json_document(run_dir, run_id, _home_summary(index)) for index in range(_home_count(config))),
     )
 
@@ -537,8 +602,28 @@ def _check_window(results: SimulationResults) -> None:
     _ = results.window
 
 
-def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> SimulationResults:
-    """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *strategy_name*.
+def _read_time_series(run_dir: Path | None, run_id: str, name: str, read: Callable[[Path], T]) -> T:
+    """*read* of the file of the time series *name* of run *run_id* in *run_dir*, refused as a stored run's time series is.
+
+    Raises:
+        StoredRunUnreadable: *run_dir* is None or the file is missing ("is missing"); *read*
+            raises an OSError, as for a file it cannot read ("is unreadable: ..."), or a
+            ValueError, as for a file that is not a run's time series ("is not the time series
+            of a run: ..."), the error being the cause. The field is None.
+    """
+    path = None if run_dir is None else run_dir / name
+    if path is None or not path.is_file():
+        raise StoredRunUnreadable(run_id, name, None, "is missing")
+    try:
+        return read(path)
+    except ValueError as refusal:
+        raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
+    except OSError as unreadable:
+        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
+
+
+def _time_series(run_dir: Path, run_id: str, name: str, summary: SummaryStatistics) -> SimulationResults:
+    """The results the time series *name* of run *run_id* holds, read from its file in *run_dir*, simulated under *summary*'s strategy_name, their grid charge sized by its grid_charge_forecast.
 
     Raises:
         StoredRunUnreadable: The file is missing, cannot be read, e.g. for its permissions or a
@@ -550,19 +635,20 @@ def _time_series(run_dir: Path, run_id: str, name: str, strategy_name: str) -> S
             no number in a row; the field is then that series' column, and SimulationResults'
             refusal is the cause.
     """
-    path = run_dir / name
-    if not path.is_file():
-        raise StoredRunUnreadable(run_id, name, None, "is missing")
-    try:
-        results = SimulationResults.from_dataframe(pd.read_parquet(path, engine="pyarrow"), strategy_name=strategy_name)
+
+    def results_of(path: Path) -> SimulationResults:
+        try:
+            results = SimulationResults.from_dataframe(
+                pd.read_parquet(path, engine="pyarrow"),
+                strategy_name=summary.strategy_name,
+                grid_charge_forecast=summary.grid_charge_forecast,
+            )
+        except SeriesRefused as refused:
+            raise StoredRunUnreadable(run_id, name, refused.column, refused.reason) from refused
         _check_window(results)
-    except SeriesRefused as refused:
-        raise StoredRunUnreadable(run_id, name, refused.column, refused.reason) from refused
-    except ValueError as refusal:
-        raise StoredRunUnreadable(run_id, name, None, f"is not the time series of a run: {refusal}") from refusal
-    except OSError as unreadable:
-        raise StoredRunUnreadable(run_id, name, None, f"is unreadable: {unreadable}") from unreadable
-    return results
+        return results
+
+    return _read_time_series(run_dir, run_id, name, results_of)
 
 
 def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
@@ -576,7 +662,7 @@ def _read_home_run(run_dir: Path, run_id: str) -> StoredHomeRun:
     documents = _home_run_documents(run_dir, run_id)
     config = documents.config.read(HomeConfig)
     summary = documents.summary.read(SummaryStatistics)
-    results = _time_series(run_dir, run_id, "data.parquet", summary.strategy_name)
+    results = _time_series(run_dir, run_id, _HOME_TIME_SERIES, summary)
     return StoredHomeRun(run_id=run_id, config=config, results=results, summary=summary)
 
 
@@ -592,13 +678,13 @@ def _read_fleet_run(run_dir: Path, run_id: str) -> StoredFleetRun:
     config = documents.config.read(FleetRunConfig)
     summary = documents.summary.read(FleetSummary)
     home_summaries = tuple(each.read(SummaryStatistics) for each in documents.home_summaries)
-    per_home_results = [
-        _time_series(run_dir, run_id, _home_time_series(index), home_summary.strategy_name)
+    per_home_results = tuple(
+        _time_series(run_dir, run_id, _home_time_series(index), home_summary)
         for index, home_summary in enumerate(home_summaries)
-    ]
+    )
     return StoredFleetRun(
         run_id=run_id,
-        fleet_results=FleetResults(per_home_results=per_home_results, home_configs=list(config.homes)),
+        fleet_results=FleetResults(per_home_results=per_home_results, home_configs=config.homes),
         summary=summary,
         home_summaries=home_summaries,
     )
@@ -789,22 +875,58 @@ def _each_document(
     and SummaryStatistics for each home summary.
     """
     kind = RUN_KINDS[run_type]
-    return StoredRunDocuments(
+    return replace(
+        documents,
         config=edit(documents.config, kind.config_type),
         summary=edit(documents.summary, kind.summary_type),
         home_summaries=tuple(edit(each, SummaryStatistics) for each in documents.home_summaries),
     )
 
 
-def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
+_SIMULATION_DAYS = "simulation_days"
+"""The key of the day count a SummaryStatistics stored before format 5 holds, the days of its window; v5 drops it."""
 
-    Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys.
+_FLEET_SEG_REVENUE_KEYS = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue total and per-home mean a FleetSummary stored before format 6 holds, a second copy of its total_export_revenue_gbp; v6 drops them."""
+
+_BATTERY_ROUND_TRIP = "efficiency"
+"""The key of the round-trip efficiency a BatteryConfig stored before format 7 holds, from which its charge_efficiency and discharge_efficiency were derived; v7 drops it."""
+
+_HOME_DISPATCH = "dispatch_strategy"
+"""The key of the dispatch a HomeConfig stored before format 8 asked for by name, 'greedy' or 'tou_optimized'; v3 reads it as its run ran, and v8 moves it into the home's battery, then drops it."""
+
+_SUMMARY_SEG_REVENUE = "seg_revenue_gbp"
+"""The key of the SEG revenue a SummaryStatistics stored before format 9 may hold, a second copy of its total_export_revenue_gbp; v9 drops it."""
+
+_RETIRED_KEYS_A_LATER_STEP_READS: Mapping[type, frozenset[str]] = MappingProxyType(
+    {
+        SummaryStatistics: frozenset({_SIMULATION_DAYS, _SUMMARY_SEG_REVENUE}),
+        FleetSummary: frozenset(_FLEET_SEG_REVENUE_KEYS),
+        BatteryConfig: frozenset({_BATTERY_ROUND_TRIP}),
+        HomeConfig: frozenset({_HOME_DISPATCH}),
+    }
+)
+"""By dataclass, each key of its stored objects, wherever they are, that it no longer has and a later step reads, which v2 keeps: v5 compares a summary's simulation_days with its window's days, then drops it, and v6 drops a fleet summary's SEG revenue pair, v7 a battery's efficiency and v9 a home summary's seg_revenue_gbp, each reporting each value that is not null; v3 reads a home's dispatch_strategy as its run ran, and v8 moves it into the home's battery."""
+
+
+def _not_read_by_a_later_step(owner: type, key: str) -> bool:
+    """Whether v2 drops *key*, a key no field of *owner* has: unless _RETIRED_KEYS_A_LATER_STEP_READS names it for *owner*."""
+    return key not in _RETIRED_KEYS_A_LATER_STEP_READS.get(owner, frozenset())
+
+
+def _unknown_keys_dropped(
+    run_type: RunType, documents: StoredRunDocuments, drops: DropsUnknownKey
+) -> StepResult:
+    """*documents* without each key their dataclasses do not have that *drops* holds for, and each dropped value that is not null.
+
+    Each document is walked as the dataclass _each_document pairs it with, by without_unknown_keys,
+    which asks *drops* of each such key with the dataclass whose stored object holds it; a key it
+    spares is kept, unreported.
     """
     dropped: list[DroppedValue] = []
 
     def document_without_unknown_keys(document: StoredDocument, cls: type) -> StoredDocument:
-        content, unknown_keys = without_unknown_keys(document.content, cls)
+        content, unknown_keys = without_unknown_keys(document.content, cls, drops=drops)
         dropped.extend(
             DroppedValue(document.run_id, document.name, key.path, key.value)
             for key in unknown_keys
@@ -814,6 +936,15 @@ def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> Step
 
     brought_forward = _each_document(run_type, documents, document_without_unknown_keys)
     return StepResult(documents=brought_forward, dropped=tuple(dropped))
+
+
+def _drop_unknown_keys(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v2's step: *documents* without each key their dataclasses do not have, and each dropped value that is not null.
+
+    A key _RETIRED_KEYS_A_LATER_STEP_READS names for the dataclass whose stored object holds it is
+    kept, unreported, for the later step that reads it.
+    """
+    return _unknown_keys_dropped(run_type, documents, _not_read_by_a_later_step)
 
 
 def _check_readable(run_type: RunType, documents: StoredRunDocuments) -> None:
@@ -837,36 +968,44 @@ _FORMAT_2_HOME_DISPATCH = ("greedy", "tou_optimized")
 _FieldChange = tuple[str, Any, Any]
 """A field a step rewrote, as its dotted path, the value it held before and the value it holds now."""
 
+_HomeRule = Callable[[Any], tuple[Any, list[_FieldChange]]]
+"""A step's rule for one stored HomeConfig object: the object brought forward, and each field it changed."""
 
-def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
-    """v3's step: *documents* with each home's config set to the dispatch its run ran by, and each value it rewrote.
+
+def _homes_brought_forward(run_type: RunType, documents: StoredRunDocuments, rule: _HomeRule) -> StepResult:
+    """*documents* with each home's object in the config brought forward by *rule*, and each value it rewrote.
 
     A home run's config is one home's object and a fleet run's holds one in each item of its
-    homes; _home_as_it_ran brings each forward. The summaries and any content that is not such
-    an object are left as they are.
+    homes. The summaries and any content that is not such an object are left as they are.
     """
     config = documents.config
     if run_type == "home":
-        content, changes = _home_as_it_ran(config.content)
+        content, changes = rule(config.content)
     else:
-        content, changes = _fleet_homes_as_they_ran(config.content)
+        content, changes = _fleet_homes_brought_forward(config.content, rule)
     rewritten = tuple(RewrittenValue(config.run_id, config.name, field, was, now) for field, was, now in changes)
     return StepResult(documents=replace(documents, config=replace(config, content=content)), rewritten=rewritten)
 
 
-def _fleet_homes_as_they_ran(config: Any) -> tuple[Any, list[_FieldChange]]:
-    """A fleet run's *config* with each item of its homes brought forward by _home_as_it_ran, and each change, at homes[i]."""
+def _fleet_homes_brought_forward(config: Any, rule: _HomeRule) -> tuple[Any, list[_FieldChange]]:
+    """A fleet run's *config* with each item of its homes brought forward by *rule*, and each change, at homes[i]."""
     if not isinstance(config, dict) or not isinstance(config.get("homes"), list):
         return config, []
-    brought_forward = [_home_as_it_ran(home) for home in config["homes"]]
+    brought_forward = [rule(home) for home in config["homes"]]
+    homes = [home for home, _ in brought_forward]
     changes = [
         (f"homes[{index}].{field}", was, now)
         for index, (_, home_changes) in enumerate(brought_forward)
         for field, was, now in home_changes
     ]
-    if not changes:
+    if homes == config["homes"]:
         return config, []
-    return {**config, "homes": [home for home, _ in brought_forward]}, changes
+    return {**config, "homes": homes}, changes
+
+
+def _dispatch_as_it_ran(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v3's step: *documents* with each home's config set to the dispatch its run ran by, as _home_as_it_ran sets it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_as_it_ran)
 
 
 def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
@@ -902,6 +1041,193 @@ def _home_as_it_ran(home: Any) -> tuple[Any, list[_FieldChange]]:
     return {**home, "battery_config": {**battery, "grid_charging": None}}, changes
 
 
+def _grid_charging_without_a_cheap_period_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v4's step: *documents* with each home's config rid of the grid_charging its run ignored, as _home_without_grid_charging_on_one_rate drops it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_without_grid_charging_on_one_rate)
+
+
+def _home_without_grid_charging_on_one_rate(home: Any) -> tuple[Any, list[_FieldChange]]:
+    """*home*, a stored HomeConfig object, with its battery's grid_charging dropped when its tariff's periods all charge one rate, and each field it changed.
+
+    That is the home as its run ran. A tariff's periods tile the day, so each covers a minute,
+    and at format 3 its cheap_minutes_of_day was empty exactly when its periods shared one rate:
+    neither GridChargeContext.is_cheap_period nor TOU dispatch on the tariff's clock then ever
+    charged from the grid. v3 had already dropped grid_charging under self-consumption dispatch or with no
+    tariff, so any left at format 3 is on a dispatch that grid-charges. The rule reads format
+    3's JSON, not a TariffConfig, so a later change to the tariff's classifier cannot change the
+    step. A home it cannot read as a grid-charging battery on such a tariff is left as it is.
+    """
+    if not isinstance(home, dict):
+        return home, []
+    battery = home.get("battery_config")
+    if not isinstance(battery, dict) or battery.get("grid_charging") is None:
+        return home, []
+    if not _periods_charge_one_rate(home.get("tariff_config")):
+        return home, []
+    change = ("battery_config.grid_charging", battery["grid_charging"], None)
+    return {**home, "battery_config": {**battery, "grid_charging": None}}, [change]
+
+
+def _periods_charge_one_rate(tariff: Any) -> bool:
+    """Whether *tariff*, a stored TariffConfig object, has periods: a list, not empty, of objects whose rate_per_kwh is each the same number, an int or a float, never a bool."""
+    periods = tariff.get("periods") if isinstance(tariff, dict) else None
+    if not isinstance(periods, list) or not periods or not all(isinstance(period, dict) for period in periods):
+        return False
+    rates = [period.get("rate_per_kwh") for period in periods]
+    is_number = [isinstance(rate, (int, float)) and not isinstance(rate, bool) for rate in rates]
+    return all(is_number) and all(rate == rates[0] for rate in rates)
+
+
+def _summaries_at_format_5(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v5's step: *documents* with each SummaryStatistics document given a window and rid of its simulation_days, as _summary_at_format_5 brings it forward, and each day count it dropped that differs from its window's days.
+
+    A home run's summary summarises its data.parquet, and a fleet run's home_summaries[i] its
+    homes/home_i.parquet; each window is read through *documents*' time_series, so a summary
+    holding one reads no series. calculate_summary took a summary's window from the index of the
+    same results its run stored, so the window is the one the run had, and a stored day count
+    other than its days, such as one counted across the autumn clock change, is the one value
+    the run's page shows differently. A fleet run's summary, its FleetSummary with its
+    simulation_days, and every config are left as they are.
+
+    Raises:
+        StoredRunUnreadable: The time series of a summary lacking a window cannot be read, as
+            StoredTimeSeries.window refuses it.
+    """
+    time_series = documents.time_series
+    if run_type == "home":
+        summary, dropped = _summary_at_format_5(documents.summary, time_series, _HOME_TIME_SERIES)
+        return StepResult(replace(documents, summary=summary), dropped=dropped)
+    brought_forward = [
+        _summary_at_format_5(summary, time_series, _home_time_series(index))
+        for index, summary in enumerate(documents.home_summaries)
+    ]
+    return StepResult(
+        replace(documents, home_summaries=tuple(summary for summary, _ in brought_forward)),
+        dropped=tuple(value for _, dropped in brought_forward for value in dropped),
+    )
+
+
+def _summary_at_format_5(
+    summary: StoredDocument, time_series: StoredTimeSeries, name: str
+) -> tuple[StoredDocument, tuple[DroppedValue, ...]]:
+    """*summary*, a stored SummaryStatistics object, given a window by _with_a_window and rid of its simulation_days; and the DroppedValue of that day count when it is not null and is not the window's days.
+
+    Any other content is left as it is.
+
+    Raises:
+        StoredRunUnreadable: As _with_a_window does.
+    """
+    summary = _with_a_window(summary, time_series, name)
+    content = summary.content
+    if not isinstance(content, dict) or _SIMULATION_DAYS not in content:
+        return summary, ()
+    days = content[_SIMULATION_DAYS]
+    without_days = replace(summary, content={key: value for key, value in content.items() if key != _SIMULATION_DAYS})
+    if days is None or days == _stored_window_days(content["window"]):
+        return without_days, ()
+    return without_days, (DroppedValue(summary.run_id, summary.name, _SIMULATION_DAYS, days),)
+
+
+def _stored_window_days(window: Any) -> int | None:
+    """The days of *window*, a stored SimulationWindow object, read as the strict reader reads it; None when it does not read as one."""
+    try:
+        return read_field_tree(window, SimulationWindow).days
+    except FieldTreeRefused:
+        return None
+
+
+def _with_a_window(summary: StoredDocument, time_series: StoredTimeSeries, name: str) -> StoredDocument:
+    """*summary*, a stored SummaryStatistics object, given the window of *time_series*' series *name* when it holds none, the key absent or null; any other content is left as it is.
+
+    The window is written in field_tree's JSON form, as a save writes it.
+
+    Raises:
+        StoredRunUnreadable: The series cannot be read, as StoredTimeSeries.window refuses it.
+    """
+    content = summary.content
+    if not isinstance(content, dict) or content.get("window") is not None:
+        return summary
+    return replace(summary, content={**content, "window": field_tree(time_series.window(name))})
+
+
+def _fleet_seg_revenue_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v6's step: *documents* with a fleet run's summary rid of each key of _FLEET_SEG_REVENUE_KEYS, and each dropped value that is not null.
+
+    A home run's documents, a fleet run's config and home summaries, and a fleet summary that is
+    not an object are left as they are.
+    """
+    summary = documents.summary
+    content = summary.content
+    if run_type != "fleet" or not isinstance(content, dict):
+        return StepResult(documents)
+    dropped = tuple(
+        DroppedValue(summary.run_id, summary.name, key, content[key])
+        for key in _FLEET_SEG_REVENUE_KEYS
+        if content.get(key) is not None
+    )
+    without_the_pair = {key: value for key, value in content.items() if key not in _FLEET_SEG_REVENUE_KEYS}
+    return StepResult(replace(documents, summary=replace(summary, content=without_the_pair)), dropped=dropped)
+
+
+def _is_a_battery_round_trip(owner: type, key: str) -> bool:
+    """Whether *key* of a stored object of *owner* is a BatteryConfig's efficiency, _BATTERY_ROUND_TRIP."""
+    return (owner, key) == (BatteryConfig, _BATTERY_ROUND_TRIP)
+
+
+def _battery_round_trips_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v7's step: *documents* without each stored BatteryConfig's efficiency, wherever the battery is, and each dropped value that is not null.
+
+    The charge_efficiency and discharge_efficiency it was derived from are kept, and so is every
+    other key, a document that is not an object, and every other document.
+    """
+    return _unknown_keys_dropped(run_type, documents, _is_a_battery_round_trip)
+
+
+def _home_dispatch_moved_to_its_battery(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v8's step: *documents* with each home's config rid of its dispatch_strategy, moved into its battery as _home_with_its_dispatch_in_its_battery moves it, and each value it rewrote."""
+    return _homes_brought_forward(run_type, documents, _home_with_its_dispatch_in_its_battery)
+
+
+def _home_with_its_dispatch_in_its_battery(home: Any) -> tuple[Any, list[_FieldChange]]:
+    """*home*, a stored HomeConfig object, rid of its dispatch_strategy, and each field it changed.
+
+    v3 left a home asking for tou_optimized beside a battery naming its own strategy, which its run
+    dispatched by; beside a battery naming none on a tariff, which ran tou_optimized on the
+    tariff's clock; or with no battery, which dispatched none. Every other home asked for greedy,
+    whose battery naming none ran self-consumption. So every home loses the key, if it holds one;
+    and, whether or not it held one, a battery naming no strategy whose home asked for tou_optimized
+    takes tou_optimized on its tariff's clock, the one field reported, while any other battery
+    naming none names self_consumption, unreported. A home that is not an object is left as it is.
+    """
+    if not isinstance(home, dict):
+        return home, []
+    without_the_key = {key: value for key, value in home.items() if key != _HOME_DISPATCH}
+    battery = home.get("battery_config")
+    if not isinstance(battery, dict) or battery.get("dispatch_strategy") is not None:
+        return without_the_key, []
+    if home.get(_HOME_DISPATCH) == "tou_optimized":
+        strategy = _tou_optimized_on_the_tariffs_clock()
+        changes = [("battery_config.dispatch_strategy", None, _tou_optimized_on_the_tariffs_clock())]
+    else:
+        strategy, changes = {"strategy_type": "self_consumption"}, []
+    return {**without_the_key, "battery_config": {**battery, "dispatch_strategy": strategy}}, changes
+
+
+def _tou_optimized_on_the_tariffs_clock() -> dict[str, Any]:
+    """A battery's dispatch_strategy of tou_optimized on its tariff's clock, as format 8 stores it: a new object each call."""
+    return {"strategy_type": "tou_optimized", "peak_hours": None}
+
+
+def _is_a_summary_seg_revenue(owner: type, key: str) -> bool:
+    """Whether *key* of a stored object of *owner* is a SummaryStatistics' seg_revenue_gbp, _SUMMARY_SEG_REVENUE."""
+    return (owner, key) == (SummaryStatistics, _SUMMARY_SEG_REVENUE)
+
+
+def _summary_seg_revenues_dropped(run_type: RunType, documents: StoredRunDocuments) -> StepResult:
+    """v9's step: *documents* without each stored SummaryStatistics' seg_revenue_gbp, a home run's summary and each of a fleet run's home summaries, and each dropped value that is not null; a fleet's FleetSummary and every config are left as they are."""
+    return _unknown_keys_dropped(run_type, documents, _is_a_summary_seg_revenue)
+
+
 RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
     RunDocumentStep(
         2,
@@ -915,6 +1241,43 @@ RUN_DOCUMENT_STEPS: tuple[RunDocumentStep, ...] = (
         "ignored, under self-consumption dispatch or with no tariff, and read as greedy a home "
         "dispatch_strategy its run did not dispatch by",
         _dispatch_as_it_ran,
+    ),
+    RunDocumentStep(
+        4,
+        "Drop each battery's grid_charging that its run ignored on a tariff with no cheap period, "
+        "one whose periods all charge the same rate",
+        _grid_charging_without_a_cheap_period_dropped,
+    ),
+    RunDocumentStep(
+        5,
+        "Set each stored summary saved before summaries carried a window to the window of its run's stored time "
+        "series, and drop each summary's simulation_days, its window's days",
+        _summaries_at_format_5,
+    ),
+    RunDocumentStep(
+        6,
+        "Drop each stored fleet summary's total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, "
+        "a second copy of its total_export_revenue_gbp",
+        _fleet_seg_revenue_dropped,
+    ),
+    RunDocumentStep(
+        7,
+        "Drop each stored battery's efficiency, the round trip its charge_efficiency and discharge_efficiency "
+        "were derived from, which BatteryConfig no longer has",
+        _battery_round_trips_dropped,
+    ),
+    RunDocumentStep(
+        8,
+        "Move each stored home's dispatch_strategy into its battery, where a battery that names no strategy "
+        "takes tou_optimized on its tariff's clock when its home asked for it, and every other battery that "
+        "names no strategy names self_consumption, then drop the home's key, which no HomeConfig has",
+        _home_dispatch_moved_to_its_battery,
+    ),
+    RunDocumentStep(
+        9,
+        "Drop each stored home summary's seg_revenue_gbp, a second copy of its total_export_revenue_gbp, "
+        "which SummaryStatistics no longer has",
+        _summary_seg_revenues_dropped,
     ),
 )
 """Every step of the stored-run format, in ascending order of version."""

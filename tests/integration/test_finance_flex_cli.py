@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.fleet import FleetResults
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results
 from tests.integration._helpers import SCENARIO
 
@@ -271,7 +271,7 @@ class TestFinanceFlexCLIBandEntryPoints:
     def test_scenario_flex_band_medium_is_refused_before_any_simulation(self, tmp_path: Path) -> None:
         scenario_file = _write_scenario(tmp_path, flex_band="medium")
 
-        result = invoke_cli(["finance", "run", str(scenario_file)], _simulate_must_not_run)
+        result = invoke_cli(["finance", "run", str(scenario_file)], answering(_simulate_must_not_run))
 
         assert result.exit_code == 1, result.output
         assert (
@@ -301,8 +301,8 @@ class TestFinanceFlexCLIBandEntryPoints:
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: GridServicesEventsConfig.band must be one of low, central, high, "
-            "got 'medium'"
+            "Configuration error: finance.grid_services_events: "
+            "GridServicesEventsConfig.band must be one of low, central, high, got 'medium'"
         ) in _whitespace_normalised(result.output), result.output
 
     def test_flex_band_flag_medium_lists_the_bands(self, tmp_path: Path) -> None:
@@ -350,8 +350,8 @@ class TestFinanceRunEventsDeliveryBaseline:
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: GridServicesEventsConfig.delivery_baseline must be one of "
-            "operational, capacity, got 'metered'"
+            "Configuration error: finance.grid_services_events: "
+            "GridServicesEventsConfig.delivery_baseline must be one of operational, capacity, got 'metered'"
         ) in _whitespace_normalised(result.output), result.output
 
 

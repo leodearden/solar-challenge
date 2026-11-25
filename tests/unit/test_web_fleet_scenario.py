@@ -2,6 +2,7 @@
 """Tests for solar_challenge.web.fleet_scenario, called directly with fleet forms: the bodies fleet-simulator.js's buildPayload() posts."""
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -10,11 +11,18 @@ import yaml
 
 pytest.importorskip("flask")
 
-from solar_challenge.config import parse_dispatch_strategy_config, parse_tariff_config
+from solar_challenge.config import parse_scenario
+from solar_challenge.dispatch import SelfConsumptionStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import LOCATION_PRESETS, Location
+from solar_challenge.scenario_blocks import (
+    parse_dispatch_strategy_config,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.scenario_writer import location_block
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, MAX_FLEET_SEED
+from solar_challenge.tariff import PRESET_RATES
+from solar_challenge.web.fleet_components import MAX_FLEET_HOMES, MAX_FLEET_SEED, MAX_WINDOW_DAYS
 from solar_challenge.web.fleet_scenario import (
     FLEET_FORM_REFUSALS,
     ImportedFleetForm,
@@ -24,7 +32,8 @@ from solar_challenge.web.fleet_scenario import (
     scenario_from_fleet_form,
 )
 from solar_challenge.web.request_boundary import require_encodable_text
-from solar_challenge.web.simulation_params import MAX_WINDOW_DAYS, parse_seg_tariff
+from solar_challenge.web.simulation_params import parse_seg_tariff
+from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
 
 _FLEET_FORM: dict[str, Any] = {
@@ -197,11 +206,13 @@ class TestParseFleetForm:
     ) -> None:
         """The tariff and SEG reach every home and the dispatch strategy every battery, each as its reader reads the form's value.
 
-        A home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
+        A form without a dispatch strategy leaves every battery BatteryConfig's self-consumption. A
+        home the form's battery pool gives 0 kWh has no battery, and none is made to carry the strategy.
         """
         tariff = parse_tariff_config(form.get("tariff"))
         seg = parse_seg_tariff(form.get("seg"))
-        dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        form_dispatch = parse_dispatch_strategy_config(form.get("dispatch_strategy"))
+        dispatch = SelfConsumptionStrategyConfig() if form_dispatch is None else form_dispatch
         battery_pool = form["battery"]["capacity_kwh"]["entries"]
         homes_with_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] > 0)
         homes_without_a_battery = sum(entry["count"] for entry in battery_pool if entry["value"] == 0)
@@ -282,11 +293,107 @@ class TestParseFleetFormRefusalOrder:
         assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
 
 
+class TestParseFleetFormReadsItsDocumentThroughParseScenario:
+    """parse_fleet_form's run is its scenario document as config.parse_scenario reads it, so the simulate endpoint and the export are one reading."""
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            pytest.param(_FLEET_FORM, id="with-overlays"),
+            pytest.param(_without(_FLEET_FORM, "tariff", "seg", "dispatch_strategy"), id="without-overlays"),
+            pytest.param(_FLEET_FORM_BY_DAYS, id="by-days"),
+            pytest.param({**_FLEET_FORM, "location": "london"}, id="london"),
+        ],
+    )
+    def test_the_run_is_the_scenario_document_as_parse_scenario_reads_it(self, form: dict[str, Any]) -> None:
+        fleet = parse_fleet_form(form)
+
+        scenario = parse_scenario(fleet.scenario)
+
+        assert scenario.simulated_homes() == fleet.homes
+        assert scenario.simulation_bounds() == (fleet.start_date, fleet.end_date)
+
+    @pytest.mark.parametrize(
+        ("key", "value", "read_block"),
+        [
+            pytest.param(
+                "tariff", {"type": "flat_rate"}, lambda: parse_tariff_config({"type": "flat_rate"}), id="tariff"
+            ),
+            pytest.param("seg", {}, lambda: parse_seg_rate({}), id="seg"),
+        ],
+    )
+    def test_a_refused_tariff_or_seg_is_refused_before_a_refused_fleet_distribution_as_parse_scenario_reads_them(
+        self, key: str, value: Any, read_block: Callable[[], object]
+    ) -> None:
+        """The reader reads the tariff and SEG before the homes source, so a fleet grammar refusal is the later block's."""
+        form = {**_FLEET_FORM, key: value, "battery": {"capacity_kwh": {"type": "uniform"}}}
+        with pytest.raises(ConfigurationError) as expected:
+            read_block()
+        with pytest.raises(FLEET_FORM_REFUSALS) as refusal:
+            parse_fleet_form(form)
+        assert (type(refusal.value), str(refusal.value)) == (type(expected.value), str(expected.value))
+
+
+#: Each component's fixed value no home may hold (P3), with the refusal parse_fleet_form gives a fleet form fixing it.
+_FIXED_VALUES_OUTSIDE_THEIR_RANGES = [
+    pytest.param(
+        "pv",
+        {"capacity_kw": 50},
+        "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1",
+        id="pv",
+    ),
+    pytest.param(
+        "battery",
+        {"capacity_kwh": 500},
+        "battery.capacity_kwh must be between 0 and 100 for every home, got 500.0 for home 1",
+        id="battery",
+    ),
+    pytest.param(
+        "load",
+        {"annual_consumption_kwh": 100000},
+        "load.annual_consumption_kwh must be between 500 and 20000 for every home, got 100000.0 for home 1",
+        id="load",
+    ),
+]
+
+#: A PV distribution every home draws above the pv component's range (P15).
+_PV_DRAWN_ABOVE_ITS_RANGE = {"capacity_kw": {"type": "normal", "mean": 50, "std": 1}}
+
+#: The refusal of a home drawing PV above its range, the value drawn left open.
+_PV_DRAWN_ABOVE_ITS_RANGE_REFUSAL = re.compile(
+    r"pv\.capacity_kw must be between 0\.5 and 20 for every home, got \d+\.\d+ for home \d+"
+)
+
+
+class TestParseFleetFormBoundsEveryHome:
+    """parse_fleet_form refuses a fleet whose homes hold a PV, battery or load value outside its component's value_range, fixed or drawn (L2)."""
+
+    @pytest.mark.parametrize(("key", "block", "message"), _FIXED_VALUES_OUTSIDE_THEIR_RANGES)
+    def test_a_fixed_value_outside_its_components_range_is_refused_naming_its_path_the_home_the_range_and_the_value(
+        self, key: str, block: dict[str, Any], message: str
+    ) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_fleet_form({**valid_distribution_form(), key: block})
+        assert str(exc_info.value) == message
+
+    def test_a_drawn_value_outside_its_components_range_is_refused_naming_its_path_and_the_home(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            parse_fleet_form({**valid_distribution_form(), "pv": _PV_DRAWN_ABOVE_ITS_RANGE})
+        assert _PV_DRAWN_ABOVE_ITS_RANGE_REFUSAL.fullmatch(str(exc_info.value)), str(exc_info.value)
+
+    def test_scenario_from_fleet_form_refuses_the_same_form(self) -> None:
+        with pytest.raises(ConfigurationError) as exc_info:
+            scenario_from_fleet_form({**valid_distribution_form(), "pv": {"capacity_kw": 50}})
+        assert str(exc_info.value) == (
+            "pv.capacity_kw must be between 0.5 and 20 for every home, got 50.0 for home 1"
+        )
+
+
 class TestScenarioFromFleetForm:
     """The fleet scenario document scenario_from_fleet_form builds from a fleet form, and its refusals."""
 
     def test_a_fleet_form_is_the_scenario_document_it_describes(self) -> None:
-        """Its distributions are written in config.py's grammar with the dispatch under the battery; its dates, location, tariff and SEG are their blocks.
+        """Its distributions are written in fleet_distribution.py's grammar with the dispatch under the battery; its dates, location, tariff and SEG are their blocks.
 
         The blocks come in the order the scenario builder writes them.
         """
@@ -677,6 +784,50 @@ class TestFleetFormFromScenario:
         )
 
     @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param({"strategy_type": "tou_optimized"}, id="peak-hours-absent"),
+            pytest.param({"strategy_type": "tou_optimized", "peak_hours": None}, id="peak-hours-null"),
+        ],
+    )
+    def test_a_battery_dispatching_tou_optimized_on_its_tariffs_clock_is_not_loaded(
+        self, dispatch_strategy: dict[str, Any]
+    ) -> None:
+        """The fleet page has no control for a tou_optimized on its tariff's clock, so the rest loads and the battery's dispatch_strategy is named."""
+        battery = {**_FLEET_SCENARIO["fleet_distribution"]["battery"], "dispatch_strategy": dispatch_strategy}
+
+        assert fleet_form_from_scenario(_with_fleet_distribution(battery=battery)) == ImportedFleetForm(
+            form=_without(_FLEET_FORM, "dispatch_strategy"),
+            not_loaded=("fleet_distribution.battery.dispatch_strategy",),
+        )
+
+    def test_an_economy_tariff_that_sets_no_rate_loads_its_preset_rates(self) -> None:
+        """An Economy 10 tariff that sets no rate loads the rates the loaders charge it, its PRESET_RATES row."""
+        imported = fleet_form_from_scenario({**_FLEET_SCENARIO, "tariff": {"type": "economy_10"}})
+
+        assert imported.form["tariff"] == {
+            "type": "economy_10",
+            "peak_rate": PRESET_RATES["economy_10"].peak_rate,
+            "off_peak_rate": PRESET_RATES["economy_10"].off_peak_rate,
+        }
+        assert imported.not_loaded == ()
+
+    def test_an_economy_tariff_that_sets_one_rate_loads_it_and_the_preset_rate_for_the_other(
+        self,
+    ) -> None:
+        """An Economy 7 tariff that sets only its off-peak rate loads that rate, and its PRESET_RATES row's peak rate."""
+        imported = fleet_form_from_scenario(
+            {**_FLEET_SCENARIO, "tariff": {"type": "economy_7", "off_peak_rate": 0.1}}
+        )
+
+        assert imported.form["tariff"] == {
+            "type": "economy_7",
+            "peak_rate": PRESET_RATES["economy_7"].peak_rate,
+            "off_peak_rate": 0.1,
+        }
+        assert imported.not_loaded == ()
+
+    @pytest.mark.parametrize(
         ("document", "reason"),
         [
             pytest.param([_FLEET_SCENARIO], "mapping", id="list-document"),
@@ -726,7 +877,7 @@ class TestFleetFormFromScenario:
                         },
                     }
                 ),
-                "fleet_distribution.battery.capacity_kwh.counts[1] must be a whole number, got 2.5",
+                "fleet_distribution.battery.capacity_kwh: counts[1] must be a whole number, got 2.5",
                 id="fractional-count-in-a-battery-pool",
             ),
             pytest.param(
@@ -741,17 +892,12 @@ class TestFleetFormFromScenario:
                 id="custom-tariff",
             ),
             pytest.param(
-                {**_FLEET_SCENARIO, "tariff": {"type": "economy_7", "off_peak_rate": 0.1}},
-                "tariff.peak_rate",
-                id="economy-7-without-a-peak-rate",
-            ),
-            pytest.param(
                 _with_fleet_distribution(
                     battery={
                         **_FLEET_SCENARIO["fleet_distribution"]["battery"],
                         "dispatch_strategy": {
                             "strategy_type": "tou_optimized",
-                            "peak_hours": [[7, 9], [16, 19]],
+                            "peak_hours": [[8, 10], [16, 19]],
                         },
                     }
                 ),
@@ -785,6 +931,30 @@ class TestFleetFormFromScenario:
         with pytest.raises(ValueError, match=re.escape(reason)):
             fleet_form_from_scenario(document)
 
+    def test_a_scenario_key_no_scenario_reads_is_refused_naming_it(self) -> None:
+        """A misspelt finance: block is refused as parse_scenario refuses it, rather than named not loaded."""
+        document = {**_FLEET_SCENARIO, "finanse": {"standing_charge_pence_per_day": 60.0}}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+        assert "'finanse'" in str(refusal.value)
+
+    def test_a_name_that_is_not_a_string_is_refused_as_parse_scenario_refuses_it(self) -> None:
+        """The reader's refusal runs before the form's own reads of the scenario, so the name the form never holds is refused with its message."""
+        document = {**_FLEET_SCENARIO, "name": 5}
+        with pytest.raises(ConfigurationError) as expected:
+            parse_scenario(document)
+        assert str(expected.value) == "name: must be a string, got 5", "premise: the reader refuses the name"
+
+        with pytest.raises(ConfigurationError) as refusal:
+            fleet_form_from_scenario(document)
+
+        assert str(refusal.value) == str(expected.value)
+
     def test_a_scenario_the_loaders_refuse_is_refused_with_their_message(self) -> None:
         """The loaders' refusal of a scenario is the import's refusal."""
         document = _with_fleet_distribution(
@@ -794,8 +964,7 @@ class TestFleetFormFromScenario:
         with pytest.raises(
             ConfigurationError,
             match=re.escape(
-                "weighted_discrete distribution for 'fleet_distribution.pv.capacity_kw' "
-                "requires 'values' and 'weights'"
+                "fleet_distribution.pv.capacity_kw: requires 'weights'"
             ),
         ):
             fleet_form_from_scenario(document)
@@ -834,7 +1003,7 @@ class TestFleetFormFromScenario:
         with pytest.raises(
             ConfigurationError,
             match=re.escape(
-                "shuffled_pool counts for 'pv.capacity_kw' must total n_homes (3), "
+                "fleet_distribution: pv.capacity_kw: shuffled_pool counts must total n_homes (3), "
                 f"got {MAX_FLEET_HOMES + 1}"
             ),
         ):

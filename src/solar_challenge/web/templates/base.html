@@ -11,6 +11,9 @@
     <!-- Tailwind CSS (compiled) -->
     <link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
 
+    {# What the page's forms accept and start at, web/fleet_components.page_limits(), which the page's scripts read #}
+    <script type="application/json" id="page-limits">{{ page_limits.as_json() | tojson }}</script>
+
     {% block head %}{% endblock %}
 
     <!-- followJobProgress, the one reader of a job's progress stream, which each script that follows a job calls (must load before Alpine core) -->

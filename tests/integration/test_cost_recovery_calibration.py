@@ -24,17 +24,20 @@ from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import (
     CostRecoverySolution,
     FinanceConfig,
-    MultiYearCurve,
-    ProjectEconomics,
-    YearPoint,
-    _cbs_own_use_kwh,
+    basis_c_own_use_kwh,
     bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
 )
 from solar_challenge.fleet import FleetResults
 from solar_challenge.home import SimulationResults, calculate_summary
+from solar_challenge.projection import (
+    MultiYearCurve,
+    ProjectEconomics,
+    YearPoint,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
 from tests._fin_calibration import (
     FIN_GOLDEN,
     FIN_SCF,
@@ -51,6 +54,7 @@ from tests._finance_builders import (
     make_sim_results,
     make_sized_home,
 )
+from tests._install_capex import fleet_wired_dc_kw
 
 
 # ---------------------------------------------------------------------------
@@ -70,15 +74,15 @@ def _make_fleet_results_fin_cr6(
 
     With _make_finance_fin_cr6's finance the solve lands in the interior 'floor'
     regime (feasible=True):
-      - 100 homes × 5.5 kWp + 5 kWh (HomeConfig)
+      - 100 homes × 5.5 kWp + 5 kWh (HomeConfig), each wiring 5.606 kWp
       - fleet_sc = n_homes × self_kwh = 200,000 kWh
-      - project_economics (solar_challenge.finance) charges debt service only in
+      - project_economics (solar_challenge.projection) charges debt service only in
         the 15 loan years but averages surplus over the 25-year asset life, so the
         effective annual cost is opex + debt_svc × 15/25
-      - Required revenue = opex(13,100) + debt_svc(≈14,410) × 15/25 (≈8,646)
-        + floor×n(2,700) ≈ £24,446/yr
-      - r* ≈ 24,446 / (200,000/100) ≈ 12.2 p/kWh < retail 23p
-      The single-year sum 13,100 + 14,410 + 2,700 = £30,210 → 15.1 p/kWh overstates
+      - Required revenue = opex(13,100) + debt_svc(≈14,701) × 15/25 (≈8,821)
+        + floor×n(2,700) ≈ £24,621/yr
+      - r* ≈ 24,621 / (200,000/100) ≈ 12.3 p/kWh < retail 23p
+      The single-year sum 13,100 + 14,701 + 2,700 = £30,501 → 15.25 p/kWh overstates
       r* because it charges debt service in all 25 years
       (docs/cost-recovery-finance-model.md §7.4).
 
@@ -97,11 +101,13 @@ def _make_scenario_fin_cr6(n_homes: int = 100) -> ScenarioConfig:
 def _make_finance_fin_cr6() -> FinanceConfig:
     """The [FIN] finance with no self-consumption override, so it prices the simulated own-use.
 
-    On the 100-home [FIN] fleet (grant=£250k, retail=23p, floor=£27):
-    Capex = 100 × (5.5×£1000 + £1000 + 5kWh×£250) = £775,000
-    Grant = £250,000 → financed = £525,000
-    Equity (0.75) = £393,750; Debt (0.25) = £131,250
-    Debt service (7%, 15yr) ≈ £14,410/yr
+    On the 100-home [FIN] fleet solved through project_fleet (grant=£250k, retail=23p,
+    floor=£27), whose curve carries the 100 × 5.606 kWp its homes wire:
+    Capex = 560.5992 kWp × £1000 + 100 × (£1000 + 5kWh×£250) = £785,599.20
+    Grant = £250,000 → financed = £535,599.20
+    Equity (0.75) = £401,699.40; Debt (0.25) = £133,899.80
+    Debt service (7%, 15yr) ≈ £14,701/yr
+    The spreadsheet column's curve carries the 550 kWp nameplate: capex £775,000.
     """
     return make_fin_finance(self_consumption_override=None)
 
@@ -140,7 +146,7 @@ def _surplus_the_bills_fund_cr6(
     figure is valid only for an age-independent injected simulate, which every CR6
     fixture uses.
     """
-    outlays = sol.outlay.per_home_net_bill_gbp
+    outlays = sol.outlay.per_home_total_outlay_gbp
     assert min(outlays) == max(outlays), (
         f"per-home outlays range £{min(outlays):.6f} to £{max(outlays):.6f}, "
         "so the representative bill does not stand for every home"
@@ -175,8 +181,9 @@ def _surplus_the_bills_fund_cr6(
         sampled_ages=(0,),
         interp_error_estimate=0.0,
         annualised_from=None,
+        fleet_pv_dc_kw=fleet_wired_dc_kw(scenario_fleet(scenario).homes),
     )
-    return project_economics(curve, scenario, finance).net_surplus_per_home_per_year_gbp
+    return project_economics(curve, scenario_fleet(scenario), finance).net_surplus_per_home_per_year_gbp
 
 
 # ---------------------------------------------------------------------------
@@ -448,17 +455,17 @@ def _make_interior_fleet_cr6(
 
     Interior guarantee (with _make_finance_interior_cr6 defaults):
       fleet_sc = n_homes × self_kwh = 5 × 2000 = 10,000 kWh
-      capex = 5 × (5.5×£2000 + £1000 + 5×£250) = 5 × £13,250 = £66,250
-      debt = 66250 × 0.25 = £16,562.50; single-year debt_svc ≈ £1,818/yr
+      capex = 5 × (5.606 kWp wired×£2000 + £1000 + 5×£250) = 5 × £13,461.98 = £67,309.92
+      debt = 67309.92 × 0.25 = £16,827.48; single-year debt_svc ≈ £1,848/yr
       (the loan runs 15 years)
       opex = 5 × £131 = £655/yr
-      project_economics (solar_challenge.finance) charges debt service only in
+      project_economics (solar_challenge.projection) charges debt service only in
       the 15 loan years but averages surplus over the 25-year asset life
       (ProjectEconomics.per_year_surplus_gbp, mean_fleet_surplus_per_year_gbp),
       so the effective annual cost is opex + debt_svc × 15/25
-      ≈ 655 + 1,818 × 15/25 ≈ £1,746/yr
-      required_revenue = 1746 + 50×5 ≈ £1,996/yr
-      r* = (1996 − 0) / (10000/100) ≈ 20p
+      ≈ 655 + 1,848 × 15/25 ≈ £1,764/yr
+      required_revenue = 1764 + 50×5 ≈ £2,014/yr
+      r* = (2014 − 0) / (10000/100) ≈ 20p
       retail=30p → interior: 0 < r* ≈ 20p < 30p ✓
 
     No-flex: no grid charging, export_revenue=0.
@@ -482,9 +489,9 @@ def _make_finance_interior_cr6(
     With n=5 homes, self=2000kWh:
       fleet_sc = 10,000 kWh
       Effective annual cost (surplus averaged over the 25-year asset life, loan
-      over 15 years) ≈ 655 + 1818 × 15/25 ≈ £1,746/yr
-      At r=0: surplus ≈ −1746/5 ≈ −349/home << floor=50
-      At r=retail=30p: surplus ≈ (30×10000/100−1746)/5 ≈ 251/home >> floor=50
+      over 15 years) ≈ 655 + 1848 × 15/25 ≈ £1,764/yr
+      At r=0: surplus ≈ −1764/5 ≈ −353/home << floor=50
+      At r=retail=30p: surplus ≈ (30×10000/100−1764)/5 ≈ 247/home >> floor=50
     ∴ interior ✓ (r* derived in _make_interior_fleet_cr6)
     """
     return _make_finance_cr6(
@@ -554,7 +561,7 @@ class TestStructuralInvariants:
             own_use_rate_pence_per_kwh=sol.own_use_rate_pence_per_kwh,
         )
         curve_solved = project_multi_year(scenario, finance_solved, simulate=simulate)
-        econ_solved = project_economics(curve_solved, scenario, finance_solved)
+        econ_solved = project_economics(curve_solved, scenario_fleet(scenario), finance_solved)
         assert econ_solved.net_surplus_per_home_per_year_gbp == pytest.approx(
             sol.net_surplus_per_home_per_year_gbp, abs=1e-6
         )
@@ -711,13 +718,13 @@ def _spreadsheet_economics_cr6(
     """[FIN]-assumption ProjectEconomics for ``scenario``: make_fin_spreadsheet_curve → project_economics.
 
     Physics-free and network-free.  Capex, debt and debt service depend on the
-    scenario's homes and ``finance`` alone, so callers that read only those do not
-    depend on the curve's revenue.
+    scenario's homes, ``finance`` and the curve's 5.5 kWp-a-home nameplate PV basis
+    alone, so callers that read only those do not depend on the curve's revenue.
     """
     curve = make_fin_spreadsheet_curve(
         n_homes=len(scenario.homes), asset_life_years=finance.asset_life_years
     )
-    return project_economics(curve, scenario, finance)
+    return project_economics(curve, scenario_fleet(scenario), finance)
 
 
 class TestThetaStaysGreen:
@@ -798,7 +805,7 @@ def _make_grid_charge_fleet_cr6(
         total_self_consumption_kwh = 2000 kWh/home  (B-style)
         total_demand_kwh           = 2000 + 800 = 2800 kWh/home
         total_grid_import_kwh      = 800 + 200 = 1000 kWh/home
-        _cbs_own_use_kwh           = 2800 − 1000 = 1800 kWh/home   (basis C)
+        demand − import            = 2800 − 1000 = 1800 kWh/home   (basis C)
         gap                        = 2000 − 1800 = 200 kWh/home     (= grid_charge)
     """
     return make_fleet_results_of(
@@ -816,7 +823,7 @@ def _make_grid_charge_fleet_cr6(
 
 
 # ---------------------------------------------------------------------------
-# Task-84 RED / GREEN: TestCbsOwnUseKwhHelper — unit test for _cbs_own_use_kwh
+# Task-84: basis C (demand − import) on grid-charging fleets, and basis_c_own_use_kwh
 # ---------------------------------------------------------------------------
 
 
@@ -824,8 +831,8 @@ class TestArbitrageBasisCReconciliation:
     """Basis-C reconciliation for grid-charging (arbitrage) fleets (task-84 step-3/4).
 
     Verifies three properties on a fleet where grid_charge_kwh > 0:
-    (c) _cbs_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
-    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh)
+    (c) basis_c_own_use_kwh(s) < s.total_self_consumption_kwh (B-vs-C gap exposed)
+    (a) project_multi_year().points[0].fleet_billed_own_use_kwh == Σ(demand − import)
         AND strictly < sum(total_self_consumption_kwh)
     Plus a flat/no-grid-charge control showing no gap.
 
@@ -855,10 +862,10 @@ class TestArbitrageBasisCReconciliation:
         return scenario, finance, fr, summaries
 
     def test_c_helper_gap_on_grid_charge_homes(self) -> None:
-        """(c) For each home: _cbs_own_use_kwh(s) < total_sc AND == demand - import."""
+        """(c) For each home: basis_c_own_use_kwh(s) < total_sc AND == demand - import."""
         _, _, _, summaries = self._build_grid_charge()
         for s in summaries:
-            basis_c = _cbs_own_use_kwh(s)
+            basis_c = basis_c_own_use_kwh(s)
             # Basis C must be strictly less than B-style total_self_consumption_kwh
             assert basis_c < s.total_self_consumption_kwh, (
                 f"Expected basis-C {basis_c:.1f} < sc {s.total_self_consumption_kwh:.1f}"
@@ -869,7 +876,7 @@ class TestArbitrageBasisCReconciliation:
             )
 
     def test_a_fleet_billed_own_use_is_basis_c(self) -> None:
-        """(a) project_multi_year fleet_billed_own_use_kwh == sum(_cbs_own_use_kwh) < sum(total_sc).
+        """(a) project_multi_year fleet_billed_own_use_kwh == Σ(demand − import) < sum(total_sc).
 
         RED until step-4: before the fix _simulate_age uses total_self_consumption_kwh.
         """
@@ -879,7 +886,7 @@ class TestArbitrageBasisCReconciliation:
         curve = project_multi_year(scenario, finance, simulate=simulate)
         year0 = curve.points[0]
 
-        expected_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        expected_basis_c = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
         b_style_sum = sum(s.total_self_consumption_kwh for s in summaries)
 
         # (a) fleet_billed_own_use_kwh must equal the basis-C sum (not B-style)
@@ -892,12 +899,12 @@ class TestArbitrageBasisCReconciliation:
         assert year0.fleet_billed_own_use_kwh < b_style_sum
 
     def test_flat_control_no_gap(self) -> None:
-        """Flat-rate control: _cbs_own_use_kwh == total_sc when grid_charge==0."""
+        """Flat-rate control: basis_c_own_use_kwh == total_sc when grid_charge==0."""
         # Use the existing flat-rate builder
         flat_sr = make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
         s = calculate_summary(flat_sr)
         # No grid charging → demand - import = sc + import - import = sc
-        assert _cbs_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
+        assert basis_c_own_use_kwh(s) == pytest.approx(s.total_self_consumption_kwh, rel=1e-9)
 
     def _build_grid_charge_interior(self) -> tuple:  # type: ignore[type-arg]
         """Return (scenario, finance, fr, summaries) for the interior grid-charging fleet.
@@ -907,7 +914,7 @@ class TestArbitrageBasisCReconciliation:
         Debt service is charged in the 15 loan years but averaged over the 25-year
         asset life (see _make_interior_fleet_cr6), so
         r* = (floor×n + opex + debt_svc × 15/25) / (fleet_sc/100)
-           ≈ (135 + 655 + 1,818 × 15/25) / 130 ≈ 14.5p < retail = 30p
+           ≈ (135 + 655 + 1,848 × 15/25) / 130 ≈ 14.6p < retail = 30p
         → binding='floor', feasible=True.
         """
         n_homes = 5
@@ -963,15 +970,14 @@ class TestArbitrageBasisCReconciliation:
 
         # Build bill distribution at the solved rate
         finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
-        sim_days = summaries[0].simulation_days
-        dist = bill_distribution(summaries, finance_solved, sim_days)
+        dist = bill_distribution(summaries, finance_solved)
         rep_bill = dist.representative
 
         # Find the summary that is the representative (median-outlay home)
         # bill_distribution selects by median total_outlay; all homes are identical
         # so any summary will do; use summaries[0].
         rep_summary = summaries[0]
-        basis_c_kwh = _cbs_own_use_kwh(rep_summary)
+        basis_c_kwh = rep_summary.total_demand_kwh - rep_summary.total_grid_import_kwh
         b_style_kwh = rep_summary.total_self_consumption_kwh
 
         # After step-6: own_use_payment == rate × basis_c / 100
@@ -1025,7 +1031,7 @@ class TestArbitrageBasisCReconciliation:
         sol = solve_cost_recovery_rate(scenario, finance, simulate=simulate)
         r_basis_c = sol.own_use_rate_pence_per_kwh
 
-        fleet_sc_basis_c = sum(_cbs_own_use_kwh(s) for s in summaries)
+        fleet_sc_basis_c = sum(s.total_demand_kwh - s.total_grid_import_kwh for s in summaries)
         fleet_sc_b_style = sum(s.total_self_consumption_kwh for s in summaries)
 
         # Floor binding: r × fleet_sc/100 = recovery_target (constant).
@@ -1040,8 +1046,8 @@ class TestArbitrageBasisCReconciliation:
         )
 
 
-class TestCbsOwnUseKwhHelper:
-    """Unit tests for the module-level helper _cbs_own_use_kwh (basis C).
+class TestBasisCOwnUseKwh:
+    """Unit tests for finance.basis_c_own_use_kwh (basis C).
 
     Basis C: own_use_kwh = max(total_demand_kwh − total_grid_import_kwh, 0.0)
     Tests cover the normal case and the clamp-to-zero case.
@@ -1058,7 +1064,7 @@ class TestCbsOwnUseKwhHelper:
         # total_demand = sc + import = 1800 + 1600 = 3400
         # total_grid_import = 1600
         # basis C = 3400 - 1600 = 1800
-        assert _cbs_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
+        assert basis_c_own_use_kwh(summary) == pytest.approx(1800.0, rel=1e-9)
 
     def test_clamp_to_zero(self) -> None:
         """Degenerate: import > demand → basis C clamped to 0.0 with a UserWarning."""
@@ -1073,7 +1079,7 @@ class TestCbsOwnUseKwhHelper:
         assert summary.total_grid_import_kwh == pytest.approx(900.0, rel=1e-9)
         # The clamp must emit a UserWarning (degenerate case is now observable, not silent)
         with pytest.warns(UserWarning, match="Basis-C own-use is negative"):
-            result = _cbs_own_use_kwh(summary)
+            result = basis_c_own_use_kwh(summary)
         assert result == pytest.approx(0.0, abs=1e-9)
 
 
@@ -1087,10 +1093,16 @@ class TestPhysicsColumnPremises:
     """
 
     def test_grant_covers_fleet_capex_so_the_fleet_has_no_debt(self) -> None:
+        """The physics fleet is priced on the PV DC its homes wire, the basis its physics column's projection carries."""
         scenario = make_physics_column_scenario()
         finance = _make_finance_fin_cr6()
+        fleet = scenario_fleet(scenario)
+        curve = dataclasses.replace(
+            make_fin_spreadsheet_curve(n_homes=2, asset_life_years=25),
+            fleet_pv_dc_kw=fleet_wired_dc_kw(fleet.homes),
+        )
 
-        econ = _spreadsheet_economics_cr6(scenario, finance)
+        econ = project_economics(curve, fleet, finance)
 
         assert econ.total_capex_gbp <= finance.grant_gbp, (
             f"grant £{finance.grant_gbp:,.0f} no longer covers the physics fleet's "

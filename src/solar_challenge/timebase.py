@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; and a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's."""
+"""How long simulated time lasts: the minutes in an hour and in a day; a duration in minutes, which is positive and finite; each timestamp's minute of the day on its own wall clock; a simulated window: the calendar days a series covers, how long each of its rows lasts, its clock's zone, its rows over its local calendar days, and the one rule that turns its totals into a year's; the default window's first and last days; and the first day of an n-day window."""
 
 import calendar
 import itertools
@@ -23,6 +23,15 @@ MINUTES_PER_DAY: int = 24 * MINUTES_PER_HOUR
 ONE_MINUTE: timedelta = timedelta(minutes=1)
 """One minute, as the standard library's timedelta. A simulated run's window has this cadence, and no setting changes it (ruling L9, docs/prds/load-composition-and-calendar-days.md)."""
 
+DEFAULT_FIRST_DAY: date = date(2024, 1, 1)
+"""The first day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+DEFAULT_LAST_DAY: date = date(2024, 12, 31)
+"""The last day a scenario simulates when neither its file nor a flag gives one: D11's default tier (ruling L42, docs/prds/one-scenario-reader.md)."""
+
+SHORT_WINDOW_START: date = date(2024, 6, 1)
+"""The first day of an n-day window: home quick's --days, and a dashboard request's days short of the full year, run that many days from it (docs/prds/dashboard-limits-and-distribution-table.md §4.2)."""
+
 
 def require_valid_duration(minutes: float, quantity: str) -> None:
     """Refuse a duration of *minutes* unless it is positive and finite, naming it *quantity* in the refusal."""
@@ -43,6 +52,12 @@ def covered_days(first_day: date, last_day: date) -> int:
     return last_day.toordinal() - first_day.toordinal() + 1
 
 
+def minutes_of_day(index: pd.DatetimeIndex) -> np.ndarray:
+    """Each timestamp's minute on its own wall clock, 0 to 1439: its hour times MINUTES_PER_HOUR plus its minute, its seconds dropped."""
+    minutes: np.ndarray = (index.hour * MINUTES_PER_HOUR + index.minute).to_numpy()
+    return minutes
+
+
 @dataclass(frozen=True, eq=False)
 class LocalDay:
     """One calendar date of a window on the window's clock: the window's rows that start on that date, from the date's first instant, at the window's cadence.
@@ -55,8 +70,7 @@ class LocalDay:
 
     def minute_of_day(self) -> np.ndarray:
         """Each row's minute on the local wall clock, 0 to 1439: a day the clocks go back repeats the minutes of the hour they repeat, and a day they go forward lacks those of the hour they skip."""
-        minutes: np.ndarray = (self.rows.hour * MINUTES_PER_HOUR + self.rows.minute).to_numpy()
-        return minutes
+        return minutes_of_day(self.rows)
 
     def instant(self, minute_of_day: int) -> pd.Timestamp:
         """The first row of this date whose local clock reads minute_of_day or later.
@@ -91,9 +105,9 @@ class SimulationWindow:
 
     def __post_init__(self) -> None:
         """Refuse a first_day or last_day that is not exactly a date, such as a pd.Timestamp or a datetime, and a cadence that is not exactly a timedelta, such as a pd.Timedelta, naming the field and the value; then a last_day before first_day, through covered_days, the one home of that rule, which names both days; then a cadence that is not positive, naming it."""
-        _require_exactly(date, "first_day", self.first_day)
-        _require_exactly(date, "last_day", self.last_day)
-        _require_exactly(timedelta, "cadence", self.cadence)
+        _require_window_field_type(date, "first_day", self.first_day)
+        _require_window_field_type(date, "last_day", self.last_day)
+        _require_window_field_type(timedelta, "cadence", self.cadence)
         covered_days(self.first_day, self.last_day)
         if self.cadence <= timedelta(0):
             raise ValueError(
@@ -222,8 +236,8 @@ class SimulationWindow:
         return read_as_dst.where(read_as_dst <= read_as_standard, read_as_standard)
 
 
-def _require_exactly(kind: type, field: str, value: object) -> None:
-    """Refuse value, SimulationWindow's field, unless its type is kind itself, never a subclass of it, naming field and value."""
+def _require_window_field_type(kind: type, field: str, value: object) -> None:
+    """Refuse value, the SimulationWindow field named field, unless its type is exactly kind, never a subclass of it, naming field and value."""
     if type(value) is not kind:
         raise ValueError(
             f"SimulationWindow's {field} is exactly the standard library's {kind.__name__}, "

@@ -11,10 +11,9 @@ One test checks that every slow test runs in some LANE_JOBS job, unless
 SLOW_TESTS_NO_LANE_JOB_RUNS lists it with the live service it needs.
 """
 
-import functools
 import os
-import shlex
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto
 from pathlib import Path, PurePosixPath
@@ -23,9 +22,7 @@ import pytest
 
 from tests._collect_only import Collection, requires_uv
 from tests._command_runner import describe_outcome, run_command
-from tests._computed_once import ComputedOnce
 from tests._lane_collection import (
-    collect_lane_job,
     default_collection_node_ids_under,
     every_test_matching,
     suite_node_ids_matching,
@@ -38,6 +35,7 @@ from tests._orchestrator_config import (
     lane_jobs_declaring_an_outage_probe,
     lane_outage_probe,
     offline_lane_jobs,
+    pytest_arguments,
 )
 from tests._uv_env import SharedUvEnvironments
 
@@ -226,18 +224,18 @@ def test_the_lane_runs_one_enabled_job_of_its_name(job: LaneJob, project_root: P
 
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_the_job_runs_its_suite_serially(job: LaneJob, project_root: Path) -> None:
-    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts ask for."""
-    command = lane_job_steps(project_root, job.name).suite.command
-    argv = shlex.split(command)
-    assert "pytest" in argv, f"the {job.name!r} lane job {command!r} runs no pytest"
-    pytest_arguments = argv[argv.index("pytest") + 1 :]
+    """The job's suite step passes pytest `-n 0`, so its suite runs in pytest's own process whatever workers pyproject's addopts or PYTEST_ADDOPTS ask for."""
+    suite = lane_job_steps(project_root, job.name).suite
+    arguments = pytest_arguments(suite)
 
-    assert ("-n", "0") in zip(pytest_arguments, pytest_arguments[1:]), (
-        f"the {job.name!r} lane job {command!r} does not pass pytest `-n 0`, so pyproject's addopts run its suite on one "
-        "pytest-xdist worker per core: each worker repeats the module-scoped work its suite does once, which asks a "
-        "live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, each a "
-        "verify over every core; and the e2e tests, which share one live server in session order, are split across "
-        "workers; pass `-n 0` right after `pytest`"
+    assert ("-n", "0") in zip(arguments, arguments[1:]), (
+        f"the {job.name!r} lane job {suite.command!r} does not pass pytest `-n 0`, so its suite may run on pytest-xdist "
+        "workers (the count the command names, or one per core should addopts or PYTEST_ADDOPTS pass `-n auto`, unless a "
+        "conftest resolves that otherwise): each worker repeats the module-scoped work its suite does once, which "
+        "asks a live service or builds (pvgis' TMY, css-build's npm ci); the interpreter-matrix cases run at once, "
+        "each a verify over every core; and each e2e worker starts its own live server and Chromium, whose pages, on a "
+        "loaded host, starve one another past their Page.goto and expect waits "
+        "(docs/orchestrator-config.md §8); pass `-n 0` right after `pytest`"
     )
 
 
@@ -254,17 +252,11 @@ def test_every_offline_lane_job_has_a_row_in_lane_jobs(project_root: Path) -> No
     )
 
 
-@pytest.fixture(scope="module")
-def lane_job_collection(shared_uv_probe_environments: SharedUvEnvironments) -> ComputedOnce[Collection]:
-    """Each lane job collected as the lane runs it, by the first test that asks, and shared by the rest."""
-    return ComputedOnce(functools.partial(collect_lane_job, env_for=shared_uv_probe_environments.for_command))
-
-
 @requires_uv
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", _checked_for(LaneContract.COLLECTS_ONLY_ITS_SUITE), ids=lambda job: job.name)
 def test_the_job_collects_its_suite_and_nothing_else(
-    job: LaneJob, project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the job collects at least one test, every one in its suite.
 
@@ -292,7 +284,7 @@ def test_the_job_collects_its_suite_and_nothing_else(
 @pytest.mark.usefixtures("callers_uv_lock_mode_is_frozen")
 @pytest.mark.parametrize("job", LANE_JOBS, ids=lambda job: job.name)
 def test_no_node_id_the_job_collects_holds_whitespace(
-    job: LaneJob, project_root: Path, lane_job_collection: ComputedOnce[Collection]
+    job: LaneJob, project_root: Path, lane_job_collection: Callable[[Path, str], Collection]
 ) -> None:
     """Run as the lane runs it, the job collects no node id holding whitespace, so the lane can name each failing test."""
     collection = lane_job_collection(project_root, job.name)
@@ -311,7 +303,7 @@ def test_no_node_id_the_job_collects_holds_whitespace(
 def test_every_slow_test_runs_in_a_lane_job_or_is_listed_as_one_no_lane_job_runs(
     project_root: Path,
     shared_uv_probe_environments: SharedUvEnvironments,
-    lane_job_collection: ComputedOnce[Collection],
+    lane_job_collection: Callable[[Path, str], Collection],
 ) -> None:
     """Every slow test runs in some LANE_JOBS job, as the lane runs it, unless SLOW_TESTS_NO_LANE_JOB_RUNS lists it.
 

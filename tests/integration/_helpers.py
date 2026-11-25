@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from solar_challenge.config import (
     ScenarioConfig,
-    SimulationPeriod,
     load_config,
     load_fleet_config,
-    parse_finance_config,
 )
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.scenario_blocks import parse_finance_config
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, SimulationWindow
 from tests._repository_paths import SCENARIOS_DIR
 
 SCENARIO = SCENARIOS_DIR / "bristol-phase1-flex.yaml"
@@ -39,7 +39,7 @@ def board_econ_scenario() -> tuple[ScenarioConfig, FinanceConfig]:
     finance = parse_finance_config(cfg.get("finance"))
     assert finance is not None, f"the board scenario {SCENARIO} has no finance block"
     fleet = load_fleet_config(SCENARIO)
-    period = SimulationPeriod(start_date="2024-01-01", end_date="2024-12-31")
+    period = SimulationWindow(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, fleet.homes[0].location.timezone)
     scenario = ScenarioConfig(
         name="Board-GridServices-Test",
         period=period,

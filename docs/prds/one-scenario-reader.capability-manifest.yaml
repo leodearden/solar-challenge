@@ -64,7 +64,7 @@ tasks:
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "\"ScenarioConfig\": \"dataclass\\[eq, frozen\\]"
+          pattern: "\"ScenarioConfig\": \"dataclass\\[eq, frozen, match_args\\]"
           paths: ["tests/unit/test_public_api_surface.py"]
           expect: present
       - name: "construction-refusals"

@@ -31,6 +31,12 @@ __all__: list[str] = [
     "ScenarioConfig",      # config.py — arg to solve_cost_recovery_rate
     "FleetConfig",         # fleet.py  — in solve_cost_recovery_rate's simulate signature
     "FleetResults",        # fleet.py  — return type of simulate
+    # --- fleet execution (fleet.py) ---
+    "FleetRunner",
+    "FleetSimulator",
+    "HomeSimulator",
+    "FleetSimulate",
+    "HomesDone",
     # --- dispatch (dispatch.py) ---
     "DispatchStrategy",
     "DispatchDecision",
@@ -47,7 +53,6 @@ __all__: list[str] = [
     # --- flow (flow.py) ---
     "EnergyFlowResult",
     "simulate_timestep",
-    "simulate_timestep_tou",
     "validate_energy_balance",
     "calculate_self_consumption",
     "calculate_excess_pv",
@@ -102,6 +107,8 @@ __all__: list[str] = [
     "SEASONAL_FACTORS",
     # --- location (location.py) — required by pv/weather call signatures ---
     "Location",
+    # --- errors (errors.py) ---
+    "ConfigurationError",
 ]
 
 # ---------------------------------------------------------------------------
@@ -122,6 +129,12 @@ _SYMBOL_MODULE: dict[str, str] = {
     "ScenarioConfig": "config",
     "FleetConfig": "fleet",
     "FleetResults": "fleet",
+    # fleet execution
+    "FleetRunner": "fleet",
+    "FleetSimulator": "fleet",
+    "HomeSimulator": "fleet",
+    "FleetSimulate": "fleet",
+    "HomesDone": "fleet",
     # dispatch
     "DispatchStrategy": "dispatch",
     "DispatchDecision": "dispatch",
@@ -138,7 +151,6 @@ _SYMBOL_MODULE: dict[str, str] = {
     # flow
     "EnergyFlowResult": "flow",
     "simulate_timestep": "flow",
-    "simulate_timestep_tou": "flow",
     "validate_energy_balance": "flow",
     "calculate_self_consumption": "flow",
     "calculate_excess_pv": "flow",
@@ -193,6 +205,8 @@ _SYMBOL_MODULE: dict[str, str] = {
     "SEASONAL_FACTORS": "load",
     # location
     "Location": "location",
+    # errors
+    "ConfigurationError": "errors",
 }
 
 # ---------------------------------------------------------------------------
@@ -279,6 +293,12 @@ if TYPE_CHECKING:
     from solar_challenge.config import ScenarioConfig as ScenarioConfig
     from solar_challenge.fleet import FleetConfig as FleetConfig
     from solar_challenge.fleet import FleetResults as FleetResults
+    # fleet execution
+    from solar_challenge.fleet import FleetRunner as FleetRunner
+    from solar_challenge.fleet import FleetSimulator as FleetSimulator
+    from solar_challenge.fleet import HomeSimulator as HomeSimulator
+    from solar_challenge.fleet import FleetSimulate as FleetSimulate
+    from solar_challenge.fleet import HomesDone as HomesDone
     # dispatch
     from solar_challenge.dispatch import DispatchStrategy as DispatchStrategy
     from solar_challenge.dispatch import DispatchDecision as DispatchDecision
@@ -295,7 +315,6 @@ if TYPE_CHECKING:
     # flow
     from solar_challenge.flow import EnergyFlowResult as EnergyFlowResult
     from solar_challenge.flow import simulate_timestep as simulate_timestep
-    from solar_challenge.flow import simulate_timestep_tou as simulate_timestep_tou
     from solar_challenge.flow import validate_energy_balance as validate_energy_balance
     from solar_challenge.flow import calculate_self_consumption as calculate_self_consumption
     from solar_challenge.flow import calculate_excess_pv as calculate_excess_pv
@@ -350,3 +369,5 @@ if TYPE_CHECKING:
     from solar_challenge.load import SEASONAL_FACTORS as SEASONAL_FACTORS
     # location
     from solar_challenge.location import Location as Location
+    # errors
+    from solar_challenge.errors import ConfigurationError as ConfigurationError

@@ -5,25 +5,29 @@ import math
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Union
 
 import pandas as pd
 
 from solar_challenge.home import (
+    RunPricing,
     SimulationResults,
     calculate_summary,
     grid_dependency_ratio,
     heat_pump_load_ratio,
     self_consumption_ratio,
 )
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
+from solar_challenge.grid_charge_forecast import GRID_CHARGE_FORECAST_LABELS
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.community import CommunityResults
-    from solar_challenge.finance import BillDistribution, CostRecoverySolution, ProjectEconomics
+    from solar_challenge.finance import BillDistribution, CostRecoverySolution
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
     from solar_challenge.optimize import RankedSweep, SensitivityPanel
+    from solar_challenge.projection import ProjectEconomics
 
 
 _WINTER_MONTHS = (12, 1, 2)
@@ -42,15 +46,32 @@ def _days_lasted(row_count: int, cadence: timedelta) -> float:
     return row_count * cadence / timedelta(days=1)
 
 
-def _extrapolation_notice(window: Optional[SimulationWindow]) -> str:
-    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* is None or runs from 1 January to 31 December."""
-    if window is None or not window.extrapolated:
+def _extrapolation_notice(window: SimulationWindow) -> str:
+    """The paragraph, ending in a blank line, that tells the board a report's yearly figures are extrapolated from *window*; empty when *window* runs from 1 January to 31 December."""
+    if not window.extrapolated:
         return ""
     return (
         f"*Yearly figures are extrapolated ×{window.annualisation_scale:.3f} from a "
         f"{window.days}-day window ({window.first_day.isoformat()} to {window.last_day.isoformat()}), "
         "not whole calendar years.*\n\n"
     )
+
+
+def _grid_charge_forecast_notice(forecasts: Sequence[GridChargeForecast]) -> str:
+    """The paragraph, ending in a blank line, that tells the board which forecasts sized a report's battery grid charging, each with what it is; empty when nothing grid-charged."""
+    if not forecasts:
+        return ""
+    sized_by = "; and by ".join(
+        f"the {forecast} forecast: {GRID_CHARGE_FORECAST_LABELS[forecast]}" for forecast in forecasts
+    )
+    return f"*Battery grid charging in cheap periods was sized by {sized_by}.*\n\n"
+
+
+def _seg_rate_row(pricing: RunPricing | None) -> str:
+    """The Financial table's SEG Rate row, ending in a newline, naming the SEG rate that priced a run's export; empty when no SEG priced it."""
+    if pricing is None or pricing.seg_rate_pence_per_kwh is None:
+        return ""
+    return f"| SEG Rate | {pricing.seg_rate_pence_per_kwh:.1f} p/kWh |\n"
 
 
 def export_to_csv(
@@ -77,26 +98,27 @@ def export_to_csv(
 def generate_summary_report(
     results: SimulationResults,
     home_name: Optional[str] = None,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
 ) -> str:
     """Generate a text summary report of simulation results.
 
     Args:
         results: Simulation results
         home_name: Optional name for the home
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, a SEG Revenue section is included in the report.
 
     Returns:
-        Formatted markdown text report
+        Formatted markdown text report. When a forecast sized the run's grid
+        charge, it opens, under its title, with a notice naming the forecast.
+        When a SEG rate priced the run's export, its Financial table names
+        that rate, after the Grid Export Revenue it earned.
     """
-    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+    summary = calculate_summary(results)
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
+    notice = _grid_charge_forecast_notice(distinct_grid_charge_forecasts([summary.grid_charge_forecast]))
 
     report = f"""{title}
 
-## Simulation Period
+{notice}## Simulation Period
 - Duration: {summary.simulation_days} days
 - Start: {results.generation.index[0]}
 - End: {results.generation.index[-1]}
@@ -130,7 +152,7 @@ def generate_summary_report(
 
         # Add seasonal breakdown if we have heat pump load data
         if results.heat_pump_load is not None:
-            amounts = results.per_minute_amounts()
+            amounts = results.per_step_amounts()
             winter_totals = _in_months(amounts, _WINTER_MONTHS).sum()
             summer_totals = _in_months(amounts, _SUMMER_MONTHS).sum()
             winter_hp_load = _in_months(results.heat_pump_load, _WINTER_MONTHS)
@@ -196,17 +218,7 @@ def generate_summary_report(
 |--------|-------|
 | Grid Import Cost | {summary.total_import_cost_gbp:.2f} |
 | Grid Export Revenue | {summary.total_export_revenue_gbp:.2f} |
-| Net Cost | {summary.net_cost_gbp:.2f} |
-"""
-
-    if summary.seg_revenue_gbp is not None:
-        report += f"""
-## SEG Revenue
-| Metric | Value |
-|--------|-------|
-| Tariff Rate | {seg_tariff_pence_per_kwh:.1f} p/kWh |
-| Total Export | {summary.total_grid_export_kwh:.1f} kWh |
-| SEG Revenue | £{summary.seg_revenue_gbp:.2f} |
+{_seg_rate_row(summary.pricing)}| Net Cost | {summary.net_cost_gbp:.2f} |
 """
 
     return report
@@ -236,7 +248,7 @@ class SeasonalMetrics:
 
 
 def _season_summary(amounts: pd.DataFrame, months: tuple[int, ...]) -> SeasonSummary:
-    """The summary of the rows in *months* of *amounts*, a run's per_minute_amounts()."""
+    """The summary of the rows in *months* of *amounts*, a run's per_step_amounts()."""
     totals = _in_months(amounts, months).sum()
     return SeasonSummary(
         generation_kwh=float(totals["generation_kwh"]),
@@ -258,7 +270,7 @@ def calculate_seasonal_metrics(results: SimulationResults) -> SeasonalMetrics:
     counts battery discharge as calculate_summary's does. The ratios are calculate_summary's,
     of the season's totals. A season with none of the run's rows has 0.0 for every figure.
     """
-    amounts = results.per_minute_amounts()
+    amounts = results.per_step_amounts()
     return SeasonalMetrics(
         winter=_season_summary(amounts, _WINTER_MONTHS),
         summer=_season_summary(amounts, _SUMMER_MONTHS),
@@ -272,7 +284,7 @@ def _aggregate_by_period(results: SimulationResults, freq: str) -> pd.DataFrame:
         results: Simulation results with 1-minute resolution
         freq: pandas offset alias of the period, e.g. "D" or "ME"
     """
-    totals = results.per_minute_amounts().resample(freq).sum()
+    totals = results.per_step_amounts().resample(freq).sum()
     peaks = pd.DataFrame(
         {"peak_generation_kw": results.generation, "peak_demand_kw": results.demand}
     ).resample(freq).max()
@@ -394,13 +406,20 @@ def generate_community_report(
             append as a separate section.
 
     Returns:
-        Formatted markdown report string.
+        Formatted markdown report string. When forecasts sized the grid charge
+        of the fleet's homes, whose grid flows it nets, it opens, under its
+        title, with a notice naming each, and what it is.
     """
     m = compute_community_metrics(community_results)
+    notice = _grid_charge_forecast_notice(
+        distinct_grid_charge_forecasts(
+            home.grid_charge_forecast for home in community_results.fleet_results.per_home_results
+        )
+    )
 
     report = f"""# Community Energy Sharing Report
 
-## Sharing Mode
+{notice}## Sharing Mode
 {m.sharing_mode}
 
 ## Community vs Unshared Grid Flows (kWh)
@@ -471,19 +490,21 @@ def generate_finance_report(
 
     When ``bill_physics.annualised_from`` is not whole calendar years, the
     report opens, under its title, with a notice that its yearly figures are
-    extrapolated from that window.
+    extrapolated from that window. When forecasts sized the homes' grid charge
+    (``bill_physics.grid_charge_forecasts``), a notice naming each, and what it
+    is, follows.
 
     Args:
         bill_physics: BillDistribution from the physics self-consumption path.
         bill_spreadsheet: Optional BillDistribution from the spreadsheet
             (override) path; when supplied both are rendered side by side.
         scenario_name: Optional scenario label for the report title.
-        economics: Optional :class:`~solar_challenge.finance.ProjectEconomics`
-            from :func:`~solar_challenge.finance.project_economics`; when
+        economics: Optional :class:`~solar_challenge.projection.ProjectEconomics`
+            from :func:`~solar_challenge.projection.project_economics`; when
             provided, a ``## Project Economics`` block is appended after the
             bill block; ``None`` (default) omits it.
         cost_recovery: Optional :class:`~solar_challenge.finance.CostRecoverySolution`
-            from :func:`~solar_challenge.finance.solve_cost_recovery_rate`; when
+            from :func:`~solar_challenge.projection.solve_cost_recovery_rate`; when
             provided, a ``## Cost-Recovery Analysis`` block is appended;
             ``None`` (default) omits it.
         flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`
@@ -518,7 +539,9 @@ def generate_finance_report(
     )
 
     rep = bill_physics.representative
-    notice = _extrapolation_notice(bill_physics.annualised_from)
+    notice = _extrapolation_notice(bill_physics.annualised_from) + _grid_charge_forecast_notice(
+        bill_physics.grid_charge_forecasts
+    )
 
     if bill_spreadsheet is None:
         # ---- Physics-only path (own-use payment + total outlay; no SEG) --
@@ -732,9 +755,10 @@ def generate_config_ranking_report(
       RECOMMENDATION.  Infeasible configs (``ranked.infeasible``) appear in a
       separate section (dims only — economics are not retained for infeasible
       configs; see :class:`~solar_challenge.optimize.RankedSweep`).
-    - **Table 2 — Fixed-15p Trade-Off**: one row per feasible config →
-      baseline outlay and CBS surplus at the fixed 15 p/kWh own-use rate, plus
-      a Pareto flag.  Infeasible configs are omitted from this table because
+    - **Table 2 — Configured-Rate Trade-Off**: one row per feasible config →
+      the configured own-use rate it was priced at, the baseline outlay and
+      CBS surplus at that rate, and a Pareto flag.  Infeasible configs are
+      omitted from this table because
       :class:`~solar_challenge.optimize.RankedSweep` retains them only as
       :class:`~solar_challenge.optimize.ConfigPoint` objects without baseline
       economics; they remain visible in Table 1's infeasible list.
@@ -744,7 +768,9 @@ def generate_config_ranking_report(
     When the feasible configs' bills are annualised from a window that is not
     whole calendar years (``results[0].solution.outlay.annualised_from``), the
     report opens, under its first heading, with a notice that its yearly figures
-    are extrapolated from that window.
+    are extrapolated from that window. When forecasts sized the homes' grid
+    charge (``results[0].solution.outlay.grid_charge_forecasts``), a notice
+    naming each, and what it is, follows.
 
     Args:
         ranked: Aggregated sweep output from :func:`~solar_challenge.optimize.run_sweep`.
@@ -761,7 +787,9 @@ def generate_config_ranking_report(
     if not ranked.results:
         report += "*No feasible configurations found.*\n"
     else:
-        report += _extrapolation_notice(ranked.results[0].solution.outlay.annualised_from)
+        outlay = ranked.results[0].solution.outlay
+        report += _extrapolation_notice(outlay.annualised_from)
+        report += _grid_charge_forecast_notice(outlay.grid_charge_forecasts)
         report += (
             "| Config | Solved Rate (p/kWh) | Rep Outlay (£) | "
             "Min/Mean/Median/Max (£) | CBS Surplus (£/home/yr) | "
@@ -804,25 +832,30 @@ def generate_config_ranking_report(
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
             report += f"| {label} | {_BINDING_LABELS['infeasible_above_retail']} |\n"
 
-    # ---- Table 2: FIXED-15p TRADE-OFF ----------------------------------------
+    # ---- Table 2: CONFIGURED-RATE TRADE-OFF ----------------------------------
     # Infeasible configs are omitted from Table 2 because RankedSweep retains them
     # only as ConfigPoints without baseline_outlay/baseline_surplus economics; they
     # remain visible in Table 1's infeasible list above.
-    report += "\n## Fixed-15p Trade-Off\n\n"
+    report += "\n## Configured-Rate Trade-Off\n\n"
     if not ranked.results:
         report += "*No feasible configurations to compare.*\n"
     else:
         pareto_set = set(ranked.pareto_baseline)
         report += (
-            "| Config | Baseline Outlay (£/yr) | Baseline CBS Surplus (£/home/yr) | Pareto |\n"
+            "| Config | Configured Rate (p/kWh) | Baseline Outlay (£/yr) | "
+            "Baseline CBS Surplus (£/home/yr) | Pareto |\n"
         )
-        report += "|--------|----------------------:|--------------------------------:|--------|\n"
+        report += (
+            "|--------|------------------------:|----------------------:|"
+            "--------------------------------:|--------|\n"
+        )
         for cr in ranked.results:
             cp = cr.config
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
             pareto_flag = "✔ Pareto" if cp in pareto_set else "—"
             report += (
                 f"| {label} "
+                f"| {cr.baseline_own_use_rate_pence_per_kwh:.2f} p/kWh "
                 f"| £{cr.baseline_outlay_gbp:.2f} "
                 f"| £{cr.baseline_surplus_per_home_gbp:.2f} "
                 f"| {pareto_flag} |\n"

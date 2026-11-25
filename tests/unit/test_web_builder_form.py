@@ -2,15 +2,21 @@
 """Tests for solar_challenge.web.builder_form, called directly with form values."""
 
 import math
+import re
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
 pytest.importorskip("flask")
 
+from solar_challenge.config import parse_scenario, period_window
+from solar_challenge.errors import ConfigurationError
+from solar_challenge.scenario_blocks import parse_seg_rate
 from solar_challenge.web.builder_form import builder_form_errors, scenario_from_builder_form
-from solar_challenge.web.fleet_components import FLEET_COMPONENTS, FleetComponent
-from solar_challenge.web.fleet_config import MAX_FLEET_HOMES, form_to_fleet_distribution_config
+from solar_challenge.web.fleet_components import FLEET_COMPONENTS, MAX_FLEET_HOMES, ComponentLimits
+from solar_challenge.web.fleet_config import form_to_fleet_distribution_config
 from solar_challenge.web.request_boundary import NotAJsonObject
 from tests._fleet_form import valid_distribution_form
 from tests._unusable_numbers import UNUSABLE_NUMBERS
@@ -291,24 +297,48 @@ class TestBuilderFormErrors:
     @pytest.mark.parametrize(
         "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
     )
-    def test_a_fixed_value_beyond_its_components_fixed_range_is_refused_naming_the_range_and_the_value(
-        self, component: FleetComponent, beyond: str
+    def test_a_fixed_value_beyond_its_components_value_range_is_refused_naming_the_range_and_the_value(
+        self, component: ComponentLimits, beyond: str
     ) -> None:
-        """The range's refusal is one of the form's reasons: a scenario reader may refuse the value as well."""
-        low, high = component.fixed_range
-        value = math.nextafter(low, -math.inf) if beyond == "below" else math.nextafter(high, math.inf)
+        """The one reason is the homes check's, for home 1, whose value is the float the loader holds.
+
+        A battery below 0 never becomes a home: the loader's presence rule refuses a negative
+        capacity first, naming the same path.
+        """
+        value_range = component.value_range
+        value = (
+            math.nextafter(value_range.low, -math.inf)
+            if beyond == "below"
+            else math.nextafter(value_range.high, math.inf)
+        )
+        path = f"{component.key}.{component.grammar_key}"
+        reason = (
+            f"fleet_distribution: {path} must be at least 0, got {value!r}"
+            if component.key == "battery" and beyond == "below"
+            else f"{path} must be {value_range} for every home, got {value!r} for home 1"
+        )
         assert builder_form_errors(_ACCEPTED_FORM) == [], "premise: the unchanged form is accepted"
-        errors = builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value})
-        assert f"{component.heading} must be between {low:g} and {high:g}, got {value!r}." in errors, errors
+        assert builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value}) == [reason]
+
+    def test_a_drawn_value_beyond_its_components_value_range_is_refused_naming_the_home(self) -> None:
+        """P15: a normal around 50 kW draws PV no home may hold, refused as a fixed 50 kW is."""
+        errors = builder_form_errors(
+            {**_ACCEPTED_FORM, "pv_distribution_type": "normal", "pv_mean": 50, "pv_std": 1}
+        )
+        assert len(errors) == 1, errors
+        assert re.fullmatch(
+            r"pv\.capacity_kw must be between 0\.5 and 20 for every home, got \d+\.\d+ for home 1",
+            errors[0],
+        ), errors
 
     @pytest.mark.parametrize("end", ["low", "high"])
     @pytest.mark.parametrize(
         "component", tuple(FLEET_COMPONENTS.values()), ids=lambda component: component.key
     )
-    def test_a_fixed_value_at_either_end_of_its_components_fixed_range_is_accepted(
-        self, component: FleetComponent, end: str
+    def test_a_fixed_value_at_either_end_of_its_components_value_range_is_accepted(
+        self, component: ComponentLimits, end: str
     ) -> None:
-        value = component.fixed_range[0] if end == "low" else component.fixed_range[1]
+        value = getattr(component.value_range, end)
         assert builder_form_errors({**_ACCEPTED_FORM, component.fixed_field: value}) == []
 
     @pytest.mark.parametrize("value", WHOLE_NUMBER_FORMS)
@@ -360,8 +390,116 @@ class TestBuilderFormErrors:
         assert builder_form_errors(_form_with_pv_pool(rows)) == [reason]
 
 
+    def test_a_period_day_that_is_not_a_day_is_refused_as_a_scenario_files_is(self) -> None:
+        """'2024' is no day, though pd.Timestamp reads it as 2024-01-01."""
+        assert (
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+            in builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024"})
+        )
+
+    def test_a_period_whose_two_days_are_not_days_is_refused_once_naming_its_start_day(self) -> None:
+        """The period's one reason is the reader's first refusal of it, not one reason per day."""
+        assert builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024", "end_date": "2024-02-30"}) == [
+            "period.start_date: '2024' is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp"
+        ]
+
+    def test_a_period_whose_last_day_precedes_its_first_is_refused_as_a_scenario_files_is(self) -> None:
+        with pytest.raises(ConfigurationError) as scenario_file_refusal:
+            period_window("2024-08-31", "2024-06-01", timezone="Europe/London")
+
+        errors = builder_form_errors({**_ACCEPTED_FORM, "start_date": "2024-08-31", "end_date": "2024-06-01"})
+
+        assert [error for error in errors if error.startswith("period.")] == [str(scenario_file_refusal.value)]
+
+    def test_a_cleared_period_day_is_listed_once(self) -> None:
+        """The one reason is parse_scenario's refusal of the period, as a scenario file's is refused."""
+        with pytest.raises(ConfigurationError) as scenario_file_refusal:
+            parse_scenario({"period": {"start_date": "2024-06-01"}, "home": {}})
+        assert str(scenario_file_refusal.value) == "period: requires 'end_date'"
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "end_date": ""}) == [str(scenario_file_refusal.value)]
+
+    @pytest.mark.parametrize(
+        ("changes", "refused_block"),
+        [
+            pytest.param(
+                {"start_date": "2024-08-31", "end_date": "2024-06-01"},
+                lambda: period_window("2024-08-31", "2024-06-01", timezone="Europe/London"),
+                id="reversed-period",
+            ),
+            pytest.param(
+                {"seg_rate_pence_per_kwh": -1},
+                lambda: parse_seg_rate({"rate_pence_per_kwh": -1.0}),
+                id="negative-seg-rate",
+            ),
+        ],
+    )
+    def test_a_refused_period_or_seg_rate_does_not_hide_a_fleet_reason(
+        self, changes: dict[str, object], refused_block: Callable[[], object]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as block_refusal:
+            refused_block()
+        component = FLEET_COMPONENTS["pv"]
+        pv_reason = (
+            f"{component.key}.{component.grammar_key} must be {component.value_range} "
+            f"for every home, got {400.0!r} for home 1"
+        )
+        assert builder_form_errors({**_ACCEPTED_FORM, "pv_capacity_kw": 400}) == [pv_reason], (
+            "premise: the PV alone is refused for home 1"
+        )
+
+        errors = builder_form_errors({**_ACCEPTED_FORM, "pv_capacity_kw": 400, **changes})
+
+        assert errors == [pv_reason, str(block_refusal.value)]
+
+    def test_a_refused_period_is_the_one_reason_beside_a_refused_seg_rate(self) -> None:
+        """The reader reads the period before the SEG rate, and its first refusal of the two is the one listed."""
+        with pytest.raises(ConfigurationError) as period_refusal:
+            period_window("2024-08-31", "2024-06-01", timezone="Europe/London")
+
+        errors = builder_form_errors(
+            {**_ACCEPTED_FORM, "start_date": "2024-08-31", "end_date": "2024-06-01", "seg_rate_pence_per_kwh": -1}
+        )
+
+        assert errors == [str(period_refusal.value)]
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            pytest.param({"location_preset": "custom", "latitude": 95, "longitude": 0}, id="location"),
+            pytest.param({"import_rate": -1}, id="tariff"),
+            pytest.param({"battery_capacity_kwh": -1}, id="fleet-distribution"),
+        ],
+    )
+    def test_a_refused_location_tariff_or_fleet_distribution_is_the_one_reason_beside_a_refused_period(
+        self, changes: dict[str, object]
+    ) -> None:
+        refused_period = {"start_date": "2024-08-31", "end_date": "2024-06-01"}
+        alone = builder_form_errors({**_ACCEPTED_FORM, **changes})
+        assert len(alone) == 1, "premise: the block alone is refused with one reason"
+        assert alone != builder_form_errors({**_ACCEPTED_FORM, **refused_period}), (
+            "premise: the period alone is refused with another reason"
+        )
+
+        assert builder_form_errors({**_ACCEPTED_FORM, **changes, **refused_period}) == alone
+
+    def test_a_refused_seg_rate_is_listed_once(self) -> None:
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "seg_rate_pence_per_kwh": -1}) == [str(seg_refusal.value)]
+
+    def test_validation_needs_no_temp_directory(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """The document is judged in memory: with the temp directory missing, so that any temp file fails, the reader's refusal is still the answer."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "absent"))
+        with pytest.raises(ConfigurationError) as seg_refusal:
+            parse_seg_rate({"rate_pence_per_kwh": -1.0})
+
+        assert builder_form_errors({**_ACCEPTED_FORM, "seg_rate_pence_per_kwh": -1}) == [str(seg_refusal.value)]
+
+
 class TestBothFormsWriteADistributionAlike:
-    """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same config.py grammar spec."""
+    """The scenario builder's flat fields and the fleet page's nested body write one editor distribution as the same fleet_distribution.py grammar spec."""
 
     @pytest.mark.parametrize(
         ("fleet_spec", "builder_fields"),

@@ -16,7 +16,14 @@ from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
 from solar_challenge.scenario_writer import fleet_scenario, scenario_yaml
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from solar_challenge.web.fleet_components import days_window
 from tests.e2e._alpine_start import open_once_alpine_has_started
+from tests.e2e._css_transitions import finish_the_css_transitions
+from tests.e2e._fetches_handled import (
+    record_fetches_started_and_handled,
+    wait_until_the_page_has_handled_every_fetch_it_started,
+)
 from tests.e2e._scenario_builder_page import open_builder, upload_scenario
 
 
@@ -47,8 +54,12 @@ def test_builder_no_js_errors(
     loaded via ``defer`` in ``{% block head %}``.  Alpine.js may evaluate
     the ``x-data`` before the component function is registered, which
     throws an uncaught ReferenceError.
+
+    It reads page_errors once the page has handled its presets and first-preview answers.
     """
+    record_fetches_started_and_handled(page)
     open_once_alpine_has_started(page, live_server + "/scenarios/builder")
+    wait_until_the_page_has_handled_every_fetch_it_started(page)
 
     assert page_errors == [], f"Errors on /scenarios/builder: {page_errors}"
 
@@ -220,7 +231,7 @@ def _accordion_with_open(page: Page, section: str) -> dict[str, str | list[str]]
 def _open_section(page: Page, section: str, *, rest_timeout_ms: float | None = None) -> None:
     """Open the accordion section whose header button is named *section*, closing the open one, and return once the accordion is at rest: *section*'s panel shows all of its content and every other section's panel is hidden.
 
-    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss.
+    *section* must be closed, as every section but General is when the page loads: a click on an open section's header closes it. Until the accordion is at rest, the headers and controls below a growing or shrinking panel are still moving, so a click on one can miss. It waits for rest in real time rather than finishing the CSS transitions; test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displayed says why.
 
     *rest_timeout_ms*, if given, bounds only the wait for rest, in milliseconds: the click and the panel-id reads keep the page's default timeout and the header check keeps expect's own, so a click slowed by a loaded host cannot fail a caller that expects the wait to time out.
     """
@@ -309,6 +320,45 @@ def test_a_click_that_outlasts_open_sections_rest_timeout_still_lands_and_its_wa
         "the click should have run _BUSY_ON_MOUSEDOWN's handler on the Period header; if it did not, the click was not held up and this test cannot tell whether rest_timeout_ms wrongly bounds it",
     ).to_have_attribute("data-busy-handled", "true")
     expect(page.get_by_role("button", name="Period", exact=True, expanded=True)).to_be_visible()
+
+
+_A_HEIGHT_TRANSITION_RUNS_ON = """(panelId) => document.getAnimations().some((animation) =>
+    animation instanceof CSSTransition && animation.transitionProperty === 'height' && animation.effect.target.id === panelId
+)"""
+"""Whether a CSS transition of height runs on the element whose id is *panelId*, as one does on a panel x-collapse is opening or closing."""
+
+_MARK_THE_END_OF_ITS_HEIGHT_TRANSITION = """(panel) => panel.addEventListener('transitionend', (event) => {
+    if (event.target === panel && event.propertyName === 'height') panel.dataset.heightTransitionEnded = 'true';
+})"""
+"""Sets *panel*'s data-height-transition-ended attribute to "true" once the browser has dispatched the transitionend of *panel*'s height transition, the event an x-collapse that hid a closing panel when its transition ended would hide it on."""
+
+
+def test_finishing_the_css_transitions_leaves_a_closing_accordion_panel_displayed(page: Page, live_server: str) -> None:
+    """x-collapse hides a closing panel from the end callback of Alpine's own transition timer, not when its CSS transition ends, so finishing the transitions, as the suite's other settled reads do, cannot bring the accordion to rest, and _open_section waits for rest in real time.
+
+    General's panel, the closing one, is made to take 600 s to close, which makes Alpine's timer as long, so the timer cannot hide the panel during the test. The accordion is read once the browser has dispatched the transitionend of that panel's finished height transition, so the test fails once x-collapse hides the panel when its transition ends; _open_section could then finish the transitions instead.
+    """
+    page.goto(live_server + "/scenarios/builder")
+    _expect_expanded_headers(
+        page,
+        "General",
+        message="the test takes General's panel to be the closing one, so General's header alone should be exposed as expanded when the page loads",
+    )
+    general_panel_id = _panel_id_of(page, "General")
+    general_panel = page.locator(f"id={general_panel_id}")
+    accordion = _accordion_with_open(page, "Period")
+    page.add_style_tag(content=f"#{general_panel_id} {{ transition-duration: 600s !important; }}")
+    page.get_by_role("button", name="Period", exact=True, expanded=False).click()
+    page.wait_for_function(_A_HEIGHT_TRANSITION_RUNS_ON, arg=general_panel_id)
+    general_panel.evaluate(_MARK_THE_END_OF_ITS_HEIGHT_TRANSITION)
+
+    finish_the_css_transitions(page)
+    expect(
+        general_panel,
+        "the browser should dispatch the transitionend of General's panel once its height transition is finished",
+    ).to_have_attribute("data-height-transition-ended", "true")
+
+    assert page.evaluate(_ACCORDION_STATE, accordion)["displayed"] == [accordion["opened"], general_panel_id]
 
 
 def _form_sent_on_validate(page: Page) -> dict[str, Any]:
@@ -1128,3 +1178,19 @@ def test_uploading_a_yaml_the_form_cannot_hold_leaves_the_form_and_says_why(
         re.compile(rf"^# scenario\.yaml was not loaded: .*{re.escape(refusal)}")
     )
     assert _form_sent_on_validate(page) == form_before_upload
+
+
+def test_full_year_sets_the_period_to_the_default_window(page: Page, live_server: str) -> None:
+    """Full Year, after 1 Week moved the period, fills Start Date and End Date with timebase's default window."""
+    open_builder(page, live_server)
+    _open_section(page, "Period")
+    start, end = page.get_by_label("Start Date", exact=True), page.get_by_label("End Date", exact=True)
+
+    page.get_by_role("button", name="1 Week", exact=True).click()
+    week_start, week_end = days_window(7)
+    expect(start).to_have_value(week_start.isoformat())
+    expect(end).to_have_value(week_end.isoformat())
+
+    page.get_by_role("button", name="Full Year", exact=True).click()
+    expect(start).to_have_value(DEFAULT_FIRST_DAY.isoformat())
+    expect(end).to_have_value(DEFAULT_LAST_DAY.isoformat())

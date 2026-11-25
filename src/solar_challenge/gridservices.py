@@ -46,9 +46,10 @@ Key public symbols:
   :class:`GridServicesAtEvents` breakdown.
 """
 
+import math
 import warnings
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, fields
+from enum import StrEnum
 from typing import TYPE_CHECKING, NamedTuple, Optional, TypeAlias, TypeVar
 
 import numpy as np
@@ -78,7 +79,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-_Word = TypeVar("_Word", bound=Enum)
+_Word = TypeVar("_Word", bound=StrEnum)
 
 
 def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word:
@@ -90,15 +91,17 @@ def _member_named(vocabulary: type[_Word], value: object, *, what: str) -> _Word
         ConfigurationError: If *value* is anything else; the message names
             *what*, the members' values in order and *value*.
     """
-    try:
-        return vocabulary(value)
-    except ValueError:
-        raise ConfigurationError.must_be(
-            what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
-        ) from None
+    if isinstance(value, str):
+        try:
+            return vocabulary(value)
+        except ValueError:
+            pass
+    raise ConfigurationError.must_be(
+        what, f"one of {', '.join(member.value for member in vocabulary)}", got=value
+    )
 
 
-class GridServicesBand(str, Enum):
+class GridServicesBand(StrEnum):
     """The three uncertainty bands every grid-services rate is quoted in, from low to high."""
 
     LOW = "low"
@@ -111,7 +114,7 @@ class GridServicesBand(str, Enum):
         return _member_named(cls, value, what=what)
 
 
-class DeliveryBaseline(str, Enum):
+class DeliveryBaseline(StrEnum):
     """How an event's delivery is measured: operational, the increment above the battery's own discharge, as NESO's DFS measures it; capacity, the battery's whole window discharge, as NGED baselines domestic storage."""
 
     OPERATIONAL = "operational"
@@ -379,7 +382,8 @@ class GridServicesEventsConfig:
         In £ per year, net of the aggregator share:
         ``compute_grid_services_at_events(fleet_results, self).annual_income_gbp``,
         priced on the same path without the displaced self-use that breakdown
-        also reports, so it reads no step length of the fleet's indices.
+        also reports, so it reads no step length of the fleet's indices and
+        refuses no displaced self-use below 0.
         """
         per_window_totals = tuple(
             _EventDayTotals.of(event_days) for event_days in _priced_event_days(fleet_results, self)
@@ -764,7 +768,7 @@ class GridServicesAtEvents:
 
     Returned by :func:`compute_grid_services_at_events`.  All income figures are
     **net** of the aggregator share: the CBS's grid-services revenue, which
-    :func:`~solar_challenge.finance.project_multi_year` books into fleet revenue.
+    :func:`~solar_challenge.projection.project_multi_year` books into fleet revenue.
 
     Attributes:
         annual_income_gbp: Total annual grid-services income across all event
@@ -794,23 +798,65 @@ class GridServicesAtEvents:
             displaced self-use (£/year), in window order: each home-day's
             displaced kWh at the mean tariff over its span, summed over homes,
             averaged over event days and multiplied by ``events_per_year``.  A
-            home simulated without a tariff (``tariff_rate`` 0) adds £0.  The
-            householders import it; neither income figure subtracts it.
+            home simulated without a tariff (``tariff_rate`` 0) adds £0, and one
+            whose import price is below 0 over its span adds a value below 0.
+            The householders import it; neither income figure subtracts it.
 
-    .. note::
-        ``sum(per_window_income_gbp) == annual_income_gbp`` is a design
-        invariant.  Consumers must NOT re-apply
-        ``(1 - aggregator_share)`` to the per-window tuple — it has already
-        been applied.
+    Construction raises ValueError for a breakdown of no event window, a
+    per-window field without one entry per event window, a NaN figure, a
+    capacity, energy or income below 0, and an *annual_income_gbp* that is not
+    ``sum(per_window_income_gbp)``.
+    Consumers must NOT re-apply ``(1 - aggregator_share)`` to the per-window
+    tuple — it has already been applied.
     """
 
     annual_income_gbp: float
     per_window_avail_kw: tuple[float, ...]
     per_window_income_gbp: tuple[float, ...]
-    per_window_avail_p50_kw: tuple[float, ...] = ()
-    per_window_avail_p90_kw: tuple[float, ...] = ()
-    per_window_displaced_self_use_kwh_per_event: tuple[float, ...] = ()
-    per_window_displaced_import_gbp_per_year: tuple[float, ...] = ()
+    per_window_avail_p50_kw: tuple[float, ...]
+    per_window_avail_p90_kw: tuple[float, ...]
+    per_window_displaced_self_use_kwh_per_event: tuple[float, ...]
+    per_window_displaced_import_gbp_per_year: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        """Refuse no event window, a per-window field without one entry per window, a NaN figure, a capacity, energy or income below 0, and a total other than the window sum."""
+        windows = len(self.per_window_avail_kw)
+        if windows == 0:
+            raise ValueError(
+                "GridServicesAtEvents prices at least one event window, as GridServicesEventsConfig requires: "
+                f"got per_window_avail_kw={self.per_window_avail_kw!r}"
+            )
+        misfits = [f"{name}={entries!r}" for name in _PER_WINDOW_FIELDS if len(entries := getattr(self, name)) != windows]
+        if misfits:
+            raise ValueError(
+                f"GridServicesAtEvents holds one entry per event window in each per-window field, {windows} as "
+                f"per_window_avail_kw={self.per_window_avail_kw!r} does: got {', '.join(misfits)}"
+            )
+        figures = [("annual_income_gbp", "annual_income_gbp", self.annual_income_gbp)] + [
+            (name, f"{name}[{index}]", value)
+            for name in _PER_WINDOW_FIELDS
+            for index, value in enumerate(getattr(self, name))
+        ]
+        refused = [
+            f"{label}={value!r}"
+            for name, label, value in figures
+            if math.isnan(value) or (value < 0.0 and name not in _IMPORT_PRICE_SIGNED_FIELDS)
+        ]
+        if refused:
+            raise ValueError(
+                "GridServicesAtEvents' figures are each a number, its capacities, energies and incomes each at "
+                f"least 0: got {', '.join(refused)}"
+            )
+        total = sum(self.per_window_income_gbp)
+        if self.annual_income_gbp != total:
+            raise ValueError(
+                f"GridServicesAtEvents.annual_income_gbp must be sum(per_window_income_gbp), {total!r} for "
+                f"{self.per_window_income_gbp!r}, got {self.annual_income_gbp!r}"
+            )
+
+
+_PER_WINDOW_FIELDS = tuple(field.name for field in fields(GridServicesAtEvents) if field.name != "annual_income_gbp")
+_IMPORT_PRICE_SIGNED_FIELDS = frozenset({"per_window_displaced_import_gbp_per_year"})
 
 
 # ---------------------------------------------------------------------------
@@ -959,7 +1005,10 @@ def compute_grid_services_at_events(
             its rows are not evenly spaced, or it has one row and no
             fixed-duration freq).  :func:`compute_fleet_spare_capacity_kw` and
             :meth:`GridServicesEventsConfig.annual_income_gbp`, which report no
-            displaced self-use, read no step length.
+            displaced self-use, read no step length.  Or if a battery home's
+            ``battery_discharge`` below 0 after an event window makes a
+            displaced self-use below 0, which :class:`GridServicesAtEvents`
+            refuses.
     """
     per_window_event_days = _priced_event_days(fleet_results, cfg)
     per_window_totals = tuple(

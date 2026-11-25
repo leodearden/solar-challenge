@@ -11,7 +11,9 @@ whether the service served it, never by what it served:
   request it does not serve, then exit os.EX_TEMPFAIL: 75, the outage status of
   dark-factory's LaneCommand.outage_probe. The causes are a fixed vocabulary, so
   the line is identical on every run of one outage: "HTTP <status>" for a 403, a
-  429 or any 5xx; "no answer within <timeout> s"; or the name of the requests
+  429 or any 5xx; "no answer within <timeout> s" for an answer, or the rest of a
+  body the probe reads, that does not arrive for the timeout; "ChunkedEncodingError"
+  for an answer whose body is cut short; or the name of the requests
   ConnectionError raised (ConnectionError, ProxyError, SSLError, ...). The URL
   and the detail go to stderr.
 - Any other status is the service answering, so it is usable: whether its answer
@@ -22,7 +24,9 @@ whether the service served it, never by what it served:
 pvgis: the pvgis job's contract tests, tests/integration/test_pvgis.py, fetch
 Bristol's TMY through PvgisTmy, which asks PVGIS_API_URL's tmy and seriescalc
 endpoints for Location.bristol() over CLIMATE_YEARS. The probe asks both the
-same, and its outage line is "PVGIS: <endpoint>: <cause>".
+same, and its outage line is "PVGIS: <endpoint>: <cause>". The tests read each
+answer's body, so the probe reads it whole too: an answer whose body is cut
+short, or stops arriving, was not served.
 
 pypi: the interpreter-matrix and newest-releases jobs install what uv.lock pins
 from PyPI, and newest-releases also resolves the newest releases from its
@@ -66,7 +70,7 @@ _REPOSITORY = Path(__file__).resolve().parents[1]
 _T = TypeVar("_T")
 
 _REQUEST_TIMEOUT_S = 30.0
-"""Seconds a request may take to connect, and again to answer. Twice this per request, for the at most two requests a service is asked, plus uv's start, the imports and the name lookups it does not bound, must fit the outage_probe_timeout_secs of every job in dark-factory-orchestrator.yaml that declares this probe."""
+"""Seconds a request may take to connect, and again to answer, and each wait for more of a body the probe reads. Twice this per request, for the at most two requests a service is asked, plus uv's start, the imports, the name lookups and the time a body takes to arrive, none of which it bounds, must fit the outage_probe_timeout_secs of every job in dark-factory-orchestrator.yaml that declares this probe."""
 
 _PVGIS_ENDPOINTS = ("tmy", "seriescalc")
 """The PVGIS endpoints PvgisTmy reads, in the order it reads them."""
@@ -74,11 +78,12 @@ _PVGIS_ENDPOINTS = ("tmy", "seriescalc")
 
 @dataclass(frozen=True)
 class _Request:
-    """A GET the probe sends a service: the step its outage line names, the URL, and the query sent with it."""
+    """A GET the probe sends a service: the step its outage line names, the URL, the query sent with it, and whether the service has served it only once its whole body has arrived (reads_body)."""
 
     step: str
     url: str
     query: Mapping[str, float | str] = field(default_factory=lambda: MappingProxyType({}))
+    reads_body: bool = False
 
 
 @dataclass(frozen=True)
@@ -102,20 +107,51 @@ def _is_outage_status(status: int) -> bool:
     return status in (HTTPStatus.FORBIDDEN, HTTPStatus.TOO_MANY_REQUESTS) or status >= HTTPStatus.INTERNAL_SERVER_ERROR
 
 
+def _caused_by_a_timeout(error: BaseException) -> bool:
+    """Whether a builtin TimeoutError is among the exceptions that led to *error*, following each one's __cause__, else its __context__."""
+    seen: set[int] = set()
+    link: BaseException | None = error
+    while link is not None and id(link) not in seen:
+        if isinstance(link, TimeoutError):
+            return True
+        seen.add(id(link))
+        link = link.__cause__ or link.__context__
+    return False
+
+
+def _read_body_whole(response: requests.Response) -> None:
+    """Read all of *response*'s body a chunk at a time, discarding it.
+
+    A body cut short raises ChunkedEncodingError. One that stops arriving for
+    the timeout raises ReadTimeout, as an answer that never starts does: requests
+    wraps the read's timeout in a bare ConnectionError, which would name a stall
+    the refused connection's cause. Any other ConnectionError is raised as it is.
+    """
+    try:
+        for _ in response.iter_content(chunk_size=1 << 16):
+            pass
+    except requests.ConnectionError as error:
+        if _caused_by_a_timeout(error):
+            raise requests.exceptions.ReadTimeout(error, response=response) from error
+        raise
+
+
 def _outage_at(request: _Request, timeout: float) -> _Outage | None:
-    """The outage *request* meets, or None when the service serves it; no body is read."""
+    """The outage *request* meets, or None when the service serves it; the body is read only for a request that reads_body, after a status that is no outage."""
     try:
         with requests.get(request.url, params=request.query, timeout=timeout, stream=True) as response:
             status, reason = response.status_code, response.reason
+            if request.reads_body and not _is_outage_status(status):
+                _read_body_whole(response)
     except requests.Timeout as error:
         return _Outage(f"no answer within {timeout:g} s", str(error))
-    except requests.ConnectionError as error:
+    except (requests.ConnectionError, requests.exceptions.ChunkedEncodingError) as error:
         return _Outage(type(error).__name__, str(error))
     return _Outage(f"HTTP {status}", reason) if _is_outage_status(status) else None
 
 
 def _pvgis(api_url: str) -> _Service:
-    """PVGIS, asked each endpoint PvgisTmy reads of the API release *api_url*.
+    """PVGIS, asked each endpoint PvgisTmy reads of the API release *api_url*, each answer's body read whole as PvgisTmy reads it.
 
     Each is asked for the contract tests' point, with the arguments of their TMY
     request that get_pvgis_tmy sends PVGIS as query parameters of the same name.
@@ -128,7 +164,10 @@ def _pvgis(api_url: str) -> _Service:
             **{name: str(PVGIS_TMY_REQUEST[name]) for name in ("outputformat", "startyear", "endyear")},
         }
     )
-    return _Service("PVGIS", tuple(_Request(endpoint, api_url + endpoint, query) for endpoint in _PVGIS_ENDPOINTS))
+    return _Service(
+        "PVGIS",
+        tuple(_Request(endpoint, api_url + endpoint, query, reads_body=True) for endpoint in _PVGIS_ENDPOINTS),
+    )
 
 
 def _pypi(uv_lock: Path) -> _Service:
@@ -174,7 +213,7 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout",
         type=float,
         default=_REQUEST_TIMEOUT_S,
-        help="seconds a request may take to connect, and again to answer (default: %(default)g)",
+        help="seconds a request may take to connect, and again to answer, and each wait for more of a body it reads (default: %(default)g)",
     )
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     services = parser.add_subparsers(title="services", metavar="<service>", required=True)

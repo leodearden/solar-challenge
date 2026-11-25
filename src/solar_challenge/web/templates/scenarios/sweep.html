@@ -89,7 +89,7 @@
                             </div>
                             <div>
                                 <label for="sweep_base_days" class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Days</label>
-                                <input id="sweep_base_days" type="number" min="1" max="{{ max_days }}" x-model="baseConfig.days"
+                                <input id="sweep_base_days" type="number" min="{{ page_limits.window_days.low }}" max="{{ page_limits.window_days.high }}" x-model="baseConfig.days"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
@@ -106,8 +106,8 @@
                     <span x-show="submitting" x-cloak>Submitting...</span>
                 </button>
 
-                <!-- Error display -->
-                <div x-show="errorMsg" x-cloak class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
+                <!-- Error display: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_page_says_why_it_lost_track_of_a_sweep_while_the_browser_renders_no_frame) -->
+                <div hidden :hidden="!errorMsg" class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
                     x-text="errorMsg"></div>
             </div>
         {% endcall %}
@@ -151,7 +151,8 @@
         {% endcall %}
     </div>
 
-    <div x-show="sweepResults.length > 0" x-cloak>
+    <!-- Sweep Results: :hidden, not x-show, which shows only at an animation frame (tests/e2e/test_parameter_sweep.py::test_the_sweep_results_table_shows_each_points_row_while_the_browser_renders_no_frame) -->
+    <div hidden :hidden="sweepResults.length === 0">
         {% call panel(title='Sweep Results') %}
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
@@ -180,8 +181,8 @@
         {% endcall %}
     </div>
 
-    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished -->
-    <section aria-label="Sweep charts" x-show="sweepCharts" x-cloak x-html="sweepCharts" class="space-y-6"></section>
+    <!-- Sweep Charts: the chart panels POST /scenarios/sweep/chart answers once every point has finished, shown as they are added (tests/e2e/test_parameter_sweep.py::test_the_sweep_charts_region_is_shown_and_its_charts_drawn_as_its_panels_are_added says why it is not x-show) -->
+    <section aria-label="Sweep charts" hidden :hidden="!sweepCharts" x-html="sweepCharts" class="space-y-6"></section>
 </div>
 
 {% endblock %}

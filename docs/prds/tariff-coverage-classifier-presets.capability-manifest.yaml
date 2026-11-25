@@ -244,12 +244,12 @@ tasks:
           paths: ["src/solar_challenge/ev.py"]
           expect: absent
       - name: "load-threads-the-tariff"
-        binding: "load.generate_load_profile takes no tariff at 9d7b67e"
+        binding: "load.generate_load_profile takes no tariff at 9d7b67e; task 895 (03bc60b5) moved the EV out of load.py, so simulate_home now passes the home's tariff to generate_ev_charging_profile"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "tariff"
-          paths: ["src/solar_challenge/load.py"]
+          pattern: "tariff=config\\.tariff_config"
+          paths: ["src/solar_challenge/home.py"]
           expect: present
       - name: "no-tariff-refusal"
         binding: "built by δ; ev.require_tariff_for_smart_charging does not exist at 9d7b67e"

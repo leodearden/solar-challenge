@@ -1,25 +1,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Configuration file support for simulation scenarios.
+"""Read whole scenario, fleet and community documents into config's own document types.
 
-Supports loading configurations from YAML and JSON files and
-scenario definitions.
+A document's blocks are read by solar_challenge.scenario_blocks, and its fleet_distribution:
+block by solar_challenge.fleet_distribution.
 """
 
+import contextlib
 import json
 import math
-import random
 import re
-from dataclasses import MISSING, asdict, dataclass, field, fields, replace
-from enum import Enum
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
     Any,
     Callable,
-    Collection,
     Generic,
     Iterable,
-    Iterator,
     Mapping,
     Optional,
     Protocol,
@@ -30,537 +28,80 @@ from typing import (
 import pandas as pd
 import yaml
 
-from solar_challenge.battery import BatteryConfig, has_battery
-from solar_challenge.boolean_fields import as_boolean
-from solar_challenge.community import CommunityBillingConfig, CommunityConfig
-from solar_challenge.dataclass_instance import DataclassInstance
-from solar_challenge.dispatch import STRATEGY_CONFIG_BY_TYPE, DispatchStrategyConfig, GridChargeConfig
+from solar_challenge.community import CommunityConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.ev import CHARGER_TYPES, EVConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
-from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
-from solar_challenge.heat_pump import HEAT_PUMP_TYPES, HeatPumpConfig
-from solar_challenge.home import HomeConfig, refuse_unknown_home_dispatch_strategy
-from solar_challenge.load import LoadConfig
+from solar_challenge.fleet_distribution import (
+    FleetDistributionConfig,
+    SweepSpec,
+    detect_sweep_spec,
+    expand_sweep_configs,
+    generate_homes_from_distribution,
+    parse_fleet_distribution_config,
+)
+from solar_challenge.gridservices import GridServicesBand
+from solar_challenge.home import HomeConfig
 from solar_challenge.location import Location
 from solar_challenge.number_fields import as_finite_float
-from solar_challenge.pv import PVConfig
-from solar_challenge.seg import SEGTariff, resolve_seg_tariff
-from solar_challenge.tariff import TariffConfig, TariffPeriod
-
-
-# --- Distribution Types for Fleet Generation ---
-
-
-#: An outcome a weighted_discrete or shuffled_pool lists: a number, one of a CHOICE field's choices, or null.
-SpecValue = Union[float, str, None]
-
-
-@dataclass(frozen=True)
-class WeightedDiscreteDistribution:
-    """Weighted discrete distribution for sampling from a list of values.
-
-    Weights are auto-normalized (e.g., [2,4,3,1] == [20,40,30,10]).
-
-    Attributes:
-        values: List of values to sample from (can include None)
-        weights: Corresponding weights (must be non-negative, sum > 0)
-    """
-
-    values: tuple[SpecValue, ...]
-    weights: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        if len(self.values) != len(self.weights):
-            raise ConfigurationError(
-                "WeightedDiscreteDistribution: values and weights must have same length"
-            )
-        if any(w < 0 for w in self.weights):
-            raise ConfigurationError(
-                "WeightedDiscreteDistribution: weights cannot be negative"
-            )
-        if sum(self.weights) == 0:
-            raise ConfigurationError(
-                "WeightedDiscreteDistribution: weights cannot all be zero"
-            )
-
-    def draw(self, rng: random.Random) -> SpecValue:
-        """Draw one of the values from *rng*, each with its weight's share of the chance."""
-        return rng.choices(list(self.values), weights=list(self.weights), k=1)[0]
-
-
-@dataclass(frozen=True)
-class NormalDistribution:
-    """Normal (Gaussian) distribution with optional bounds.
-
-    Attributes:
-        mean: Mean of the distribution
-        std: Standard deviation
-        min: Optional minimum bound (values are clamped)
-        max: Optional maximum bound (values are clamped)
-    """
-
-    mean: float
-    std: float
-    min: Optional[float] = None
-    max: Optional[float] = None
-
-    def __post_init__(self) -> None:
-        if self.std < 0:
-            raise ConfigurationError("NormalDistribution: std cannot be negative")
-        if self.min is not None and self.max is not None and self.min > self.max:
-            raise ConfigurationError("NormalDistribution: min cannot be greater than max")
-
-    def draw(self, rng: random.Random) -> float:
-        """Draw a value from *rng*'s normal distribution of mean and std, clamped to whichever of min and max is set."""
-        value = rng.gauss(self.mean, self.std)
-        if self.min is not None:
-            value = max(self.min, value)
-        if self.max is not None:
-            value = min(self.max, value)
-        return value
-
-
-@dataclass(frozen=True)
-class UniformDistribution:
-    """Uniform distribution between min and max.
-
-    Attributes:
-        min: Minimum value (inclusive)
-        max: Maximum value (inclusive)
-    """
-
-    min: float
-    max: float
-
-    def __post_init__(self) -> None:
-        if self.min > self.max:
-            raise ConfigurationError("UniformDistribution: min cannot be greater than max")
-
-    def draw(self, rng: random.Random) -> float:
-        """Draw a value from *rng* uniformly between min and max."""
-        return rng.uniform(self.min, self.max)
-
-
-@dataclass(frozen=True)
-class ShuffledPoolDistribution:
-    """Shuffled pool distribution for exact count assignment.
-
-    Creates a pool of values with exact counts, shuffles once, and assigns
-    sequentially. This matches the behavior of pre-generating distributions
-    then shuffling (like bristol-phase1).
-
-    Attributes:
-        values: List of values (can include None)
-        counts: Number of each value in the pool.  In a fleet distribution they total
-            n_homes, one value per home, and FleetDistributionConfig refuses any other total;
-            a parameter only some homes draw leaves the other homes' values undrawn.
-    """
-
-    values: tuple[SpecValue, ...]
-    counts: tuple[int, ...]
-
-    def __post_init__(self) -> None:
-        if len(self.values) != len(self.counts):
-            raise ConfigurationError(
-                "ShuffledPoolDistribution: values and counts must have same length"
-            )
-        if any(c < 0 for c in self.counts):
-            raise ConfigurationError(
-                "ShuffledPoolDistribution: counts cannot be negative"
-            )
-        if sum(self.counts) == 0:
-            raise ConfigurationError(
-                "ShuffledPoolDistribution: counts cannot all be zero"
-            )
-
-    def create_pool(self) -> list[SpecValue]:
-        """Create the expanded pool of values."""
-        pool: list[SpecValue] = []
-        for value, count in zip(self.values, self.counts):
-            pool.extend([value] * count)
-        return pool
-
-
-@dataclass(frozen=True)
-class SweepSpec:
-    """Sweep specification for parameter exploration.
-
-    Attributes:
-        min: Minimum value
-        max: Maximum value
-        steps: Number of steps
-        mode: "geometric" or "linear" (default: geometric)
-    """
-
-    min: float
-    max: float
-    steps: int
-    mode: str = "geometric"
-
-    def __post_init__(self) -> None:
-        if self.min <= 0 and self.mode == "geometric":
-            raise ConfigurationError(
-                "SweepSpec: geometric mode requires min > 0"
-            )
-        if self.max <= self.min:
-            raise ConfigurationError(
-                "SweepSpec: max must be greater than min"
-            )
-        if self.steps < 2:
-            raise ConfigurationError(
-                "SweepSpec: steps must be at least 2"
-            )
-        if self.mode not in ("geometric", "linear"):
-            raise ConfigurationError(
-                f"SweepSpec: mode must be 'geometric' or 'linear', got '{self.mode}'"
-            )
-
-    def get_values(self) -> list[float]:
-        """Generate the sweep values."""
-        if self.mode == "geometric":
-            ratio = (self.max / self.min) ** (1 / (self.steps - 1))
-            return [self.min * (ratio ** i) for i in range(self.steps)]
-        else:
-            step = (self.max - self.min) / (self.steps - 1)
-            return [self.min + step * i for i in range(self.steps)]
-
-
-@dataclass(frozen=True)
-class ProportionalDistribution:
-    """Distribution proportional to another sampled field.
-
-    Used for making one parameter proportional to another, e.g.,
-    battery capacity = multiplier * PV capacity.
-
-    Attributes:
-        source: Source field path (e.g., "pv.capacity_kw")
-        multiplier: Multiplication factor (float or SweepSpec)
-        offset: Additive offset (default 0.0)
-    """
-
-    source: str
-    multiplier: Union[float, SweepSpec] = 1.0
-    offset: float = 0.0
-
-
-# Type alias for distribution specifications; a bare string is one of a CHOICE field's choices.
-DistributionSpec = Union[
-    WeightedDiscreteDistribution,
-    NormalDistribution,
-    UniformDistribution,
-    ShuffledPoolDistribution,
-    ProportionalDistribution,
-    float,
-    str,
-    None,
-]
-
-#: The value a fleet gives every home for a SETTING or FLAG key: a SETTING's as written or as its
-#: sub-block reads it, a FLAG's as true or false.
-SettingValue = Union[bool, str, GridChargeConfig, DispatchStrategyConfig, None]
-
-
-@dataclass(frozen=True)
-class ComponentDistribution:
-    """How a fleet gives each home one component: the specs it draws and the settings it gives every home.
-
-    *draws* maps each key a home draws to its spec, and *settings* each SETTING or FLAG key to the
-    value every home is given. A key in neither takes its dataclass's default. Both are held as
-    read-only copies; a ComponentDistribution pickles and deep-copies, but dataclasses.asdict
-    of one raises TypeError.
-    """
-
-    draws: Mapping[str, DistributionSpec]
-    settings: Mapping[str, SettingValue] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "draws", MappingProxyType(dict(self.draws)))
-        object.__setattr__(self, "settings", MappingProxyType(dict(self.settings)))
-
-    def __reduce__(
-        self,
-    ) -> tuple[type["ComponentDistribution"], tuple[dict[str, DistributionSpec], dict[str, SettingValue]]]:
-        """Rebuild through the constructor from dicts of the draws and settings, since a mappingproxy does not pickle."""
-        return (type(self), (dict(self.draws), dict(self.settings)))
-
-
-#: The path of a fleet's block in its file, under which every refusal of a fleet names its keys.
-_FLEET_DISTRIBUTION_PATH = "fleet_distribution"
-
-
-@dataclass(frozen=True)
-class FleetDistributionConfig:
-    """Configuration for generating a fleet from distributions.
-
-    It is frozen: a changed fleet is a new one, made with dataclasses.replace, which checks it
-    as construction does.
-
-    Attributes:
-        n_homes: Number of homes to generate
-        pv: How each home draws its PV
-        load: How each home draws its load; an empty one draws nothing, so every load takes
-            LoadConfig's defaults
-        battery: How each home draws its battery; None is no battery for any home
-        heat_pump: How each home draws its heat pump; None is no heat pump for any home
-        ev: How each home draws its EV; None is no EV for any home
-        seed: Random seed for reproducibility (optional)
-        random_order: One of _RANDOM_ORDERS' keys, naming what is drawn ahead of the first
-            home and in which order ("bristol_legacy" reproduces
-            create_bristol_phase1_scenario's sequence)
-        dispatch_strategy: Dispatch strategy of every home ("greedy" or "tou_optimized");
-            None means greedy.  A battery given a dispatch_strategy setting dispatches with
-            that instead.
-    """
-
-    n_homes: int
-    pv: ComponentDistribution
-    load: ComponentDistribution = field(default_factory=lambda: ComponentDistribution({}))
-    battery: Optional[ComponentDistribution] = None
-    heat_pump: Optional[ComponentDistribution] = None
-    ev: Optional[ComponentDistribution] = None
-    seed: Optional[int] = None
-    random_order: str = "default"
-    dispatch_strategy: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        """Refuse a fleet no home of which could be drawn, as each check's helper states.
-
-        Past n_homes, random_order and dispatch_strategy it refuses, in this order: a component
-        key outside its table's fleet rows, or held in the wrong one of its draws and settings
-        (F1); a required key a component does not draw (F5); a spec its key's kind does not
-        draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
-        source is not a number or count field drawn earlier for every home that draws it (F4);
-        a shuffled pool whose counts do not total n_homes (F6); a fixed presence value its
-        table's presence rule refuses; and a rounded count with no whole number from its min
-        to its max.
-        """
-        if self.n_homes < 1:
-            raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
-        if not isinstance(self.random_order, str) or self.random_order not in _RANDOM_ORDERS:
-            raise ConfigurationError(
-                f"FleetDistributionConfig: random_order must be "
-                f"{' or '.join(repr(order) for order in _RANDOM_ORDERS)}, got '{self.random_order}'"
-            )
-        if self.dispatch_strategy is not None:
-            refuse_unknown_home_dispatch_strategy(
-                self.dispatch_strategy, field="FleetDistributionConfig.dispatch_strategy"
-            )
-        _refuse_keys_held_where_no_row_puts_them(self)
-        _refuse_required_keys_not_drawn(self)
-        _refuse_specs_their_kinds_cannot_draw(self)
-        _refuse_proportional_sources_not_drawn_earlier(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
-        _refuse_pools_not_sized_to_the_fleet(self)
-        _refuse_fixed_presences_their_rules_refuse(self)
-        _refuse_rounded_counts_with_no_whole_number(self)
-
-
-#: The default shuffle order: every random order shuffles the pools it does not shuffle first
-#: component by component in this order, each component's keys in its table's fleet order. It
-#: is not the order in which a home draws them, which is _HOME_DRAW_ORDER.
-_DEFAULT_SHUFFLE_ORDER: tuple[str, ...] = ("pv", "load", "battery", "heat_pump", "ev")
-
-#: The order in which each home draws its components (T3), each component's keys in its table's
-#: fleet order.
-_HOME_DRAW_ORDER: tuple[str, ...] = ("pv", "battery", "load", "heat_pump", "ev")
-
-#: The components every home has: HomeConfig's pv_config and load_config are not Optional.
-_EVERY_HOME_HAS: frozenset[str] = frozenset({"pv", "load"})
-
-
-@dataclass(frozen=True)
-class _RandomOrder:
-    """What a fleet's random order draws for every home before the first home is built.
-
-    First each pre_sampled setting's values, then the pools of the shuffled_first settings
-    in that order, then every other pool in the default shuffle order: component by
-    component in _DEFAULT_SHUFFLE_ORDER, each component's keys in its table's fleet order.
-
-    Attributes:
-        pre_sampled: Paths of the settings whose weighted discrete, normal or uniform
-            values are all drawn ahead, e.g. 'load.annual_consumption_kwh'
-        shuffled_first: Paths of the settings whose pools are shuffled before any other pool
-    """
-
-    pre_sampled: tuple[str, ...] = ()
-    shuffled_first: tuple[str, ...] = ()
-
-
-#: create_bristol_phase1_scenario's random call order, which review/briefing.yaml's
-#: reproducibility rule says to keep.
-_BRISTOL_LEGACY_ORDER = _RandomOrder(
-    pre_sampled=("load.annual_consumption_kwh",),
-    shuffled_first=("pv.capacity_kw", "battery.capacity_kwh", "heat_pump.heat_pump_type", "ev.charger_type"),
+from solar_challenge.scenario_blocks import (
+    HOME_BLOCK_KEYS,
+    RETIRED_DISPATCH_STRATEGY_KEY,
+    block_label,
+    child_path,
+    parse_community_config,
+    parse_finance_config,
+    parse_home_block,
+    parse_location_block,
+    parse_seg_rate,
+    parse_tariff_config,
+    read_text,
+    refusal,
+    refuse_retired_keys,
+    refuse_unrecognised_keys,
+    require_held_keys,
+    require_keys,
+    require_list,
+    require_mapping,
 )
-
-_RANDOM_ORDERS: Mapping[str, _RandomOrder] = MappingProxyType({
-    "default": _RandomOrder(),
-    "bristol_legacy": _BRISTOL_LEGACY_ORDER,
-})
+from solar_challenge.seg import SEGTariff
+from solar_challenge.tariff import TariffConfig
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, SimulationWindow
 
 
-def _component_draws(config: FleetDistributionConfig) -> Iterator[tuple[str, "FleetField", DistributionSpec]]:
-    """Each spec *config*'s components draw, with its path and its fleet row, e.g. ('pv.tilt', row, spec).
+_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+"""The one string form a period's day takes: 'YYYY-MM-DD'."""
 
-    Components come in _DEFAULT_SHUFFLE_ORDER and each component's keys in its table's fleet
-    order, never in the order its draws mapping lists them.
+
+def period_day(value: object, path: str) -> date:
+    """The calendar day *value*, the period day at *path*, gives: a datetime's or Timestamp's own date on its own clock, a date as it is, or a 'YYYY-MM-DD' string's day.
+
+    Raises:
+        ConfigurationError: For any other value, such as NaT, '2024' or '20240601', naming *path*,
+            the value and the forms a period's day takes.
     """
-    components = _fleet_components(config)
-    for name in _DEFAULT_SHUFFLE_ORDER:
-        block, component = components[name]
-        if component is None:
-            continue
-        for key, row in block.fleet.items():
-            if key in component.draws:
-                yield f"{name}.{key}", row, component.draws[key]
+    if isinstance(value, datetime) and value is not pd.NaT:
+        return value.date()
+    if type(value) is date:
+        return value
+    if isinstance(value, str) and _ISO_DAY.fullmatch(value):
+        with contextlib.suppress(ValueError):
+            return date.fromisoformat(value)
+    raise refusal(path, f"{value!r} is not a day: give a date, a 'YYYY-MM-DD' string or a Timestamp")
 
 
-def _refuse_keys_held_where_no_row_puts_them(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a component holds a key outside its table's fleet rows, as the parser refuses one, or holds a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings, naming the key's path and kind."""
-    for name, (block, component) in _fleet_components(config).items():
-        if component is None:
-            continue
-        block_path = _child_path(_FLEET_DISTRIBUTION_PATH, name)
-        _refuse_unrecognised_keys(block_path, {**component.draws, **component.settings}, block.fleet)
-        for key, row in block.fleet.items():
-            if key in (component.draws if row.kind in _GIVEN_EVERY_HOME else component.settings):
-                raise _held_in_the_wrong_place(_child_path(block_path, key), row)
-
-
-def _refuse_required_keys_not_drawn(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a component does not draw a key its table's fleet rows require, as the parser refuses a block leaving it out; a null draw is drawn."""
-    for name, (block, component) in _fleet_components(config).items():
-        if component is not None:
-            _refuse_required_fleet_keys_left_out(block, component.draws, _child_path(_FLEET_DISTRIBUTION_PATH, name))
-
-
-def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
-    for path, row, spec in _component_draws(config):
-        _refuse_a_spec_its_row_cannot_draw(row, spec, _child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
-
-
-def _refuse_proportional_sources_not_drawn_earlier(
-    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]], block_path: str
-) -> None:
-    """Refuse the fleet at *block_path* whose *components*, by name, hold a proportional_to whose source is not a number or count field drawn earlier for every home that draws the dependent, naming the dependent's path under *block_path*, its source and those it may name, in draw order.
-
-    Those are the number and count fields the components every home has draw before the
-    dependent's component in _HOME_DRAW_ORDER, and those the dependent's own component draws
-    before it in its table's fleet order. A field of another component every home need not have
-    is never one, even when every home of this fleet has it, so whether a fleet is refused does
-    not depend on what it draws.
-    """
-    drawn_for_every_home: list[str] = []
-    for name in _HOME_DRAW_ORDER:
-        block, component = components[name]
-        if component is None:
-            continue
-        drawn_earlier = list(drawn_for_every_home)
-        for key, row in block.fleet.items():
-            if key not in component.draws:
-                continue
-            path, spec = f"{name}.{key}", component.draws[key]
-            if isinstance(spec, ProportionalDistribution) and spec.source not in drawn_earlier:
-                raise ConfigurationError(
-                    f"Invalid {_child_path(block_path, path)} source {spec.source!r}; "
-                    "valid sources: a number or count field drawn earlier for every home that draws it, "
-                    f"one of {drawn_earlier!r}"
-                )
-            if row.kind in _NUMBER_KINDS:
-                drawn_earlier.append(path)
-        if name in _EVERY_HOME_HAS:
-            drawn_for_every_home = drawn_earlier
-
-
-def _shuffled_pools(
-    config: FleetDistributionConfig,
-) -> Iterator[tuple[str, ShuffledPoolDistribution]]:
-    """Each shuffled pool among *config*'s component parameters, with its path, e.g. ('pv.capacity_kw', pool)."""
-    for path, _, spec in _component_draws(config):
-        if isinstance(spec, ShuffledPoolDistribution):
-            yield path, spec
-
-
-def _refuse_pools_not_sized_to_the_fleet(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a shuffled pool's counts do not total its n_homes: a pool holds one value per home."""
-    for path, pool in _shuffled_pools(config):
-        total = sum(pool.counts)
-        if total != config.n_homes:
-            raise ConfigurationError(
-                f"FleetDistributionConfig: shuffled_pool counts for '{path}' must total n_homes "
-                f"({config.n_homes}), got {total}"
-            )
-
-
-def _refuse_fixed_presences_their_rules_refuse(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a presence field's fixed value is one its table's presence rule refuses, e.g. a negative battery capacity; draws are checked as drawn."""
-    for name, (block, component) in _fleet_components(config).items():
-        if component is None or block.presence is None:
-            continue
-        spec = component.draws.get(block.presence)
-        if isinstance(spec, (int, float, str)):
-            block.asks_for_component(spec, f"{name}.{block.presence}")
-
-
-def _refuse_rounded_counts_with_no_whole_number(config: FleetDistributionConfig) -> None:
-    """Refuse *config* when a normal or uniform count that _converted_count rounds has no whole number from its min to its max, as _count_bounds states; draws are checked as drawn."""
-    for path, row, spec in _component_draws(config):
-        if (
-            row.kind is FieldKind.COUNT
-            and path not in _TRUNCATED_COUNTS
-            and isinstance(spec, (NormalDistribution, UniformDistribution))
-        ):
-            _count_bounds(spec, path)
-
-
-@dataclass
-class SimulationPeriod:
-    """Defines the time period for a simulation.
-
-    Attributes:
-        start_date: Start date as string (YYYY-MM-DD) or Timestamp
-        end_date: End date as string (YYYY-MM-DD) or Timestamp
-    """
-
-    start_date: Union[str, pd.Timestamp]
-    end_date: Union[str, pd.Timestamp]
-
-    def get_start_timestamp(self, timezone: str = "Europe/London") -> pd.Timestamp:
-        """Get start date as Timestamp."""
-        if isinstance(self.start_date, pd.Timestamp):
-            return self.start_date
-        ts = pd.Timestamp(self.start_date)
-        if ts.tz is None:
-            ts = ts.tz_localize(timezone)
-        return ts
-
-    def get_end_timestamp(self, timezone: str = "Europe/London") -> pd.Timestamp:
-        """Get end date as Timestamp."""
-        if isinstance(self.end_date, pd.Timestamp):
-            return self.end_date
-        ts = pd.Timestamp(self.end_date)
-        if ts.tz is None:
-            ts = ts.tz_localize(timezone)
-        return ts
-
-
-@dataclass
-class OutputConfig:
-    """Configuration for simulation output.
-
-    Attributes:
-        csv_path: Path to save CSV results (optional)
-        include_minute_data: Include 1-minute resolution data in output
-        include_summary: Include summary statistics
-        aggregation: Aggregation level for output (minute, daily, monthly, annual)
-    """
-
-    csv_path: Optional[str] = None
-    include_minute_data: bool = True
-    include_summary: bool = True
-    aggregation: str = "minute"
+def period_window(start_date: object, end_date: object, *, timezone: str, block_path: str = "period") -> SimulationWindow:
+    """The one-minute window on *timezone* from *start_date* to *end_date*, each read by period_day at its path in the period at *block_path*; a pair of days SimulationWindow refuses, such as a last day before the first, raises ConfigurationError naming both paths and days and the window's reason."""
+    start_path = child_path(block_path, "start_date")
+    end_path = child_path(block_path, "end_date")
+    first_day = period_day(start_date, start_path)
+    last_day = period_day(end_date, end_path)
+    try:
+        return SimulationWindow(first_day, last_day, ONE_MINUTE, timezone)
+    except ValueError as exc:
+        raise refusal(
+            start_path, f"{first_day.isoformat()} to {end_path} {last_day.isoformat()} gives no window: {exc}"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -571,27 +112,26 @@ class ScenarioConfig:
         name: Scenario identifier
         description: Human-readable description
         location: Geographic location (defaults to Bristol)
-        period: Simulation period
+        period: The days and clock the scenario simulates: a one-minute window on the
+            scenario's zone, its location's, else its first home's
         homes: Home configurations (for fleet simulation); a list is held as a tuple
         home: Single home configuration (for single-home simulation)
-        output: Output preferences
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional), read
             as SEGTariff reads its rate; a home whose own seg_tariff sets another rate is refused
-        tariff_config: Refused when set: no simulation reads it, so a home's
-            tariff is its HomeConfig.tariff_config
         finance: Financial appraisal parameters (None for no financial analysis)
+        flex_band: The grid-services uncertainty band a finance run reports flexibility in,
+            held as the GridServicesBand it names (None for none)
     """
 
     name: str
-    period: SimulationPeriod
+    period: SimulationWindow
     description: str = ""
     location: Optional[Location] = None
     homes: tuple[HomeConfig, ...] = ()
     home: Optional[HomeConfig] = None
-    output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
-    tariff_config: Optional[TariffConfig] = None
     finance: Optional[FinanceConfig] = None
+    flex_band: Optional[GridServicesBand] = None
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
@@ -606,11 +146,8 @@ class ScenarioConfig:
             )
         self._read_the_seg_rate()
         self._refuse_a_home_seg_rate_other_than_the_scenarios()
-        if self.tariff_config is not None:
-            raise ConfigurationError(
-                f"Scenario '{self.name}' sets tariff_config, which no simulation reads: "
-                "give each home its tariff as HomeConfig.tariff_config"
-            )
+        self._refuse_a_period_this_scenario_cannot_simulate()
+        self._read_the_flex_band()
 
     @property
     def is_fleet(self) -> bool:
@@ -637,6 +174,61 @@ class ScenarioConfig:
             return replace(self, home=transform(self.home))
         return replace(self, homes=tuple(transform(home) for home in self.homes))
 
+    def window(self) -> SimulationWindow:
+        """The period: the days the scenario simulates at ONE_MINUTE, on the clock of location, or of the first home's location when location is None."""
+        return self.period
+
+    def with_window(self, *, first_day: Optional[date] = None, last_day: Optional[date] = None) -> "ScenarioConfig":
+        """A copy whose period keeps each day not given, checked as construction checks; each day given is exactly a date.
+
+        Raises:
+            ConfigurationError: For days that give no window, such as a datetime or a last day
+                before the first, naming the scenario, the arguments given and the window's reason.
+        """
+        try:
+            period = replace(
+                self.period,
+                first_day=self.period.first_day if first_day is None else first_day,
+                last_day=self.period.last_day if last_day is None else last_day,
+            )
+        except ValueError as exc:
+            given = {"first_day": first_day, "last_day": last_day}
+            arguments = ", ".join(f"{parameter}={day!r}" for parameter, day in given.items() if day is not None)
+            raise ConfigurationError(f"Scenario '{self.name}': with_window({arguments}) gives no window: {exc}") from exc
+        return replace(self, period=period)
+
+    def simulation_bounds(self) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """The window's first and last days' local midnights: the start and end, end inclusive, that simulate_home and a fleet simulator take."""
+        window = self.window()
+        return (
+            pd.Timestamp(window.first_day, tz=window.timezone),
+            pd.Timestamp(window.last_day, tz=window.timezone),
+        )
+
+    def _timezone(self) -> str:
+        """The zone of the window's clock: location's, else the first stored home's location's."""
+        location = self.location if self.location is not None else self._stored_homes()[0].location
+        return location.timezone
+
+    def _refuse_a_period_this_scenario_cannot_simulate(self) -> None:
+        """Raise ConfigurationError, naming the scenario, for a period that is not a SimulationWindow, naming its type; at a cadence other than ONE_MINUTE, naming both; or on a zone other than _timezone()'s, naming both."""
+        period: object = self.period
+        if not isinstance(period, SimulationWindow):
+            raise ConfigurationError(
+                f"Scenario '{self.name}': period is a timebase.SimulationWindow, got {type(period).__name__} {period!r}"
+            )
+        if period.cadence != ONE_MINUTE:
+            raise ConfigurationError(
+                f"Scenario '{self.name}': period.cadence is {period.cadence!r}, "
+                f"but a scenario simulates at ONE_MINUTE, {ONE_MINUTE!r}"
+            )
+        timezone = self._timezone()
+        if period.timezone != timezone:
+            raise ConfigurationError(
+                f"Scenario '{self.name}': period.timezone is {period.timezone!r}, but the scenario's clock is "
+                f"{timezone!r}, its location's, else its first home's"
+            )
+
     def _stored_homes(self) -> tuple[HomeConfig, ...]:
         """The homes as stored: (home,) in the single-home form, else homes, in order."""
         return (self.home,) if self.home is not None else self.homes
@@ -659,6 +251,12 @@ class ScenarioConfig:
         if tariff is not None:
             object.__setattr__(self, "seg_tariff_pence_per_kwh", tariff.rate_pence_per_kwh)
 
+    def _read_the_flex_band(self) -> None:
+        """Hold flex_band as the GridServicesBand it names, raising ConfigurationError, naming the scenario and the value, for one naming no band."""
+        if self.flex_band is not None:
+            band = GridServicesBand.parse(self.flex_band, what=f"Scenario '{self.name}' flex_band")
+            object.__setattr__(self, "flex_band", band)
+
     def _refuse_a_home_seg_rate_other_than_the_scenarios(self) -> None:
         """Raise ConfigurationError naming the first home, by its path 'home' or 'homes[i]', whose own SEG rate is not math.isclose to the scenario's."""
         rate = self.seg_tariff_pence_per_kwh
@@ -676,1836 +274,190 @@ class ScenarioConfig:
             )
 
 
-def _child_path(block_path: str, key: str) -> str:
-    """Return the path of the *key* block inside the block at *block_path*; "" is the top level."""
-    return f"{block_path}.{key}" if block_path else key
-
-
-def _block_label(block_path: str) -> str:
-    """Name the block at *block_path* in an error message."""
-    return block_path or "the top level"
-
-
-def _require_mapping(block_path: str, data: object) -> dict[Any, Any]:
-    """Return the block at *block_path*, refusing it unless it is a mapping."""
-    if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"{_block_label(block_path)} must be a mapping, got {type(data).__name__}"
-        )
-    return data
-
-
-def _refuse_unrecognised_keys(
-    block_path: str, data: object, recognised: Collection[str]
-) -> dict[Any, Any]:
-    """Return the block at *block_path*, refusing it unless it is a mapping holding only *recognised* keys."""
-    mapping = _require_mapping(block_path, data)
-    unrecognised = sorted(repr(key) for key in mapping.keys() - recognised)
-    if unrecognised:
-        raise ConfigurationError(
-            f"Unrecognised keys in {_block_label(block_path)}: {', '.join(unrecognised)}; "
-            f"recognised keys: {', '.join(sorted(recognised))}"
-        )
-    return mapping
-
-
-def _read_name(block: Mapping[str, Any], *, block_path: str) -> str:
-    """Return the name the block at *block_path* sets, "" when it sets none or a null one, refusing a name that is not a string by its path."""
-    name = block.get("name")
-    if name is None:
-        return ""
-    if not isinstance(name, str):
-        raise ConfigurationError.must_be(_child_path(block_path, "name"), "a string", got=name)
-    return name
-
-
-_Built = TypeVar("_Built")
-
-
-@dataclass(frozen=True)
-class _BlockType(Generic[_Built]):
-    """One type a block names in its ``type:`` key.
-
-    *recognised_keys* is every key a block of the type recognises, ``type`` among them. *build*
-    reads a block holding only those keys, and receives the block's path in its file.
-    """
-
-    recognised_keys: frozenset[str]
-    build: Callable[[dict[str, Any], str], _Built]
-
-
-class _SubBlockReader(Protocol):
-    """Reads a nested block's value, given its path in its file, as the config the block describes."""
-
-    def __call__(self, data: Any, *, block_path: str) -> SettingValue: ...
-
-
-@dataclass(frozen=True)
-class SubBlock:
-    """A key whose value is a nested block, with its grammar's reader and writer.
-
-    *read* reads the key's non-null value at its block path; *write* writes the field's non-None
-    value as the block *read* reads back as it.
-    """
-
-    read: _SubBlockReader
-    write: Callable[[Any], dict[str, Any]]
-
-
-class FieldKind(Enum):
-    """The ways a fleet_distribution: block can give each home a value for one key of a component."""
-
-    NUMBER = "number"
-    """A float: fixed, null, weighted_discrete, normal, uniform, shuffled_pool or proportional_to."""
-
-    COUNT = "count"
-    """A whole number: drawn as a NUMBER is, then converted by the sampler's one count conversion."""
-
-    CHOICE = "choice"
-    """One of its FleetField's choices: fixed, null, or a weighted_discrete or shuffled_pool of them."""
-
-    SETTING = "setting"
-    """Not drawn: one value, as written (a string or a sub-block), given to every home."""
-
-    FLAG = "flag"
-    """Not drawn: true or false, read as boolean_fields.as_boolean reads it, given to every home."""
-
-
-#: The kinds a fleet gives every home as one value, never drawn.
-_GIVEN_EVERY_HOME: frozenset[FieldKind] = frozenset({FieldKind.SETTING, FieldKind.FLAG})
-
-#: The kinds whose draws are numbers: a count is drawn as a number is, then converted.
-_NUMBER_KINDS: frozenset[FieldKind] = frozenset({FieldKind.NUMBER, FieldKind.COUNT})
-
-
-@dataclass(frozen=True)
-class FleetField:
-    """One key's row in a component's fleet grammar.
-
-    *kind* is how a fleet_distribution: block gives each home the key's value. *choices* are the
-    values a CHOICE field may take; a field of any other kind has none. *required* means the
-    block must give the key.
-    """
-
-    kind: FieldKind
-    choices: tuple[str, ...] = ()
-    required: bool = False
-
-    def __post_init__(self) -> None:
-        """Refuse a CHOICE field without choices, and a field of any other kind with some."""
-        if (self.kind is FieldKind.CHOICE) != bool(self.choices):
-            needs = "must list its choices" if self.kind is FieldKind.CHOICE else "takes no choices"
-            raise ConfigurationError(f"FleetField: a {self.kind.name} field {needs}, got {self.choices!r}")
-
-
-@dataclass(frozen=True)
-class _DrawnKindRule:
-    """What a fleet may give a key of one drawn kind: the specs the kind draws, and the values a spec of it may list.
-
-    *spec_types* are the types of the specs the kind draws, beside null. *admits* says whether a
-    value a spec lists, or a bare spec, is one the kind admits for a key of the row given; null
-    always is. *describe_specs* and *describe_values* return the prose a refusal naming a key of
-    the row uses for the specs the kind draws and the values it admits, e.g. 'null or a number'.
-    """
-
-    spec_types: tuple[type[DistributionSpec], ...]
-    admits: Callable[[SpecValue, FleetField], bool]
-    describe_specs: Callable[[FleetField], str]
-    describe_values: Callable[[FleetField], str]
-
-
-#: A number or count field's rule. A value it lists is no string; reading it as a number is the sampler's.
-_NUMBER_KIND_RULE = _DrawnKindRule(
-    spec_types=(
-        int, float, WeightedDiscreteDistribution, NormalDistribution, UniformDistribution,
-        ShuffledPoolDistribution, ProportionalDistribution,
-    ),
-    admits=lambda value, row: not isinstance(value, str),
-    describe_specs=lambda row: (
-        "null, a number, or a weighted_discrete, normal, uniform, shuffled_pool or proportional_to of numbers"
-    ),
-    describe_values=lambda row: "null or a number",
-)
-
-_CHOICE_KIND_RULE = _DrawnKindRule(
-    spec_types=(str, WeightedDiscreteDistribution, ShuffledPoolDistribution),
-    admits=lambda value, row: value in row.choices,
-    describe_specs=lambda row: (
-        f"null, one of {list(row.choices)}, or a weighted_discrete or shuffled_pool of them and nulls"
-    ),
-    describe_values=lambda row: f"null or one of {list(row.choices)}",
-)
-
-#: The kind rules: what a fleet may give a key of each drawn kind. A number and a count draw alike;
-#: a SETTING or FLAG key is given every home, never drawn, so no rule names it.
-_DRAWN_KIND_RULES: Mapping[FieldKind, _DrawnKindRule] = MappingProxyType({
-    **dict.fromkeys(_NUMBER_KINDS, _NUMBER_KIND_RULE),
-    FieldKind.CHOICE: _CHOICE_KIND_RULE,
-})
-
-
-def _listed_values(spec: DistributionSpec) -> tuple[SpecValue, ...]:
-    """The values *spec* lists: a weighted_discrete's or shuffled_pool's values; a normal, uniform or proportional_to lists none, and any other spec lists itself."""
-    if isinstance(spec, (WeightedDiscreteDistribution, ShuffledPoolDistribution)):
-        return spec.values
-    if isinstance(spec, (NormalDistribution, UniformDistribution, ProportionalDistribution)):
-        return ()
-    return (spec,)
-
-
-def _held_in_the_wrong_place(path: str, row: FleetField) -> ConfigurationError:
-    """The refusal of the key at *path*, whose fleet row is *row*, held in the wrong one of a ComponentDistribution's draws and settings: a SETTING or FLAG key in its draws, or a key of a drawn kind in its settings."""
-    held_in, not_in = ("settings", "draws") if row.kind in _GIVEN_EVERY_HOME else ("draws", "settings")
-    return ConfigurationError(
-        f"{path} is a {row.kind.value} key, which a ComponentDistribution holds in its {held_in}, not its {not_in}"
-    )
-
-
-def _refuse_a_spec_its_row_cannot_draw(row: FleetField, spec: object, path: str, written: object) -> DistributionSpec:
-    """Return *spec*, the spec of the key at *path* whose fleet row is *row*, refusing it unless the row's kind is drawn and *spec* is null or a spec the kind draws, every value it lists one the kind admits.
-
-    A key of a kind no home draws, a SETTING or FLAG, is refused whatever its spec, as
-    _held_in_the_wrong_place states. A spec of a type the kind does not draw is refused naming
-    *path* and *written*, the spec as its block gives it. A value it lists, or a bare spec, that
-    the kind does not admit is refused naming *path* and the value, even one no home would draw.
-    _DRAWN_KIND_RULES holds each drawn kind's rule.
-    """
-    rule = _DRAWN_KIND_RULES.get(row.kind)
-    if rule is None:
-        raise _held_in_the_wrong_place(path, row)
-    if spec is None:
-        return None
-    if not isinstance(spec, rule.spec_types):
-        raise ConfigurationError(f"Invalid {path} {written!r}; valid specs: {rule.describe_specs(row)}")
-    for value in _listed_values(spec):
-        if value is not None and not rule.admits(value, row):
-            raise ConfigurationError(f"Invalid {path} value {value!r}; valid values: {rule.describe_values(row)}")
-    return spec
-
-
-def _any_draw_asks_for_it(drawn: object, path: str) -> bool:
-    """The presence rule of a component that any non-null draw of its presence field asks for."""
-    return True
-
-
-_Component = TypeVar("_Component", bound=DataclassInstance)
-
-
-@dataclass(frozen=True)
-class ComponentBlock(Generic[_Component]):
-    """A component's block in the scenario grammar, stated against the dataclass it builds.
-
-    *config_type* is the dataclass. *keys* are the block's keys, the fields it carries, in field
-    order; *outside_grammar* maps each other field to the reason no key carries it. *sub_blocks*
-    holds the keys whose value is a nested block, and *when_omitted* the value an omitted key
-    reads as, for each key where that is not the dataclass's declared default.
-
-    *fleet* holds the keys a fleet_distribution: block gives each home, each with its FleetField,
-    in key order, which is the order a home draws them; *not_in_fleet* maps each other key to the
-    reason the fleet grammar does not carry it. *presence* is the fleet field whose null draw
-    means the home has no such component, and *asks_for_component* says whether its non-null
-    draw, at its path, asks for one.
-    tests/unit/config/test_component_blocks.py holds every table to its dataclass's fields (T1).
-    """
-
-    config_type: type[_Component]
-    keys: tuple[str, ...]
-    outside_grammar: Mapping[str, str]
-    sub_blocks: Mapping[str, SubBlock]
-    when_omitted: Mapping[str, object]
-    fleet: Mapping[str, FleetField]
-    not_in_fleet: Mapping[str, str]
-    presence: Optional[str] = None
-    asks_for_component: Callable[[object, str], bool] = _any_draw_asks_for_it
-
-    def value_when_omitted(self, name: str) -> object:
-        """The value field *name* is built with when a block does not set it, as no block sets a field outside the grammar.
-
-        That is the table's when-omitted value, else the dataclass's declared default or its
-        default factory's value, else MISSING, which no value equals.
-        """
-        if name in self.when_omitted:
-            return self.when_omitted[name]
-        declared = {each.name: each for each in fields(self.config_type)}[name]
-        if declared.default_factory is not MISSING:
-            return declared.default_factory()
-        return declared.default
-
-
-def _set_keys(block: ComponentBlock[Any], data: object, block_path: str) -> dict[str, Any]:
-    """The keys the block at *block_path* sets, its null ones dropped, once every key it holds is one of *block*'s."""
-    return {
-        key: value
-        for key, value in _refuse_unrecognised_keys(block_path, data, block.keys).items()
-        if value is not None
-    }
-
-
-def _refuse_missing_keys(block_path: str, missing_keys: Collection[str]) -> None:
-    """Refuse the block at *block_path* if it leaves out any of *missing_keys*, keys it needs, naming each by its path."""
-    if missing_keys:
-        missing = ", ".join(_child_path(block_path, key) for key in missing_keys)
-        raise ConfigurationError(f"Missing required keys in {_block_label(block_path)}: {missing}")
-
-
-def _refuse_required_fleet_keys_left_out(block: ComponentBlock[Any], given: Collection[str], block_path: str) -> None:
-    """Refuse the fleet's component block at *block_path* if *given*, the keys it gives, leaves out a key *block*'s fleet rows require, naming each by its path."""
-    _refuse_missing_keys(block_path, [key for key, row in block.fleet.items() if row.required and key not in given])
-
-
-def _built_from(config_type: type[_Built], values: Mapping[str, Any], block_path: str) -> _Built:
-    """The config *config_type* builds from *values*, the block at *block_path*'s.
-
-    Raises:
-        ConfigurationError: naming the block, for a value of a type *config_type* cannot use,
-            which building it refuses with a TypeError.
-    """
-    try:
-        return config_type(**values)
-    except TypeError as refusal:
-        raise ConfigurationError(f"{_block_label(block_path)}: {refusal}") from refusal
-
-
-def _built_component(
-    block: ComponentBlock[_Component], set_keys: Mapping[str, Any], block_path: str
-) -> _Component:
-    """The config the block at *block_path* describes, built from the keys it sets.
-
-    Each sub-block it sets is read first, in the table's order; then the dataclass is built once
-    from the set values, as written, over the table's when-omitted values.
-
-    Raises:
-        ConfigurationError: naming by its path each key the block leaves out that has neither a
-            declared default nor a when-omitted value; or naming the block, for a value of a
-            type its dataclass cannot use, which building it refuses with a TypeError.
-    """
-    _refuse_missing_keys(
-        block_path,
-        [key for key in block.keys if key not in set_keys and block.value_when_omitted(key) is MISSING],
-    )
-    sub_block_configs = {
-        key: sub_block.read(set_keys[key], block_path=_child_path(block_path, key))
-        for key, sub_block in block.sub_blocks.items()
-        if key in set_keys
-    }
-    return _built_from(block.config_type, {**block.when_omitted, **set_keys, **sub_block_configs}, block_path)
-
-
-def _read_component_block(
-    block: ComponentBlock[_Component], data: object, *, block_path: str
-) -> _Component:
-    """The config the component block at *block_path* describes, read by *block*'s table.
-
-    A key outside the table's keys is refused, null or not; a null key reads as absent; an
-    omitted key takes the table's when-omitted value, else the dataclass's declared default; a
-    key with neither is refused by its path; and a value of a type the dataclass cannot use is
-    refused naming the block.
-    """
-    return _built_component(block, _set_keys(block, data, block_path), block_path)
-
-
-def _float_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* to a float, keeping a null as None."""
-    return None if value is None else float(value)
-
-
-def _number(value: Any) -> float:
-    """Coerce *value* to a float as float() does, refusing a boolean, which float() would read as 1.0 or 0.0."""
-    if isinstance(value, bool):
-        raise TypeError(f"{value!r} is a boolean, not a number")
-    return float(value)
-
-
-def _number_or_none(value: Any) -> Optional[float]:
-    """Coerce *value* as :func:`_number` does, keeping a null as None."""
-    return None if value is None else _number(value)
-
-
-def parse_location_block(
-    data: Optional[dict[str, Any]], *, block_path: str = "location"
-) -> Location:
-    """Parse a ``location:`` block into a Location, as LOCATION_BLOCK reads it.
-
-    A block that is absent or sets no key, its null keys read as absent, is Bristol. Otherwise it
-    must set latitude and longitude: a block that leaves either out is refused, naming it by its
-    path. An omitted timezone or altitude takes Bristol's, and an omitted name stays empty.
-    """
-    if data is None:
-        return Location.bristol()
-    set_keys = _set_keys(LOCATION_BLOCK, data, block_path)
-    if not set_keys:
-        return Location.bristol()
-    return _built_component(LOCATION_BLOCK, set_keys, block_path)
-
-
-def _parse_pv_config(data: dict[str, Any], *, block_path: str) -> PVConfig:
-    """Parse a pv: block into a PVConfig, as _read_component_block reads PV_BLOCK."""
-    return _read_component_block(PV_BLOCK, data, block_path=block_path)
-
-
-_GRID_CHARGING_BLOCK_KEYS: frozenset[str] = frozenset({"target_soc_fraction"})
-
-
-def _parse_grid_charge_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[GridChargeConfig]:
-    """Parse grid-charging configuration from a dict or None.
-
-    An omitted ``target_soc_fraction`` takes GridChargeConfig's declared default.
-
-    Args:
-        data: grid_charging mapping (e.g. ``{'target_soc_fraction': 0.9}``) or None.
-        block_path: The block's path in its file, named in error messages.
-
-    Returns:
-        GridChargeConfig if data is a non-None mapping, else None.
-
-    Raises:
-        ConfigurationError: If data is present but not a mapping, or carries a key
-            other than ``target_soc_fraction``.
-    """
-    if data is None:
-        return None
-    return GridChargeConfig(**_refuse_unrecognised_keys(block_path, data, _GRID_CHARGING_BLOCK_KEYS))
-
-
-def _grid_charging_block(grid_charging: GridChargeConfig) -> dict[str, Any]:
-    """The grid_charging: block _parse_grid_charge_config reads back as *grid_charging*."""
-    return {"target_soc_fraction": grid_charging.target_soc_fraction}
-
-
-_PER_DIRECTION_EFFICIENCY_KEYS: tuple[str, ...] = ("charge_efficiency", "discharge_efficiency")
-"""The battery: block's per-direction efficiency keys, in BATTERY_BLOCK's order, which a block setting efficiency, the round trip, may not set."""
-
-
-def _refuse_both_efficiency_forms(block_path: str, set_keys: Mapping[str, Any]) -> None:
-    """Refuse the battery: block at *block_path* if *set_keys*, the keys it sets, hold a per-direction efficiency beside efficiency, naming the block and each key."""
-    per_direction = [key for key in _PER_DIRECTION_EFFICIENCY_KEYS if key in set_keys]
-    if per_direction:
-        raise ConfigurationError(
-            f"{_block_label(block_path)} sets both forms of a battery's efficiency: efficiency and "
-            f"{' and '.join(per_direction)}; set efficiency, the round trip, or charge_efficiency "
-            "and discharge_efficiency, not both"
-        )
-
-
-def _parse_battery_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[BatteryConfig]:
-    """Parse a battery: block into a BatteryConfig by BATTERY_BLOCK, its efficiency the round trip BatteryConfig.with_round_trip reads; a null block is no battery.
-
-    Raises:
-        ConfigurationError: as _read_component_block refuses a block; for one setting
-            efficiency beside charge_efficiency or discharge_efficiency, naming the block and
-            each key; or as with_round_trip refuses the efficiency it sets, naming that key by
-            its path.
-    """
-    if data is None:
-        return None
-    set_keys = _set_keys(BATTERY_BLOCK, data, block_path)
-    round_trip = set_keys.get("efficiency")
-    if round_trip is None:
-        return _built_component(BATTERY_BLOCK, set_keys, block_path)
-    _refuse_both_efficiency_forms(block_path, set_keys)
-    other_keys = {key: value for key, value in set_keys.items() if key != "efficiency"}
-    battery = _built_component(BATTERY_BLOCK, other_keys, block_path)
-    try:
-        return battery.with_round_trip(round_trip)
-    except ConfigurationError as refusal:
-        raise ConfigurationError(f"{_child_path(block_path, 'efficiency')}: {refusal}") from refusal
-
-
-def _parse_load_config(data: dict[str, Any], *, block_path: str) -> LoadConfig:
-    """Parse a load: block into a LoadConfig, as _read_component_block reads LOAD_BLOCK."""
-    return _read_component_block(LOAD_BLOCK, data, block_path=block_path)
-
-
-_KEYS_A_STRATEGY_READS: frozenset[str] = frozenset(
-    each.name for variant in STRATEGY_CONFIG_BY_TYPE.values() for each in fields(variant) if each.init
-)
-"""Each key a dispatch_strategy: block reads beside strategy_type, for one strategy or another."""
-
-
-def _tuples(value: Any) -> Any:
-    """*value* with each list in it, at any depth, read as a tuple."""
-    if isinstance(value, (list, tuple)):
-        return tuple(_tuples(item) for item in value)
-    return value
-
-
-def _lists(value: Any) -> Any:
-    """*value* with each tuple in it, at any depth, written as a list, which _tuples reads back as it."""
-    if isinstance(value, (list, tuple)):
-        return [_lists(item) for item in value]
-    return value
-
-
-def _strategy_variant(block: Mapping[str, Any], block_path: str) -> type[DispatchStrategyConfig]:
-    """The variant of DispatchStrategyConfig the strategy_type of the dispatch_strategy: block at *block_path* names.
-
-    Raises:
-        ConfigurationError: for a strategy_type that is missing or names no variant, naming its
-            path, its value and the variants' tags.
-    """
-    tag = block.get("strategy_type")
-    variant = STRATEGY_CONFIG_BY_TYPE.get(tag) if isinstance(tag, str) else None
-    if variant is None:
-        raise ConfigurationError(
-            f"Invalid {_child_path(block_path, 'strategy_type')} {tag!r}; "
-            f"valid values: {sorted(STRATEGY_CONFIG_BY_TYPE)}"
-        )
-    return variant
-
-
-def parse_dispatch_strategy_config(
-    data: Optional[dict[str, Any]], *, block_path: str = "dispatch_strategy"
-) -> Optional[DispatchStrategyConfig]:
-    """Parse a dispatch_strategy: block into the variant of DispatchStrategyConfig its strategy_type names; a null block is no strategy.
-
-    The block's other keys are the variant's fields, each list in them read as a tuple. A null
-    key that some strategy reads reads as absent, so a block written before the strategies were
-    variants, every key present and those its strategy does not read null, reads as its variant.
-
-    Raises:
-        ConfigurationError: for a block that is not a mapping; a strategy_type that is missing
-            or names no variant, naming its path, its value and the variants' tags; a key the
-            variant does not read, unless it is null and another strategy reads it; a key the
-            variant needs, left out or null, naming its path; a value of a type the variant
-            cannot use, naming the block; and a value the variant refuses, as it refuses it.
-    """
-    if data is None:
-        return None
-    block = _require_mapping(block_path, data)
-    variant = _strategy_variant(block, block_path)
-    variant_fields = [each for each in fields(variant) if each.init]
-    set_keys = _refuse_unrecognised_keys(
-        block_path,
-        {key: value for key, value in block.items() if value is not None or key not in _KEYS_A_STRATEGY_READS},
-        {"strategy_type", *(each.name for each in variant_fields)},
-    )
-    _refuse_missing_keys(
-        block_path,
-        [
-            each.name
-            for each in variant_fields
-            if each.name not in set_keys and each.default is MISSING and each.default_factory is MISSING
-        ],
-    )
-    values = {each.name: _tuples(set_keys[each.name]) for each in variant_fields if each.name in set_keys}
-    return _built_from(variant, values, block_path)
-
-
-def _dispatch_strategy_block(strategy: DispatchStrategyConfig) -> dict[str, Any]:
-    """The dispatch_strategy: block parse_dispatch_strategy_config reads back as *strategy*: its tag, then its fields."""
-    return {
-        "strategy_type": strategy.strategy_type,
-        **{each.name: _lists(getattr(strategy, each.name)) for each in fields(strategy) if each.init},
-    }
-
-
-_NUMBER_FIELD = FleetField(FieldKind.NUMBER)
-_COUNT_FIELD = FleetField(FieldKind.COUNT)
-_SETTING_FIELD = FleetField(FieldKind.SETTING)
-
-_UNNAMED_IN_A_FLEET = "the generator names each home, and leaves its components unnamed"
-
-PV_BLOCK: ComponentBlock[PVConfig] = ComponentBlock(
-    config_type=PVConfig,
-    keys=(
-        "capacity_kw", "azimuth", "tilt", "name", "module_efficiency", "temperature_coefficient",
-        "inverter_efficiency", "inverter_capacity_kw", "system_age_years",
-        "degradation_rate_per_year", "system_losses",
-    ),
-    outside_grammar=MappingProxyType({
-        "custom_module_params": "custom pvlib module parameters have no YAML form",
-        "custom_inverter_params": "custom pvlib inverter parameters have no YAML form",
-    }),
-    sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType({"capacity_kw": 4.0}),
-    fleet=MappingProxyType({
-        "capacity_kw": FleetField(FieldKind.NUMBER, required=True),
-        **dict.fromkeys(
-            (
-                "azimuth", "tilt", "module_efficiency", "temperature_coefficient", "inverter_efficiency",
-                "inverter_capacity_kw", "system_age_years", "degradation_rate_per_year", "system_losses",
-            ),
-            _NUMBER_FIELD,
-        ),
-    }),
-    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
-)
-
-BATTERY_BLOCK: ComponentBlock[BatteryConfig] = ComponentBlock(
-    config_type=BatteryConfig,
-    keys=(
-        "capacity_kwh", "max_charge_kw", "max_discharge_kw", "name", "dispatch_strategy",
-        "grid_charging", "min_soc_fraction", "max_soc_fraction", "charge_efficiency",
-        "discharge_efficiency", "efficiency", "system_age_years", "calendar_fade_rate_per_year",
-        "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
-    ),
-    outside_grammar=MappingProxyType({}),
-    sub_blocks=MappingProxyType({
-        "dispatch_strategy": SubBlock(parse_dispatch_strategy_config, _dispatch_strategy_block),
-        "grid_charging": SubBlock(_parse_grid_charge_config, _grid_charging_block),
-    }),
-    when_omitted=MappingProxyType({"capacity_kwh": 5.0}),
-    fleet=MappingProxyType({
-        "capacity_kwh": FleetField(FieldKind.NUMBER, required=True),
-        "max_charge_kw": _NUMBER_FIELD,
-        "max_discharge_kw": _NUMBER_FIELD,
-        "dispatch_strategy": _SETTING_FIELD,
-        "grid_charging": _SETTING_FIELD,
-        **dict.fromkeys(
-            (
-                "min_soc_fraction", "max_soc_fraction", "charge_efficiency", "discharge_efficiency",
-                "efficiency", "system_age_years", "calendar_fade_rate_per_year",
-                "cycle_fade_per_equivalent_full_cycle", "soh_floor", "soh",
-            ),
-            _NUMBER_FIELD,
-        ),
-    }),
-    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
-    presence="capacity_kwh",
-    asks_for_component=has_battery,
-)
-
-LOAD_BLOCK: ComponentBlock[LoadConfig] = ComponentBlock(
-    config_type=LoadConfig,
-    keys=("annual_consumption_kwh", "household_occupants", "name", "use_stochastic", "seed"),
-    outside_grammar=MappingProxyType({}),
-    sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType({}),
-    fleet=MappingProxyType({
-        "annual_consumption_kwh": _NUMBER_FIELD,
-        "household_occupants": _COUNT_FIELD,
-        "use_stochastic": FleetField(FieldKind.FLAG),
-    }),
-    not_in_fleet=MappingProxyType({
-        "name": _UNNAMED_IN_A_FLEET,
-        "seed": "the generator gives each home the fleet's seed plus the home's index",
-    }),
-)
-
-HEAT_PUMP_BLOCK: ComponentBlock[HeatPumpConfig] = ComponentBlock(
-    config_type=HeatPumpConfig,
-    keys=("heat_pump_type", "thermal_capacity_kw", "annual_heat_demand_kwh", "name"),
-    outside_grammar=MappingProxyType({}),
-    sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType({}),
-    fleet=MappingProxyType({
-        "heat_pump_type": FleetField(FieldKind.CHOICE, choices=HEAT_PUMP_TYPES),
-        "thermal_capacity_kw": _NUMBER_FIELD,
-        "annual_heat_demand_kwh": _NUMBER_FIELD,
-    }),
-    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
-    presence="heat_pump_type",
-)
-
-EV_BLOCK: ComponentBlock[EVConfig] = ComponentBlock(
-    config_type=EVConfig,
-    keys=(
-        "charger_type", "arrival_hour", "departure_hour", "required_charge_kwh",
-        "smart_charging_mode", "name",
-    ),
-    outside_grammar=MappingProxyType({}),
-    sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType({}),
-    fleet=MappingProxyType({
-        "charger_type": FleetField(FieldKind.CHOICE, choices=CHARGER_TYPES, required=True),
-        "arrival_hour": _COUNT_FIELD,
-        "departure_hour": _COUNT_FIELD,
-        "required_charge_kwh": _NUMBER_FIELD,
-        "smart_charging_mode": _SETTING_FIELD,
-    }),
-    not_in_fleet=MappingProxyType({"name": _UNNAMED_IN_A_FLEET}),
-    presence="charger_type",
-)
-
-_LOCATION_KEYS = ("latitude", "longitude", "timezone", "altitude", "name")
-
-LOCATION_BLOCK: ComponentBlock[Location] = ComponentBlock(
-    config_type=Location,
-    keys=_LOCATION_KEYS,
-    outside_grammar=MappingProxyType({}),
-    sub_blocks=MappingProxyType({}),
-    when_omitted=MappingProxyType(
-        {
-            key: value
-            for key, value in asdict(Location.bristol()).items()
-            if key in ("timezone", "altitude")
-        }
-    ),
-    fleet=MappingProxyType({}),
-    not_in_fleet=MappingProxyType(
-        dict.fromkeys(_LOCATION_KEYS, "a fleet's homes share the location: block of its file")
-    ),
-)
-
-
-def _components_by_name(
-    *,
-    pv: ComponentDistribution,
-    battery: Optional[ComponentDistribution],
-    load: ComponentDistribution,
-    heat_pump: Optional[ComponentDistribution],
-    ev: Optional[ComponentDistribution],
-) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
-    """Each of a fleet's components by name, with its table and its distribution, None for a component the fleet gives no home."""
-    return {
-        "pv": (PV_BLOCK, pv),
-        "battery": (BATTERY_BLOCK, battery),
-        "load": (LOAD_BLOCK, load),
-        "heat_pump": (HEAT_PUMP_BLOCK, heat_pump),
-        "ev": (EV_BLOCK, ev),
-    }
-
-
-def _fleet_components(
-    config: FleetDistributionConfig,
-) -> Mapping[str, tuple[ComponentBlock[Any], Optional[ComponentDistribution]]]:
-    """Each component of *config* by name, with its table and its distribution, as _components_by_name pairs them."""
-    return _components_by_name(
-        pv=config.pv, battery=config.battery, load=config.load, heat_pump=config.heat_pump, ev=config.ev
-    )
-
-
-_TARIFF_PERIOD_KEYS: frozenset[str] = frozenset({"start_time", "end_time", "rate_per_kwh", "name"})
-
-_PRESET_TARIFF_RATE_KEYS: frozenset[str] = frozenset({"off_peak_rate", "peak_rate"})
-
-
-def _build_flat_rate_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the flat_rate tariff a block names, refusing it unless it gives a rate."""
-    rate = data.get("rate_per_kwh")
-    if rate is None:
-        raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
-    return TariffConfig.flat_rate(
-        rate_per_kwh=float(rate),
-        name=_read_name(data, block_path=block_path)
-    )
-
-
-def _preset_tariff_overrides(data: dict[str, Any]) -> dict[str, Any]:
-    """Return the keyword overrides a preset tariff block sets, its rates read as floats.
-
-    Reads a block that parse_tariff_config has already confined to its type's keys.
-    """
-    return {
-        key: float(value) if key in _PRESET_TARIFF_RATE_KEYS else value
-        for key, value in data.items()
-        if key != "type"
-    }
-
-
-def _build_economy_7_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the Economy 7 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_7(**_preset_tariff_overrides(data))
-
-
-def _build_economy_10_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the Economy 10 tariff a block names, with the overrides it sets."""
-    return TariffConfig.economy_10(**_preset_tariff_overrides(data))
-
-
-def _parse_tariff_period(data: object, *, block_path: str) -> TariffPeriod:
-    """Parse one period of a custom tariff block, refusing it unless it gives a start, an end and a rate."""
-    period = _refuse_unrecognised_keys(block_path, data, _TARIFF_PERIOD_KEYS)
-    for key in ("start_time", "end_time", "rate_per_kwh"):
-        if key not in period:
-            raise ConfigurationError(f"Tariff period requires '{key}' field")
-    return TariffPeriod(
-        start_time=period["start_time"],
-        end_time=period["end_time"],
-        rate_per_kwh=float(period["rate_per_kwh"]),
-        name=_read_name(period, block_path=block_path)
-    )
-
-
-def _build_custom_tariff(data: dict[str, Any], block_path: str) -> TariffConfig:
-    """Build the custom tariff a block names from its periods, refusing it unless it gives some."""
-    if "periods" not in data:
-        raise ConfigurationError("custom tariff requires 'periods' field")
-
-    periods_data = data["periods"]
-    if not periods_data:
-        raise ConfigurationError("custom tariff must have at least one period")
-
-    return TariffConfig(
-        periods=tuple(
-            _parse_tariff_period(period, block_path=_child_path(block_path, f"periods[{index}]"))
-            for index, period in enumerate(periods_data)
-        ),
-        name=_read_name(data, block_path=block_path)
-    )
-
-
-_TARIFF_TYPES: Mapping[str, _BlockType[TariffConfig]] = MappingProxyType({
-    "flat_rate": _BlockType(
-        frozenset({"type", "rate_per_kwh", "name"}),
-        _build_flat_rate_tariff,
-    ),
-    "economy_7": _BlockType(
-        frozenset({
-            "type", "off_peak_rate", "peak_rate", "off_peak_start", "off_peak_end",
-        }),
-        _build_economy_7_tariff,
-    ),
-    "economy_10": _BlockType(
-        frozenset({
-            "type", "off_peak_rate", "peak_rate", "night_start", "night_end", "afternoon_start",
-            "afternoon_end", "evening_start", "evening_end",
-        }),
-        _build_economy_10_tariff,
-    ),
-    "custom": _BlockType(
-        frozenset({"type", "periods", "name"}),
-        _build_custom_tariff,
-    ),
-})
-
-
-def parse_tariff_config(
-    data: Optional[dict[str, Any]], *, block_path: str = "tariff"
-) -> Optional[TariffConfig]:
-    """Parse tariff configuration from config data.
-
-    Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
-    tariff definitions with explicit periods.
-
-    Args:
-        data: Tariff configuration dictionary or None
-        block_path: The block's path in its file, named in error messages
-
-    Returns:
-        TariffConfig object or None if data is None
-
-    Raises:
-        ConfigurationError: If tariff specification is invalid, including a
-            block or custom period that is not a mapping or carries a key its
-            type does not read
-    """
-    if data is None:
-        return None
-    _require_mapping(block_path, data)
-
-    tariff_type = data.get("type")
-    if tariff_type is None:
-        raise ConfigurationError("Tariff configuration requires 'type' field")
-    block_type = _TARIFF_TYPES.get(tariff_type) if isinstance(tariff_type, str) else None
-    if block_type is None:
-        raise ConfigurationError(
-            f"Unknown tariff type '{tariff_type}'. "
-            f"Supported types: {', '.join(_TARIFF_TYPES)}"
-        )
-    _refuse_unrecognised_keys(block_path, data, block_type.recognised_keys)
-    return block_type.build(data, block_path)
-
-
-def _parse_heat_pump_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[HeatPumpConfig]:
-    """Parse a heat_pump: block into a HeatPumpConfig, as _read_component_block reads HEAT_PUMP_BLOCK; a null block is no heat pump."""
-    if data is None:
-        return None
-    return _read_component_block(HEAT_PUMP_BLOCK, data, block_path=block_path)
-
-
-def _parse_ev_config(data: Optional[dict[str, Any]], *, block_path: str) -> Optional[EVConfig]:
-    """Parse an ev: block into an EVConfig, as _read_component_block reads EV_BLOCK; a null block is no EV."""
-    if data is None:
-        return None
-    return _read_component_block(EV_BLOCK, data, block_path=block_path)
-
-
-_HOME_SCALAR_KEYS: tuple[str, ...] = ("name",)
-
-_HOME_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_HOME_SCALAR_KEYS, "dispatch_strategy", "pv", "battery", "load", "tariff", "heat_pump", "ev",
-})
-
-
-def _read_dispatch_strategy_key(block: Mapping[str, Any], *, block_path: str) -> Optional[str]:
-    """The dispatch_strategy the block at *block_path* sets: None when it is absent or null, else one of HOME_DISPATCH_STRATEGIES.
-
-    Raises:
-        ConfigurationError: It is set to another value, as refuse_unknown_home_dispatch_strategy
-            refuses it, naming its key's path.
-    """
-    value = block.get("dispatch_strategy")
-    if value is None:
-        return None
-    return refuse_unknown_home_dispatch_strategy(value, field=_child_path(block_path, "dispatch_strategy"))
-
-
-def parse_home_block(
-    data: dict[str, Any], location: Location, *, block_path: str = "home"
-) -> HomeConfig:
-    """Parse a ``home:`` block, or one ``homes:`` entry, into a HomeConfig at *location*.
-
-    A key the block omits takes HomeConfig's declared default, and so does a null scalar. An
-    omitted pv or load block reads as an empty one.
-    """
-    home = _refuse_unrecognised_keys(block_path, data, _HOME_BLOCK_KEYS)
-    return HomeConfig(
-        pv_config=_parse_pv_config(home.get("pv", {}), block_path=_child_path(block_path, "pv")),
-        battery_config=_parse_battery_config(
-            home.get("battery"), block_path=_child_path(block_path, "battery")
-        ),
-        load_config=_parse_load_config(
-            home.get("load", {}), block_path=_child_path(block_path, "load")
-        ),
-        location=location,
-        tariff_config=parse_tariff_config(
-            home.get("tariff"), block_path=_child_path(block_path, "tariff")
-        ),
-        heat_pump_config=_parse_heat_pump_config(
-            home.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
-        ),
-        ev_config=_parse_ev_config(home.get("ev"), block_path=_child_path(block_path, "ev")),
-        **{key: home[key] for key in _HOME_SCALAR_KEYS if home.get(key) is not None},
-        **_dispatch_strategy_argument(_read_dispatch_strategy_key(home, block_path=block_path)),
-    )
-
-
-def _dispatch_strategy_argument(dispatch_strategy: Optional[str]) -> dict[str, Any]:
-    """HomeConfig's dispatch_strategy argument for *dispatch_strategy*: none when it is None, so the field takes its default."""
-    return {} if dispatch_strategy is None else {"dispatch_strategy": dispatch_strategy}
-
-
 _PERIOD_BLOCK_KEYS: frozenset[str] = frozenset({"start_date", "end_date"})
 
 
-def _parse_period(data: dict[str, Any], *, block_path: str) -> SimulationPeriod:
-    """Parse simulation period from config data."""
-    _refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
-    if "start_date" not in data or "end_date" not in data:
-        raise ConfigurationError("Simulation period requires 'start_date' and 'end_date'")
-    return SimulationPeriod(
-        start_date=data["start_date"],
-        end_date=data["end_date"],
+def _parse_period(data: dict[str, Any], *, timezone: str, block_path: str) -> SimulationWindow:
+    """Read the simulation period at *block_path* as period_window reads it on *timezone*, refusing it first unless it gives both days, naming each it leaves out."""
+    refuse_unrecognised_keys(block_path, data, _PERIOD_BLOCK_KEYS)
+    require_keys(block_path, data, ["start_date", "end_date"])
+    return period_window(data["start_date"], data["end_date"], timezone=timezone, block_path=block_path)
+
+
+@dataclass(frozen=True)
+class _ScenarioLevelBlocks:
+    """A scenario's blocks other than its homes source, as parse_scenario reads them: what its ScenarioConfig holds and every home it builds is given."""
+
+    name: str
+    description: str
+    location: Location
+    period: SimulationWindow
+    tariff: Optional[TariffConfig]
+    seg_tariff_pence_per_kwh: Optional[float]
+    finance: Optional[FinanceConfig]
+    flex_band: Optional[GridServicesBand]
+
+    def home_built_from(self, block: Any, *, block_path: str) -> HomeConfig:
+        """The home the home block at *block_path* describes, at the scenario's location and on its tariff unless it sets its own."""
+        return parse_home_block(block, self.location, block_path=block_path, fleet_tariff=self.tariff)
+
+    def homes_generated_by(self, distribution: FleetDistributionConfig) -> tuple[HomeConfig, ...]:
+        """The homes *distribution* generates, at the scenario's location and on its tariff."""
+        return tuple(generate_homes_from_distribution(distribution, self.location, fleet_tariff=self.tariff))
+
+    def scenario(self, *, home: Optional[HomeConfig] = None, homes: tuple[HomeConfig, ...] = ()) -> ScenarioConfig:
+        """The scenario of these blocks holding *home* or *homes*."""
+        return ScenarioConfig(
+            name=self.name,
+            description=self.description,
+            location=self.location,
+            period=self.period,
+            homes=homes,
+            home=home,
+            seg_tariff_pence_per_kwh=self.seg_tariff_pence_per_kwh,
+            finance=self.finance,
+            flex_band=self.flex_band,
+        )
+
+
+def _one_home(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
+    """The single-home scenario of the home: block at *block_path*."""
+    return blocks.scenario(home=blocks.home_built_from(data, block_path=block_path))
+
+
+def _listed_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
+    """The fleet scenario of the homes: list at *block_path*, refused unless it lists at least one home."""
+    listed = require_list(block_path, data)
+    if not listed:
+        raise refusal(block_path, "must list at least one home")
+    return blocks.scenario(
+        homes=tuple(blocks.home_built_from(entry, block_path=f"{block_path}[{index}]") for index, entry in enumerate(listed))
     )
 
 
-_OUTPUT_BLOCK_KEYS: frozenset[str] = frozenset({
-    "csv_path", "include_minute_data", "include_summary", "aggregation",
+def _generated_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
+    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates."""
+    return blocks.scenario(homes=blocks.homes_generated_by(parse_fleet_distribution_config(data, block_path=block_path)))
+
+
+class _HomesSourceReader(Protocol):
+    """A builder of the scenario whose homes one homes source's block, at *block_path*, gives."""
+
+    def __call__(self, blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig: ...
+
+
+_HOMES_SOURCES: Mapping[str, _HomesSourceReader] = MappingProxyType({
+    "home": _one_home,
+    "homes": _listed_homes,
+    "fleet_distribution": _generated_homes,
+})
+"""Each key a scenario's homes come from, with the builder of the scenario that key's block gives."""
+
+_SCENARIO_LEVEL_KEYS: frozenset[str] = frozenset({
+    "name", "description", "location", "period", "tariff", "seg", "finance", "flex_band", "community",
 })
 
+_SCENARIO_KEYS: frozenset[str] = _SCENARIO_LEVEL_KEYS | _HOMES_SOURCES.keys()
 
-def _parse_output_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[OutputConfig]:
-    """Parse output configuration from config data."""
-    if data is None:
-        return None
-    _refuse_unrecognised_keys(block_path, data, _OUTPUT_BLOCK_KEYS)
-    return OutputConfig(
-        csv_path=data.get("csv_path"),
-        include_minute_data=data.get("include_minute_data", True),
-        include_summary=data.get("include_summary", True),
-        aggregation=data.get("aggregation", "minute"),
-    )
-
-
-# --- Distribution Parsing and Sampling ---
-
-
-_SWEEP_SPEC_KEYS: frozenset[str] = frozenset({"type", "min", "max", "steps", "mode"})
-
-
-def _build_weighted_discrete_spec(
-    data: dict[str, Any], block_path: str
-) -> WeightedDiscreteDistribution:
-    """Build the weighted_discrete distribution a spec names, refusing it unless it gives values and weights."""
-    if "values" not in data or "weights" not in data:
-        raise ConfigurationError(
-            f"weighted_discrete distribution for '{block_path}' requires 'values' and 'weights'"
-        )
-    return WeightedDiscreteDistribution(
-        values=tuple(data["values"]),
-        weights=tuple(float(w) for w in data["weights"]),
-    )
-
-
-def _build_normal_spec(data: dict[str, Any], block_path: str) -> NormalDistribution:
-    """Build the normal distribution a spec names, refusing it unless it gives a mean and a std."""
-    if "mean" not in data or "std" not in data:
-        raise ConfigurationError(
-            f"normal distribution for '{block_path}' requires 'mean' and 'std'"
-        )
-    return NormalDistribution(
-        mean=float(data["mean"]),
-        std=float(data["std"]),
-        min=_float_or_none(data.get("min")),
-        max=_float_or_none(data.get("max")),
-    )
-
-
-def _build_uniform_spec(data: dict[str, Any], block_path: str) -> UniformDistribution:
-    """Build the uniform distribution a spec names, refusing it unless it gives a min and a max."""
-    if "min" not in data or "max" not in data:
-        raise ConfigurationError(
-            f"uniform distribution for '{block_path}' requires 'min' and 'max'"
-        )
-    return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
-
-
-def _build_fixed_spec(data: dict[str, Any], block_path: str) -> Optional[float]:
-    """Build the fixed value a spec names, refusing it unless it gives a value."""
-    if "value" not in data:
-        raise ConfigurationError(
-            f"fixed distribution for '{block_path}' requires 'value'"
-        )
-    return _float_or_none(data["value"])
-
-
-def _build_shuffled_pool_spec(
-    data: dict[str, Any], block_path: str
-) -> ShuffledPoolDistribution:
-    """Build the shuffled_pool distribution a spec names, refusing it unless it gives values and counts."""
-    if "values" not in data or "counts" not in data:
-        raise ConfigurationError(
-            f"shuffled_pool distribution for '{block_path}' requires 'values' and 'counts'"
-        )
-    return ShuffledPoolDistribution(
-        values=tuple(data["values"]),
-        counts=tuple(int(c) for c in data["counts"]),
-    )
-
-
-def _parse_proportional_to_multiplier(data: Any, block_path: str) -> Union[float, SweepSpec]:
-    """Parse the multiplier of the spec at *block_path*: a number, or a sweep given as a mapping."""
-    if not isinstance(data, dict):
-        return float(data)
-    if data.get("type") != "sweep":
-        raise ConfigurationError(
-            f"proportional_to multiplier dict for '{block_path}' must have type='sweep'"
-        )
-    _refuse_unrecognised_keys(_child_path(block_path, "multiplier"), data, _SWEEP_SPEC_KEYS)
-    return SweepSpec(
-        min=float(data["min"]),
-        max=float(data["max"]),
-        steps=int(data["steps"]),
-        mode=data.get("mode", "geometric"),
-    )
-
-
-def _build_proportional_to_spec(
-    data: dict[str, Any], block_path: str
-) -> ProportionalDistribution:
-    """Build the proportional_to distribution a spec names, refusing it unless it gives a source."""
-    if "source" not in data:
-        raise ConfigurationError(
-            f"proportional_to distribution for '{block_path}' requires 'source'"
-        )
-    return ProportionalDistribution(
-        source=data["source"],
-        multiplier=_parse_proportional_to_multiplier(data.get("multiplier", 1.0), block_path),
-        offset=float(data.get("offset", 0.0)),
-    )
-
-
-_DISTRIBUTION_SPEC_TYPES: Mapping[str, _BlockType[DistributionSpec]] = MappingProxyType({
-    "weighted_discrete": _BlockType(
-        frozenset({"type", "values", "weights"}),
-        _build_weighted_discrete_spec,
-    ),
-    "normal": _BlockType(
-        frozenset({"type", "mean", "std", "min", "max"}),
-        _build_normal_spec,
-    ),
-    "uniform": _BlockType(
-        frozenset({"type", "min", "max"}),
-        _build_uniform_spec,
-    ),
-    "fixed": _BlockType(
-        frozenset({"type", "value"}),
-        _build_fixed_spec,
-    ),
-    "shuffled_pool": _BlockType(
-        frozenset({"type", "values", "counts"}),
-        _build_shuffled_pool_spec,
-    ),
-    "proportional_to": _BlockType(
-        frozenset({"type", "source", "multiplier", "offset"}),
-        _build_proportional_to_spec,
-    ),
+_RETIRED_SCENARIO_KEYS: Mapping[str, str] = MappingProxyType({
+    "output": "no command reads an output block; pass --output to the command instead",
+    "tariff_config": "a scenario's tariff is its top-level tariff: block, which every home without its own takes",
+    **RETIRED_DISPATCH_STRATEGY_KEY,
+    **{
+        key: f"a home's {key} block goes under home: (or each homes[i]); the flat home-file form is retired"
+        for key in sorted(HOME_BLOCK_KEYS - _SCENARIO_KEYS)
+    },
 })
+"""Each key a scenario no longer reads, with why it is refused and what replaces it."""
 
 
-def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
-    """Parse a distribution specification from config data.
+def _refuse_keys_no_scenario_reads(data: object, *, block_path: str) -> dict[str, Any]:
+    """Return the scenario at *block_path*, refusing it unless it is a mapping holding only the keys a scenario reads.
 
-    Args:
-        data: Raw data (scalar, None, or distribution dict)
-        param_name: The parameter's path in its file, named in error messages
+    A retired key is refused first, naming its path and what replaces it.
+    """
+    scenario = refuse_retired_keys(block_path, data, _RETIRED_SCENARIO_KEYS)
+    return refuse_unrecognised_keys(block_path, scenario, _SCENARIO_KEYS)
 
-    Returns:
-        DistributionSpec (distribution object, scalar, or None)
+
+def _parse_flex_band(value: object, *, block_path: str) -> Optional[GridServicesBand]:
+    """The band the flex_band at *block_path* names, a string read case-insensitively; None when it is absent or null.
 
     Raises:
-        ConfigurationError: If distribution specification is invalid
+        ConfigurationError: as GridServicesBand.parse refuses a value naming no band, naming
+            the value as written.
     """
-    # Handle None and scalars
-    if data is None:
+    if value is None:
         return None
-    if isinstance(data, (int, float)):
-        return float(data)
-
-    # Must be a dict with type key
-    if not isinstance(data, dict):
-        raise ConfigurationError(
-            f"Invalid distribution spec for '{param_name}': expected number, null, or dict"
-        )
-
-    dist_type = data.get("type")
-    if dist_type is None:
-        raise ConfigurationError(
-            f"Distribution for '{param_name}' requires 'type' field"
-        )
-    block_type = _DISTRIBUTION_SPEC_TYPES.get(dist_type) if isinstance(dist_type, str) else None
-    if block_type is None:
-        raise ConfigurationError(
-            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            f"Supported: {', '.join(_DISTRIBUTION_SPEC_TYPES)}"
-        )
-    _refuse_unrecognised_keys(param_name, data, block_type.recognised_keys)
-    return block_type.build(data, param_name)
+    if isinstance(value, str) and value.lower() in {band.value for band in GridServicesBand}:
+        return GridServicesBand(value.lower())
+    return GridServicesBand.parse(value, what=block_path)
 
 
-def _parse_drawn_spec(row: FleetField, data: object, key_path: str) -> DistributionSpec:
-    """Read the spec of the drawn key at *key_path*, whose fleet row is *row*, as _refuse_a_spec_its_row_cannot_draw admits it.
-
-    A CHOICE's value that is not a mapping is the spec as written; any other value is read as
-    _parse_distribution_spec reads it. A spec the row's kind does not draw is refused naming
-    *key_path* and the spec as written.
-    """
-    spec = data if row.kind is FieldKind.CHOICE and not isinstance(data, dict) else _parse_distribution_spec(data, key_path)
-    return _refuse_a_spec_its_row_cannot_draw(row, spec, key_path, written=data)
-
-
-def _read_setting(block: ComponentBlock[Any], key: str, value: Any, key_path: str) -> SettingValue:
-    """The value every home is given for *block*'s *key*, a SETTING or FLAG, read from *value*, not null, at *key_path*.
-
-    A FLAG is read as true or false, naming *key_path*. A SETTING is read by its sub-block's
-    reader when the key has a sub-block, and is otherwise the value as written.
-    """
-    if block.fleet[key].kind is FieldKind.FLAG:
-        return as_boolean(value, key_path)
-    sub_block = block.sub_blocks.get(key)
-    return value if sub_block is None else sub_block.read(value, block_path=key_path)
-
-
-def _parse_component_distribution(
-    block: ComponentBlock[Any], data: object, *, block_path: str
-) -> ComponentDistribution:
-    """Read a fleet_distribution: component block by *block*'s fleet rows.
-
-    A key outside the rows is refused, and so is a required key left out, naming its path. A
-    SETTING key is read as written, or by its sub-block's reader, and a FLAG key as true or
-    false, naming its path; a null one of either reads as absent. Any other key is a spec, kept
-    even when null, as _parse_drawn_spec reads it.
-    """
-    mapping = _refuse_unrecognised_keys(block_path, data, block.fleet)
-    _refuse_required_fleet_keys_left_out(block, mapping, block_path)
-    draws: dict[str, DistributionSpec] = {}
-    settings: dict[str, SettingValue] = {}
-    for key, row in block.fleet.items():
-        if key not in mapping:
-            continue
-        value, key_path = mapping[key], _child_path(block_path, key)
-        if row.kind not in _GIVEN_EVERY_HOME:
-            draws[key] = _parse_drawn_spec(row, value, key_path)
-        elif value is not None:
-            settings[key] = _read_setting(block, key, value, key_path)
-    return ComponentDistribution(draws, settings)
-
-
-def _parse_optional_component_distribution(
-    block: ComponentBlock[Any], data: object, *, block_path: str
-) -> Optional[ComponentDistribution]:
-    """Read a component block as _parse_component_distribution does; a null block is no such component for any home."""
-    return None if data is None else _parse_component_distribution(block, data, block_path=block_path)
-
-
-_FLEET_DISTRIBUTION_BLOCK_KEYS: frozenset[str] = frozenset({
-    "n_homes", "pv", "load", "battery", "heat_pump", "ev", "seed", "random_order",
-    "dispatch_strategy",
-})
-
-
-def parse_fleet_distribution_config(
-    data: dict[str, Any], *, block_path: str = _FLEET_DISTRIBUTION_PATH
-) -> FleetDistributionConfig:
-    """Parse the fleet_distribution: block at *block_path*, each component block read by its table's fleet rows.
-
-    The refusals of a key outside its component's rows, a required key left out, a spec its
-    key's kind does not draw and a proportional_to source not drawn earlier for every home that
-    draws the dependent name the key under *block_path*.
-    """
-    _refuse_unrecognised_keys(block_path, data, _FLEET_DISTRIBUTION_BLOCK_KEYS)
-    if "n_homes" not in data:
-        raise ConfigurationError("Fleet distribution config requires 'n_homes'")
-    if "pv" not in data:
-        raise ConfigurationError("Fleet distribution config requires 'pv' section")
-
-    pv = _parse_component_distribution(PV_BLOCK, data["pv"], block_path=_child_path(block_path, "pv"))
-    load = _parse_component_distribution(LOAD_BLOCK, data.get("load", {}), block_path=_child_path(block_path, "load"))
-    battery = _parse_optional_component_distribution(
-        BATTERY_BLOCK, data.get("battery"), block_path=_child_path(block_path, "battery")
+def _read_scenario_level_blocks(document: object, *, block_path: str) -> tuple[dict[str, Any], _ScenarioLevelBlocks]:
+    """The scenario at *block_path*, refused unless it holds only the keys a scenario reads, and its blocks other than its homes source, read in order."""
+    scenario = _refuse_keys_no_scenario_reads(document, block_path=block_path)
+    name = read_text(scenario, "name", block_path=block_path)
+    description = read_text(scenario, "description", block_path=block_path)
+    location = parse_location_block(scenario.get("location"), block_path=child_path(block_path, "location"))
+    period_path = child_path(block_path, "period")
+    period = (
+        period_window(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, timezone=location.timezone, block_path=period_path)
+        if scenario.get("period") is None
+        else _parse_period(scenario["period"], timezone=location.timezone, block_path=period_path)
     )
-    heat_pump = _parse_optional_component_distribution(
-        HEAT_PUMP_BLOCK, data.get("heat_pump"), block_path=_child_path(block_path, "heat_pump")
-    )
-    ev = _parse_optional_component_distribution(EV_BLOCK, data.get("ev"), block_path=_child_path(block_path, "ev"))
-    _refuse_proportional_sources_not_drawn_earlier(
-        _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
-    )
-    return FleetDistributionConfig(
-        n_homes=int(data["n_homes"]),
-        pv=pv,
-        load=load,
-        battery=battery,
-        heat_pump=heat_pump,
-        ev=ev,
-        seed=data.get("seed"),
-        random_order=data.get("random_order", "default"),
-        dispatch_strategy=_read_dispatch_strategy_key(data, block_path=block_path),
-    )
-
-
-def _count_bounds(
-    spec: Union[NormalDistribution, UniformDistribution], setting: str
-) -> tuple[float, float]:
-    """Return the least and greatest whole numbers from *spec*'s min to its max.
-
-    A min or max that *spec* leaves unset, or that is not finite, bounds nothing:
-    the least is then -inf and the greatest inf.
-
-    Raises:
-        ConfigurationError: If no whole number lies from *spec*'s min to its max,
-            naming *setting*, the min and the max.
-    """
-    least: float = math.ceil(spec.min) if spec.min is not None and math.isfinite(spec.min) else -math.inf
-    greatest: float = math.floor(spec.max) if spec.max is not None and math.isfinite(spec.max) else math.inf
-    if least > greatest:
-        raise ConfigurationError(
-            f"{setting} is a count, so a whole number must lie from its min to its max, "
-            f"got a min of {spec.min!r} and a max of {spec.max!r}"
-        )
-    return least, greatest
-
-
-def _nearest_count(
-    draw: float, spec: Union[NormalDistribution, UniformDistribution], setting: str
-) -> float:
-    """Return the whole number nearest *draw* among those from *spec*'s min to its max, as a float.
-
-    A half rounds up. _count_bounds says which whole numbers *spec* allows.
-
-    Raises:
-        ConfigurationError: As _count_bounds, if no whole number lies from *spec*'s
-            min to its max.
-    """
-    least, greatest = _count_bounds(spec, setting)
-    return float(min(max(_nearest_whole_number(draw), least), greatest))
-
-
-def _nearest_whole_number(value: float) -> float:
-    """Return the whole number nearest *value*, a half rounding up, as a float."""
-    whole = math.floor(value)
-    return float(whole + 1 if value - whole >= 0.5 else whole)
-
-
-#: The COUNT fields _converted_count truncates, as the generator did before it drew each field
-#: by its kind; every other count is rounded. Task 868 rounds these too and deletes the set
-#: (docs/prds/component-defaults-one-home.md §6 decisions 8 and 9).
-_TRUNCATED_COUNTS: frozenset[str] = frozenset({"ev.arrival_hour", "ev.departure_hour"})
-
-
-def _refuse_unless_finite(value: SpecValue, path: str) -> None:
-    """Refuse *value*, a count of the field at *path* to convert, if it is an infinity or a NaN, naming *path* and the value."""
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ConfigurationError.must_be(path, "a finite number", got=value)
-
-
-def _converted_count(value: SpecValue, spec: DistributionSpec, path: str) -> SpecValue:
-    """Return the count of the COUNT field at *path* for *value*, drawn from *spec*; this is the sampler's one count conversion.
-
-    A count in _TRUNCATED_COUNTS is truncated to an int. For any other, a draw from a normal or
-    uniform distribution gives the whole number nearest it among those from the spec's min to
-    its max, as _nearest_count states, and a proportional_to's value the whole number nearest
-    it, a half rounding up either way. The whole number is returned as a float, so a refusal of
-    the count names it as drawn, 1e+300 rather than the 301-digit int it equals. A fixed value
-    is returned as the spec gives it, and any other value as drawn.
-
-    Raises:
-        ConfigurationError: If a count it truncates, or a proportional_to's value, is an
-            infinity or a NaN, naming *path* and the value; or as _nearest_count does, for a
-            normal or uniform distribution with no whole number from its min to its max.
-    """
-    if path in _TRUNCATED_COUNTS:
-        _refuse_unless_finite(value, path)
-        return None if value is None else int(value)
-    if isinstance(spec, (int, float)):
-        return spec
-    if isinstance(value, (int, float)) and isinstance(spec, (NormalDistribution, UniformDistribution)):
-        return _nearest_count(value, spec, path)
-    if isinstance(value, (int, float)) and isinstance(spec, ProportionalDistribution):
-        _refuse_unless_finite(value, path)
-        return _nearest_whole_number(value)
-    return value
-
-
-def _proportional_value(
-    spec: ProportionalDistribution, path: str, drawn: Mapping[str, SpecValue]
-) -> Optional[float]:
-    """The value *spec*, the spec of the field at *path*, gives: its multiplier times the value *drawn* holds for its source, plus its offset; a null source gives null.
-
-    FleetDistributionConfig refuses, as it is built, a source that is not a number or count
-    field drawn earlier for every home that draws *path*; these refusals check that rule again
-    where the source is used.
-
-    Raises:
-        ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
-            source, or holds a choice, naming *path* and the source; or if the multiplier is a
-            SweepSpec, which expand_sweep_configs replaces before any home is drawn.
-    """
-    if spec.source not in drawn:
-        raise ConfigurationError(f"{path} is proportional_to {spec.source}, which no earlier field of the home drew")
-    source = drawn[spec.source]
-    if source is None:
-        return None
-    if isinstance(source, str):
-        raise ConfigurationError(f"{path} is proportional_to {spec.source}, which drew {source!r}, not a number")
-    if isinstance(spec.multiplier, SweepSpec):
-        raise ConfigurationError(
-            "Cannot sample ProportionalDistribution with SweepSpec multiplier directly. "
-            "Use expand_sweep_configs() to expand sweep values first."
-        )
-    return source * spec.multiplier + spec.offset
-
-
-class _DistributionSampler:
-    """Draws a fleet's settings home by home, from one RNG seeded with the fleet's seed.
-
-    Before the first home it draws ahead what the fleet's random order says, each
-    setting's values under the setting's path. A setting drawn ahead hands out its
-    values in order, one per home; any other setting is drawn afresh from its spec.
-    """
-
-    def __init__(self, config: FleetDistributionConfig) -> None:
-        self._rng = random.Random(config.seed)
-        self._drawn_ahead: dict[str, list[SpecValue]] = {}
-        self._handed_out: dict[str, int] = {}
-        order = _RANDOM_ORDERS[config.random_order]
-        specs = {path: spec for path, _, spec in _component_draws(config)}
-        for setting in order.pre_sampled:
-            spec = specs.get(setting)
-            if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
-                self._drawn_ahead[setting] = [spec.draw(self._rng) for _ in range(config.n_homes)]
-        pools = dict(_shuffled_pools(config))
-        shuffled_first = [setting for setting in order.shuffled_first if setting in pools]
-        for setting in shuffled_first + [setting for setting in pools if setting not in shuffled_first]:
-            values = pools[setting].create_pool()
-            self._rng.shuffle(values)
-            self._drawn_ahead[setting] = values
-
-    def draw(
-        self, row: FleetField, spec: DistributionSpec, path: str, drawn: Mapping[str, SpecValue]
-    ) -> SpecValue:
-        """Draw the next home's value of the field at *path*, whose fleet row is *row*, from *spec*.
-
-        A proportional_to gives what _proportional_value computes from *drawn*, the home's
-        draws so far by path, and any other spec what sample draws; a COUNT's value is then
-        converted by _converted_count.
-
-        Raises:
-            ConfigurationError: As _proportional_value, sample or _converted_count refuse the draw.
-        """
-        value: SpecValue
-        if isinstance(spec, ProportionalDistribution):
-            value = _proportional_value(spec, path, drawn)
-        else:
-            value = self.sample(spec, path)
-        return _converted_count(value, spec, path) if row.kind is FieldKind.COUNT else value
-
-    def sample(self, spec: DistributionSpec, setting: str) -> SpecValue:
-        """Draw the next home's value of *setting* from *spec*.
-
-        A setting drawn ahead hands out its next value. Any other is drawn afresh: None
-        gives None, a bare choice gives itself, a fixed number gives itself as a float, and
-        a weighted discrete, normal or uniform spec draws from the RNG.
-
-        Args:
-            spec: The setting's distribution specification
-            setting: The setting's path in the fleet distribution, e.g. 'pv.tilt'
-
-        Raises:
-            ConfigurationError: If *setting* was drawn ahead and every value of it is
-                handed out, or if *spec* cannot be drawn afresh, as a proportional_to
-                or a pool not drawn ahead for *setting* cannot, naming *setting*; or if
-                *spec* is a normal or uniform distribution and the value it draws is not
-                a finite number, naming *setting* and the draw. A normal's draw is
-                checked after its min and max clamp it.
-        """
-        value = self._next_value(spec, setting)
-        if (
-            isinstance(spec, (NormalDistribution, UniformDistribution))
-            and isinstance(value, float)
-            and not math.isfinite(value)
-        ):
-            raise ConfigurationError(
-                f"{setting} must draw samples that are finite numbers, got a sample of {value!r}"
-            )
-        return value
-
-    def _next_value(self, spec: DistributionSpec, setting: str) -> SpecValue:
-        if setting in self._drawn_ahead:
-            return self._next_value_drawn_ahead(setting)
-        if spec is None or isinstance(spec, str):
-            return spec
-        if isinstance(spec, (int, float)):
-            return float(spec)
-        if isinstance(spec, (WeightedDiscreteDistribution, NormalDistribution, UniformDistribution)):
-            return spec.draw(self._rng)
-        raise ConfigurationError(f"{setting} cannot be drawn from {spec!r}")
-
-    def _next_value_drawn_ahead(self, setting: str) -> SpecValue:
-        values = self._drawn_ahead[setting]
-        handed_out = self._handed_out.get(setting, 0)
-        if handed_out == len(values):
-            raise ConfigurationError(
-                f"{setting} has no value left to draw: its {len(values)} values, one per home, are all drawn"
-            )
-        self._handed_out[setting] = handed_out + 1
-        return values[handed_out]
-
-
-_NOTHING_GIVEN: Mapping[str, object] = MappingProxyType({})
-
-
-def _drawn_component(
-    name: str,
-    block: ComponentBlock[_Component],
-    component: Optional[ComponentDistribution],
-    sampler: _DistributionSampler,
-    drawn: dict[str, SpecValue],
-    home_number: int,
-    *,
-    given: Mapping[str, object] = _NOTHING_GIVEN,
-) -> Optional[_Component]:
-    """Draw home *home_number*'s *name* component by *block*'s fleet rows, and build it; None when the home has none.
-
-    Each row *component* draws is drawn in the table's order, and recorded in *drawn* under its
-    path; SETTING and FLAG rows, and rows it does not draw, are skipped. The home has no such
-    component when the presence field is not drawn, draws null, or draws a value the table's
-    presence rule says asks for none. The dataclass is built from the non-null draws, the
-    settings and *given*, so each field drawn null or not drawn takes its default.
-
-    Raises:
-        ConfigurationError: As sampler.draw refuses a draw, naming its path; as the table's
-            presence rule refuses the presence field's draw, e.g. has_battery a negative or
-            non-finite battery capacity; if a required field is not drawn, naming its path, or
-            draws null, naming its path and the home; or, naming the component and the home, as
-            the dataclass refuses what it is built from.
-    """
-    if component is None:
-        return None
-    values: dict[str, object] = {}
-    for key, row in block.fleet.items():
-        if row.kind in _GIVEN_EVERY_HOME:
-            continue
-        path = f"{name}.{key}"
-        value: SpecValue = None
-        if key in component.draws:
-            value = drawn[path] = sampler.draw(row, component.draws[key], path, drawn)
-        if key == block.presence and (value is None or not block.asks_for_component(value, path)):
-            return None
-        if value is not None:
-            values[key] = value
-        elif row.required:
-            got = f"home {home_number} drew null" if key in component.draws else "the fleet does not draw it"
-            raise ConfigurationError(f"{_child_path(_FLEET_DISTRIBUTION_PATH, path)} is required, but {got}")
-    try:
-        return block.config_type(**values, **component.settings, **given)
-    except (ValueError, TypeError) as refusal:
-        raise ConfigurationError(
-            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)}, home {home_number}: {refusal}"
-        ) from refusal
-
-
-def _drawn_component_every_home_has(
-    name: str,
-    block: ComponentBlock[_Component],
-    component: Optional[ComponentDistribution],
-    sampler: _DistributionSampler,
-    drawn: dict[str, SpecValue],
-    home_number: int,
-    *,
-    given: Mapping[str, object] = _NOTHING_GIVEN,
-) -> _Component:
-    """Draw and build home *home_number*'s *name* component as _drawn_component does, for a component in _EVERY_HOME_HAS.
-
-    Raises:
-        ConfigurationError: As _drawn_component does; or if the home is given no *name*
-            component, naming the component and the home.
-    """
-    built = _drawn_component(name, block, component, sampler, drawn, home_number, given=given)
-    if built is None:
-        raise ConfigurationError(
-            f"{_child_path(_FLEET_DISTRIBUTION_PATH, name)} gave home {home_number} no {name}, which every home needs"
-        )
-    return built
-
-
-def _checked_component(built: Mapping[str, object], name: str, config_type: type[_Built]) -> _Built:
-    """The home's *name* component in *built*, checked to be a *config_type*.
-
-    Raises:
-        TypeError: If *built* holds another type under *name*, naming the component and both types.
-    """
-    component = built[name]
-    if not isinstance(component, config_type):
-        raise TypeError(
-            f"home component {name!r} was built as {type(component).__name__}, not {config_type.__name__}"
-        )
-    return component
-
-
-def _checked_component_or_none(
-    built: Mapping[str, object], name: str, config_type: type[_Built]
-) -> Optional[_Built]:
-    """The home's *name* component in *built* as _checked_component checks it; None when the home has none.
-
-    Raises:
-        TypeError: As _checked_component does.
-    """
-    if built[name] is None:
-        return None
-    return _checked_component(built, name, config_type)
-
-
-def _generated_home(
-    config: FleetDistributionConfig,
-    sampler: _DistributionSampler,
-    index: int,
-    location: Location,
-    fleet_tariff: Optional[TariffConfig],
-) -> HomeConfig:
-    """The fleet's home at *index*: it draws its components in _HOME_DRAW_ORDER (T3), each by its table's fleet rows.
-
-    A component in _EVERY_HOME_HAS is drawn as _drawn_component_every_home_has draws it, any
-    other as _drawn_component does. Each load is given the fleet's seed plus the home's index,
-    when the fleet has a seed. Each component goes into HomeConfig only after it is checked to
-    be its own field's type.
-    """
-    home_number = index + 1
-    drawn: dict[str, SpecValue] = {}
-    components = _fleet_components(config)
-    given = {"load": _NOTHING_GIVEN if config.seed is None else {"seed": config.seed + index}}
-    built: dict[str, object] = {}
-    for name in _HOME_DRAW_ORDER:
-        block, component = components[name]
-        draw = _drawn_component_every_home_has if name in _EVERY_HOME_HAS else _drawn_component
-        built[name] = draw(name, block, component, sampler, drawn, home_number, given=given.get(name, _NOTHING_GIVEN))
-    return HomeConfig(
-        pv_config=_checked_component(built, "pv", PVConfig),
-        battery_config=_checked_component_or_none(built, "battery", BatteryConfig),
-        load_config=_checked_component(built, "load", LoadConfig),
-        heat_pump_config=_checked_component_or_none(built, "heat_pump", HeatPumpConfig),
-        ev_config=_checked_component_or_none(built, "ev", EVConfig),
+    return scenario, _ScenarioLevelBlocks(
+        name=name,
+        description=description,
         location=location,
-        name=f"Home {home_number}",
-        tariff_config=fleet_tariff,
-        **_dispatch_strategy_argument(config.dispatch_strategy),
+        period=period,
+        tariff=parse_tariff_config(scenario.get("tariff"), block_path=child_path(block_path, "tariff")),
+        seg_tariff_pence_per_kwh=parse_seg_rate(scenario.get("seg"), block_path=child_path(block_path, "seg")),
+        finance=parse_finance_config(scenario.get("finance"), block_path=child_path(block_path, "finance")),
+        flex_band=_parse_flex_band(scenario.get("flex_band"), block_path=child_path(block_path, "flex_band")),
     )
 
 
-def generate_homes_from_distribution(
-    config: FleetDistributionConfig,
-    location: Location,
-    *,
-    fleet_tariff: Optional[TariffConfig] = None,
-) -> list[HomeConfig]:
-    """Generate a list of homes by sampling from distributions.
+def _refuse_unless_one_homes_source(scenario: Mapping[str, Any], *, block_path: str) -> None:
+    """Refuse the scenario at *block_path*, naming the sources, unless it sets exactly one key of _HOMES_SOURCES, a null one included."""
+    given = [key for key in _HOMES_SOURCES if key in scenario]
+    if len(given) == 1:
+        return
+    sources = ", ".join(repr(key) for key in _HOMES_SOURCES)
+    if not given:
+        raise refusal(block_path, f"requires the scenario's homes, from exactly one of {sources}")
+    raise refusal(
+        block_path,
+        f"sets {', '.join(repr(key) for key in given)}, but a scenario's homes come from exactly one of {sources}",
+    )
 
-    Each home draws its components in _HOME_DRAW_ORDER, each component's keys in its table's
-    fleet order, through one sampler (_DistributionSampler).
 
-    Args:
-        config: Fleet distribution configuration
-        location: Location for all homes
-        fleet_tariff: Optional TariffConfig to apply to every home. When None
-            (default) homes are generated with tariff_config=None, preserving
-            bit-identical behaviour for callers that do not pass this kwarg.
+def _homes_source(scenario: Mapping[str, Any], *, block_path: str) -> str:
+    """The one key of _HOMES_SOURCES the scenario at *block_path* sets, refused as _refuse_unless_one_homes_source refuses it."""
+    _refuse_unless_one_homes_source(scenario, block_path=block_path)
+    return next(key for key in _HOMES_SOURCES if key in scenario)
 
-    Returns:
-        List of HomeConfig objects
+
+def parse_scenario(document: object, *, block_path: str = "") -> ScenarioConfig:
+    """Read the scenario mapping at *block_path*: a bare scenario document, or a scenario: block or scenarios: entry.
+
+    A scenario is name and description (strings, "" when absent), location (Bristol when
+    absent), period (DEFAULT_FIRST_DAY to DEFAULT_LAST_DAY on the location's clock when absent),
+    tariff, seg, finance, flex_band and community, then exactly one homes source: home, homes or
+    fleet_distribution. Every home is built at the location, on the tariff unless it sets an equal
+    one, and simulated at the seg rate unless it sets its own. Blocks are read in that order, a
+    null scenario-level block as absent; community: is left to load_community_config. The homes
+    source is the key the scenario sets, so a null one is refused by its reader, as no mapping
+    or no list. The grammar is docs/prds/one-scenario-reader.md §4.2.
 
     Raises:
-        ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
-            uniform draw that is not a finite number, a count with no whole number from its
-            spec's min to its max, an EV hour or a proportional_to's count that is an
-            infinity or a NaN); if a required field draws null, naming its path and the
-            home; if a presence rule refuses a draw, as battery.has_battery refuses a
-            negative or non-finite battery capacity; if the fleet gives a home no PV or no
-            load, which every home needs, naming the component and the home; as a
-            component's dataclass refuses what it is built from, naming the component and
-            the home; or as HomeConfig refuses a home whose battery's dispatch would ignore
-            a setting (tou_optimized with no fleet_tariff, or a grid_charging its dispatch
-            would ignore), in HomeConfig's words, which name neither the home nor the
-            fleet_distribution block.
-            Where it uses them, it checks again what FleetDistributionConfig
-            refuses as it is built: that each shuffled pool's counts total config.n_homes,
-            that each required field is drawn and that each proportional_to's source is a
-            number the home drew earlier.
+        ConfigurationError: naming the block's path: for a retired key, naming what replaces it,
+            then a key no scenario reads; then for the first block, in that order, its reader
+            refuses; then for a scenario setting no homes source or more than one.
     """
-    _refuse_pools_not_sized_to_the_fleet(config)
-    sampler = _DistributionSampler(config)
-    return [_generated_home(config, sampler, index, location, fleet_tariff) for index in range(config.n_homes)]
-
-
-_SEG_BLOCK_KEYS: frozenset[str] = frozenset({"preset", "rate_pence_per_kwh"})
-
-
-def parse_seg_rate(data: object, *, block_path: str = "seg") -> Optional[float]:
-    """Read the SEG export rate in pence/kWh from a ``seg:`` block.
-
-    The block names exactly one of a :data:`~solar_challenge.seg.SEG_PRESETS`
-    ``preset`` or a ``rate_pence_per_kwh`` that :func:`_parse_seg_rate_scalar`
-    accepts.  ``None`` means no SEG; any other shape raises
-    :exc:`ConfigurationError` naming *block_path*.
-    """
-    if data is None:
-        return None
-    data = _refuse_unrecognised_keys(block_path, data, _SEG_BLOCK_KEYS)
-    if ("preset" in data) == ("rate_pence_per_kwh" in data):
-        raise ConfigurationError(
-            f"'{block_path}' must specify exactly one of 'preset' or "
-            f"'rate_pence_per_kwh', got {data!r}"
-        )
-    if "rate_pence_per_kwh" in data:
-        return _parse_seg_rate_scalar(
-            data["rate_pence_per_kwh"], key_path=f"{block_path}.rate_pence_per_kwh"
-        )
-    try:
-        return resolve_seg_tariff(data["preset"]).rate_pence_per_kwh
-    except (ValueError, TypeError) as exc:
-        raise ConfigurationError(f"'{block_path}' block {data!r} is invalid: {exc}") from exc
-
-
-def _parse_seg_rate_scalar(value: Any, *, key_path: str) -> float:
-    """Read a SEG export rate in pence/kWh: a finite number that :class:`SEGTariff` accepts."""
-    try:
-        rate = float(value)
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"'{key_path}' must be a number, got {value!r}") from exc
-    if isinstance(value, bool) or not math.isfinite(rate):
-        raise ConfigurationError(f"'{key_path}' must be a finite number, got {value!r}")
-    try:
-        return SEGTariff(name="", rate_pence_per_kwh=rate).rate_pence_per_kwh
-    except ValueError as exc:
-        raise ConfigurationError(f"'{key_path}' is invalid: {exc}") from exc
-
-
-# Rows follow FinanceConfig's field order, which decides the first bad value reported.
-_FINANCE_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "standing_charge_pence_per_day": _number,
-    "vat_rate": _number,
-    "retail_baseline_rate_pence_per_kwh": _number,
-    "self_consumption_override": _number_or_none,
-    "pv_cost_per_kwp_gbp": _number,
-    "roof_fit_cost_gbp": _number,
-    "battery_cost_per_kwh_gbp": _number,
-    "inverter_cost_per_kw_gbp": _number,
-    "grant_gbp": _number,
-    "equity_fraction": _number,
-    "loan_term_years": _number,
-    "loan_rate": _number,
-    "opex_per_home_per_year_gbp": _number,
-    "asset_life_years": _number,
-    "own_use_rate_pence_per_kwh": _number,
-    "retained_cash_floor_per_home_per_year_gbp": _number,
-    "grid_services_income_per_kw_per_year_gbp": _number,
-    "grid_services_model": str,
-})
-
-_FINANCE_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_FINANCE_SCALAR_COERCIONS, "grid_services_events",
-})
-
-# Rows follow GridServicesEventsConfig's field order, which decides the first bad value reported.
-_GRID_SERVICES_EVENTS_SCALAR_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "band": str,
-    "aggregator_share": _number,
-    "utilisation_factor": _number,
-    "availability_gbp_per_kw_per_event": _number_or_none,
-    "utilisation_gbp_per_mwh": _number_or_none,
-    "delivery_baseline": str,
-})
-
-_GRID_SERVICES_EVENTS_BLOCK_KEYS: frozenset[str] = frozenset({
-    *_GRID_SERVICES_EVENTS_SCALAR_COERCIONS, "event_windows",
-})
-
-
-def _int_tuple(values: Any) -> tuple[int, ...]:
-    """Coerce each of *values* to an int as int() does, keeping their order."""
-    return tuple(int(value) for value in values)
-
-
-# Rows follow EventWindow's field order, which decides the first bad value reported.
-_EVENT_WINDOW_COERCIONS: Mapping[str, Callable[[Any], Any]] = MappingProxyType({
-    "months": _int_tuple,
-    "weekdays": _int_tuple,
-    "hours": _int_tuple,
-    "events_per_year": int,
-    "event_hours": _number,
-})
-
-
-def _parse_event_windows(data: object, *, block_path: str) -> tuple[EventWindow, ...]:
-    """Parse the event_windows list at *block_path* into EventWindows."""
-    if not isinstance(data, list):
-        raise ConfigurationError(f"{block_path} must be a list of window dicts")
-    parsed_windows: list[EventWindow] = []
-    for i, ew_dict in enumerate(data):
-        window_path = f"{block_path}[{i}]"
-        _refuse_unrecognised_keys(window_path, ew_dict, _EVENT_WINDOW_COERCIONS)
-        for req_key in _EVENT_WINDOW_COERCIONS:
-            if req_key not in ew_dict:
-                raise ConfigurationError(f"{window_path} requires '{req_key}' field")
-        try:
-            fields = {key: coerce(ew_dict[key]) for key, coerce in _EVENT_WINDOW_COERCIONS.items()}
-        except (ValueError, TypeError, OverflowError) as exc:
-            raise ConfigurationError(
-                f"{window_path} contains a non-numeric value: {exc}"
-            ) from exc
-        parsed_windows.append(EventWindow(**fields))
-    return tuple(parsed_windows)
-
-
-def _parse_grid_services_events_config(
-    data: object, *, block_path: str
-) -> Optional[GridServicesEventsConfig]:
-    """Parse a finance block's grid_services_events block; absent or null is no events config.
-
-    A key the block omits takes GridServicesEventsConfig's declared default, so an omitted
-    event_windows is the default schedule, DEFAULT_EVENT_WINDOWS.
-    """
-    if data is None:
-        return None
-    gs_data = _refuse_unrecognised_keys(block_path, data, _GRID_SERVICES_EVENTS_BLOCK_KEYS)
-    fields: dict[str, Any] = {}
-    if "event_windows" in gs_data:
-        fields["event_windows"] = _parse_event_windows(
-            gs_data["event_windows"], block_path=_child_path(block_path, "event_windows")
-        )
-    try:
-        fields.update(
-            (key, coerce(gs_data[key]))
-            for key, coerce in _GRID_SERVICES_EVENTS_SCALAR_COERCIONS.items()
-            if key in gs_data
-        )
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(
-            f"grid_services_events block contains a non-numeric value: {exc}"
-        ) from exc
-    return GridServicesEventsConfig(**fields)
-
-
-def parse_finance_config(
-    data: Optional[dict[str, Any]], *, block_path: str = "finance"
-) -> Optional[FinanceConfig]:
-    """Parse finance configuration from config data.
-
-    A key the block omits takes FinanceConfig's declared default.
-
-    Args:
-        data: Finance configuration dictionary or None
-        block_path: The block's path in its file, named in error messages
-
-    Returns:
-        FinanceConfig object or None if data is None
-
-    Raises:
-        ConfigurationError: If any field value is out of its allowed range
-            (propagated from FinanceConfig.__post_init__), if a numeric value
-            is a boolean or a value float() cannot read, or if the block, its
-            grid_services_events block or an event window is not a mapping or
-            carries a key it does not read
-    """
-    if data is None:
-        return None
-    _refuse_unrecognised_keys(block_path, data, _FINANCE_BLOCK_KEYS)
-    if "standing_charge_pence_per_day" not in data:
-        raise ConfigurationError(
-            "finance.standing_charge_pence_per_day is required"
-        )
-
-    grid_services_events = _parse_grid_services_events_config(
-        data.get("grid_services_events"),
-        block_path=_child_path(block_path, "grid_services_events"),
-    )
-    try:
-        scalars = {
-            key: coerce(data[key])
-            for key, coerce in _FINANCE_SCALAR_COERCIONS.items()
-            if key in data
-        }
-    except (ValueError, TypeError, OverflowError) as exc:
-        raise ConfigurationError(f"finance block contains a non-numeric value: {exc}") from exc
-    return FinanceConfig(**scalars, grid_services_events=grid_services_events)
-
-
-def _parse_scenario(data: dict[str, Any], *, block_path: str) -> ScenarioConfig:
-    """Parse a scenario from config data."""
-    if "name" not in data:
-        raise ConfigurationError("Scenario must have a 'name' field")
-    if "period" not in data:
-        raise ConfigurationError(f"Scenario '{data['name']}' must have a 'period' field")
-
-    location = parse_location_block(
-        data.get("location"), block_path=_child_path(block_path, "location")
-    )
-
-    homes: list[HomeConfig] = []
-    home: Optional[HomeConfig] = None
-
-    if "homes" in data:
-        for index, home_data in enumerate(data["homes"]):
-            homes.append(
-                parse_home_block(
-                    home_data, location, block_path=_child_path(block_path, f"homes[{index}]")
-                )
-            )
-    elif "home" in data:
-        home = parse_home_block(data["home"], location, block_path=_child_path(block_path, "home"))
-    else:
-        raise ConfigurationError(
-            f"Scenario '{data['name']}' must define either 'home' or 'homes'"
-        )
-
-    return ScenarioConfig(
-        name=data["name"],
-        description=data.get("description", ""),
-        location=location,
-        period=_parse_period(data["period"], block_path=_child_path(block_path, "period")),
-        homes=tuple(homes),
-        home=home,
-        output=_parse_output_config(
-            data.get("output"), block_path=_child_path(block_path, "output")
-        ),
-        seg_tariff_pence_per_kwh=parse_seg_rate(
-            data.get("seg"), block_path=_child_path(block_path, "seg")
-        ),
-        tariff_config=parse_tariff_config(
-            data.get("tariff_config"), block_path=_child_path(block_path, "tariff_config")
-        ),
-        finance=parse_finance_config(
-            data.get("finance"), block_path=_child_path(block_path, "finance")
-        ),
-    )
+    scenario, blocks = _read_scenario_level_blocks(document, block_path=block_path)
+    source = _homes_source(scenario, block_path=block_path)
+    return _HOMES_SOURCES[source](blocks, scenario[source], block_path=child_path(block_path, source))
 
 
 _PLACEHOLDER_PATTERN = re.compile(r"\$\{(?P<name>[^}:]+)(?::(?P<default>[^}]*))?\}")
@@ -2534,13 +486,13 @@ def _read_placeholder(path: str, text: str) -> Optional[_Placeholder]:
     whole = _PLACEHOLDER_PATTERN.fullmatch(text)
     if whole is not None:
         name, default = whole["name"], whole["default"]
-        default_field = f"{_block_label(path)}: the default of variable {name!r}"
+        default_field = f"{block_label(path)}: the default of variable {name!r}"
         return _Placeholder(path, name, None if default is None else as_finite_float(default, default_field))
     inside = _PLACEHOLDER_PATTERN.search(text)
     if inside is not None:
-        raise ConfigurationError(
-            f"{_block_label(path)}: variable {inside['name']!r} is inside the longer string {text!r}; "
-            "a placeholder must be the whole value"
+        raise refusal(
+            path,
+            f"variable {inside['name']!r} is inside the longer string {text!r}; a placeholder must be the whole value",
         )
     return None
 
@@ -2605,7 +557,7 @@ def _substitute_mapping(
 ) -> _Substitution[dict[_Key, Any]]:
     """*data*, the mapping at *path*, as a new dict of its keys and their values substituted, and the placeholders those hold; its keys are not read."""
     entries = {
-        key: _substitute_variables(child, variables, _child_path(path, str(key)))
+        key: _substitute_variables(child, variables, child_path(path, str(key)))
         for key, child in data.items()
     }
     return _Substitution(
@@ -2619,7 +571,7 @@ def _refuse_unmatched_variables(
     """Refuse *variables* if one of them is named by none of *placeholders*, the document's, listing those."""
     unmatched = sorted(repr(name) for name in variables.keys() - {each.name for each in placeholders})
     if unmatched:
-        listed = ", ".join(f"{each.name!r} at {_block_label(each.path)}" for each in placeholders)
+        listed = ", ".join(f"{each.name!r} at {block_label(each.path)}" for each in placeholders)
         held = f"its placeholders: {listed}" if placeholders else "it holds no placeholders"
         raise ConfigurationError(
             f"Variables with no placeholder in the document: {', '.join(unmatched)}; {held}"
@@ -2632,9 +584,7 @@ def _refuse_placeholders_without_a_value(
     """Refuse the first of *placeholders* that neither *variables* nor its default gives a value, naming its key path and its variable."""
     for each in placeholders:
         if each.value(variables) is None:
-            raise ConfigurationError(
-                f"{_block_label(each.path)}: variable {each.name!r} is not supplied and has no default"
-            )
+            raise refusal(each.path, f"variable {each.name!r} is not supplied and has no default")
 
 
 def substitute_config_variables(
@@ -2664,74 +614,6 @@ def substitute_config_variables(
     return substitution.document(supplied)
 
 
-def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
-    """Find SweepSpec in config (e.g., in battery.capacity_kwh.multiplier).
-
-    Currently only checks battery.capacity_kwh for ProportionalDistribution
-    with a SweepSpec multiplier.
-
-    Args:
-        config: Fleet distribution configuration
-
-    Returns:
-        SweepSpec if found, None otherwise
-    """
-    if config.battery is not None:
-        cap_spec = config.battery.draws.get("capacity_kwh")
-        if isinstance(cap_spec, ProportionalDistribution):
-            if isinstance(cap_spec.multiplier, SweepSpec):
-                return cap_spec.multiplier
-    return None
-
-
-def _replace_sweep_with_value(
-    config: FleetDistributionConfig, value: float
-) -> FleetDistributionConfig:
-    """Create a copy of config with sweep multiplier replaced by a fixed value.
-
-    Args:
-        config: Original configuration with SweepSpec
-        value: Value to use instead of sweep
-
-    Returns:
-        New FleetDistributionConfig with fixed multiplier
-    """
-    if config.battery is None:
-        return config
-
-    cap_spec = config.battery.draws.get("capacity_kwh")
-    if not isinstance(cap_spec, ProportionalDistribution):
-        return config
-
-    swept_draws = {**config.battery.draws, "capacity_kwh": replace(cap_spec, multiplier=value)}
-    return replace(config, battery=replace(config.battery, draws=swept_draws))
-
-
-def expand_sweep_configs(
-    config: FleetDistributionConfig,
-) -> Iterator[tuple[float, FleetDistributionConfig]]:
-    """Expand a config with SweepSpec into individual configs.
-
-    Args:
-        config: Fleet distribution configuration (may contain SweepSpec)
-
-    Yields:
-        (sweep_value, config) pairs for each sweep point
-
-    Raises:
-        ConfigurationError: If no sweep spec found
-    """
-    sweep = detect_sweep_spec(config)
-    if sweep is None:
-        raise ConfigurationError(
-            "No sweep specification found in config. "
-            "Use proportional_to with type: sweep in multiplier."
-        )
-
-    for value in sweep.get_values():
-        yield value, _replace_sweep_with_value(config, value)
-
-
 def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
     """Load configuration from a YAML file.
 
@@ -2742,7 +624,8 @@ def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
         Parsed configuration dictionary
 
     Raises:
-        ConfigurationError: If file cannot be read or parsed
+        ConfigurationError: If file cannot be read or parsed, naming the file; or if its
+            document is not a mapping, naming the top level and the document's type
     """
     path = Path(path)
     if not path.exists():
@@ -2750,10 +633,10 @@ def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
 
     try:
         with open(path, encoding="utf-8") as f:
-            config: dict[str, Any] = yaml.safe_load(f)
+            config: object = yaml.safe_load(f)
         if config is None:
             raise ConfigurationError(f"Empty configuration file: {path}")
-        return config
+        return require_mapping("", config)
     except yaml.YAMLError as e:
         raise ConfigurationError(f"Invalid YAML in {path}: {e}") from e
 
@@ -2768,7 +651,8 @@ def load_config_json(path: Union[str, Path]) -> dict[str, Any]:
         Parsed configuration dictionary
 
     Raises:
-        ConfigurationError: If file cannot be read or parsed
+        ConfigurationError: If file cannot be read or parsed, naming the file; or if its
+            document is not a mapping, naming the top level and the document's type
     """
     path = Path(path)
     if not path.exists():
@@ -2776,8 +660,8 @@ def load_config_json(path: Union[str, Path]) -> dict[str, Any]:
 
     try:
         with open(path, encoding="utf-8") as f:
-            config: dict[str, Any] = json.load(f)
-        return config
+            config: object = json.load(f)
+        return require_mapping("", config)
     except json.JSONDecodeError as e:
         raise ConfigurationError(f"Invalid JSON in {path}: {e}") from e
 
@@ -2810,308 +694,164 @@ def load_config(path: Union[str, Path]) -> dict[str, Any]:
         )
 
 
-def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
-    """Load scenarios from a configuration file.
-
-    Args:
-        path: Path to configuration file
-
-    Returns:
-        List of ScenarioConfig objects
+def _one_scenario(document: object) -> ScenarioConfig:
+    """The one scenario *document* holds: itself, as a bare scenario, or its scenario: block, which it holds alone.
 
     Raises:
-        ConfigurationError: If configuration is invalid
+        ConfigurationError: for a document that is no mapping; a scenarios: document, naming how
+            many scenarios it holds; a scenario: block beside another top-level key; or as
+            parse_scenario refuses the scenario.
     """
-    config = load_config(path)
+    mapping = require_mapping("", document)
+    if "scenarios" in mapping:
+        count = len(require_list("scenarios", mapping["scenarios"]))
+        raise refusal(
+            "scenarios",
+            f"holds {count} scenarios, but this reader reads one: give a bare scenario document or a "
+            "scenario: block, or read the file with load_scenarios",
+        )
+    if "scenario" in mapping:
+        refuse_unrecognised_keys("", mapping, {"scenario"})
+        return parse_scenario(mapping["scenario"], block_path="scenario")
+    return parse_scenario(mapping)
 
-    if "scenarios" in config:
-        return [
-            _parse_scenario(scenario, block_path=f"scenarios[{index}]")
-            for index, scenario in enumerate(config["scenarios"])
-        ]
-    elif "scenario" in config:
-        return [_parse_scenario(config["scenario"], block_path="scenario")]
-    else:
-        # Try to parse the entire config as a single scenario
-        return [_parse_scenario(config, block_path="")]
+
+def load_scenario(path: Union[str, Path]) -> ScenarioConfig:
+    """The one scenario the file at *path* holds, bare or as its scenario: block, as parse_scenario reads it.
+
+    Raises:
+        ConfigurationError: as load_config refuses the file, or _one_scenario its document.
+    """
+    return _one_scenario(load_config(path))
 
 
-_FLAT_HOME_FILE_KEYS: frozenset[str] = _HOME_BLOCK_KEYS | {"location"}
+def load_scenarios(path: Union[str, Path]) -> list[ScenarioConfig]:
+    """Every scenario the file at *path* holds, each as parse_scenario reads it: each entry of its scenarios: list, else its one scenario.
+
+    Raises:
+        ConfigurationError: as load_config refuses the file; for a scenarios: list beside another
+            top-level key; or as parse_scenario refuses an entry at scenarios[i], or as
+            load_scenario refuses the one scenario.
+    """
+    document = load_config(path)
+    if "scenarios" not in document:
+        return [_one_scenario(document)]
+    refuse_unrecognised_keys("", document, {"scenarios"})
+    return [
+        parse_scenario(scenario, block_path=f"scenarios[{index}]")
+        for index, scenario in enumerate(require_list("scenarios", document["scenarios"]))
+    ]
 
 
 def load_home_config(path: Union[str, Path]) -> HomeConfig:
-    """Load a single home configuration from file.
-
-    The file holds a ``home:`` block, or is itself a home block beside an
-    optional ``location:`` block.
-
-    Args:
-        path: Path to configuration file
-
-    Returns:
-        HomeConfig object
+    """The home of the one-home scenario the file at *path* holds, as load_scenario reads it, exporting at the file's SEG rate unless it sets its own.
 
     Raises:
-        ConfigurationError: If configuration is invalid
+        ConfigurationError: as load_scenario refuses the file, or for a fleet scenario, naming
+            how many homes it holds and load_fleet_config, which reads fleets.
     """
-    config = load_config(path)
-    location = parse_location_block(config.get("location"))
-
-    if "home" in config:
-        return parse_home_block(config["home"], location)
-    _refuse_unrecognised_keys("", config, _FLAT_HOME_FILE_KEYS)
-    flat_home = {key: value for key, value in config.items() if key != "location"}
-    return parse_home_block(flat_home, location, block_path="")
-
-
-@dataclass(frozen=True)
-class _FleetFileSettings:
-    """What a fleet file gives every home its fleet_distribution: block generates.
-
-    Attributes:
-        location: The file's location: block, Bristol when it has none
-        tariff: The file's top-level tariff: block, None when it has none
-    """
-
-    location: Location
-    tariff: Optional[TariffConfig]
-
-    def generate_homes(self, distribution: FleetDistributionConfig) -> list[HomeConfig]:
-        """The homes *distribution* generates, each given the file's settings."""
-        return generate_homes_from_distribution(
-            distribution, self.location, fleet_tariff=self.tariff
+    scenario = load_scenario(path)
+    if scenario.home is None:
+        count = len(scenario.homes)
+        raise refusal(
+            "",
+            f"holds a fleet of {'1 home' if count == 1 else f'{count} homes'}, not a home: block: "
+            "read it with load_fleet_config",
         )
+    (home,) = scenario.simulated_homes()
+    return home
 
 
-def _read_fleet_distribution_file(
-    document: Mapping[str, Any],
-) -> tuple[FleetDistributionConfig, _FleetFileSettings]:
-    """Read the fleet_distribution: block of *document*, with what the file gives every home it generates.
-
-    The one place that decides which top-level blocks those homes get. It reads location:,
-    fleet_distribution: and tariff: in that order.
-    """
-    location = parse_location_block(document.get("location"))
-    distribution = parse_fleet_distribution_config(document["fleet_distribution"])
-    tariff = parse_tariff_config(document.get("tariff"))
-    return distribution, _FleetFileSettings(location=location, tariff=tariff)
+def _fleet_of(scenario: ScenarioConfig) -> FleetConfig:
+    """The fleet of *scenario*'s simulated homes, named by its name."""
+    return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name)
 
 
-def parse_fleet_config(document: Mapping[str, Any]) -> FleetConfig:
-    """Parse a fleet file's document, already loaded or variable-substituted.
-
-    Supports two formats:
-    - Explicit homes list: `homes: [...]`
-    - Distribution-based generation: `fleet_distribution: {...}`
-
-    Args:
-        document: The fleet file's configuration dictionary
-
-    Returns:
-        FleetConfig object
+def parse_fleet_config(document: object) -> FleetConfig:
+    """The fleet of the one scenario *document*, already loaded or variable-substituted, holds: its simulated homes, of any homes source, named by its name.
 
     Raises:
-        ConfigurationError: If configuration is invalid
+        ConfigurationError: as load_scenario refuses the same document.
     """
-    if "fleet_distribution" in document:
-        distribution, settings = _read_fleet_distribution_file(document)
-        homes = settings.generate_homes(distribution)
-    elif "homes" in document:
-        location = parse_location_block(document.get("location"))
-        homes_data = document["homes"]
-        if not homes_data:
-            raise ConfigurationError("Fleet 'homes' list cannot be empty")
-        homes = [
-            parse_home_block(home_data, location, block_path=f"homes[{index}]")
-            for index, home_data in enumerate(homes_data)
-        ]
-    else:
-        raise ConfigurationError(
-            "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
-        )
-
-    return FleetConfig(homes=homes, name=document.get("name", ""))
+    return _fleet_of(_one_scenario(document))
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
-    """Load a fleet configuration from file, as parse_fleet_config parses its document.
-
-    Args:
-        path: Path to configuration file
-
-    Returns:
-        FleetConfig object
+    """The fleet of the one scenario the file at *path* holds, as parse_fleet_config reads its document.
 
     Raises:
-        ConfigurationError: If configuration is invalid
+        ConfigurationError: as load_scenario refuses the file.
     """
-    return parse_fleet_config(load_config(path))
+    return _fleet_of(load_scenario(path))
 
 
-def detect_fleet_sweep_spec(document: Mapping[str, Any]) -> Optional[SweepSpec]:
+def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelBlocks, FleetDistributionConfig]:
+    """The scenario-level blocks and fleet_distribution: block of the bare scenario *document*, read in parse_scenario's order.
+
+    Raises:
+        ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
+            blocks; for a document holding no fleet_distribution: block, naming the top level;
+            as parse_scenario refuses one setting another homes source beside it; or as
+            parse_fleet_distribution_config refuses the block.
+    """
+    scenario, blocks = _read_scenario_level_blocks(document, block_path="")
+    require_held_keys("", scenario, ["fleet_distribution"])
+    _refuse_unless_one_homes_source(scenario, block_path="")
+    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"])
+
+
+def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
     """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
 
+    A document holding a fleet_distribution: block is read as parse_sweep_fleet_configs reads
+    it up to its sweep, its keys and scenario-level blocks before the block, so a file is
+    refused on the same first block whether or not it sweeps.
+
     Args:
-        document: The fleet file's configuration dictionary
+        document: The fleet file's document, refused unless it is a mapping
 
     Returns:
         The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
         it has no such block or the block no sweep
 
     Raises:
-        ConfigurationError: If its fleet_distribution: block is invalid
+        ConfigurationError: If the document is not a mapping, or as parse_sweep_fleet_configs
+            refuses a document holding a fleet_distribution: block before expanding its sweep
     """
+    document = require_mapping("", document)
     if "fleet_distribution" not in document:
         return None
-    return detect_sweep_spec(parse_fleet_distribution_config(document["fleet_distribution"]))
+    _, distribution = _read_fleet_distribution_scenario(document)
+    return detect_sweep_spec(distribution)
 
 
-def parse_sweep_fleet_configs(document: Mapping[str, Any]) -> list[tuple[float, FleetConfig]]:
+def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
-    The sweep is the fleet_distribution: block's battery.capacity_kwh multiplier. Every
-    point's homes get the file's top-level blocks as parse_fleet_config gives them, read
-    once for the whole file.
-
-    Args:
-        document: The fleet file's configuration dictionary
+    The document is a bare scenario whose homes source is a fleet_distribution: block whose
+    battery.capacity_kwh multiplier sweeps. Its scenario-level blocks are read once, as
+    parse_scenario reads them, and every point's homes get them as parse_fleet_config gives them.
 
     Returns:
         (sweep value, FleetConfig named after it) for each sweep point, in sweep order
 
     Raises:
-        ConfigurationError: If the document has no fleet_distribution: block or no
-            sweep, or if configuration is invalid
+        ConfigurationError: as parse_scenario refuses the document's keys and scenario-level
+            blocks; for a document holding no fleet_distribution: block, naming the top level,
+            or another homes source beside it; if the block is not a mapping or holds no sweep,
+            naming the block; or if configuration is invalid
     """
-    if "fleet_distribution" not in document:
-        raise ConfigurationError("A YAML-defined sweep requires a 'fleet_distribution' block")
-    distribution, settings = _read_fleet_distribution_file(document)
+    blocks, distribution = _read_fleet_distribution_scenario(document)
     return [
-        (value, FleetConfig(homes=settings.generate_homes(point), name=f"multiplier={value:.4f}"))
+        (
+            value,
+            FleetConfig(
+                homes=blocks.scenario(homes=blocks.homes_generated_by(point)).simulated_homes(),
+                name=f"multiplier={value:.4f}",
+            ),
+        )
         for value, point in expand_sweep_configs(distribution)
     ]
-
-
-# ---------------------------------------------------------------------------
-# Community config parsing
-# ---------------------------------------------------------------------------
-
-
-_COMMUNITY_BILLING_BLOCK_KEYS: frozenset[str] = frozenset({
-    "tariff", "seg_rate_pence_per_kwh", "seg",
-})
-
-
-def _parse_community_billing_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[CommunityBillingConfig]:
-    """Parse a ``billing:`` sub-block into a :class:`CommunityBillingConfig`.
-
-    Resolves the SEG rate from one of three forms:
-
-    * Direct scalar: ``seg_rate_pence_per_kwh: 4.1``
-    * Preset lookup: ``seg: { preset: Octopus }``
-    * Explicit rate:  ``seg: { rate_pence_per_kwh: 5.5 }``
-
-    Supplying both the direct scalar and a nested ``seg`` block is ambiguous and
-    raises :exc:`ConfigurationError`.
-
-    Args:
-        data: Billing configuration dictionary, or None.
-        block_path: The block's path in its file, named in error messages.
-
-    Returns:
-        ``CommunityBillingConfig`` when *data* is a dict; ``None`` otherwise.
-
-    Raises:
-        ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, an ambiguous SEG specification, a malformed ``seg``
-            block or an invalid ``seg_rate_pence_per_kwh``.
-    """
-    if data is None:
-        return None
-    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BILLING_BLOCK_KEYS)
-
-    tariff = parse_tariff_config(data.get("tariff"), block_path=_child_path(block_path, "tariff"))
-
-    # Resolve SEG rate (three mutually-exclusive forms)
-    direct_rate: Optional[float] = None
-    if "seg_rate_pence_per_kwh" in data:
-        direct_rate = _parse_seg_rate_scalar(
-            data["seg_rate_pence_per_kwh"],
-            key_path=_child_path(block_path, "seg_rate_pence_per_kwh"),
-        )
-
-    seg_block = data.get("seg")
-
-    if direct_rate is not None and seg_block is not None:
-        raise ConfigurationError(
-            "community billing: specify either 'seg_rate_pence_per_kwh' (scalar) "
-            "or 'seg' block — not both."
-        )
-
-    seg_rate = (
-        direct_rate
-        if direct_rate is not None
-        else parse_seg_rate(seg_block, block_path=_child_path(block_path, "seg"))
-    )
-
-    # Normalise an all-None result to None so callers can reliably test ``is None``
-    # for "no billing configured" without distinguishing an empty block from an
-    # absent key.
-    if tariff is None and seg_rate is None:
-        return None
-    return CommunityBillingConfig(tariff=tariff, seg_rate_pence_per_kwh=seg_rate)
-
-
-_COMMUNITY_BLOCK_KEYS: frozenset[str] = frozenset({
-    "sharing_mode", "community_battery", "billing",
-})
-
-
-def _parse_community_config(
-    data: Optional[dict[str, Any]], *, block_path: str
-) -> Optional[CommunityConfig]:
-    """Parse a ``community:`` YAML block into a :class:`CommunityConfig`.
-
-    Args:
-        data: Community configuration dictionary, or None.
-        block_path: The block's path in its file, named in error messages.
-
-    Returns:
-        ``CommunityConfig`` when *data* is a dict; ``None`` when *data* is ``None``.
-
-    Raises:
-        ConfigurationError: For a block that is not a mapping or carries a key it
-            does not read, missing/invalid ``sharing_mode``, p2p+battery,
-            community_battery-without-battery, or any nested config error.
-    """
-    if data is None:
-        return None
-    _refuse_unrecognised_keys(block_path, data, _COMMUNITY_BLOCK_KEYS)
-
-    sharing_mode = data.get("sharing_mode")
-    if not sharing_mode:
-        raise ConfigurationError(
-            "community: block requires a 'sharing_mode' field "
-            "('p2p' or 'community_battery')"
-        )
-
-    community_battery = _parse_battery_config(
-        data.get("community_battery"), block_path=_child_path(block_path, "community_battery")
-    )
-    billing = _parse_community_billing_config(
-        data.get("billing"), block_path=_child_path(block_path, "billing")
-    )
-
-    try:
-        return CommunityConfig(
-            sharing_mode=sharing_mode,
-            community_battery=community_battery,
-            billing=billing,
-        )
-    except ValueError as exc:
-        raise ConfigurationError(str(exc)) from exc
 
 
 def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
@@ -3132,9 +872,4 @@ def load_community_config(path: Union[str, Path]) -> Optional[CommunityConfig]:
         ConfigurationError: If the file cannot be read or the community block
             is invalid.
     """
-    raw = load_config(path)
-    # yaml.safe_load returns None for an empty file; coerce to a dict so that
-    # .get("community") works cleanly and returns None rather than raising
-    # AttributeError.
-    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
-    return _parse_community_config(data.get("community"), block_path="community")
+    return parse_community_config(load_config(path).get("community"), block_path="community")

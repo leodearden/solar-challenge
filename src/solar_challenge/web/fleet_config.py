@@ -3,7 +3,7 @@
 
 Provides utilities for sampling distributions, converting form data to
 fleet distribution configs and their distributions back to the form's, and
-writing either fleet form's distributions in config.py's grammar.
+writing either fleet form's distributions in fleet_distribution.py's grammar.
 """
 
 from __future__ import annotations
@@ -17,35 +17,14 @@ from typing import Any, TypeGuard
 
 
 from solar_challenge.number_fields import Interval, as_finite_float, as_whole_number
-
-#: The most homes a dashboard fleet holds. The fleet forms refuse a larger fleet, a
-#: shuffled pool that holds values for more homes, and a preview that draws more values.
-MAX_FLEET_HOMES = 10_000
-
-
-def read_fleet_size(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's number of homes, a whole number from 1 to :data:`MAX_FLEET_HOMES`.
-
-    Raises:
-        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming *field* and the value sent.
-    """
-    return as_whole_number(value, field, within=Interval(1, MAX_FLEET_HOMES))
-
-
-#: The largest seed, positive or negative, a dashboard fleet holds: Number.MAX_SAFE_INTEGER,
-#: past which the JavaScript number the fleet page holds its seed in rounds some whole numbers.
-MAX_FLEET_SEED = 2**53 - 1
-
-
-def read_fleet_seed(value: Any, field: str) -> int:
-    """Read *value*, the setting named *field*, as a dashboard fleet's seed, a whole number from -:data:`MAX_FLEET_SEED` to :data:`MAX_FLEET_SEED`.
-
-    Raises:
-        ConfigurationError: From :func:`~solar_challenge.number_fields.as_whole_number`,
-            naming *field* and the value sent.
-    """
-    return as_whole_number(value, field, within=Interval(-MAX_FLEET_SEED, MAX_FLEET_SEED))
+from solar_challenge.web.fleet_components import (
+    FLEET_SIZE,
+    FLEET_SIZE_DEFAULT,
+    MAX_FLEET_HOMES,
+    SEED_DEFAULT,
+    read_fleet_seed,
+    read_fleet_size,
+)
 
 
 def read_pool_counts(counts: Iterable[tuple[str, Any]], pool_field: str) -> list[int]:
@@ -97,7 +76,7 @@ def sample_distribution(
             a finite number, as finite params whose draws overflow a float can; that error
             names params and the sample.
     """
-    n_samples = as_whole_number(n_samples, "n_samples", within=Interval(1, MAX_FLEET_HOMES))
+    n_samples = as_whole_number(n_samples, "n_samples", within=FLEET_SIZE)
     params = _require_dict(params, "params")
     fields = {**_fields_under("params"), "type": "type"}
     distribution = {**params, "type": dist_type}
@@ -115,7 +94,7 @@ def sample_distribution(
 def _refuse_a_preview_without_what_its_type_is_drawn_from(
     distribution: Mapping[str, Any], fields: Mapping[str, str]
 ) -> None:
-    """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key the preview draws its type from: the preview never runs config.py's grammar, which would name it.
+    """Refuse *distribution*, an editor distribution of a type the editor offers, when it leaves out, or sends as null, a key the preview draws its type from: the preview never runs fleet_distribution.py's grammar, which would name it.
 
     Raises:
         ValueError: Naming the first such key's field, from *fields*, and the keys the
@@ -191,7 +170,7 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
 
     The returned dict mirrors the structure of the ``fleet_distribution``
     section in scenario YAML files and can be used with
-    :func:`solar_challenge.config.generate_homes_from_distribution`.
+    :func:`solar_challenge.fleet_distribution.generate_homes_from_distribution`.
 
     Its pv/battery/load blocks follow the fleet form's presence rule (see
     :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form`).  Its battery block sets
@@ -214,8 +193,8 @@ def form_to_fleet_distribution_config(form_data: dict[str, Any]) -> dict[str, An
             field as a dot path from the form's root.
     """
     config: dict[str, Any] = {
-        "n_homes": read_fleet_size(form_data.get("n_homes", 100), "n_homes"),
-        "seed": read_fleet_seed(form_data.get("seed", 42), "seed"),
+        "n_homes": read_fleet_size(form_data.get("n_homes", FLEET_SIZE_DEFAULT), "n_homes"),
+        "seed": read_fleet_seed(form_data.get("seed", SEED_DEFAULT), "seed"),
     }
 
     # Process PV distribution
@@ -258,7 +237,7 @@ def _component_block_or_empty(form_data: dict[str, Any], key: str) -> dict[str, 
 def _refuse_battery_dispatch_strategy(battery: dict[str, Any]) -> None:
     """Refuse the fleet form's *battery* block when it sets a dispatch strategy: every battery takes the form's dispatch_strategy.
 
-    config.py's grammar reads a battery block's dispatch_strategy, but the fleet form
+    fleet_distribution.py's grammar reads a battery block's dispatch_strategy, but the fleet form
     spells the setting once, at its root:
     :func:`~solar_challenge.web.fleet_scenario.parse_fleet_form` gives the form's
     dispatch_strategy to every battery, over any the block sets.
@@ -289,13 +268,13 @@ def _require_dict(value: object, field: str) -> dict[str, Any]:
 def _parse_component_distribution(
     data: dict[str, Any], block: str, primary_field: str
 ) -> dict[str, Any]:
-    """Return the config.py grammar block for *data*, the *block* component block of a fleet form.
+    """Return the fleet_distribution.py grammar block for *data*, the *block* component block of a fleet form.
 
     Its distribution is what *data* holds at *primary_field*: a distribution (see
     :func:`_is_distribution`), read by :func:`distribution_grammar_spec`, or a fixed value
     (see :func:`_is_fixed_value`), read by
     :func:`~solar_challenge.number_fields.as_finite_float`.  A mapping without a type
-    passes as given, and an absent or null field as an empty mapping, for config.py's
+    passes as given, and an absent or null field as an empty mapping, for fleet_distribution.py's
     grammar to refuse.  The block's other settings are read by :func:`_other_setting`.
 
     Args:
@@ -349,12 +328,12 @@ def _refuse_block_that_is_a_distribution(
 
 
 def _other_setting(value: object, field: str) -> object:
-    """Return *value*, a block setting other than its distribution, as it is passed to config.py's grammar.
+    """Return *value*, a block setting other than its distribution, as it is passed to fleet_distribution.py's grammar.
 
     A distribution (see :func:`_is_distribution`) is read as the block's own is, by
     :func:`distribution_grammar_spec`.  Null, booleans (flags such as load.use_stochastic)
     and any other mapping (a block such as battery.grid_charging) pass as given, for
-    config.py's grammar to read or refuse; any other value is read as a number, named
+    fleet_distribution.py's grammar to read or refuse; any other value is read as a number, named
     *field*.
 
     Raises:
@@ -381,7 +360,7 @@ def _is_fixed_value(value: object) -> bool:
 
 @dataclasses.dataclass(frozen=True)
 class _EditorRows:
-    """An editor distribution's *key* rows, each a mapping of a value and its *column*, which config.py's grammar spells as parallel lists: values, and the *grammar_key* list *read_column* reads."""
+    """An editor distribution's *key* rows, each a mapping of a value and its *column*, which fleet_distribution.py's grammar spells as parallel lists: values, and the *grammar_key* list *read_column* reads."""
 
     key: str
     column: str
@@ -397,7 +376,7 @@ class _EditorType:
 
     parameters: tuple[str, ...]
     #: The editor keys the preview draws the type from: the forms leave a missing one for
-    #: config.py's grammar to name, and only the preview, which never runs the grammar,
+    #: fleet_distribution.py's grammar to name, and only the preview, which never runs the grammar,
     #: refuses it.
     drawn_from: tuple[str, ...]
     rows: _EditorRows | None = None
@@ -445,11 +424,11 @@ def _fields_under(path: str) -> dict[str, str]:
 def distribution_grammar_spec(
     distribution: Mapping[str, Any], fields: Mapping[str, str]
 ) -> dict[str, Any]:
-    """config.py's grammar spec of *distribution*, a distribution as the distribution editor holds it; :func:`distribution_form_spec` reads such a spec back.
+    """fleet_distribution.py's grammar spec of *distribution*, a distribution as the distribution editor holds it; :func:`distribution_form_spec` reads such a spec back.
 
     *fields* maps each of its keys to the field a form sends it in, which every refusal
     names.  A key the distribution leaves out, or sends as null, is left out of the spec,
-    for config.py's grammar to name; a key its type does not read is ignored.
+    for fleet_distribution.py's grammar to name; a key its type does not read is ignored.
 
     Raises:
         ValueError: For a type the editor does not offer, a parameter
@@ -474,7 +453,7 @@ def distribution_grammar_spec(
 def _rows_spec(
     distribution: Mapping[str, Any], fields: Mapping[str, str], rows: _EditorRows
 ) -> dict[str, list[float]]:
-    """The values list and the *rows* column list of *distribution*'s rows, as config.py's grammar spells them; neither when it leaves its rows out or sends them as null.
+    """The values list and the *rows* column list of *distribution*'s rows, as fleet_distribution.py's grammar spells them; neither when it leaves its rows out or sends them as null.
 
     Each value is read by as_finite_float, and the column by the rows' read_column, each
     cell under its field, ``<rows field>[index].<column>``.
@@ -505,7 +484,7 @@ def _rows_spec(
 
 
 def distribution_form_spec(spec: object, path: str) -> float | dict[str, Any]:
-    """The fleet form's distribution for the config.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
+    """The fleet form's distribution for the fleet_distribution.py grammar *spec* at *path*: the inverse of the form's conversion of a block's distribution (see :func:`_parse_component_distribution`).
 
     *spec* is one the grammar accepts.  The form's distribution is the editor's: a fixed
     value, which the grammar spells as a number or as a fixed distribution, and which the

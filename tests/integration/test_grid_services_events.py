@@ -34,15 +34,7 @@ import yaml
 from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.errors import ConfigurationError
-from solar_challenge.finance import (
-    BillDistribution,
-    FinanceConfig,
-    MultiYearCurve,
-    bill_distribution,
-    project_economics,
-    project_multi_year,
-    solve_cost_recovery_rate,
-)
+from solar_challenge.finance import BillDistribution, FinanceConfig, bill_distribution
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.flex import resolve_flex_band
 from solar_challenge.gridservices import (
@@ -53,9 +45,16 @@ from solar_challenge.gridservices import (
     GridServicesEventsConfig,
     compute_grid_services_at_events,
 )
-from solar_challenge.home import SimulationResults, SummaryStatistics
+from solar_challenge.home import RunPricing, SimulationResults, SummaryStatistics
 from solar_challenge.output import generate_finance_report
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from solar_challenge.projection import (
+    MultiYearCurve,
+    project_economics,
+    project_multi_year,
+    scenario_fleet,
+    solve_cost_recovery_rate,
+)
+from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results_of, make_scenario_and_finance, make_window
 from tests.integration._helpers import SCENARIO, board_econ_scenario
 
@@ -77,7 +76,7 @@ def _make_spare_battery_sim_results(
     battery_soc above min_soc_kwh and battery_discharge below max_discharge_kw.
 
     With the default battery_soc_kwh=3.0 (above min_soc_kwh=0.5 for a 5kWh×0.1 battery)
-    and battery_discharge=0.5 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
+    and battery_discharge=0.2 kW (below max_discharge_kw=2.5), DEFAULT_EVENT_WINDOWS
     (winter-weekday-16-18h) selects real in-window steps of the default full-year
     index, and compute_fleet_spare_capacity_kw yields a positive event figure.
     """
@@ -86,7 +85,9 @@ def _make_spare_battery_sim_results(
     # in the flat-rate-0 delta isolation and do not feed the grid-services
     # computation (which only reads battery_soc and battery_discharge).  Each
     # kW row lasts an hour, so *hours* total 2,000 kWh of self-consumption,
-    # 800 kWh of export and 1,400 kWh of import.
+    # 800 kWh of export and 1,400 kWh of import.  The 0.2 kW discharge totals
+    # at most 1,752 kWh over a year of hours, under the 2,000 kWh of
+    # self-consumption that counts it.
     sc_kw = 2000.0 / n_steps
     exp_kw = 800.0 / n_steps
     imp_kw = 1400.0 / n_steps
@@ -99,7 +100,7 @@ def _make_spare_battery_sim_results(
         demand=pd.Series(demand_kw, index=hours),
         self_consumption=pd.Series(sc_kw, index=hours),
         battery_charge=zeros.copy(),
-        battery_discharge=pd.Series(0.5, index=hours),  # below max_discharge_kw=2.5
+        battery_discharge=pd.Series(0.2, index=hours),  # below max_discharge_kw=2.5
         battery_soc=pd.Series(battery_soc_kwh, index=hours),
         grid_import=pd.Series(imp_kw, index=hours),
         grid_export=pd.Series(exp_kw, index=hours),
@@ -107,6 +108,7 @@ def _make_spare_battery_sim_results(
         export_revenue=zeros.copy(),
         tariff_rate=zeros.copy(),
         grid_charge_cost=None,
+        pricing=RunPricing(None, None),
     )
 
 
@@ -235,7 +237,7 @@ def test_finance_run_refuses_the_events_model_without_events_before_simulating(
         simulated.append(fleet_config)
         return _synthetic_fleet_results_in_window(fleet_config.homes)
 
-    result = invoke_cli(["finance", "run", str(path)], _recording_simulate)
+    result = invoke_cli(["finance", "run", str(path)], answering(_recording_simulate))
 
     stderr = " ".join(result.stderr.split())
     assert result.exit_code == 1, result.output
@@ -482,7 +484,8 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
 
     Event income (like the flat term) is rate-independent
     (own_use_rate never enters physical dispatch or gridservices computation),
-    so the existing affine reconstruction (finance.py:1789-1802) remains exact.
+    so the existing affine reconstruction (projection.solve_cost_recovery_rate's
+    surplus_at) remains exact.
     """
     scenario, finance_base = board_econ_scenario()
     homes = scenario.homes
@@ -521,10 +524,10 @@ def test_b5_solve_cost_recovery_converges_and_i4_rate_independence() -> None:
     curve_events = project_multi_year(scenario, finance_events, simulate=simulate)
     curve_flat0 = project_multi_year(scenario, finance_flat0, simulate=simulate)
     surplus_events = project_economics(
-        curve_events, scenario, finance_events
+        curve_events, scenario_fleet(scenario), finance_events
     ).net_surplus_per_home_per_year_gbp
     surplus_flat0 = project_economics(
-        curve_flat0, scenario, finance_flat0
+        curve_flat0, scenario_fleet(scenario), finance_flat0
     ).net_surplus_per_home_per_year_gbp
     assert surplus_events > surplus_flat0, (
         f"capacity_at_events surplus (£{surplus_events:.4f}/home/yr) must exceed "
@@ -569,18 +572,17 @@ def _synthetic_bill_distribution() -> BillDistribution:
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=365,
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
-        seg_revenue_gbp=73.8,
         window=make_window(days=365),
+        pricing=RunPricing(0.23, 4.1),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    return bill_distribution([summary], finance, 365)
+    return bill_distribution([summary], finance)
 
 
 def test_epsilon_finance_report_renders_capacity_at_events_line() -> None:

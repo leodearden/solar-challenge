@@ -3,19 +3,26 @@
 Verifies preset population, including a preset select that lists each
 preset once and applies the built-in one when a saved home preset holds a
 built-in preset's name, location changes, a custom location posted as its
-latitude and longitude, period buttons, and conditional field visibility.
+latitude and longitude, period buttons, conditional field visibility, and
+that each economy tariff type shows and keeps its own rates, the run being
+posted with the selected type's.
 """
 
 from urllib.parse import quote
 
 from playwright.sync_api import Page, expect
 
+from tests.e2e._economy_rates import (
+    ECONOMY_7_AT_THE_TYPED_PEAK_RATE,
+    type_a_peak_rate_under_economy_7_then_visit_economy_10,
+)
 from tests.e2e._home_form import (
     choose_custom_range,
     choose_location,
     form_data,
     open_location_tab,
     open_period_tab,
+    open_tab,
     submit_two_day_run,
 )
 
@@ -135,3 +142,22 @@ def test_custom_date_range_fields(page: Page, live_server: str) -> None:
 
     for date_input in date_inputs:
         expect(date_input).to_be_visible()
+
+
+# -- Each economy type keeps its own rates ----------------------------------
+
+
+def test_each_economy_type_shows_and_keeps_its_own_rates(
+    page: Page, live_server: str, page_errors: list[str]
+) -> None:
+    """A peak rate typed under Economy 7 is kept while Economy 10 shows its own rates, and the run is posted with it (201)."""
+    page.goto(live_server + "/simulate/home")
+    open_tab(page, "Tariff")
+    page.get_by_role("switch", name="Enable Tariff", exact=True).click()
+    type_a_peak_rate_under_economy_7_then_visit_economy_10(page)
+    assert page_errors == [], f"Errors on /simulate/home: {page_errors}"
+
+    response = submit_two_day_run(page)
+
+    assert response.request.post_data_json["tariff"] == ECONOMY_7_AT_THE_TYPED_PEAK_RATE
+    assert response.status == 201, response.text()

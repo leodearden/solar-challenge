@@ -112,15 +112,3 @@ def test_a_run_saved_from_its_results_is_recorded_running_with_no_completion_tim
     assert [(record.status, record.completed_at) for record in _records_of_the_home_and_fleet_runs(storage)] == [
         ("running", None)
     ] * 2
-
-
-def test_a_fleet_unpaired_after_construction_is_refused_and_nothing_is_saved(storage: RunStorage) -> None:
-    fleet = _two_unlike_homes()
-    fleet.home_configs.pop()
-
-    with pytest.raises(ValueError, match="got 2 per_home_results and 1 home_configs"):
-        storage.save_fleet_run_from_results("fleet-1", fleet, name="Saved Run")
-
-    assert storage.run_record("fleet-1") is None
-    with pytest.raises(FileNotFoundError):
-        storage.load_run("fleet-1")

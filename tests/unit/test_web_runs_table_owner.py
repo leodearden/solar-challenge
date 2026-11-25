@@ -10,8 +10,8 @@ Under src/solar_challenge/web:
   (``"DATA_DIR"``, ``"DATABASE"``).
 
 schema.py holds none of these. Every other module takes the store from the app through
-shared.get_database() and shared.get_storage(). docs/prds/run-store-one-owner.md §3.1 lays
-out the modules and §3.12 states the invariant.
+dashboard.get_database() and dashboard.get_storage(). docs/prds/run-store-one-owner.md §3.1
+lays out the modules and §3.12 states the invariant.
 
 The scan reads the text of each module that tests/_dashboard_sources.py's
 dashboard_python_sources returns, comments and docstrings included. A statement is runs SQL
@@ -140,9 +140,9 @@ def test_only_its_owner_uses_each_seam_of_the_store(web_sources: Mapping[str, st
         "Each seam has one owner: database.py opens every SQLite connection, storage.py issues "
         "every runs statement, and app.py builds the RunStorage and reads the store's location. "
         "Open a connection through Database.connect() (the app's database through "
-        "shared.get_database()). Put runs SQL in storage.py, as a RunStorage method, or for a "
+        "dashboard.get_database()). Put runs SQL in storage.py, as a RunStorage method, or for a "
         "schema step as a storage.py function like migrate_runs_table_v1. Take the app's "
-        "RunStorage through shared.get_storage(). Read the store's location only in create_app. "
+        "RunStorage through dashboard.get_storage(). Read the store's location only in create_app. "
         "Reword prose the scan reads as runs SQL. "
         "(D27 invariant 4; docs/prds/run-store-one-owner.md §3.1 and §4 C1)"
     )

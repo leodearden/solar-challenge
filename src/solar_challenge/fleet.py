@@ -4,15 +4,20 @@
 import contextlib
 import itertools
 import math
+import multiprocessing
 import os
+import signal
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from concurrent.futures.process import BrokenProcessPool
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
+from datetime import tzinfo
+from multiprocessing.context import BaseContext
 from typing import Callable, Generator, Iterator, Optional, Protocol, Sequence, TypeAlias
 
 import pandas as pd
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.home import (
     HomeConfig,
@@ -20,6 +25,7 @@ from solar_challenge.home import (
     SummaryStatistics,
     calculate_summary,
     grid_dependency_ratio,
+    run_window,
     self_consumption_ratio,
     simulate_home,
 )
@@ -30,20 +36,29 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.weather import PrefetchedWeather, WeatherProvider, default_weather
 
 
-@dataclass
+def fleet_home_seed(fleet_seed: int | None, index: int) -> int | None:
+    """Home *index*'s load seed in a fleet seeded with *fleet_seed*: fleet_seed + index, or None for an unseeded fleet.
+
+    The one home of the per-home seed rule.
+    """
+    return None if fleet_seed is None else fleet_seed + index
+
+
+@dataclass(frozen=True)
 class FleetConfig:
     """Configuration for a fleet of homes.
 
     Attributes:
-        homes: List of HomeConfig objects for each home
+        homes: The HomeConfig of each home, held as a tuple whatever sequence is given
         name: Optional identifier for the fleet
     """
 
-    homes: list[HomeConfig] = field(default_factory=list)
+    homes: tuple[HomeConfig, ...] = ()
     name: str = ""
 
     def __post_init__(self) -> None:
-        """Validate fleet configuration."""
+        """Hold homes as a tuple, then validate fleet configuration."""
+        object.__setattr__(self, "homes", tuple(self.homes))
         if not self.homes:
             raise ConfigurationError("Fleet must have at least one home")
 
@@ -63,6 +78,8 @@ class FleetConfig:
         battery_config: Optional[BatteryConfig] = None,
         location: Location = Location.bristol(),
         name: str = "",
+        *,
+        seed: int | None = None,
     ) -> "FleetConfig":
         """Create a fleet with uniform home configurations.
 
@@ -73,20 +90,32 @@ class FleetConfig:
             battery_config: Battery configuration (or None) for all homes
             location: Location for all homes
             name: Fleet name
+            seed: Fleet seed: home i's load seed is fleet_home_seed(seed, i); None leaves every
+                home's load unseeded, drawing fresh profiles each run
 
         Returns:
-            FleetConfig with identical home configurations
+            FleetConfig whose homes share every setting but their load seed
+
+        Raises:
+            ConfigurationError: If load_config's seed is set, since the fleet's seed is passed
+                as seed=
         """
-        homes = [
+        if load_config.seed is not None:
+            raise ConfigurationError.must_be(
+                "load_config.seed",
+                "None (pass the fleet's seed as seed=; home i then gets seed + i)",
+                got=load_config.seed,
+            )
+        homes = tuple(
             HomeConfig(
                 pv_config=pv_config,
-                load_config=load_config,
+                load_config=replace(load_config, seed=fleet_home_seed(seed, i)),
                 battery_config=battery_config,
                 location=location,
                 name=f"Home {i+1}",
             )
             for i in range(n_homes)
-        ]
+        )
         return cls(homes=homes, name=name)
 
     @classmethod
@@ -97,6 +126,8 @@ class FleetConfig:
         annual_consumptions_kwh: list[float],
         location: Location = Location.bristol(),
         name: str = "",
+        *,
+        seed: int | None = None,
     ) -> "FleetConfig":
         """Create a fleet with heterogeneous home configurations.
 
@@ -106,6 +137,8 @@ class FleetConfig:
             annual_consumptions_kwh: Annual consumption for each home
             location: Location for all homes
             name: Fleet name
+            seed: Fleet seed: home i's load seed is fleet_home_seed(seed, i); None leaves every
+                home's load unseeded, drawing fresh profiles each run
 
         Returns:
             FleetConfig with varied home configurations
@@ -127,34 +160,33 @@ class FleetConfig:
             homes.append(
                 HomeConfig(
                     pv_config=PVConfig(capacity_kw=pv_kw),
-                    load_config=LoadConfig(annual_consumption_kwh=load_kwh),
+                    load_config=LoadConfig(annual_consumption_kwh=load_kwh, seed=fleet_home_seed(seed, i)),
                     battery_config=battery_config,
                     location=location,
                     name=f"Home {i+1}",
                 )
             )
 
-        return cls(homes=homes, name=name)
+        return cls(homes=tuple(homes), name=name)
 
 
-@dataclass
+@dataclass(frozen=True)
 class FleetResults:
     """Results from a fleet simulation of at least one home, each home's SimulationResults paired with its HomeConfig.
 
     Attributes:
-        per_home_results: List of SimulationResults for each home
-        home_configs: The HomeConfig of each home, in per_home_results' order
+        per_home_results: The SimulationResults of each home, held as a tuple whatever sequence is given
+        home_configs: The HomeConfig of each home, in per_home_results' order, held as a tuple whatever
+            sequence is given
     """
 
-    per_home_results: list[SimulationResults]
-    home_configs: list[HomeConfig]
+    per_home_results: tuple[SimulationResults, ...]
+    home_configs: tuple[HomeConfig, ...]
 
     def __post_init__(self) -> None:
-        """Enforce _require_paired_homes at construction."""
-        self._require_paired_homes()
-
-    def _require_paired_homes(self) -> None:
-        """Raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        """Hold both fields as tuples; raise ValueError unless the fleet has at least one home and one HomeConfig per home's results."""
+        object.__setattr__(self, "per_home_results", tuple(self.per_home_results))
+        object.__setattr__(self, "home_configs", tuple(self.home_configs))
         if not self.per_home_results:
             raise ValueError("FleetResults must have at least one home: per_home_results is empty")
         if len(self.home_configs) != len(self.per_home_results):
@@ -180,12 +212,7 @@ class FleetResults:
         Returns:
             Sum of the series across all homes, named as each home's series is: its
             SimulationResults column, which to_aggregate_dataframe relies on
-
-        Raises:
-            ValueError: If the fleet has no homes, or home_configs does not hold one
-                HomeConfig per home's results
         """
-        self._require_paired_homes()
         series_list = [getattr(r, series_name) for r in self.per_home_results]
         return sum(series_list[1:], series_list[0])
 
@@ -256,14 +283,14 @@ class FleetSummary:
 
     simulation_days: int
 
-    # SEG revenue aggregates (populated when seg_tariff_pence_per_kwh is provided)
-    total_seg_revenue_gbp: Optional[float] = None
-    per_home_seg_revenue_mean_gbp: Optional[float] = None
-
     # Financial aggregates (always populated on computed path, None on direct construction)
     total_net_cost_gbp: Optional[float] = None
     total_import_cost_gbp: Optional[float] = None
     total_export_revenue_gbp: Optional[float] = None
+
+    # The forecasts that sized the homes' grid charge (dispatch.distinct_grid_charge_forecasts),
+    # () when none grid-charged, or the stored summary predates the field.
+    grid_charge_forecasts: tuple[GridChargeForecast, ...] = ()
 
 
 FleetSimulate: TypeAlias = Callable[[FleetConfig, pd.Timestamp, pd.Timestamp], FleetResults]
@@ -312,7 +339,12 @@ class FleetRunner:
     Attributes:
         weather: Asked once per call for each distinct location of the call's homes, in the calling process
         home_simulator: Simulates each home; a pool pickles it into each job, so when parallel it must pickle, e.g. a top-level function or an instance of a top-level class
-        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process
+        parallel: Whether a call of two or more homes runs them in a process pool rather than in turn in the calling process.
+            The pool's workers start as multiprocessing's default start method says, except that a default of fork
+            starts them by forkserver, because a call may come from any thread of a process running others (the
+            dashboard's job threads). So a script that makes a parallel call guards its entry point with
+            ``if __name__ == "__main__":``. The workers ignore SIGINT, so a Ctrl+C that interrupts the call waits for the
+            homes already running to finish, none started after it. Decision 12 of docs/prds/fleet-execution-policy.md says why
         max_workers: The pool's worker count, a whole number of at least 1; None is min(homes in the call, os.cpu_count() or 4)
     """
 
@@ -367,6 +399,60 @@ def default_runner() -> FleetRunner:
     return FleetRunner(weather=default_weather(), home_simulator=simulate_home)
 
 
+def reusing(
+    simulate: FleetSimulate, results: FleetResults, start_date: pd.Timestamp, end_date: pd.Timestamp
+) -> FleetSimulate:
+    """simulate, except that a request for results' homes from start_date to end_date is answered from results, paired with the asked homes.
+
+    A request matches when its start and end are start_date's and end_date's instants on their clocks, and its homes
+    equal results' with each battery at its starting soh; the fleet's name is not compared. A home whose load is
+    stochastic and unseeded is therefore answered with results' draw, not a fresh one. A matching request raises
+    ValueError, naming both windows, unless each of results' homes covers its run window from start_date to end_date
+    (home.run_window, the window simulate_home runs it over). Every other request goes to simulate, and nothing beyond
+    results is kept: the reasons are in decision 8 of docs/prds/fleet-execution-policy.md.
+    """
+    held_homes = _at_starting_soh(results.home_configs)
+    held_window = _instants_and_clocks(start_date, end_date)
+
+    def simulate_reusing(fleet: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        """results paired with fleet's homes for a request reusing matches, once each of results' homes is found to cover its run window; else simulate's answer."""
+        if _instants_and_clocks(start, end) == held_window and _at_starting_soh(fleet.homes) == held_homes:
+            _require_results_cover(results, start_date, end_date)
+            return FleetResults(per_home_results=results.per_home_results, home_configs=fleet.homes)
+        return simulate(fleet, start, end)
+
+    return simulate_reusing
+
+
+def _instants_and_clocks(
+    start: pd.Timestamp, end: pd.Timestamp
+) -> tuple[pd.Timestamp, tzinfo | None, pd.Timestamp, tzinfo | None]:
+    """Each moment followed by its tzinfo, so two windows are equal only at the same instants on the same clocks."""
+    return start, start.tz, end, end.tz
+
+
+def _require_results_cover(results: FleetResults, start_date: pd.Timestamp, end_date: pd.Timestamp) -> None:
+    """Raise ValueError, naming both windows, unless each of results' homes covers its run window from start_date to end_date."""
+    for position, (home, held) in enumerate(zip(results.home_configs, results.per_home_results, strict=True)):
+        covered, expected = held.window, run_window(home.location, start_date, end_date)
+        if covered != expected:
+            raise ValueError(
+                "reusing answers only from results over the window simulate_home runs each home over from "
+                f"start_date to end_date: home {position} ({home.name!r}) covers {covered!r}, "
+                f"where its run window is {expected!r}"
+            )
+
+
+def _at_starting_soh(homes: Sequence[HomeConfig]) -> list[HomeConfig]:
+    """homes with each battery's soh set to its resolved_soh, the state of health a Battery built from it starts at."""
+    return [
+        home
+        if home.battery_config is None
+        else replace(home, battery_config=replace(home.battery_config, soh=home.battery_config.resolved_soh))
+        for home in homes
+    ]
+
+
 def _job_weather(weather: PrefetchedWeather, home: HomeConfig) -> PrefetchedWeather:
     """The weather home's job carries: its location's alone, so a job pickles one frame."""
     return PrefetchedWeather.fetch(weather, [home.location])
@@ -415,7 +501,7 @@ def _homes_in_a_pool(
     """
     workers = min(len(jobs), os.cpu_count() or 4) if runner.max_workers is None else runner.max_workers
     waiting = iter(jobs)
-    pool = ProcessPoolExecutor(max_workers=workers)
+    pool = ProcessPoolExecutor(max_workers=workers, mp_context=_worker_context(), initializer=_ignoring_interrupts)
 
     def submitted(job: _HomeJob) -> Future[SimulationResults]:
         """job's home submitted to the pool; a BrokenProcessPool the submit raises carries _naming_the_home's note for job."""
@@ -439,6 +525,17 @@ def _homes_in_a_pool(
                 yield job, results
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _ignoring_interrupts() -> None:
+    """Make this pool worker ignore SIGINT: a terminal's Ctrl+C signals the caller's whole process group, workers included, and the calling process alone owns interruption, closing the generator so no home not yet handed on starts and the started ones finish."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def _worker_context() -> BaseContext:
+    """multiprocessing's default context, or forkserver's where that default is fork: the pool may be started from any thread of a process running others, and a fork of such a process may deadlock its child."""
+    default = multiprocessing.get_context()
+    return multiprocessing.get_context("forkserver") if default.get_start_method() == "fork" else default
 
 
 def _result_naming_the_home(job: _HomeJob, future: Future[SimulationResults]) -> SimulationResults:
@@ -493,62 +590,39 @@ def _simulate_fleets(
             fleet_finished[job.home_index] = results
             if len(fleet_finished) == len(job.fleet.homes):
                 yield job.fleet_index, FleetResults(
-                    per_home_results=[fleet_finished[home_index] for home_index in range(len(job.fleet.homes))],
+                    per_home_results=tuple(fleet_finished[home_index] for home_index in range(len(job.fleet.homes))),
                     home_configs=job.fleet.homes,
                 )
 
 
-def calculate_home_summaries(
-    results: FleetResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> list[SummaryStatistics]:
+def calculate_home_summaries(results: FleetResults) -> list[SummaryStatistics]:
     """Calculate each home's summary statistics, in per_home_results' order.
 
     Args:
         results: Fleet simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, each home's summary has its SEG revenue at that tariff.
 
     Returns:
         calculate_summary of each home's results, in per_home_results' order
-
-    Raises:
-        ValueError: If results has no homes, or its home_configs does not hold one
-            HomeConfig per home's results
     """
-    results._require_paired_homes()
-    return [
-        calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
-        for r in results.per_home_results
-    ]
+    return [calculate_summary(r) for r in results.per_home_results]
 
 
-def calculate_fleet_summary(
-    results: FleetResults,
-    seg_tariff_pence_per_kwh: Optional[float] = None,
-) -> FleetSummary:
+def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
     """Calculate summary statistics for fleet simulation.
 
     Args:
         results: Fleet simulation results
-        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
-            If provided, SEG revenue is aggregated across all homes.
 
     Returns:
         FleetSummary with totals and distribution statistics
-
-    Raises:
-        ValueError: If results has no homes, or its home_configs does not hold one
-            HomeConfig per home's results
     """
-    return aggregate_home_summaries(calculate_home_summaries(results, seg_tariff_pence_per_kwh))
+    return aggregate_home_summaries(calculate_home_summaries(results))
 
 
 def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> FleetSummary:
     """Aggregate the summary statistics of a fleet's homes into the fleet's.
 
-    The fleet's SEG revenue total and per-home mean are taken over the homes whose
-    summary has a seg_revenue_gbp, and both are None when no home's summary has one.
+    Its grid_charge_forecasts are the forecasts that sized the homes' grid charge.
 
     Args:
         home_summaries: The summary statistics of each home in the fleet
@@ -577,16 +651,6 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
     sc_ratios = [s.self_consumption_ratio for s in home_summaries]
     sc_series = pd.Series(sc_ratios)
 
-    # Aggregate SEG revenue over the homes whose summary has one
-    total_seg_revenue_gbp: Optional[float] = None
-    per_home_seg_revenue_mean_gbp: Optional[float] = None
-    seg_revenues = [
-        s.seg_revenue_gbp for s in home_summaries if s.seg_revenue_gbp is not None
-    ]
-    if seg_revenues:
-        total_seg_revenue_gbp = sum(seg_revenues)
-        per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
-
     # Fleet financial aggregates
     total_import_cost = sum(s.total_import_cost_gbp for s in home_summaries)
     total_export_revenue = sum(s.total_export_revenue_gbp for s in home_summaries)
@@ -609,11 +673,12 @@ def aggregate_home_summaries(home_summaries: Sequence[SummaryStatistics]) -> Fle
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
         simulation_days=home_summaries[0].simulation_days,
-        total_seg_revenue_gbp=total_seg_revenue_gbp,
-        per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
         total_net_cost_gbp=total_net_cost,
         total_import_cost_gbp=total_import_cost,
         total_export_revenue_gbp=total_export_revenue,
+        grid_charge_forecasts=distinct_grid_charge_forecasts(
+            summary.grid_charge_forecast for summary in home_summaries
+        ),
     )
 
 

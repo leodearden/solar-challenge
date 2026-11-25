@@ -10,12 +10,13 @@ import pytest
 pytest.importorskip("flask")
 from flask.testing import FlaskClient
 
-from solar_challenge.config import parse_location_block
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.location import parse_location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import parse_location_block
 from solar_challenge.web.request_boundary import read_location, require_encodable_text
-from solar_challenge.web.simulation_params import MAX_DAYS, MAX_WINDOW_DAYS
+from solar_challenge.web.fleet_components import MAX_DAYS, MAX_WINDOW_DAYS
+from tests._non_mapping_block_refusals import non_mapping_block_refusal
 from tests._home_payload import VALID_HOME_PAYLOAD
 from tests._html_page import element_attributes
 from tests.unit.web_api._request_bodies import MALFORMED_SEG_BODIES
@@ -90,22 +91,22 @@ class TestSimulateHomeAPI:
         assert "JSON" in data["error"]
 
     def test_invalid_pv_too_low_returns_400(self, client: FlaskClient) -> None:
-        """PV capacity below 0.5 kW triggers a 400."""
+        """PV capacity below the pv component's value_range triggers a 400 naming pv_kw, the range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "pv_kw": 0.1},
         )
         assert resp.status_code == 400
-        assert "PV capacity" in resp.get_json()["error"]
+        assert resp.get_json()["error"] == "pv_kw must be between 0.5 and 20, got 0.1"
 
     def test_invalid_pv_too_high_returns_400(self, client: FlaskClient) -> None:
-        """PV capacity above 20 kW triggers a 400."""
+        """PV capacity above the pv component's value_range triggers a 400 naming pv_kw, the range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "pv_kw": 25.0},
         )
         assert resp.status_code == 400
-        assert "PV capacity" in resp.get_json()["error"]
+        assert resp.get_json()["error"] == "pv_kw must be between 0.5 and 20, got 25.0"
 
     @pytest.mark.parametrize("end", ["low", "high"])
     def test_consumption_at_either_end_the_home_page_allows_is_accepted(
@@ -144,13 +145,25 @@ class TestSimulateHomeAPI:
         mock_job_manager.submit_home_job.assert_not_called()
 
     def test_negative_battery_returns_400(self, client: FlaskClient) -> None:
-        """A negative battery capacity is refused with a 400 naming battery_kwh and the value sent."""
+        """A negative battery capacity is refused with a 400 naming battery_kwh, the battery component's value_range and the value sent."""
         resp = client.post(
             "/api/simulate/home",
             json={**VALID_HOME_PAYLOAD, "battery_kwh": -1.0},
         )
         assert resp.status_code == 400
-        assert resp.get_json()["error"] == "battery_kwh must be at least 0, got -1.0"
+        assert resp.get_json()["error"] == "battery_kwh must be between 0 and 100, got -1.0"
+
+    def test_a_battery_above_its_range_returns_400_and_queues_no_run(
+        self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
+    ) -> None:
+        """P1: a 500 kWh battery is refused with a 400 naming battery_kwh, its range and the value sent; nothing is submitted."""
+        resp = client.post(
+            "/api/simulate/home",
+            json={**VALID_HOME_PAYLOAD, "battery_kwh": 500},
+        )
+        assert resp.status_code == 400
+        assert resp.get_json() == {"error": "battery_kwh must be between 0 and 100, got 500"}
+        mock_job_manager.submit_home_job.assert_not_called()
 
     def test_nan_battery_returns_400_naming_it(
         self, client: FlaskClient, mock_job_manager: NonCallableMagicMock
@@ -240,7 +253,6 @@ class TestSimulateHomeAPI:
         call_kwargs = mock_job_manager.submit_home_job.call_args
         config = call_kwargs.kwargs.get("config") or call_kwargs[0][0]
         assert config.battery_config is not None
-        assert config.battery_config.efficiency is None
         assert config.battery_config.charge_efficiency == config.battery_config.discharge_efficiency == math.sqrt(0.9)
 
     def test_unrecognised_key_returns_400_and_submits_nothing(
@@ -533,7 +545,7 @@ class TestParseHomeConfigErrorPaths:
         """A nested block sent as a non-object is a 400 naming the block and the type sent, never a 500; nothing is submitted."""
         resp = client.post(url, json=body)
         assert resp.status_code == 400
-        assert f"{key} must be a mapping, got str" in resp.get_json()["error"]
+        assert non_mapping_block_refusal(key, "str") in resp.get_json()["error"]
         mock_job_manager.submit_home_job.assert_not_called()
         mock_job_manager.submit_fleet_job.assert_not_called()
 
@@ -723,7 +735,7 @@ class TestParseHomeConfigErrorPaths:
             pytest.param(
                 "/api/simulate/home",
                 {**VALID_HOME_PAYLOAD, "tariff": {"type": "flat_rate", "rate_per_kwh": 0.2, "name": 5}},
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="home-tariff-name",
             ),
             pytest.param(
@@ -737,7 +749,7 @@ class TestParseHomeConfigErrorPaths:
                         ],
                     },
                 },
-                "tariff.periods[0].name must be a string, got 7",
+                "tariff.periods[0].name: must be a string, got 7",
                 id="home-tariff-period-name",
             ),
             pytest.param(
@@ -751,7 +763,7 @@ class TestParseHomeConfigErrorPaths:
                         },
                     ]
                 },
-                "tariff.name must be a string, got 5",
+                "tariff.name: must be a string, got 5",
                 id="fleet-later-home-tariff-name",
             ),
         ],
@@ -831,7 +843,7 @@ class TestSimulateHomeLocation:
     @pytest.mark.parametrize(
         ("location", "named"),
         [
-            pytest.param({"latitude": 50}, ("location.longitude",), id="block-without-longitude"),
+            pytest.param({"latitude": 50}, ("location: requires 'longitude'",), id="block-without-longitude"),
             pytest.param(5, ("location", "int"), id="number"),
         ],
     )

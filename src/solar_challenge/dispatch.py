@@ -12,7 +12,7 @@ refuse_grid_charging_it_would_ignore refuses grid charging a strategy would igno
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, time, timedelta
 from enum import Enum
@@ -30,8 +30,8 @@ from solar_challenge.number_fields import (
     as_whole_numbers,
     read_field,
 )
-from solar_challenge.tariff import TariffConfig
-from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
+from solar_challenge.tariff import TariffConfig, describe_minutes_of_day
+from solar_challenge.timebase import HOURS_PER_MINUTE, MINUTES_PER_HOUR, require_valid_duration
 
 
 @dataclass(frozen=True)
@@ -108,6 +108,15 @@ class GridChargeContext:
         charge_efficiency: One-way charge efficiency in (0, 1], used to
             account for losses when computing how much grid power is needed
             to reach the target SOC
+        useful_charge_ceiling_kwh: The SOC in kWh above which this step's grid
+            charge is forecast to be stranded by the PV after it, finite and at
+            least 0; grid charging fills to the lower of it and target_soc_kwh.
+            None, the default, means no ceiling. The engine sets it from the
+            battery's GridChargeConfig.forecast (docs/grid-charge-forecast.md).
+
+    Raises:
+        ValueError: If an efficiency is outside (0, 1], or useful_charge_ceiling_kwh is
+            neither None nor finite and at least 0, naming the field and its value.
     """
 
     current_rate: float
@@ -117,9 +126,10 @@ class GridChargeContext:
     max_charge_kw: float
     round_trip_efficiency: float
     charge_efficiency: float
+    useful_charge_ceiling_kwh: Optional[float] = None
 
     def __post_init__(self) -> None:
-        """Validate efficiency fields to prevent ZeroDivisionError at runtime."""
+        """Validate efficiency fields to prevent ZeroDivisionError at runtime, and refuse a ceiling NON_NEGATIVE does not admit."""
         if not (0.0 < self.round_trip_efficiency <= 1.0):
             raise ValueError(
                 f"round_trip_efficiency must be in (0, 1], "
@@ -130,6 +140,9 @@ class GridChargeContext:
                 f"charge_efficiency must be in (0, 1], "
                 f"got {self.charge_efficiency}"
             )
+        ceiling = self.useful_charge_ceiling_kwh
+        if ceiling is not None and not NON_NEGATIVE.admits(ceiling):
+            raise ValueError(f"useful_charge_ceiling_kwh must be None or finite and at least 0, got {ceiling!r} kWh")
 
 
 def compute_grid_charge_power_kw(
@@ -166,11 +179,12 @@ def compute_grid_charge_power_kw(
         ctx.max_charge_kw)``. It is 0.0 when the period is not cheap
         (ctx.is_cheap_period is False), when the spread gate fails (peak
         saving does not cover round-trip losses), or when the predicted
-        post-PV SOC is at or above ``ctx.target_soc_kwh``. The engine's
+        post-PV SOC is at or above the fill level: ``ctx.target_soc_kwh``,
+        or ``ctx.useful_charge_ceiling_kwh`` when that is lower. The engine's
         target, ``Battery.grid_charge_target_kwh``, is at most
         ``max_soc_kwh``, so a prediction past the battery's ceiling also
         gives 0.0. A step that grid-charges therefore ends at or below the
-        target.
+        lower of the target and the useful-charge ceiling.
 
     Raises:
         ValueError: If ``timestep_minutes`` is not positive and finite.
@@ -187,10 +201,12 @@ def compute_grid_charge_power_kw(
     if ctx.peak_rate <= ctx.current_rate / ctx.round_trip_efficiency:
         return 0.0
 
-    # Gate 3: how much the battery still needs after this step's PV charge
+    # Gate 3: how much the battery still needs after this step's PV charge, to the target or the
+    # lower useful-charge ceiling
+    ceiling = ctx.useful_charge_ceiling_kwh
     return _grid_power_to_target_kw(
         ctx,
-        target_kwh=ctx.target_soc_kwh,
+        target_kwh=ctx.target_soc_kwh if ceiling is None else min(ctx.target_soc_kwh, ceiling),
         battery_soc_kwh=battery_soc_kwh,
         pv_charge_kw=pv_charge_power_kw,
         timestep_minutes=timestep_minutes,
@@ -314,6 +330,35 @@ def _grid_power_to_target_kw(
 TARGET_SOC_FRACTION: Final = FRACTION
 """The grid-charge targets a battery may be given, as fractions of its effective (SOH-derated) capacity: greater than 0 and at most 1."""
 
+GridChargeForecast: TypeAlias = Literal["pv_blind", "trailing_14_days", "perfect_foresight"]
+"""The forecasts that may size a battery's grid charge in cheap periods; GridChargeConfig.forecast says what each does."""
+
+GRID_CHARGE_FORECASTS: Final[tuple[GridChargeForecast, ...]] = get_args(GridChargeForecast)
+"""Every GridChargeForecast, in its declared order."""
+
+ANALYSIS_ONLY_FORECASTS: Final[frozenset[GridChargeForecast]] = frozenset({"perfect_foresight"})
+"""The forecasts that read a run's own future PV and demand: upper bounds for analysis, which no board figure may use."""
+
+
+def distinct_grid_charge_forecasts(
+    forecasts: Iterable[Optional[GridChargeForecast]],
+) -> tuple[GridChargeForecast, ...]:
+    """The distinct forecasts among *forecasts*, each a run's, None for a run that did not grid-charge, in GRID_CHARGE_FORECASTS order: () when none is set.
+
+    The one derivation of the forecasts that sized an aggregate's grid charge, which every
+    fleet summary, bill distribution and report discloses.
+    """
+    sized_by = set(forecasts)
+    return tuple(forecast for forecast in GRID_CHARGE_FORECASTS if forecast in sized_by)
+
+
+def _refuse_unknown_forecast(forecast: object) -> None:
+    """Raise ConfigurationError, naming forecast, the value and every GRID_CHARGE_FORECASTS name, unless forecast is one of them."""
+    if not (isinstance(forecast, str) and forecast in GRID_CHARGE_FORECASTS):
+        raise ConfigurationError.must_be(
+            "forecast", f"one of {', '.join(map(repr, GRID_CHARGE_FORECASTS))}", got=forecast
+        )
+
 
 @dataclass(frozen=True)
 class GridChargeConfig:
@@ -326,17 +371,28 @@ class GridChargeConfig:
             most 1, held as the float read. Defaults to 0.9. A target above the
             battery's max_soc_fraction charges it to max_soc_kwh
             (Battery.grid_charge_target_kwh).
+        forecast: What sizes a cheap period's grid charge, one of GRID_CHARGE_FORECASTS;
+            defaults to 'pv_blind'. 'pv_blind' fills to the target whatever PV the day
+            brings. 'trailing_14_days' caps the fill at the forecast useful-charge
+            ceiling, the charge the PV after it is not forecast to strand
+            (docs/grid-charge-forecast.md). 'perfect_foresight', one of
+            ANALYSIS_ONLY_FORECASTS, is an upper-bound analysis mode: it reads the run's
+            own future PV and demand, and is never used for board figures.
 
     Raises:
         ConfigurationError: If target_soc_fraction is a bool, is not a finite number, or
-            is outside that range, naming target_soc_fraction and the value.
+            is outside that range, naming target_soc_fraction and the value; or if
+            forecast is not one of GRID_CHARGE_FORECASTS, naming forecast, the value and
+            every forecast.
     """
 
     target_soc_fraction: float = 0.9
+    forecast: GridChargeForecast = "pv_blind"
 
     def __post_init__(self) -> None:
-        """Read target_soc_fraction, and hold the float read."""
+        """Read target_soc_fraction, and hold the float read; refuse a forecast outside GRID_CHARGE_FORECASTS."""
         read_field(self, "target_soc_fraction", as_finite_float, TARGET_SOC_FRACTION)
+        _refuse_unknown_forecast(self.forecast)
 
 
 _PEAK_WINDOW_HOURS = Interval(0, 24)
@@ -371,6 +427,64 @@ def _as_hour_windows(value: object, field: str, within: Interval) -> tuple[tuple
     return tuple(_as_hour_window(window, f"{field}[{index}]", within) for index, window in enumerate(value))
 
 
+_TouClock: TypeAlias = TariffConfig | tuple[tuple[int, int], ...]
+"""What a TOUOptimizedStrategy tells its peak minutes by: its peak windows, read by _as_hour_windows, or the tariff, each of whose minutes that is not cheap is peak."""
+
+
+def _tou_clock(peak_hours: Sequence[object] | None, tariff: TariffConfig | None) -> _TouClock:
+    """The clock of a TOUOptimizedStrategy given peak_hours and tariff: the windows of peak_hours, checked against tariff when there is one; else tariff.
+
+    Raises:
+        ConfigurationError: If peak_hours and tariff are both None; if _as_hour_windows refuses
+            peak_hours; or if a window reaches a cheap minute of tariff.
+    """
+    if peak_hours is None:
+        if tariff is None:
+            raise ConfigurationError(
+                "dispatch strategy 'tou_optimized' without peak_hours charges and discharges the battery on the "
+                "tariff's clock, but there is no tariff; add a tariff or set peak_hours"
+            )
+        return tariff
+    windows = _as_hour_windows(peak_hours, "peak_hours", _PEAK_WINDOW_HOURS)
+    if tariff is not None:
+        _refuse_peak_hours_in_cheap_minutes(peak_hours, windows, tariff)
+    return windows
+
+
+def _refuse_peak_hours_in_cheap_minutes(
+    peak_hours: Sequence[object], windows: tuple[tuple[int, int], ...], tariff: TariffConfig
+) -> None:
+    """Refuse peak_hours, read as windows, if a window reaches a minute tariff prices cheap: a peak hour is when the battery discharges.
+
+    Raises:
+        ConfigurationError: Naming each window that does as peak_hours[i] and the window given,
+            the cheap clock ranges it reaches, and the tariff.
+    """
+    cheap_by_window = {index: _cheap_minutes_in(window, tariff) for index, window in enumerate(windows)}
+    reaches = [
+        f"peak_hours[{index}] {peak_hours[index]!r} reaches {describe_minutes_of_day(cheap)}"
+        for index, cheap in cheap_by_window.items()
+        if cheap
+    ]
+    if reaches:
+        raise ConfigurationError(
+            "dispatch strategy 'tou_optimized' discharges the battery in its peak hours, so none may fall in a "
+            f"cheap period of {_tariff_label(tariff)}, but {' and '.join(reaches)}; remove peak_hours to discharge "
+            "on the tariff's clock, or narrow the window to the tariff's expensive minutes"
+        )
+
+
+def _cheap_minutes_in(window: tuple[int, int], tariff: TariffConfig) -> frozenset[int]:
+    """The minutes of the day in window, a (start, end) pair of whole hours, that tariff prices cheap."""
+    start, end = window
+    return frozenset(range(start * MINUTES_PER_HOUR, end * MINUTES_PER_HOUR)) & tariff.cheap_minutes_of_day
+
+
+def _tariff_label(tariff: TariffConfig) -> str:
+    """The tariff as a refusal names it: tariff and its quoted name, when it has one, else the tariff."""
+    return f"tariff {tariff.name!r}" if tariff.name else "the tariff"
+
+
 _IMPORT_LIMIT_KW = POSITIVE
 """The grid import limits, in kW, that PeakShavingStrategyConfig and PeakShavingStrategy admit."""
 
@@ -390,23 +504,26 @@ class TOUOptimizedStrategyConfig:
     Attributes:
         peak_hours: The (start, end) hours of the peak periods the strategy discharges the
             battery in: a list of at least one window, each a pair of whole hours from 0 to
-            24 that starts before it ends, held as a tuple of int pairs.
+            24 that starts before it ends, held as a tuple of int pairs. None, the default,
+            is the tariff's clock: the strategy discharges in the home tariff's expensive
+            minutes and grid-charges in its cheap ones. A set peak_hours narrows discharge,
+            and the strategy checks it against the home's tariff when it is built.
 
     Raises:
         ConfigurationError: With the refusal TOUOptimizedStrategy gives, if peak_hours is
-            not a list of at least one window; if an hour is a bool, is not a finite whole
-            number, or is outside 0 to 24, naming it peak_hours[i][j] and the value; or if
-            a window is not a (start, end) pair that starts before it ends, naming it
-            peak_hours[i] and the window.
+            not None and not a list of at least one window; if an hour is a bool, is not a
+            finite whole number, or is outside 0 to 24, naming it peak_hours[i][j] and the
+            value; or if a window is not a (start, end) pair that starts before it ends,
+            naming it peak_hours[i] and the window.
     """
 
-    peak_hours: tuple[tuple[int, int], ...]
+    peak_hours: tuple[tuple[int, int], ...] | None = None
     strategy_type: Literal["tou_optimized"] = field(default="tou_optimized", init=False)
     _charges_from_the_grid: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
-        """Read peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
-        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS)
+        """Read a set peak_hours as TOUOptimizedStrategy does, and hold the int pairs read."""
+        read_field(self, "peak_hours", _as_hour_windows, _PEAK_WINDOW_HOURS, optional=True)
 
 
 @dataclass(frozen=True)
@@ -485,7 +602,7 @@ class DispatchStrategy(ABC):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -586,7 +703,7 @@ class SelfConsumptionStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -652,6 +769,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
     - Discharging battery during peak hours to offset demand and reduce costs
     - Still opportunistically charging from excess PV even during peak hours
 
+    Its peak hours are its peak_hours windows or, without them, the tariff's clock: each
+    minute the tariff does not price cheap (TariffConfig.is_cheap_at) is a peak minute.
+
     This strategy is designed for scenarios with time-of-use tariffs where
     electricity costs vary by time of day.
     """
@@ -666,22 +786,32 @@ class TOUOptimizedStrategy(DispatchStrategy):
         """Whether it charges from the grid, as its configuration, TOUOptimizedStrategyConfig, declares."""
         return TOUOptimizedStrategyConfig._charges_from_the_grid
 
-    def __init__(self, peak_hours: List[Tuple[int, int]]) -> None:
-        """Initialize TOU-optimized strategy with tariff period definitions.
+    def __init__(
+        self, peak_hours: List[Tuple[int, int]] | None = None, *, tariff: TariffConfig | None = None
+    ) -> None:
+        """Initialize TOU-optimized strategy with its peak windows, or the tariff on whose clock it dispatches.
 
         Args:
             peak_hours: List of (start_hour, end_hour) windows defining peak periods: at
                 least one, each a pair of whole hours from 0 to 24 that starts before it
                 ends, held as a tuple of int pairs. For example, [(17, 20)] represents
                 peak period from 5 PM to 8 PM. Every hour outside these ranges is off-peak.
+                None, the default, dispatches on the tariff's clock instead.
+            tariff: The tariff the strategy's battery is charged at. Without peak_hours it is
+                the strategy's clock; with them it only checks them, and the strategy does
+                not hold it. None, the default, leaves peak_hours unchecked.
 
         Raises:
-            ConfigurationError: If peak_hours is not a list of at least one window; if an
-                hour is a bool, is not a finite whole number, or is outside 0 to 24, naming
-                it peak_hours[i][j] and the value; or if a window is not a (start, end)
-                pair that starts before it ends, naming it peak_hours[i] and the window.
+            ConfigurationError: If peak_hours and tariff are both None, naming tou_optimized,
+                the tariff's clock and the missing tariff. If peak_hours is not a list of at
+                least one window; if an hour is a bool, is not a finite whole number, or is
+                outside 0 to 24, naming it peak_hours[i][j] and the value; or if a window is
+                not a (start, end) pair that starts before it ends, naming it peak_hours[i] and
+                the window. Then, with a tariff, if a window reaches a minute it prices cheap:
+                one refusal naming each such window as peak_hours[i] and the window given, the
+                cheap clock ranges it reaches and the tariff, by its name when it has one.
         """
-        self._peak_hours = _as_hour_windows(peak_hours, "peak_hours", _PEAK_WINDOW_HOURS)
+        self._clock = _tou_clock(peak_hours, tariff)
 
     def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
         """Determine tariff period for given timestamp.
@@ -690,11 +820,15 @@ class TOUOptimizedStrategy(DispatchStrategy):
             timestamp: Timestamp to check
 
         Returns:
-            TariffPeriod.PEAK if timestamp falls within peak hours,
-            TariffPeriod.OFF_PEAK otherwise
+            On the tariff's clock, TariffPeriod.OFF_PEAK if the tariff prices the timestamp's
+            minute cheap, TariffPeriod.PEAK otherwise; with peak windows, TariffPeriod.PEAK if
+            its hour falls within one, TariffPeriod.OFF_PEAK otherwise
         """
+        clock = self._clock
+        if isinstance(clock, TariffConfig):
+            return TariffPeriod.OFF_PEAK if clock.is_cheap_at(timestamp) else TariffPeriod.PEAK
         hour = timestamp.hour
-        if any(start <= hour < end for start, end in self._peak_hours):
+        if any(start <= hour < end for start, end in clock):
             return TariffPeriod.PEAK
         return TariffPeriod.OFF_PEAK
 
@@ -705,7 +839,7 @@ class TOUOptimizedStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -725,11 +859,12 @@ class TOUOptimizedStrategy(DispatchStrategy):
                 power ``compute_grid_charge_power_kw`` gives for
                 ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
                 stored first, so a step that grid-charges ends at or below
-                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
-                the decision discharges.  This holds inside ``peak_hours``
-                too: whether a period is cheap is the caller's
-                classification, which both dispatch paths share, never
-                ``peak_hours`` (docs/prds/tou-grid-charging-battery-arbitrage.md §4).
+                ``grid_charge_ctx.target_soc_kwh``, or its
+                ``useful_charge_ceiling_kwh`` when that is lower.  It asks for
+                none while the decision discharges.  When the strategy was built with
+                the step's tariff, no minute is both PEAK and cheap, so it
+                never discharges while ``grid_charge_ctx.is_cheap_period``
+                is true.
                 ``None`` (default) means no grid charging: ``grid_charge_kw``
                 is always 0.
 
@@ -830,7 +965,7 @@ class PeakShavingStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -850,8 +985,9 @@ class PeakShavingStrategy(DispatchStrategy):
                 power ``compute_grid_charge_power_kw`` gives for
                 ``battery_soc_kwh`` with the step's PV charge, ``charge_kw``,
                 stored first, so a step that grid-charges ends at or below
-                ``grid_charge_ctx.target_soc_kwh``.  It asks for none while
-                the decision discharges to shave a peak: shaving takes
+                ``grid_charge_ctx.target_soc_kwh``, or its
+                ``useful_charge_ceiling_kwh`` when that is lower.  It asks for
+                none while the decision discharges to shave a peak: shaving takes
                 precedence.  ``None`` (default) means no grid charging:
                 ``grid_charge_kw`` is always 0.
 
@@ -916,16 +1052,20 @@ def build_dispatch_strategy(
     """Build a new instance of the strategy config configures, for a battery whose grid-charge setting is grid_charging, in a home on tariff.
 
     Raises:
-        ConfigurationError: refuse_grid_charging_it_would_ignore refuses grid_charging under the
-            strategy built: its variant does not charge from the grid, or there is no tariff to
-            find a cheap period in.
+        ConfigurationError: The strategy's constructor refuses the variant at tariff: a
+            tou_optimized variant with no peak_hours and no tariff, or with peak_hours that
+            reach a cheap minute of tariff. Then refuse_grid_charging_it_would_ignore refuses
+            grid_charging under the strategy built: its variant does not charge from the grid,
+            there is no tariff to find a cheap period in, or the tariff has no cheap period.
     """
     strategy: DispatchStrategy
     match config:
         case SelfConsumptionStrategyConfig():
             strategy = SelfConsumptionStrategy()
         case TOUOptimizedStrategyConfig():
-            strategy = TOUOptimizedStrategy(list(config.peak_hours))
+            strategy = TOUOptimizedStrategy(
+                None if config.peak_hours is None else list(config.peak_hours), tariff=tariff
+            )
         case PeakShavingStrategyConfig():
             strategy = PeakShavingStrategy(config.import_limit_kw)
         case _:
@@ -937,13 +1077,15 @@ def build_dispatch_strategy(
 def refuse_grid_charging_it_would_ignore(
     strategy: DispatchStrategy, *, grid_charging: GridChargeConfig | None, tariff: TariffConfig | None
 ) -> None:
-    """Refuse grid_charging, a battery's grid-charge setting, if *strategy* would ignore it in a home on tariff: if the strategy does not charge from the grid, or there is no tariff.
+    """Refuse grid_charging, a battery's grid-charge setting, if *strategy* would ignore it in a home on tariff: if the strategy does not charge from the grid, there is no tariff, or the tariff has no cheap minute to charge in.
 
     Raises:
         ConfigurationError: grid_charging is set and strategy.charges_from_the_grid is False,
             or grid_charging is set and tariff is None; the message names grid_charging, the
             strategy and what to change. The first message names, as the strategy to use
             instead, each variant of DispatchStrategyConfig that charges from the grid.
+            Otherwise _require_cheap_minutes_for_grid_charging's refusal of a tariff with no
+            cheap minute.
     """
     if grid_charging is None:
         return
@@ -958,6 +1100,26 @@ def refuse_grid_charging_it_would_ignore(
             f"grid_charging is set, but there is no tariff, so dispatch strategy {strategy.name!r} has no cheap "
             "period to charge in; add a tariff or remove grid_charging"
         )
+    _require_cheap_minutes_for_grid_charging(strategy.name, tariff)
+
+
+def _require_cheap_minutes_for_grid_charging(strategy_name: str, tariff: TariffConfig) -> None:
+    """Refuse grid_charging under the dispatch strategy named *strategy_name* when *tariff* has no cheap minute to charge in.
+
+    refuse_grid_charging_it_would_ignore calls it once it has established that grid_charging
+    is set, that the strategy charges from the grid and that there is a tariff, so a strategy
+    that does not grid-charge, or a home with no tariff, is told that instead.
+
+    Raises:
+        ConfigurationError: tariff's cheap_minutes_of_day is empty, naming grid_charging, the
+            tariff, the strategy and what to change.
+    """
+    if tariff.cheap_minutes_of_day:
+        return
+    raise ConfigurationError(
+        f"grid_charging is set, but {_tariff_label(tariff)} has no cheap period, so dispatch strategy {strategy_name!r} "
+        "never charges from the grid; remove grid_charging or use a time-of-use tariff"
+    )
 
 
 _ONE_DAY = timedelta(days=1)
@@ -1042,7 +1204,9 @@ def _window_decision(
     Above the window's target, a window that allows discharge covers a shortfall from the
     battery, down to the target and no further. Otherwise the step charges its PV excess and,
     offered a grid-charge context, the grid power that charges the battery to the target,
-    whatever the rates.
+    whatever the rates. The window's target is the device's explicit schedule, so the
+    context's useful-charge ceiling, which sizes only compute_grid_charge_power_kw's fill,
+    does not lower it.
     """
     excess_kw = _step_excess_kw(generation_kw, demand_kw)
     shortfall_kw = _step_shortfall_kw(generation_kw, demand_kw)
@@ -1099,7 +1263,7 @@ class ScheduledChargeStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:

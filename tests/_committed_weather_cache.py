@@ -31,7 +31,7 @@ def committed_bristol_tmy(*, cache_dir: Path = COMMITTED_WEATHER_CACHE_DIR) -> p
     """Bristol's TMY as the weather cache in *cache_dir*, by default the committed one, holds it, read afresh on every call.
 
     Fails the calling test, naming the fix, when the directory or its Bristol entry is missing. The directory is
-    checked before any WeatherCache is built, because WeatherCache creates the directory it is given.
+    checked before the cache is read, because a WeatherCache reads an absent directory as an empty one.
     """
     if not cache_dir.is_dir():
         pytest.fail(

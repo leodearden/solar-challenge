@@ -7,6 +7,7 @@ import io
 import json
 import os
 import uuid
+import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -171,6 +172,10 @@ def _decode_sealed_content(content: TextIO) -> pd.DataFrame:
     return frame.set_axis(pd.DatetimeIndex(instants, freq=freq, name=frame.index.name))
 
 
+_NO_FILE_AT_PATH: tuple[type[OSError], ...] = (FileNotFoundError, NotADirectoryError)
+"""The OSErrors that opening or removing a cache file raises when no file is at its path: nothing is there, or a regular file stands where the cache directory, or one of its parents, should be."""
+
+
 class WeatherCache:
     """Cache for weather data to avoid repeated API calls.
 
@@ -193,13 +198,13 @@ class WeatherCache:
         """Initialize the cache.
 
         Args:
-            cache_dir: Directory for cache files. Given none, the directory CACHE_DIR_VARIABLE names when it is
-                set and non-empty, else DEFAULT_CACHE_DIR, under the working directory
+            cache_dir: Directory for cache files, created by the first put, not here, so that constructing a cache
+                touches no file. Given none, the directory CACHE_DIR_VARIABLE names when it is set and non-empty,
+                else DEFAULT_CACHE_DIR, under the working directory
         """
         if cache_dir is None:
             cache_dir = Path(os.environ.get(CACHE_DIR_VARIABLE) or DEFAULT_CACHE_DIR)
         self.cache_dir = cache_dir
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _make_key(self, prefix: str, location: Location,
                   start_date: Optional[pd.Timestamp] = None,
@@ -236,7 +241,8 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            The cached DataFrame, or None if not found
+            The cached DataFrame, or None if not found, as when the cache directory is absent or a regular file lies
+            where it, or a parent of it, should be
 
         Raises:
             ValueError: Naming the entry's file and how to remove it, if its first line does not seal the rest, as
@@ -244,12 +250,14 @@ class WeatherCache:
                 put writes: a header holding anything but a timezone and a frequency, each a str or null, a
                 timezone str that names none, which put refuses to record, rows that are no CSV of instants, or
                 rows not on the header's frequency
+            OSError: If the entry's file cannot be opened or read for a reason other than its absence, as when a
+                directory lies at its path or the process may not open files in the cache directory
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
             with open(cache_file, encoding="utf-8", newline="") as file:
                 return _read_entry(file)
-        except FileNotFoundError:
+        except _NO_FILE_AT_PATH:
             return None
         except ValueError as e:
             raise ValueError(
@@ -260,7 +268,7 @@ class WeatherCache:
     def put(self, data: pd.DataFrame, prefix: str, location: Location,
             start_date: Optional[pd.Timestamp] = None,
             end_date: Optional[pd.Timestamp] = None) -> None:
-        """Store data in cache, replacing any entry under the same key whole.
+        """Store data in cache, creating the cache directory, parents included, if absent, and replacing any entry under the same key whole.
 
         A get racing this put, in any thread or process, finds the previous entry (or none) or this one,
         never part of either. A put that raises part-way, as on Ctrl-C, leaves the previous entry, or none,
@@ -277,6 +285,8 @@ class WeatherCache:
         Raises:
             ValueError: If data's index is in a timezone get could not restore from its str, such as a dateutil
                 zone; nothing is then written
+            OSError: If the cache directory cannot be created, as under a regular file or where the process cannot
+                write, or the entry's file cannot be written; any entry under the key is then left as it was
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
 
@@ -285,6 +295,7 @@ class WeatherCache:
             _require_timezone_name(tz_str)
         freq_str = data.index.freqstr if hasattr(data.index, "freqstr") and data.index.freqstr else None
 
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         with _staged_beside(cache_file) as staged:
             with open(staged, "w", encoding="utf-8", newline="") as file:
                 _write_entry(file, {"timezone": tz_str, "freq": freq_str}, data)
@@ -296,10 +307,11 @@ class WeatherCache:
         """Clear all cached data: every file in the cache directory, those of entries an earlier key version wrote included.
 
         Returns:
-            Number of files removed
+            Number of files removed, 0 if the cache holds none, as when the cache directory is absent or a regular
+            file lies where it, or a parent of it, should be
         """
         count = 0
-        if self.cache_dir.exists():
+        if self.cache_dir.is_dir():
             for file in self.cache_dir.glob("*"):
                 file.unlink()
                 count += 1
@@ -317,12 +329,13 @@ class WeatherCache:
             end_date: Optional end of a date-ranged entry (part of the key)
 
         Returns:
-            True if cache entry was removed, False if not found
+            True if the entry's file was removed, False if not found, as when the cache directory is absent or a
+            regular file lies where it, or a parent of it, should be
         """
         cache_file = self._cache_path(self._make_key(prefix, location, start_date, end_date))
         try:
             cache_file.unlink()
-        except FileNotFoundError:
+        except _NO_FILE_AT_PATH:
             return False
         return True
 
@@ -337,7 +350,7 @@ class WeatherProvider(Protocol):
 
 @dataclass(frozen=True)
 class PvgisTmy:
-    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there; with no cache, fetched on every get."""
+    """PVGIS's TMY for each location, scaled to the point's 2005-2020 mean annual GHI (docs/tmy-irradiation-scaling.md): read from cache, else fetched and put there when it can; with no cache, fetched on every get."""
 
     cache: WeatherCache | None
 
@@ -346,6 +359,10 @@ class PvgisTmy:
 
         Its ghi, dni and dhi are those of PVGIS's TMY multiplied by one factor, so that the year's GHI equals
         the mean annual GHI of PVGIS's 2005-2020 hourly series at the point.
+
+        If its cache's put raises OSError, as where the process may not create the cache directory or a regular file
+        lies where it, or a parent of it, should be, get returns the fetched TMY uncached, with a UserWarning
+        attributed to its caller naming the directory and the error, so the next get fetches it again.
 
         Returns:
             DataFrame with columns including:
@@ -365,6 +382,9 @@ class PvgisTmy:
                 short or changed after put wrote it, or is not in the form put writes; nothing is then fetched. A
                 note on it says what removing the entry, by deleting the file or with WeatherCache.invalidate,
                 leads to: the next get fetches the TMY afresh and puts it
+            OSError: From its cache's get, if the entry's file cannot be opened or read for a reason other than its
+                absence, as when a directory lies at its path or the process may not open files in the cache
+                directory; nothing is then fetched
         """
         if self.cache is None:
             return _fetch_scaled_tmy(location)
@@ -378,8 +398,22 @@ class PvgisTmy:
         if cached is not None:
             return cached
         tmy = _fetch_scaled_tmy(location)
-        self.cache.put(tmy, "tmy", location)
+        _put_or_warn(self.cache, tmy, location)
         return tmy
+
+
+def _put_or_warn(cache: WeatherCache, tmy: pd.DataFrame, location: Location) -> None:
+    """Put tmy in cache as location's TMY; an OSError from the put becomes a UserWarning, attributed to PvgisTmy.get's caller, naming cache's directory and the error."""
+    try:
+        cache.put(tmy, "tmy", location)
+    except OSError as e:
+        warnings.warn(
+            f"Could not cache the TMY fetched for {location!r} in {cache.cache_dir}: {e}. It is returned uncached, "
+            "so the next PvgisTmy.get fetches it from PVGIS again; name a directory this process can write with "
+            f"{CACHE_DIR_VARIABLE} or WeatherCache(cache_dir=...)",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 @dataclass(frozen=True, eq=False)

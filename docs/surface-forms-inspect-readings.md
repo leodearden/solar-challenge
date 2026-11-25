@@ -69,7 +69,8 @@ other than `type` and `object` that holds a `__getattribute__`, its reading of w
 3.11.17, 3.12.3, 3.13.9 and 3.14.4 on 2026-11-04, and 4.10's readings on those releases on
 2026-11-05. 3.5's reading of a class statement whose `def` of its constructor did not
 write the constructor the class holds was measured on CPython 3.11.15, 3.11.17, 3.12.3,
-3.13.9 and 3.14.4 on 2026-11-05. A new refusal gets its rule test first, then its entry
+3.13.9 and 3.14.4 on 2026-11-05. 3.6's readings were measured on CPython 3.11.15, 3.12.3,
+3.13.9 and 3.14.4 on 2026-11-22. A new refusal gets its rule test first, then its entry
 here.
 
 ## 2. The Chain inspect Follows, on Every Minor
@@ -316,6 +317,37 @@ Pinned by:
 - `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_class_statement_defines_it_by_a_def_and_whose_code_carries_the_qualified_name_a_def_in_its_class_body_gives_raises_type_error_naming_the_class_the_constructor_and_that_module`
 - `tests/unit/surface_forms_helper/test_named_classes_generated_constructors.py::test_a_constructor_named_as_generated_that_inspect_reads_no_source_for_whose_code_carries_another_qualified_name_than_a_def_in_its_class_body_gives_is_spelled_as_its_generator_spells_what_it_writes`
 - `tests/unit/surface_forms_helper/test_undeclared_attributes.py::test_a_class_whose_modules_source_holds_no_class_statement_under_its_qualified_name_raises_a_type_error_naming_that_module_and_that_name_from_undeclared_attributes_and_unset_attributes`
+
+### 3.6 A class's instance layout and positional pattern
+
+`dataclasses` records `match_args`, `slots` and `weakref_slot` in a class's
+`__dataclass_params__` only from 3.12; 3.11's records none of the three. From 3.12 the
+record is inherited, so an undecorated subclass of a `slots=True` dataclass reads
+`slots=True` there, though its instances hold a `__dict__` again. `surface_form` reads all
+three from the class itself, alike on every minor, for every class but an Enum, not only
+a dataclass, as what its instances can do.
+
+Whether instances hold a `__dict__` and take a weakref is read from `type`'s own
+`__dictoffset__` and `__weakrefoffset__` descriptors, as `recorded_mro` reads `__mro__`,
+so no metaclass shadows them. Their values differ by minor. Measured: a plain class reads
+`-48` and `16` on 3.11.15, and `-1` and `-32` on 3.12.3, 3.13.9 and 3.14.4; a class whose
+`__slots__` lists `__weakref__` reads `0` and `24` on 3.11.15, and `0` and `-32` from
+3.12. Each is zero alike on every minor exactly when instances hold no `__dict__`, or
+take no weakref: both read `0` for a class whose `__slots__` lists neither, a
+`slots=True` dataclass, a named tuple and `object` itself, and a subclass of `tuple` reads
+a non-zero `__dictoffset__` and a `__weakrefoffset__` of `0`. So
+`instances_hold_a_dict` and `instances_take_a_weakref`, in
+`tests/_surface_forms_class_reads.py`, read only whether each is zero. `__match_args__` is
+read with `getattr` on the class, as the match statement reads it, which reads alike on
+every minor.
+
+Pinned by:
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_dataclass_kind_lists_match_args_when_its_match_args_names_its_constructors_positional_parameters`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_class_other_than_a_dataclass_is_spelled_with_the_kind_class_only_when_it_has_a_qualifier`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_class_whose_match_args_is_neither_empty_nor_its_constructors_positional_parameters_raises_a_type_error_naming_it_what_it_holds_and_those_parameters`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_class_whose_instances_hold_no_dict_lists_slots_then_weakref_slot_if_they_take_a_weakref`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_class_whose_instances_hold_a_dict_lists_no_slots_whatever_slots_its_own_body_or_its_decorator_sets`
+- `tests/unit/surface_forms_helper/test_surface_form_grammar.py::test_a_class_whose_instances_hold_a_dict_but_take_no_weakref_raises_a_type_error_naming_it`
 
 ## 4. Refused
 
@@ -1069,7 +1101,7 @@ under the class's qualified name. `member_forms`, `undeclared_attributes` and
 same error for 3.11's class and, on every minor, for the one
 `dataclass(types.new_class(...))` makes. From 3.12 the class records the `__module__` and
 globals that one `dataclass(type(...))` makes in the calling module records, and reads as
-that one does (3.5): `surface_form` spells it `dataclass[eq] (spare: Decimal) -> None`,
+that one does (3.5): `surface_form` spells it `dataclass[eq, match_args] (spare: Decimal) -> None`,
 `named_classes` gives `{Decimal}`, `member_forms` gives `{}`, and
 `undeclared_attributes` and `unset_attributes` raise `TypeError`, as for any class with no
 class statement to scan. Called from a function of another module, `make_dataclass`
@@ -1138,7 +1170,9 @@ from 3.12 `make_dataclass` records its calling module. The refusal of a class wh
 rests on no minor: no record names the module that binds such a class. 3.5's lookup stays
 whatever the admitted minors: it finds a class's statement by qualified name, as 3.11 and
 3.12 do, and the lookup 3.13 and 3.14 make reads none for a class whose `__module__` was
-assigned.
+assigned. 3.6's reading from the class stays whatever the admitted minors too: no class
+but a dataclass has a `__dataclass_params__`, and from 3.12 an undecorated subclass
+inherits a record its instances do not bear out.
 Whether to lift one is for the task that changes `requires-python`.
 
 ## 6. How to Re-measure

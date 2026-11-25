@@ -5,6 +5,9 @@ Proves the user-observable signal: net_cost_gbp(grid_charge_ON) < net_cost_gbp(g
 These tests:
 - Load the committed scenarios/bristol-arbitrage.yaml scenario
 - Validate that the CLI accepts the battery.grid_charging YAML keys
+- Assert that the scenario's text from before the battery took the home's
+  dispatch_strategy is refused, by `validate config` and by `home run`, naming
+  the battery's key
 - Assert that enabling grid-charging reduces net cost on a single winter day
   using a deterministic zero-PV synthetic weather frame (PVGIS-free, fast)
 - Assert that a copy of the scenario whose battery is at SOH 0.7 ends the cheap
@@ -17,6 +20,7 @@ Every simulation is given a sunless winter day as its weather, so these tests ru
 from __future__ import annotations
 
 import dataclasses
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -26,9 +30,12 @@ from typer.testing import CliRunner
 
 from solar_challenge.cli.main import app
 from solar_challenge.config import load_scenarios
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.home import calculate_summary, simulate_home
 from solar_challenge.weather import WeatherCache
+from tests._cli_table_text import table_text
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 from tests._synthetic_weather import sunless_tmy, sunless_weather, weather_for
 
 runner = CliRunner()
@@ -50,7 +57,7 @@ def test_validate_config_accepts_grid_charging_keys() -> None:
 
 
 def test_scenario_parses_grid_charging() -> None:
-    """load_scenarios parses grid_charging.target_soc_fraction and dispatch_strategy."""
+    """load_scenarios parses the battery's grid_charging.target_soc_fraction and its dispatch_strategy, tou_optimized on the tariff's clock."""
     scenario = load_scenarios(SCENARIO)[0]
     assert scenario.home is not None, "Scenario must define a single 'home:' block"
     assert scenario.home.battery_config is not None, "Home must have a battery_config"
@@ -58,8 +65,43 @@ def test_scenario_parses_grid_charging() -> None:
         "Battery must have grid_charging set"
     )
     assert scenario.home.battery_config.grid_charging.target_soc_fraction == 0.9
-    assert scenario.home.dispatch_strategy == "tou_optimized"
+    assert scenario.home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig()
     assert scenario.home.tariff_config is not None, "Home must have a tariff_config"
+
+
+def _pre_migration_scenario(tmp_path: Path) -> Path:
+    """The committed scenario as it was written before the battery took the home's dispatch_strategy: its battery's moved back to the home as `dispatch_strategy: tou_optimized`, written under *tmp_path*."""
+    document = yaml.safe_load(SCENARIO.read_text())
+    document["home"]["battery"].pop("dispatch_strategy", None)
+    document["home"]["dispatch_strategy"] = "tou_optimized"
+    path = tmp_path / "bristol-arbitrage-pre-migration.yaml"
+    path.write_text(yaml.safe_dump(document))
+    return path
+
+
+def test_validate_config_refuses_the_pre_migration_scenario_naming_the_batterys_dispatch_strategy(
+    tmp_path: Path,
+) -> None:
+    """PRD §9 row 12: the home-level key is retired, so the file's old text is an error row naming where the key goes."""
+    result = runner.invoke(app, ["validate", "config", str(_pre_migration_scenario(tmp_path))], catch_exceptions=False)
+
+    text = table_text(result.stdout)
+    assert result.exit_code != 0, text
+    assert re.search(retired_dispatch_strategy_refusal("home.dispatch_strategy"), text), text
+
+
+def test_home_run_refuses_the_pre_migration_scenario_naming_the_batterys_dispatch_strategy(tmp_path: Path) -> None:
+    """PRD §9 row 12: `home run` refuses the file's old text before it simulates, its stderr starting with the key's path."""
+    result = runner.invoke(
+        app,
+        ["home", "run", str(_pre_migration_scenario(tmp_path)), "--start", "2024-01-15", "--end", "2024-01-15"],
+        catch_exceptions=False,
+    )
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code != 0, stderr
+    assert stderr.startswith("Configuration error: home.dispatch_strategy: "), stderr
+    assert re.search(retired_dispatch_strategy_refusal("home.dispatch_strategy"), stderr), stderr
 
 
 # ---------------------------------------------------------------------------
@@ -71,9 +113,8 @@ def test_grid_charge_lowers_net_cost() -> None:
     """grid_charge ON reduces net_cost_gbp vs OFF on a deterministic winter day.
 
     Uses zero-PV injected weather so net_cost == import_cost in both runs.
-    The ON run grid-charges overnight (off-peak 0.09 £/kWh) and discharges
-    at the 18:00 evening peak (0.25 £/kWh), strictly lowering import cost.
-    The Economy 7 spread gate guarantees a comfortable ~£0.31 margin.
+    The ON run grid-charges overnight at Economy 7's off-peak rate and
+    discharges at its 18:00 evening peak, strictly lowering import cost.
     """
     scenario = load_scenarios(SCENARIO)[0]
     home_on = scenario.home

@@ -3,7 +3,7 @@
 
 Proves:
 (a) Threading sanity: load_fleet_config(flex scenario) yields battery homes with
-    Economy-7 tariff (0.09/0.25, 00:30-07:30) + grid_charging + dispatch tou_optimized.
+    Economy-7 tariff at the Economy 7 preset's rates and window + grid_charging + dispatch tou_optimized.
 (b) G6 signal: zero-PV winter-day A/B (grid_charging ON vs OFF) → import_cost_gbp(ON) <
     import_cost_gbp(OFF) AND annualised delta ∈ [£100, £330].
 (c) Finance report: generate_finance_report gains optional flex_band block; default None
@@ -20,10 +20,12 @@ import warnings
 import pandas as pd
 
 from solar_challenge.config import load_config, load_fleet_config
+from solar_challenge.dispatch import TOUOptimizedStrategyConfig
 from solar_challenge.finance import FinanceConfig, bill_distribution, householder_bill
 from solar_challenge.flex import resolve_flex_band
-from solar_challenge.home import SummaryStatistics, calculate_summary, simulate_home
+from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary, simulate_home
 from solar_challenge.output import generate_finance_report
+from solar_challenge.tariff import PRESET_RATES
 from tests._finance_builders import make_window
 from tests._synthetic_weather import sunless_weather, weather_for
 from tests.integration._helpers import SCENARIO
@@ -35,13 +37,14 @@ from tests.integration._helpers import SCENARIO
 
 
 def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
-    """All battery homes in the flex scenario inherit Economy-7 tariff, grid_charging,
-    and tou_optimized dispatch_strategy.
+    """All battery homes in the flex scenario inherit Economy-7 tariff, grid_charging
+    sized by the trailing_14_days forecast, and a tou_optimized battery dispatch_strategy.
 
     Verifies the β/β′ seam threading (load_fleet_config at config.py:2030):
     scenario-level `tariff:` → every generated home; `fleet_distribution.battery.
-    grid_charging:` → every battery home; `fleet_distribution.dispatch_strategy:` →
-    every home.
+    grid_charging:` and `fleet_distribution.battery.dispatch_strategy:` → every
+    battery home. The forecast leaves this file's single-day runs PV-blind: they end
+    before its 14-day warm-up (docs/grid-charge-forecast.md).
     """
     fleet = load_fleet_config(SCENARIO)
     battery_homes = [h for h in fleet.homes if h.battery_config is not None]
@@ -53,16 +56,20 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
             f"Home {home.name!r} must inherit Economy-7 tariff from scenario 'tariff:' key"
         )
         # Off-peak rate at 03:00 (inside 00:30–07:30 window)
+        expected_off_peak = PRESET_RATES["economy_7"].off_peak_rate
         off_peak_ts = pd.Timestamp("2024-01-15 03:00:00", tz="Europe/London")
         off_peak_rate = home.tariff_config.get_rate(off_peak_ts)
-        assert abs(off_peak_rate - 0.09) < 1e-9, (
-            f"Expected off-peak rate 0.09 £/kWh at 03:00, got {off_peak_rate}"
+        assert abs(off_peak_rate - expected_off_peak) < 1e-9, (
+            f"Expected the Economy 7 preset's off-peak rate {expected_off_peak} £/kWh at 03:00, "
+            f"got {off_peak_rate}"
         )
         # Peak rate at 18:00 (outside off-peak window)
+        expected_peak = PRESET_RATES["economy_7"].peak_rate
         peak_ts = pd.Timestamp("2024-01-15 18:00:00", tz="Europe/London")
         peak_rate = home.tariff_config.get_rate(peak_ts)
-        assert abs(peak_rate - 0.25) < 1e-9, (
-            f"Expected peak rate 0.25 £/kWh at 18:00, got {peak_rate}"
+        assert abs(peak_rate - expected_peak) < 1e-9, (
+            f"Expected the Economy 7 preset's peak rate {expected_peak} £/kWh at 18:00, "
+            f"got {peak_rate}"
         )
 
         # ---- Grid charging must be set with target_soc_fraction 0.9 -----------
@@ -75,11 +82,16 @@ def test_board_scenario_inherits_tou_tariff_and_grid_charging() -> None:
             f"Expected target_soc_fraction=0.9, "
             f"got {home.battery_config.grid_charging.target_soc_fraction}"
         )
+        assert home.battery_config.grid_charging.forecast == "trailing_14_days", (
+            f"Home {home.name!r}: the board fleet sizes its grid charge by the trailing_14_days "
+            "forecast, set explicitly (fleet_distribution.battery.grid_charging.forecast), "
+            f"got {home.battery_config.grid_charging.forecast!r}"
+        )
 
-        # ---- Dispatch strategy must be tou_optimized --------------------------
-        assert home.dispatch_strategy == "tou_optimized", (
-            f"Home {home.name!r}: expected dispatch_strategy='tou_optimized', "
-            f"got {home.dispatch_strategy!r}"
+        # ---- Battery dispatch must be tou_optimized on the tariff's clock -----
+        assert home.battery_config.dispatch_strategy == TOUOptimizedStrategyConfig(), (
+            f"Home {home.name!r}: expected its battery to dispatch tou_optimized on the tariff's clock, "
+            f"got {home.battery_config.dispatch_strategy!r}"
         )
 
 
@@ -151,12 +163,8 @@ def test_time_shift_lowers_householder_bill_within_band() -> None:
     # ---- Householder bill A/B (suppress <360-day annualisation warning) ------
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        bill_on = householder_bill(
-            summary_on, summary_on.total_self_consumption_kwh, finance, simulation_days=1
-        )
-        bill_off = householder_bill(
-            summary_off, summary_off.total_self_consumption_kwh, finance, simulation_days=1
-        )
+        bill_on = householder_bill(summary_on, summary_on.total_self_consumption_kwh, finance)
+        bill_off = householder_bill(summary_off, summary_off.total_self_consumption_kwh, finance)
 
     # ---- G6 gate: import_cost_gbp(ON) < import_cost_gbp(OFF) ----------------
     assert bill_on.import_cost_gbp < bill_off.import_cost_gbp, (
@@ -198,18 +206,17 @@ def test_finance_report_renders_flex_value_block() -> None:
         self_consumption_ratio=sc_ratio,
         grid_dependency_ratio=gd_ratio,
         export_ratio=ex_ratio,
-        simulation_days=365,
         total_import_cost_gbp=276.0,
         total_export_revenue_gbp=73.8,
         net_cost_gbp=202.2,
-        seg_revenue_gbp=73.8,
         window=make_window(days=365),
+        pricing=RunPricing(0.23, 4.1),
     )
     finance = FinanceConfig(
         standing_charge_pence_per_day=60.0,
         own_use_rate_pence_per_kwh=15.0,
     )
-    dist = bill_distribution([summary], finance, 365)
+    dist = bill_distribution([summary], finance)
 
     # ---- Baseline: no flex_band → bit-identical output -----------------------
     baseline = generate_finance_report(dist, scenario_name="Flex")

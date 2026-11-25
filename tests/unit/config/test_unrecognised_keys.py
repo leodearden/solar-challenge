@@ -4,6 +4,7 @@
 import copy
 import re
 from collections.abc import Callable, Collection, Iterator, Mapping
+from datetime import date
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -15,47 +16,51 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.config import FLEET_TEMPLATE, HOME_TEMPLATE, SCENARIO_TEMPLATE
 from solar_challenge.community import CommunityBillingConfig, CommunityConfig
 from solar_challenge.config import (
-    BATTERY_BLOCK,
-    EV_BLOCK,
-    HEAT_PUMP_BLOCK,
-    LOAD_BLOCK,
-    PV_BLOCK,
-    ComponentDistribution,
-    FleetDistributionConfig,
-    NormalDistribution,
-    OutputConfig,
-    ProportionalDistribution,
-    ShuffledPoolDistribution,
-    SimulationPeriod,
-    SweepSpec,
-    UniformDistribution,
-    WeightedDiscreteDistribution,
     detect_fleet_sweep_spec,
     load_community_config,
     load_config,
     load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_finance_config,
-    parse_fleet_distribution_config,
-    parse_home_block,
-    parse_location_block,
-    parse_seg_rate,
     parse_sweep_fleet_configs,
-    parse_tariff_config,
 )
 from solar_challenge.dispatch import GridChargeConfig, TOUOptimizedStrategyConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.ev import EVConfig
 from solar_challenge.finance import FinanceConfig
+from solar_challenge.fleet_distribution import (
+    ComponentDistribution,
+    FleetDistributionConfig,
+    NormalDistribution,
+    ProportionalDistribution,
+    ShuffledPoolDistribution,
+    SweepSpec,
+    UniformDistribution,
+    WeightedDiscreteDistribution,
+    parse_fleet_distribution_config,
+)
 from solar_challenge.gridservices import EventWindow, GridServicesEventsConfig
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    PV_BLOCK,
+    parse_finance_config,
+    parse_home_block,
+    parse_location_block,
+    parse_seg_rate,
+    parse_tariff_config,
+)
 from solar_challenge.tariff import TariffConfig, TariffPeriod
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._repository_paths import SCENARIOS_DIR
+from tests._retired_dispatch_strategy import retired_dispatch_strategy_refusal
 
 _PERIOD = {"start_date": "2024-01-01", "end_date": "2024-01-07"}
 
@@ -88,7 +93,7 @@ def _parsed_fleet_distribution(**sections: Any) -> FleetDistributionConfig:
 def _refusal(block_path: str, *keys: str) -> str:
     """Match the refusal of *keys* by the block at *block_path*."""
     return re.escape(
-        f"Unrecognised keys in {block_path}: " + ", ".join(repr(key) for key in sorted(keys)) + ";"
+        f"{block_path}: unrecognised keys " + ", ".join(repr(key) for key in sorted(keys)) + ";"
     )
 
 
@@ -131,7 +136,7 @@ def _assert_blocks_recognise_exactly_their_keys(
             read(probed)
         recognised = set(nested) | set(also_recognised.get(path, ()))
         assert str(refusal.value) == (
-            f"Unrecognised keys in {path}: {_PROBE_KEY!r}; "
+            f"{path}: unrecognised keys {_PROBE_KEY!r}; "
             f"recognised keys: {', '.join(sorted(recognised))}"
         )
 
@@ -144,16 +149,10 @@ def _parse_every_block(path: Path) -> None:
     as one.
     """
     document = load_config(path)
-    if "home" in document:
-        parse_home_block(document["home"], parse_location_block(document.get("location")))
     if detect_fleet_sweep_spec(document) is not None:
         parse_sweep_fleet_configs(document)
-    elif "fleet_distribution" in document or "homes" in document:
-        load_fleet_config(path)
-    if {"name", "period"} <= document.keys() and ("home" in document or "homes" in document):
+    else:
         load_scenarios(path)
-    parse_seg_rate(document.get("seg"))
-    parse_finance_config(document.get("finance"))
     load_community_config(path)
 
 
@@ -227,7 +226,7 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError) as refusal:
             _parsed_home(load={"annual_kwh": 3000, "people": 2})
         assert str(refusal.value) == (
-            "Unrecognised keys in home.load: 'annual_kwh', 'people'; recognised keys: "
+            "home.load: unrecognised keys 'annual_kwh', 'people'; recognised keys: "
             "annual_consumption_kwh, household_occupants, name, seed, use_stochastic"
         )
 
@@ -252,7 +251,7 @@ class TestHomeBlockKeys:
     ) -> None:
         """A block that is not a mapping is refused, naming the block's path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             _parsed_home(**blocks)
 
@@ -312,26 +311,32 @@ class TestHomeBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal(block_path, "capacity_kwp")):
             load(path)
 
-    def test_flat_home_file_names_blocks_from_the_top_level(self, tmp_path: Path) -> None:
-        """A home file without a home: key is itself the home block, so its blocks are named from the top level."""
+    def test_a_flat_home_file_is_refused_naming_home(self, tmp_path: Path) -> None:
+        """The flat home-file form is retired, so a home's block at the top level is refused naming where it goes, before its own keys are read."""
         path = _write(tmp_path, {"pv": {"capacity_kwp": 4.0}})
-        with pytest.raises(ConfigurationError, match=_refusal("pv", "capacity_kwp")):
+        with pytest.raises(ConfigurationError, match=re.escape("pv: ") + ".*home:"):
             load_home_config(path)
 
-    def test_flat_home_file_refusal_lists_location_among_its_keys(self, tmp_path: Path) -> None:
-        """A flat home file recognises the home block's keys and the location: block beside them."""
-        path = _write(tmp_path, {"pv": {"capacity_kw": 4.0}, "batteries": {}})
-        with pytest.raises(ConfigurationError) as refusal:
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_top_level_dispatch_strategy_beside_home_is_refused_naming_the_batterys(
+        self, tmp_path: Path, dispatch_strategy: object
+    ) -> None:
+        """The scenario retires dispatch_strategy as the home does, so a top-level one, of any value, is refused naming the battery's, not as an unrecognised key."""
+        path = _write(tmp_path, {"home": {"battery": {"capacity_kwh": 5.0}}, "dispatch_strategy": dispatch_strategy})
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("dispatch_strategy")):
             load_home_config(path)
-        assert str(refusal.value) == (
-            "Unrecognised keys in the top level: 'batteries'; recognised keys: "
-            "battery, dispatch_strategy, ev, heat_pump, load, location, name, pv, tariff"
-        )
 
-    def test_flat_home_file_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
-        """load_home_config reads a flat home file's location: block itself, beside the home keys."""
+    def test_a_home_documents_location_block_is_read_not_refused(self, tmp_path: Path) -> None:
+        """load_home_config reads a home: document's location: block, beside its home: block."""
         location = {"latitude": 52.0, "longitude": -1.5, "name": "Midlands"}
-        path = _write(tmp_path, {"location": location, "pv": {"capacity_kw": 4.0}})
+        path = _write(tmp_path, {"location": location, "home": {"pv": {"capacity_kw": 4.0}}})
         assert load_home_config(path).location.latitude == 52.0
 
     @pytest.mark.parametrize(
@@ -371,7 +376,7 @@ class TestHomeBlockKeys:
             "degradation_rate_per_year": 0.006,
             "system_losses": 0.05,
         }
-        grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8}
+        grid_charging: dict[str, Any] = {"target_soc_fraction": 0.8, "forecast": "trailing_14_days"}
         dispatch_strategy: dict[str, Any] = {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]}
         battery_without_efficiency: dict[str, Any] = {
             "capacity_kwh": 9.5,
@@ -415,8 +420,13 @@ class TestHomeBlockKeys:
             "pv": pv,
             "battery": battery,
             "load": load,
-            "tariff": {"type": "flat_rate", "rate_per_kwh": 0.25, "name": "Flat"},
-            "dispatch_strategy": "tou_optimized",
+            "tariff": {
+                "type": "economy_7",
+                "off_peak_rate": 0.10,
+                "peak_rate": 0.30,
+                "off_peak_start": "01:00",
+                "off_peak_end": "08:00",
+            },
             "heat_pump": heat_pump,
             "ev": ev,
         }
@@ -433,8 +443,9 @@ class TestHomeBlockKeys:
             load_config=LoadConfig(**load),
             location=Location.bristol(),
             name="Every key",
-            tariff_config=TariffConfig.flat_rate(rate_per_kwh=0.25, name="Flat"),
-            dispatch_strategy="tou_optimized",
+            tariff_config=TariffConfig.economy_7(
+                off_peak_rate=0.10, peak_rate=0.30, off_peak_start="01:00", off_peak_end="08:00"
+            ),
             heat_pump_config=HeatPumpConfig(**heat_pump),
             ev_config=EVConfig(**ev),
         )
@@ -445,6 +456,26 @@ class TestHomeBlockKeys:
             "home",
             also_recognised={"home.battery": other_efficiency_keys},
         )
+
+    @pytest.mark.parametrize(
+        "dispatch_strategy",
+        [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    @pytest.mark.parametrize("block_path", ["home", "homes[1]"])
+    def test_a_home_level_dispatch_strategy_is_refused_naming_the_batterys_ahead_of_an_unrecognised_key(
+        self, dispatch_strategy: object, block_path: str
+    ) -> None:
+        """The dispatch strategy is the battery's own setting: the block parser refuses the retired home-level key, of any value, before any key it does not recognise."""
+        block = {"battery": {"capacity_kwh": 5.0}, "dispatch_strategy": dispatch_strategy, _PROBE_KEY: None}
+
+        with pytest.raises(
+            ConfigurationError, match=retired_dispatch_strategy_refusal(f"{block_path}.dispatch_strategy")
+        ):
+            parse_home_block(block, Location.bristol(), block_path=block_path)
 
 
 class TestTariffBlockKeys:
@@ -519,7 +550,7 @@ class TestTariffBlockKeys:
     ) -> None:
         """A tariff or custom period that is not a mapping is refused, naming it; only None means no tariff."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             parse_tariff_config(block)
 
@@ -534,12 +565,6 @@ class TestTariffBlockKeys:
                 {"homes": [{"pv": {"capacity_kw": 4.0}, "tariff": _MISKEYED_ECONOMY_7}]},
                 "homes[0].tariff",
                 id="fleet-homes",
-            ),
-            pytest.param(
-                load_scenarios,
-                {**_SCENARIO, "tariff_config": _MISKEYED_ECONOMY_7},
-                "tariff_config",
-                id="scenario",
             ),
             pytest.param(
                 load_fleet_config,
@@ -739,13 +764,23 @@ class TestFleetDistributionBlockKeys:
         with pytest.raises(ConfigurationError, match=_refusal(block_path, key)):
             _parsed_fleet_distribution(**sections)
 
-    def test_block_setting_every_recognised_key_is_accepted(self) -> None:
-        """A block setting every fleet key of every component's table, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
+    @pytest.mark.parametrize(
+        ("efficiency_draws", "other_efficiency_keys"),
+        [
+            pytest.param(
+                {"charge_efficiency": 0.96, "discharge_efficiency": 0.96}, ("efficiency",), id="pair"
+            ),
+            pytest.param({"efficiency": 0.92}, ("charge_efficiency", "discharge_efficiency"), id="round-trip"),
+        ],
+    )
+    def test_block_setting_every_recognised_key_is_accepted(
+        self, efficiency_draws: dict[str, float], other_efficiency_keys: tuple[str, ...]
+    ) -> None:
+        """A block setting every fleet key of every component's table, its battery's efficiency in one form at a time, with a spec of each distribution type, parses to the FleetDistributionConfig built from those values; no block recognises another key."""
         fleet_distribution: dict[str, Any] = {
             "n_homes": 2,
             "seed": 42,
             "random_order": "bristol_legacy",
-            "dispatch_strategy": "tou_optimized",
             "pv": {
                 "capacity_kw": {"type": "normal", "mean": 4.0, "std": 1.0, "min": 2.0, "max": 6.0},
                 "azimuth": {"type": "uniform", "min": 170.0, "max": 190.0},
@@ -768,12 +803,10 @@ class TestFleetDistributionBlockKeys:
                 "max_charge_kw": {"type": "shuffled_pool", "values": [2.5, 3.0], "counts": [1, 1]},
                 "max_discharge_kw": 3.0,
                 "dispatch_strategy": {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]},
-                "grid_charging": {"target_soc_fraction": 0.8},
+                "grid_charging": {"target_soc_fraction": 0.8, "forecast": "trailing_14_days"},
                 "min_soc_fraction": 0.15,
                 "max_soc_fraction": 0.95,
-                "charge_efficiency": 0.96,
-                "discharge_efficiency": 0.96,
-                "efficiency": 0.92,
+                **efficiency_draws,
                 "system_age_years": 2.0,
                 "calendar_fade_rate_per_year": 0.015,
                 "cycle_fade_per_equivalent_full_cycle": 4e-05,
@@ -820,9 +853,7 @@ class TestFleetDistributionBlockKeys:
                     "max_discharge_kw": 3.0,
                     "min_soc_fraction": 0.15,
                     "max_soc_fraction": 0.95,
-                    "charge_efficiency": 0.96,
-                    "discharge_efficiency": 0.96,
-                    "efficiency": 0.92,
+                    **efficiency_draws,
                     "system_age_years": 2.0,
                     "calendar_fade_rate_per_year": 0.015,
                     "cycle_fade_per_equivalent_full_cycle": 4e-05,
@@ -831,7 +862,7 @@ class TestFleetDistributionBlockKeys:
                 },
                 settings={
                     "dispatch_strategy": TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-                    "grid_charging": GridChargeConfig(target_soc_fraction=0.8),
+                    "grid_charging": GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
                 },
             ),
             heat_pump=ComponentDistribution(
@@ -848,43 +879,62 @@ class TestFleetDistributionBlockKeys:
             ),
             seed=42,
             random_order="bristol_legacy",
-            dispatch_strategy="tou_optimized",
         )
+        unset = {"battery": set(other_efficiency_keys)}
         assert {component: set(fleet_distribution[component]) for component in tables} == {
-            component: set(table.fleet) for component, table in tables.items()
+            component: set(table.fleet) - unset.get(component, set()) for component, table in tables.items()
         }
         assert parse_fleet_distribution_config(fleet_distribution) == expected
         _assert_blocks_recognise_exactly_their_keys(
-            parse_fleet_distribution_config, fleet_distribution, "fleet_distribution"
+            parse_fleet_distribution_config,
+            fleet_distribution,
+            "fleet_distribution",
+            also_recognised={"fleet_distribution.battery": other_efficiency_keys},
         )
 
     @pytest.mark.parametrize(
         "dispatch_strategy",
         [
+            pytest.param("tou_optimized", id="tou_optimized"),
+            pytest.param("greedy", id="greedy"),
+            pytest.param(None, id="null"),
             pytest.param("tou-optimised", id="misspelt"),
-            pytest.param("", id="empty"),
-            pytest.param({"strategy_type": "tou_optimized"}, id="mapping"),
         ],
     )
-    def test_dispatch_strategy_outside_the_valid_strategies_is_refused_naming_its_path(
+    def test_a_fleet_level_dispatch_strategy_is_refused_naming_the_batterys_ahead_of_an_unrecognised_key(
         self, dispatch_strategy: object
     ) -> None:
-        """The block parser refuses a dispatch_strategy that names no strategy, so every reader of the block does."""
+        """The dispatch strategy is the battery's own setting: the block parser refuses the retired fleet-level key, of any value, before any key it does not recognise."""
         with pytest.raises(
-            ConfigurationError,
-            match=re.escape(f"Invalid fleet_distribution.dispatch_strategy {dispatch_strategy!r};"),
+            ConfigurationError, match=retired_dispatch_strategy_refusal("fleet_distribution.dispatch_strategy")
         ):
-            _parsed_fleet_distribution(dispatch_strategy=dispatch_strategy)
+            _parsed_fleet_distribution(dispatch_strategy=dispatch_strategy, **{_PROBE_KEY: None})
+
+    @pytest.mark.parametrize(
+        ("data", "type_name"),
+        [
+            pytest.param(None, "NoneType", id="null"),
+            pytest.param(5, "int", id="a-number"),
+            pytest.param(["dispatch_strategy"], "list", id="a-list-holding-the-retired-key"),
+            pytest.param("dispatch_strategy", "str", id="the-retired-key-as-a-string"),
+        ],
+    )
+    def test_a_block_that_is_no_mapping_is_refused_as_no_mapping(self, data: object, type_name: str) -> None:
+        """The block is refused as not a mapping before any key of it is read, so neither a bare TypeError escapes nor a list or string holding the retired key's name is refused as that key."""
+        with pytest.raises(
+            ConfigurationError, match=re.escape(f"fleet_distribution: must be a mapping, got {type_name}")
+        ):
+            parse_fleet_distribution_config(data)
 
     def test_every_home_of_every_sweep_point_carries_grid_charging_and_dispatch_strategy(self) -> None:
-        """Every home of every sweep point, built by parse_sweep_fleet_configs as ``fleet sweep`` builds them, carries the block's dispatch_strategy and battery.grid_charging."""
+        """Every home of every sweep point, built by parse_sweep_fleet_configs as ``fleet sweep`` builds them, carries the battery block's dispatch_strategy and grid_charging."""
         sweep = {"type": "sweep", "min": 1.0, "max": 2.0, "steps": 2}
         tariff_for_tou_dispatch = {"type": "economy_7"}
         fleet_file = {
             "fleet_distribution": _fleet_distribution_block(
-                dispatch_strategy="tou_optimized",
                 battery={
                     "capacity_kwh": {"type": "proportional_to", "source": "pv.capacity_kw", "multiplier": sweep},
+                    "dispatch_strategy": {"strategy_type": "tou_optimized"},
                     "grid_charging": {"target_soc_fraction": 0.8},
                 },
             ),
@@ -894,9 +944,9 @@ class TestFleetDistributionBlockKeys:
         homes = [home for _, fleet in parse_sweep_fleet_configs(fleet_file) for home in fleet.homes]
 
         assert [
-            (home.dispatch_strategy, home.battery_config and home.battery_config.grid_charging)
+            home.battery_config and (home.battery_config.dispatch_strategy, home.battery_config.grid_charging)
             for home in homes
-        ] == [("tou_optimized", GridChargeConfig(target_soc_fraction=0.8))] * 2
+        ] == [(TOUOptimizedStrategyConfig(), GridChargeConfig(target_soc_fraction=0.8))] * 2
 
     @pytest.mark.parametrize(
         ("sections", "block_path", "type_name"),
@@ -910,13 +960,13 @@ class TestFleetDistributionBlockKeys:
     ) -> None:
         """A component block that is not a mapping is refused, naming its path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             _parsed_fleet_distribution(**sections)
 
 
 class TestScenarioFileBlockKeys:
-    """The location, period, output, seg, finance and community blocks refuse a key their parser does not read."""
+    """A scenario, its location, period, seg and finance blocks, and a community block refuse a key their reader does not read, naming its path; a scenario's retired output: and tariff_config: keys are refused naming what replaces them."""
 
     _MISKEYED_SEG: dict[str, Any] = {"rate_pence_per_kwh": 5.5, "currency": "GBP"}
     _MISKEYED_FINANCE: dict[str, Any] = {"standing_charge_pence_per_day": 60.0, "vat": 0.05}
@@ -967,13 +1017,6 @@ class TestScenarioFileBlockKeys:
                 "period",
                 "days",
                 id="period",
-            ),
-            pytest.param(
-                "load_scenarios",
-                {**_SCENARIO, "output": {"csv_path": "out.csv", "format": "csv"}},
-                "output",
-                "format",
-                id="output",
             ),
             pytest.param(
                 "load_scenarios",
@@ -1081,6 +1124,109 @@ class TestScenarioFileBlockKeys:
         assert refusal.type is ConfigurationError
 
     @pytest.mark.parametrize(
+        ("document", "key_path", "replacements"),
+        [
+            pytest.param(
+                {**_SCENARIO, "output": {"csv_path": "r.csv"}}, "output", ("--output",), id="output"
+            ),
+            pytest.param(
+                {"scenario": {**_SCENARIO, "output": ["csv"]}},
+                "scenario.output",
+                ("--output",),
+                id="scenario-output-not-a-mapping",
+            ),
+            pytest.param(
+                {"scenarios": [_SCENARIO, {**_SCENARIO, "name": "Second", "output": {"csv_path": "r.csv"}}]},
+                "scenarios[1].output",
+                ("--output",),
+                id="scenarios-output",
+            ),
+            pytest.param(
+                {"scenario": {**_SCENARIO, "tariff_config": {"type": "economy_7"}}},
+                "scenario.tariff_config",
+                ("tariff:",),
+                id="scenario-tariff_config",
+            ),
+            pytest.param(
+                {**_SCENARIO, "tariff_config": {"type": "economy_7", "rate_per_kwh": 0.30}},
+                "tariff_config",
+                ("tariff:",),
+                id="tariff_config-a-key-its-type-does-not-read",
+            ),
+            *(
+                pytest.param(document, key, ("home:",), id=f"{form}-{key}")
+                for key in ("pv", "battery", "load", "heat_pump", "ev")
+                for form, document in (
+                    ("beside-home", {**_SCENARIO, key: {}}),
+                    ("flat", {key: {}}),
+                )
+            ),
+        ],
+    )
+    def test_a_retired_scenario_key_is_refused_naming_its_path_and_its_replacement(
+        self, tmp_path: Path, document: dict[str, Any], key_path: str, replacements: tuple[str, ...]
+    ) -> None:
+        """A scenario's output:, tariff_config: or a home's own block at the top level is refused whatever it holds, before anything reads it, naming the key's path and what replaces it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        message = str(refusal.value)
+        assert message.startswith(f"{key_path}: ")
+        for replacement in replacements:
+            assert replacement in message, (replacement, message)
+
+    @pytest.mark.parametrize(
+        ("document", "key_path"),
+        [
+            pytest.param({"scenario": {**_SCENARIO, "bogus": 1, "output": {"csv_path": "r.csv"}}}, "scenario.output", id="output"),
+            pytest.param({"bogus": 1, "pv": {"capacity_kw": 4.0}}, "pv", id="a-flat-home-key"),
+        ],
+    )
+    def test_a_retired_key_is_refused_before_an_unrecognised_one(
+        self, tmp_path: Path, document: dict[str, Any], key_path: str
+    ) -> None:
+        """A scenario holding both a retired key and a key no scenario reads is refused for the retired key, whose refusal names what replaces it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        assert str(refusal.value).startswith(f"{key_path}: ")
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({**_SCENARIO, "dispatch_strategy": "tou_optimized"}, id="beside-home"),
+            pytest.param({"dispatch_strategy": None, "pv": {"capacity_kw": 4.0}}, id="flat"),
+        ],
+    )
+    def test_a_top_level_dispatch_strategy_is_refused_naming_the_batterys(
+        self, tmp_path: Path, document: dict[str, Any]
+    ) -> None:
+        """The dispatch strategy is the battery's own setting at every level, so the scenario's refusal is the home's."""
+        with pytest.raises(ConfigurationError, match=retired_dispatch_strategy_refusal("dispatch_strategy")):
+            load_scenarios(_write(tmp_path, document))
+
+    @pytest.mark.parametrize(
+        ("document", "label"),
+        [
+            pytest.param({**_SCENARIO, "bogus": 1}, "the top level", id="bare"),
+            pytest.param({"scenario": {**_SCENARIO, "bogus": 1}}, "scenario", id="scenario"),
+            pytest.param(
+                {"scenarios": [_SCENARIO, {**_SCENARIO, "name": "Second", "bogus": 1}]},
+                "scenarios[1]",
+                id="scenarios",
+            ),
+        ],
+    )
+    def test_an_unrecognised_scenario_key_is_refused_naming_its_block_and_the_keys_a_scenario_reads(
+        self, tmp_path: Path, document: dict[str, Any], label: str
+    ) -> None:
+        """A key no scenario reads is refused, naming the scenario's block, the key and the twelve keys a scenario reads."""
+        with pytest.raises(ConfigurationError, match=_refusal(label, "bogus")) as refusal:
+            load_scenarios(_write(tmp_path, document))
+        assert str(refusal.value).endswith(
+            "recognised keys: community, description, finance, fleet_distribution, flex_band, home, homes, "
+            "location, name, period, seg, tariff"
+        )
+
+    @pytest.mark.parametrize(
         ("read", "data", "block_path", "type_name"),
         [
             pytest.param(
@@ -1131,9 +1277,6 @@ class TestScenarioFileBlockKeys:
             pytest.param(
                 "load_community_config", {"community": "p2p"}, "community", "str", id="community"
             ),
-            pytest.param(
-                "load_scenarios", {**_SCENARIO, "output": ["csv"]}, "output", "list", id="output"
-            ),
         ],
         indirect=["read"],
     )
@@ -1142,24 +1285,18 @@ class TestScenarioFileBlockKeys:
     ) -> None:
         """A block that is not a mapping is refused, naming the block's path and the type it got."""
         with pytest.raises(
-            ConfigurationError, match=re.escape(f"{block_path} must be a mapping, got {type_name}")
+            ConfigurationError, match=re.escape(f"{block_path}: must be a mapping, got {type_name}")
         ):
             read(data)
 
     def test_every_recognised_key_is_accepted(self, tmp_path: Path) -> None:
-        """A scenario setting every key of its location, period, output and finance blocks, and a seg block, parses to the values set; those blocks recognise no other key."""
+        """A scenario setting every key of its location, period and finance blocks, and a seg block, parses to the values set; those blocks recognise no other key."""
         location: dict[str, Any] = {
             "latitude": 52.2,
             "longitude": -1.5,
             "timezone": "Europe/London",
             "altitude": 80.0,
             "name": "Midlands",
-        }
-        output: dict[str, Any] = {
-            "csv_path": "out.csv",
-            "include_minute_data": False,
-            "include_summary": False,
-            "aggregation": "daily",
         }
         grid_services_events: dict[str, Any] = {
             "band": "high",
@@ -1194,7 +1331,6 @@ class TestScenarioFileBlockKeys:
         document = {
             **_SCENARIO,
             "location": location,
-            "output": output,
             "seg": {"rate_pence_per_kwh": 5.5},
             "finance": finance,
         }
@@ -1216,8 +1352,9 @@ class TestScenarioFileBlockKeys:
             }
         )
         assert scenario.location == Location(**location)
-        assert scenario.period == SimulationPeriod(**_PERIOD)
-        assert scenario.output == OutputConfig(**output)
+        assert scenario.period == SimulationWindow(
+            date(2024, 1, 1), date(2024, 1, 7), ONE_MINUTE, Location(**location).timezone
+        )
         assert scenario.seg_tariff_pence_per_kwh == 5.5
         assert scenario.finance == FinanceConfig(
             **{**finance, "grid_services_events": expected_events}
@@ -1226,7 +1363,7 @@ class TestScenarioFileBlockKeys:
         def read_scenario_with(key: str) -> Callable[[Any], object]:
             return lambda block: load_scenarios(_write(tmp_path, {**document, key: block}))
 
-        for key in ("location", "period", "output", "finance"):
+        for key in ("location", "period", "finance"):
             _assert_blocks_recognise_exactly_their_keys(read_scenario_with(key), document[key], key)
         either_seg_form = {"preset": "Octopus", "rate_pence_per_kwh": 5.5}
         _assert_blocks_recognise_exactly_their_keys(parse_seg_rate, either_seg_form, "seg")

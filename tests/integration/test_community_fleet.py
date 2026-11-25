@@ -23,7 +23,6 @@ import pytest
 import yaml
 from typer.testing import CliRunner, Result
 
-import solar_challenge.cli.fleet as _cli_fleet_module
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.main import app
 from solar_challenge.community import (
@@ -43,6 +42,7 @@ from solar_challenge.pv import PVConfig
 from solar_challenge.tariff import FlatRateTariff, TariffConfig
 from solar_challenge.weather import PrefetchedWeather
 from tests._balanced_sim_results import make_balanced_fleet
+from tests._cli_fleet_simulator import invoke_cli
 from tests._committed_weather_cache import committed_bristol_tmy
 from tests._fleet_runner import MarkingHomeSimulator, started
 from tests._repository_paths import SCENARIOS_DIR
@@ -104,7 +104,7 @@ def _fleet_run_in_process(scenario: Path, *options: str) -> Result:
     process does not inherit, as it gets only the guard's proxy variables, and it
     spares each run a worker pool's start-up.
     """
-    return CliRunner().invoke(app, ["fleet", "run", str(scenario), "--sequential", *options])
+    return CliRunner().invoke(app, ["--sequential", "fleet", "run", str(scenario), *options])
 
 
 bristol_june_tmy = ClearJuneDays(first_day=pd.Timestamp("2024-06-21"), count=1).bristol_tmy_fixture()
@@ -832,29 +832,27 @@ class TestFleetRunCommunityBillingCLI:
 class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
     """`fleet run` reads the community: block before it simulates, so a block it refuses costs no simulation.
 
-    The CLI's default_runner is replaced with a FleetRunner whose home simulator marks each
-    home it starts, on the committed Bristol TMY, so the runs are offline and need no seeded
-    weather cache. monkeypatch.setattr fails if the CLI no longer binds default_runner.
-    `fleet run` sets the runner's parallelism from its own --sequential and --workers
-    options, so the fixture sets none, and `_fleet_run_in_process`'s --sequential keeps the
-    marking simulator in this process, as the positive control asserts.
+    Each run's runner is injected as the invocation's: a FleetRunner whose home simulator
+    marks each home it starts, on the committed Bristol TMY, so the runs are offline and
+    need no seeded weather cache. The runner is sequential, so every home runs in this
+    process, as the positive control asserts.
     """
 
     @pytest.fixture
-    def marker_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-        """The directory where the home simulator of each `fleet run` in the test marks each home it starts."""
+    def marker_dir(self, tmp_path: Path) -> Path:
+        """The directory where marking_runner's home simulator marks each home it starts."""
         marker_dir = tmp_path / "started"
         marker_dir.mkdir()
-        weather = PrefetchedWeather({load_fleet_config(SCENARIO).homes[0].location: committed_bristol_tmy()})
-        monkeypatch.setattr(
-            _cli_fleet_module,
-            "default_runner",
-            lambda: FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir)),
-        )
         return marker_dir
 
+    @pytest.fixture
+    def marking_runner(self, marker_dir: Path) -> FleetRunner:
+        """A sequential FleetRunner on the committed Bristol TMY whose home simulator marks each home it starts in marker_dir."""
+        weather = PrefetchedWeather({load_fleet_config(SCENARIO).homes[0].location: committed_bristol_tmy()})
+        return FleetRunner(weather=weather, home_simulator=MarkingHomeSimulator(marker_dir), parallel=False)
+
     def test_a_refused_community_block_exits_before_any_home_is_simulated(
-        self, tmp_path: Path, marker_dir: Path
+        self, tmp_path: Path, marker_dir: Path, marking_runner: FleetRunner
     ) -> None:
         """The scenario's community battery names no strategy, so self-consumption refuses the grid_charging added to it."""
         scenario = yaml.safe_load(SCENARIO.read_text())
@@ -862,7 +860,7 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         refused = tmp_path / "bristol-community-grid-charging-under-self-consumption.yaml"
         refused.write_text(yaml.safe_dump(scenario))
 
-        result = _fleet_run_in_process(refused, "--start", "2024-01-15", "--end", "2024-01-15")
+        result = invoke_cli(["fleet", "run", str(refused), "--start", "2024-01-15", "--end", "2024-01-15"], marking_runner)
 
         assert result.exit_code == 1, result.output
         assert "Configuration error" in result.output
@@ -871,13 +869,13 @@ class TestFleetRunRefusesTheCommunityBlockBeforeSimulating:
         assert "Simulating fleet" not in result.output
         assert started(marker_dir) == {}
 
-    def test_the_injected_simulator_is_the_one_fleet_run_runs(self, marker_dir: Path) -> None:
+    def test_the_injected_simulator_is_the_one_fleet_run_runs(self, marker_dir: Path, marking_runner: FleetRunner) -> None:
         """The positive control, without which the test above could pass on a simulator `fleet run` never calls.
 
         It asserts only on the marks: the simulator's stand-in results need not suit the rest of the run.
-        It also asserts that every home ran in this process, where `_fleet_run_in_process`'s --sequential keeps the simulator.
+        It also asserts that every home ran in this process, where the sequential runner keeps the simulator.
         """
-        _fleet_run_in_process(SCENARIO, "--start", "2024-01-15", "--end", "2024-01-15")
+        invoke_cli(["fleet", "run", str(SCENARIO), "--start", "2024-01-15", "--end", "2024-01-15"], marking_runner)
 
         assert set(started(marker_dir)) == {home.name for home in load_fleet_config(SCENARIO).homes}
         assert {start.pid for start in started(marker_dir).values()} == {os.getpid()}

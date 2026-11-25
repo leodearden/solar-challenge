@@ -4,7 +4,9 @@
 There is one of an offline-lane job, one of a default collection of tests/, one
 of a suite under a mark expression, and one of every test under tests/ under a
 mark expression. Each runs a throwaway project's lane job, tests/ or suite
-through this interpreter's pytest, with no uv and no mocks.
+through this interpreter's pytest, with no uv and no mocks. The lane job's
+probe also comes in a form that collects each job once for every call given one
+collections directory.
 """
 
 import os
@@ -15,16 +17,21 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 import pytest
-import yaml
 
 from tests._collect_only import CollectedTest
 from tests._lane_collection import (
     collect_lane_job,
+    collect_lane_job_once,
     default_collection_node_ids_under,
     every_test_matching,
     suite_node_ids_matching,
     suite_tests_matching,
 )
+from tests._lane_project_logging_each_collection import (
+    collections_logged,
+    throwaway_lane_project_logging_each_collection,
+)
+from tests._throwaway_lane_project import PROBE_JOB, throwaway_lane_project
 
 _PYTEST = f"{shlex.quote(sys.executable)} -m pytest -p no:cacheprovider"
 
@@ -57,16 +64,6 @@ def _this_process_environment(command: str) -> Mapping[str, str]:
     return os.environ
 
 
-def _project_with_lane_job(project_root: Path, command: str, **job_fields: str) -> Path:
-    """Make *project_root* a throwaway project whose one offline-lane job, named probe, runs *command*."""
-    (project_root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
-    (project_root / "dark-factory-orchestrator.yaml").write_text(
-        yaml.safe_dump({"git": {"offline_lane_commands": [{"name": "probe", "command": command, **job_fields}]}}),
-        encoding="utf-8",
-    )
-    return project_root
-
-
 def _project_with_a_suite(project_root: Path, *, ini: str = "[pytest]\n", conftest: str = "") -> Path:
     """Make *project_root* a throwaway project with *ini* as its pytest.ini and *conftest* as its tests/conftest.py.
 
@@ -85,12 +82,12 @@ def _project_with_a_suite(project_root: Path, *, ini: str = "[pytest]\n", confte
 
 def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path: Path) -> None:
     command = f"{_PYTEST} test_kept.py"
-    project_root = _project_with_lane_job(tmp_path, command)
+    project_root = throwaway_lane_project(tmp_path, command)
     (project_root / "test_kept.py").write_text(
         "def test_alpha():\n    pass\n\n\ndef test_beta():\n    pass\n", encoding="utf-8"
     )
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert collection.command == command
     assert collection.node_ids() == ("test_kept.py::test_alpha", "test_kept.py::test_beta"), collection.describe()
@@ -98,11 +95,11 @@ def test_returns_the_jobs_command_and_the_node_ids_it_collects_in_order(tmp_path
 
 def test_a_job_with_a_cwd_collects_from_that_directory(tmp_path: Path) -> None:
     """Run from the project root instead, its command would name a file that is not there."""
-    project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_in_suite.py", cwd="suite")
+    project_root = throwaway_lane_project(tmp_path, f"{_PYTEST} test_in_suite.py", cwd="suite")
     (project_root / "suite").mkdir()
     (project_root / "suite" / "test_in_suite.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert collection.node_ids() == ("suite/test_in_suite.py::test_case",), collection.describe()
 
@@ -113,10 +110,10 @@ def test_a_jobs_setup_steps_are_not_run_when_it_is_collected(tmp_path: Path) -> 
     A setup step provisions, as the e2e job's browser install does, and run in a
     verify it would write outside the test's tmp_path or reach the network.
     """
-    project_root = _project_with_lane_job(tmp_path, f"touch setup-ran && {_PYTEST} test_kept.py")
+    project_root = throwaway_lane_project(tmp_path, f"touch setup-ran && {_PYTEST} test_kept.py")
     (project_root / "test_kept.py").write_text("def test_alpha():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert not (project_root / "setup-ran").exists()
     assert collection.command == f"{_PYTEST} test_kept.py"
@@ -131,7 +128,7 @@ def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_thi
     So an environment keyed on the command, as a shared uv environment is, fits
     what runs, and an inherited UV_FROZEN never reaches a lane job's `uv run --locked`.
     """
-    project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_environment.py")
+    project_root = throwaway_lane_project(tmp_path, f"{_PYTEST} test_environment.py")
     (project_root / "test_environment.py").write_text(_ENVIRONMENT_PROBE_MODULE, encoding="utf-8")
     monkeypatch.setenv(_PROBE_VARIABLE, "inherited")
     asked_for: list[str] = []
@@ -140,7 +137,7 @@ def test_the_jobs_command_runs_in_the_environment_env_for_returns_for_it_not_thi
         asked_for.append(command)
         return {name: value for name, value in os.environ.items() if name != _PROBE_VARIABLE}
 
-    collection = collect_lane_job(project_root, "probe", env_for=env_for)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=env_for)
 
     assert asked_for == [collection.command]
     assert collection.node_ids() == ("test_environment.py::test_environment[unset]",), collection.describe()
@@ -150,13 +147,13 @@ def test_a_job_whose_command_fails_to_collect_fails_naming_the_job_its_command_a
     tmp_path: Path,
 ) -> None:
     command = f"{_PYTEST} test_broken.py"
-    project_root = _project_with_lane_job(tmp_path, command)
+    project_root = throwaway_lane_project(tmp_path, command)
     (project_root / "test_broken.py").write_text(f"raise ImportError({_IMPORT_ERROR_MESSAGE!r})\n", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+        collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
-    assert "'probe'" in str(failure.value)
+    assert repr(PROBE_JOB) in str(failure.value)
     assert repr(command) in str(failure.value)
     assert _IMPORT_ERROR_MESSAGE in str(failure.value)
 
@@ -164,13 +161,13 @@ def test_a_job_whose_command_fails_to_collect_fails_naming_the_job_its_command_a
 def test_a_job_whose_command_collects_nothing_fails_naming_the_job_and_its_command(tmp_path: Path) -> None:
     """pytest exits NO_TESTS_COLLECTED, as when a job's marker expression deselects every test its path names."""
     command = f"{_PYTEST} test_empty.py"
-    project_root = _project_with_lane_job(tmp_path, command)
+    project_root = throwaway_lane_project(tmp_path, command)
     (project_root / "test_empty.py").write_text("", encoding="utf-8")
 
     with pytest.raises(AssertionError) as failure:
-        collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+        collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
-    assert "'probe'" in str(failure.value)
+    assert repr(PROBE_JOB) in str(failure.value)
     assert repr(command) in str(failure.value)
 
 
@@ -182,9 +179,9 @@ def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path:
     holds the phrase whole.
     """
     command = shlex.join([sys.executable, "-c", "import sys; print('this command never ran', sys.argv[1])", "pytest"])
-    project_root = _project_with_lane_job(tmp_path, command)
+    project_root = throwaway_lane_project(tmp_path, command)
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     with pytest.raises(AssertionError) as failure:
         collection.node_ids()
@@ -194,12 +191,12 @@ def test_a_job_whose_command_never_runs_pytest_has_no_node_ids_to_read(tmp_path:
 
 def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_it(tmp_path: Path) -> None:
     """suite_extra, whose name merely starts with suite's, is not under suite."""
-    project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} suite suite_extra")
+    project_root = throwaway_lane_project(tmp_path, f"{_PYTEST} suite suite_extra")
     for directory, module in (("suite", "test_in_suite.py"), ("suite_extra", "test_beside_suite.py")):
         (project_root / directory).mkdir()
         (project_root / directory / module).write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert collection.node_ids_outside("suite") == ("suite_extra/test_beside_suite.py::test_case",), (
         collection.describe()
@@ -208,7 +205,7 @@ def test_node_ids_outside_a_directory_are_those_collected_from_files_not_under_i
 
 def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tmp_path: Path) -> None:
     """The file's own ids stay inside though a parameter id holds a '/' or '::', and test_contract_extra.py is another file."""
-    project_root = _project_with_lane_job(tmp_path, f"{_PYTEST} test_contract.py test_contract_extra.py")
+    project_root = throwaway_lane_project(tmp_path, f"{_PYTEST} test_contract.py test_contract_extra.py")
     (project_root / "test_contract.py").write_text(
         textwrap.dedent(
             """\
@@ -229,10 +226,73 @@ def test_node_ids_outside_a_test_file_are_those_collected_from_any_other_file(tm
     )
     (project_root / "test_contract_extra.py").write_text("def test_case():\n    pass\n", encoding="utf-8")
 
-    collection = collect_lane_job(project_root, "probe", env_for=_this_process_environment)
+    collection = collect_lane_job(project_root, PROBE_JOB, env_for=_this_process_environment)
 
     assert collection.node_ids_outside("test_contract.py") == ("test_contract_extra.py::test_case",), (
         collection.describe()
+    )
+
+
+def test_a_second_call_given_the_same_collections_directory_reads_the_collection_back_without_collecting_again(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    project_root = throwaway_lane_project_logging_each_collection(tmp_path_factory.mktemp("project"))
+    collections = tmp_path_factory.mktemp("collections")
+
+    first = collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
+    second = collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
+
+    assert second == first
+    assert second.node_ids() == ("test_kept.py::test_case",), second.describe()
+    assert collections_logged(project_root) == 1, (
+        f"two calls given one collections directory collected the job {collections_logged(project_root)} times; "
+        "the second must read the first's collection back"
+    )
+
+
+def test_one_collections_directory_keeps_the_collection_of_each_project_and_job_apart(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Asking project a for a job its yaml lacks fails first, and then each project's probe job is asked for.
+
+    A key ignoring the job's name would raise that recorded failure for a's probe
+    job, and a key ignoring the project would hand b a's collection.
+    """
+    project_a = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("a"), "def test_in_a():\n    pass\n"
+    )
+    project_b = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("b"), "def test_in_b():\n    pass\n"
+    )
+    collections = tmp_path_factory.mktemp("collections")
+
+    with pytest.raises(AssertionError, match="'absent'"):
+        collect_lane_job_once(collections, project_a, "absent", env_for=_this_process_environment)
+    in_a = collect_lane_job_once(collections, project_a, PROBE_JOB, env_for=_this_process_environment)
+    in_b = collect_lane_job_once(collections, project_b, PROBE_JOB, env_for=_this_process_environment)
+
+    assert in_a.node_ids() == ("test_kept.py::test_in_a",), in_a.describe()
+    assert in_b.node_ids() == ("test_kept.py::test_in_b",), in_b.describe()
+    assert (collections_logged(project_a), collections_logged(project_b)) == (1, 1)
+
+
+def test_a_collection_that_failed_is_not_collected_again_and_each_later_call_raises_its_error(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """The job's pytest stops on test_kept.py's error at import, so the first call fails collect_lane_job's assert."""
+    project_root = throwaway_lane_project_logging_each_collection(
+        tmp_path_factory.mktemp("project"), "raise RuntimeError('test_kept.py refuses to be imported')\n"
+    )
+    collections = tmp_path_factory.mktemp("collections")
+
+    with pytest.raises(AssertionError, match="failed to collect"):
+        collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
+    with pytest.raises(RuntimeError, match="failed to collect"):
+        collect_lane_job_once(collections, project_root, PROBE_JOB, env_for=_this_process_environment)
+
+    assert collections_logged(project_root) == 1, (
+        f"the job was collected {collections_logged(project_root)} times, though its first collection failed; "
+        "a later call must raise that failure, never collect again"
     )
 
 

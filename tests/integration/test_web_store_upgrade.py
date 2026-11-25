@@ -15,9 +15,9 @@ run, but render and export only the stored ones.
 
 `web start` refuses the store until `web migrate` has migrated it, and then serves it.
 Flask.run is replaced by a recorder, so `web start` hands its dashboard over without serving
-it, and each test drives that dashboard through its test client. cli/web.py's _serve shuts
-every job manager down once its server stops (shutdown_all_managers), so no test submits a
-job.
+it, and each test drives that dashboard through its test client. cli/web.py's _serve, the
+root that built the dashboard, closes it once its server stops (dashboard_of(app).close()),
+shutting its job manager down, so no test submits a job.
 """
 
 import io
@@ -38,19 +38,22 @@ from typer.testing import CliRunner, Result
 
 from solar_challenge.cli.main import app
 from solar_challenge.web.app import default_store_location
+from solar_challenge.web.dashboard import dashboard_of
 from solar_challenge.web.database import Database
 from solar_challenge.web.schema import SCHEMA_VERSION
 from solar_challenge.web.stored_runs import RunType
-from tests._dashboard_databases import write_pre_548_database
+from tests._dashboard_databases import runs_rows_of, write_pre_548_database
 from tests._html_page import headings
 from tests._run_storage_layout import stored_run_dir
 from tests._stored_run_fixtures import (
+    PRE_975_FLEET_SEG_REVENUE_KEYS,
     STORED_RUN_FIXTURES,
     fixture_run_type,
+    fixture_summary_statistics_documents,
     install_stored_run_fixture,
     stored_run_fixture_dir,
 )
-from tests._web_app import release_store_lock, run_storage_of
+from tests._web_app import run_storage_of
 
 _MINUTES_OF_THE_FIXTURES_DAY = 24 * 60
 """The rows of each stored run's time series: one day at 1-minute resolution (tests/_stored_run_fixtures.py)."""
@@ -106,7 +109,7 @@ def legacy_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _LegacyStor
 
 @pytest.fixture
 def served_dashboards(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Flask]]:
-    """Each dashboard `web start` hands to Flask.run, which records it rather than serving it; each one's store lock is released at teardown."""
+    """Each dashboard `web start` hands to Flask.run, which records it rather than serving it; each one is closed at teardown."""
     served: list[Flask] = []
 
     def record(self: Flask, *args: Any, **kwargs: Any) -> None:
@@ -115,7 +118,7 @@ def served_dashboards(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Flask]]:
     monkeypatch.setattr(Flask, "run", record)
     yield served
     for dashboard in served:
-        release_store_lock(dashboard)
+        dashboard_of(dashboard).close()
 
 
 @pytest.fixture
@@ -257,3 +260,75 @@ def test_deleting_every_run_leaves_history_empty_and_no_stored_run_s_files(
     details = {run_id: client.get(f"/api/history/runs/{run_id}").status_code for run_id in legacy_store.run_ids}
     assert details == dict.fromkeys(legacy_store.run_ids, 404)
     assert [run_dir for run_dir in run_dirs.values() if run_dir.exists()] == []
+
+
+def _files_of_the_run(dashboard: Flask, run_id: str) -> dict[str, bytes]:
+    """Each file of run *run_id*'s directory in *dashboard*'s store, by its path in that directory."""
+    run_dir = stored_run_dir(run_storage_of(dashboard), run_id)
+    return {path.relative_to(run_dir).as_posix(): path.read_bytes() for path in sorted(run_dir.rglob("*")) if path.is_file()}
+
+
+def test_a_fleet_run_stored_with_a_seg_revenue_pair_renders_without_it_once_migrated_and_a_second_migrate_leaves_it_alone(
+    dashboard: Flask, legacy_store: _LegacyStore
+) -> None:
+    """B15: pre_975_seg_fleet's summary, in its run directory and its runs row alike, loses the pair; its results page answers 200.
+
+    The second `web migrate` finds the store at SCHEMA_VERSION and so applies no step: it checks
+    that a migrated store is left alone. v6's own idempotence is checked by
+    tests/unit/test_web_run_document_steps.py::test_every_step_is_idempotent_on_the_fixture.
+    """
+    (run_id,) = [run_id for run_id, name in legacy_store.stored_runs.items() if name == "pre_975_seg_fleet"]
+    rows = {row["id"]: row for row in _history_rows(dashboard.test_client())}
+    summary = json.loads((stored_run_dir(run_storage_of(dashboard), run_id) / "summary.json").read_text())
+    with closing(sqlite3.connect(legacy_store.database)) as conn:
+        (row_summary_json,) = conn.execute("SELECT summary_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+    files = _files_of_the_run(dashboard, run_id)
+
+    again = _web("migrate")
+
+    assert dashboard.test_client().get(rows[run_id]["results_url"]).status_code == 200
+    assert [key for key in PRE_975_FLEET_SEG_REVENUE_KEYS if key in summary or key in json.loads(row_summary_json)] == []
+    assert again.exit_code == 0, again.output
+    assert _files_of_the_run(dashboard, run_id) == files
+
+
+def _summary_statistics_held(name: str, files: Mapping[str, bytes], runs_row: Mapping[str, Any]) -> list[Any]:
+    """The decoded SummaryStatistics documents of a run installed from fixture *name*: those among its *files*, then those in its *runs_row*."""
+    documents = fixture_summary_statistics_documents(name)
+    return [
+        *(json.loads(files[path]) for path in documents.files),
+        *(json.loads(runs_row[column]) for column in documents.columns),
+    ]
+
+
+def test_each_home_run_stored_with_a_seg_revenue_renders_without_it_once_migrated_and_a_second_migrate_leaves_it_alone(
+    dashboard: Flask, legacy_store: _LegacyStore
+) -> None:
+    """B16 of docs/prds/board-reports-sections-by-mode.md §9, not this module's B16 of run-store-one-owner: no stored home summary keeps a seg_revenue_gbp.
+
+    Each home run's summary, in its run directory and its runs row alike, loses it, and its
+    results page answers 200; each fleet run's homes/home_<i>_summary.json loses it too. The
+    second `web migrate` finds the store at SCHEMA_VERSION and leaves every stored run's files
+    byte for byte. v9's own idempotence is checked by
+    tests/unit/test_web_run_document_steps.py::test_every_step_is_idempotent_on_the_fixture.
+    """
+    client = dashboard.test_client()
+    rows = {row["id"]: row for row in _history_rows(client)}
+    home_runs = [run_id for run_id, name in legacy_store.stored_runs.items() if fixture_run_type(name) == "home"]
+    files = {run_id: _files_of_the_run(dashboard, run_id) for run_id in legacy_store.stored_runs}
+    runs_rows = runs_rows_of(legacy_store.database)
+    summaries = {
+        run_id: _summary_statistics_held(name, files[run_id], runs_rows[run_id])
+        for run_id, name in legacy_store.stored_runs.items()
+    }
+
+    again = _web("migrate")
+
+    pages = {run_id: client.get(rows[run_id]["results_url"]).status_code for run_id in home_runs}
+    assert home_runs and pages == dict.fromkeys(home_runs, 200)
+    assert all(summaries.values()), summaries
+    assert {run_id: [each for each in stored if "seg_revenue_gbp" in each] for run_id, stored in summaries.items()} == {
+        run_id: [] for run_id in summaries
+    }
+    assert again.exit_code == 0, again.output
+    assert {run_id: _files_of_the_run(dashboard, run_id) for run_id in legacy_store.stored_runs} == files

@@ -100,6 +100,9 @@ document.addEventListener('alpine:init', () => {
         return data;
     }
 
+    // What the page's forms accept and start at: the #page-limits element base.html writes from page_limits().
+    const limits = JSON.parse(document.getElementById('page-limits').textContent);
+
     // components is what scenarios.py lists from web/fleet_components.py for each fleet component: its key (its
     // fleet_distribution block and its form fields' prefix), the field a fixed value is sent in, its grammar key, and
     // the distribution its card starts at.
@@ -107,13 +110,13 @@ document.addEventListener('alpine:init', () => {
         // Form state
         name: '',
         description: '',
-        start_date: '2024-01-01',
-        end_date: '2024-12-31',
+        start_date: limits.default_window[0],
+        end_date: limits.default_window[1],
         location_preset: 'bristol',
         latitude: 51.45,
         longitude: -2.58,
         altitude: 11.0,
-        n_homes: 100,
+        n_homes: limits.fleet_size_default,
         import_rate: 0.245,
         seg_rate_pence_per_kwh: '',
 
@@ -130,24 +133,9 @@ document.addEventListener('alpine:init', () => {
         presets: [],
         debounceTimer: null,
 
-        // Quick period presets
-        setPeriod(preset) {
-            if (preset === 'full-year') {
-                this.start_date = '2024-01-01';
-                this.end_date = '2024-12-31';
-            } else if (preset === 'summer') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-08-31';
-            } else if (preset === 'winter') {
-                this.start_date = '2024-12-01';
-                this.end_date = '2025-02-28';
-            } else if (preset === 'week') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-06-07';
-            } else if (preset === 'month') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-06-30';
-            }
+        // Quick period presets: each button's title names its preset in limits.period_presets
+        setPeriod(title) {
+            [this.start_date, this.end_date] = limits.period_presets.find((preset) => preset.title === title).window;
         },
 
         // Debounced YAML preview update

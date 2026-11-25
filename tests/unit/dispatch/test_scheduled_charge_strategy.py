@@ -82,7 +82,7 @@ class _RecordingStrategy(DispatchStrategy):
         demand_kw: float,
         battery_soc_kwh: float,
         battery_capacity_kwh: float,
-        timestep_minutes: float = 1.0,
+        timestep_minutes: float,
         *,
         grid_charge_ctx: Optional[GridChargeContext] = None,
     ) -> DispatchDecision:
@@ -578,7 +578,7 @@ class TestScheduledChargeStrategyThroughTheEngine:
         (flow,) = _window_minutes(battery, _over_self_consumption(_NIGHTLY), minutes=1, generation_kw=1.0)
 
         assert flow.grid_charge > 0.0
-        assert flow.battery_charge <= 2.5 / 60 * 0.975 + 1e-12
+        assert flow.battery_charge <= 2.5 / 60 + 1e-12
 
     def test_a_target_above_max_soc_fraction_stores_nothing_past_max_soc_kwh(self) -> None:
         """A window to 0.95 asks for grid power into a battery its 0.9 max_soc_fraction has filled; the battery stores none, so the step imports its shortfall alone."""

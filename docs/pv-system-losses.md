@@ -23,7 +23,8 @@
   the request body's `system_losses`. Left blank, the form sends none and the run takes
   the default, which the field shows as its placeholder (`pv.PVWATTS_DEFAULT_SYSTEM_LOSSES`).
   `home run --system-losses` overrides a scenario file's value. Both refuse a value
-  outside [0, 1) with `PVConfig`'s own error, as a scenario file does.
+  outside [0, 1) with `PVConfig`'s own error. `home run` gives it under the option's name,
+  `--system-losses:`, as a scenario file's refusal is under its `pv:` block.
 - **Performance ratio**, as this note and its measurements use it: a year's AC energy
   divided by the in-plane irradiation (kWh/m², before angle-of-incidence losses) times
   the wired DC capacity (`pv.wired_dc_capacity_kw`, the denominator of validation's

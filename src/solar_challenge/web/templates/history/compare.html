@@ -19,13 +19,13 @@
     {% endfor %}
 </div>
 
-{# Summary metric cards with deltas #}
+{# Each Key Metrics row is a figure of every run's RunHeadline, with its delta #}
 {% set metrics = [
-    ("Total Generation", "total_generation_kwh", "kWh", true),
-    ("Total Demand", "total_demand_kwh", "kWh", none),
-    ("Self-Consumption", "total_self_consumption_kwh", "kWh", true),
-    ("Grid Import", "total_grid_import_kwh", "kWh", false),
-    ("Grid Export", "total_grid_export_kwh", "kWh", true),
+    ("Total Generation", "generation_kwh", "kWh", true),
+    ("Total Demand", "demand_kwh", "kWh", none),
+    ("Self-Consumption", "self_consumption_kwh", "kWh", true),
+    ("Grid Import", "grid_import_kwh", "kWh", false),
+    ("Grid Export", "grid_export_kwh", "kWh", true),
     ("Self-Consumption Ratio", "self_consumption_ratio", "%", true),
 ] %}
 
@@ -50,37 +50,30 @@
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                     <td class="px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</td>
                     {% for run in runs %}
-                    {% set val = run.summary.get(key) if run.summary else None %}
+                    {% set val = run.headline|attr(key) %}
                     <td class="px-4 py-3 text-sm text-right text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                        {% if val is not none %}
-                            {% if unit == '%' %}
-                                {{ "%.1f"|format(val * 100) }}%
-                            {% else %}
-                                {{ "%.1f"|format(val) }} {{ unit }}
-                            {% endif %}
-                        {% else %}-{% endif %}
+                        {% if unit == '%' %}
+                            {{ "%.1f"|format(val * 100) }}%
+                        {% else %}
+                            {{ "%.1f"|format(val) }} {{ unit }}
+                        {% endif %}
                     </td>
                     {% endfor %}
                     {% if runs|length == 2 %}
-                        {% set val_a = runs[0].summary.get(key) if runs[0].summary else None %}
-                        {% set val_b = runs[1].summary.get(key) if runs[1].summary else None %}
-                        {% if val_a is not none and val_b is not none %}
-                            {% set delta = val_b - val_a %}
-                            {% set pct = ((delta / val_a) * 100) if val_a != 0 else 0 %}
-                            <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (delta >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
-                                {% if unit == '%' %}
-                                    {{ "%+.1f"|format(delta * 100) }} pp
-                                {% else %}
-                                    {{ "%+.1f"|format(delta) }} {{ unit }}
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (pct >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
-                                {{ "%+.1f"|format(pct) }}%
-                            </td>
-                        {% else %}
-                            <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
-                            <td class="px-4 py-3 text-sm text-right text-slate-400">-</td>
-                        {% endif %}
+                        {% set val_a = runs[0].headline|attr(key) %}
+                        {% set val_b = runs[1].headline|attr(key) %}
+                        {% set delta = val_b - val_a %}
+                        {% set pct = ((delta / val_a) * 100) if val_a != 0 else 0 %}
+                        <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (delta >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                            {% if unit == '%' %}
+                                {{ "%+.1f"|format(delta * 100) }} pp
+                            {% else %}
+                                {{ "%+.1f"|format(delta) }} {{ unit }}
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (pct >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+                            {{ "%+.1f"|format(pct) }}%
+                        </td>
                     {% endif %}
                 </tr>
                 {% endfor %}

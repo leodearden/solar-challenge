@@ -129,8 +129,8 @@ class TestCommunityBlockParsing:
     def test_billing_both_scalar_and_seg_block_raises(
         self, load_community_block: LoadCommunityBlock
     ) -> None:
-        """Supplying both seg_rate_pence_per_kwh and seg block raises ConfigurationError."""
-        with pytest.raises(ConfigurationError):
+        """Supplying both seg_rate_pence_per_kwh and seg block is refused, naming the billing block."""
+        with pytest.raises(ConfigurationError) as refusal:
             load_community_block(
                 {
                     "sharing_mode": "p2p",
@@ -140,6 +140,18 @@ class TestCommunityBlockParsing:
                     },
                 }
             )
+        assert str(refusal.value) == "community.billing: sets both seg_rate_pence_per_kwh and seg; set one, not both"
+
+    @pytest.mark.parametrize(
+        "sharing_mode",
+        [pytest.param({}, id="absent"), pytest.param({"sharing_mode": None}, id="null"), pytest.param({"sharing_mode": ""}, id="empty")],
+    )
+    def test_a_block_without_a_sharing_mode_is_refused_naming_it(
+        self, load_community_block: LoadCommunityBlock, sharing_mode: dict[str, Any]
+    ) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_block(sharing_mode)
+        assert str(refusal.value) == "community: requires 'sharing_mode': 'p2p' or 'community_battery'"
 
     def test_billing_seg_non_dict_raises(
         self, load_community_block: LoadCommunityBlock
@@ -185,7 +197,6 @@ class TestCommunityBatteryEfficiency:
         )
         assert cfg is not None
         assert cfg.community_battery == BatteryConfig(capacity_kwh=10).with_round_trip(0.95)
-        assert cfg.community_battery.efficiency is None
 
     @pytest.mark.parametrize(
         ("per_direction", "keys_named"),
@@ -210,7 +221,7 @@ class TestCommunityBatteryEfficiency:
                 }
             )
         assert str(refusal.value) == (
-            "community.community_battery sets both forms of a battery's efficiency: "
+            "community.community_battery: sets both forms of a battery's efficiency: "
             f"efficiency and {keys_named}; "
             "set efficiency, the round trip, or charge_efficiency and discharge_efficiency, not both"
         )
@@ -260,15 +271,14 @@ period:
         result = load_community_config(path)
         assert result is None
 
-    def test_load_non_dict_yaml_returns_none(self, tmp_path: Path) -> None:
-        """A YAML file whose top-level value is a list (not a dict) returns None
-        instead of raising AttributeError on .get('community').
-        """
+    def test_a_yaml_file_that_is_a_list_is_refused_naming_the_top_level(self, tmp_path: Path) -> None:
+        """A document is a mapping of blocks, so a list is refused, where it was read as a file with no community block."""
         path = tmp_path / "community.yaml"
-        path.write_text("- item1\n- item2\n")  # top-level list, no community key
+        path.write_text("- item1\n- item2\n")
 
-        result = load_community_config(path)
-        assert result is None
+        with pytest.raises(ConfigurationError) as refusal:
+            load_community_config(path)
+        assert str(refusal.value) == "the top level: must be a mapping, got list"
 
 
 class TestCommunityConfigFrozenPicklable:

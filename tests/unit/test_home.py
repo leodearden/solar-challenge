@@ -1,4 +1,4 @@
-"""Tests for HomeConfig, SimulationResults, calculate_summary and simulate_home's tariff and SEG pricing and the weather it runs on."""
+"""Tests for HomeConfig, SimulationResults, RunPricing, calculate_summary and simulate_home's tariff and SEG pricing, the pricing it records and the weather it runs on."""
 
 import dataclasses
 import math
@@ -14,6 +14,7 @@ import pytest
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import (
     HomeConfig,
+    RunPricing,
     SeriesRefused,
     SimulationResults,
     SummaryStatistics,
@@ -68,14 +69,22 @@ class TestHomeConfigBasics:
         )
         assert config.battery_config is None
 
-    def test_name_and_dispatch_strategy_take_the_declared_defaults(self):
-        """An unnamed home has an empty name and the greedy dispatch strategy."""
+    def test_name_takes_the_declared_default(self):
+        """An unnamed home has an empty name."""
         config = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(),
         )
         assert config.name == ""
-        assert config.dispatch_strategy == "greedy"
+
+    def test_a_home_has_no_dispatch_strategy_its_battery_has_its_own(self):
+        """The dispatch strategy is the battery's own setting, so HomeConfig takes none."""
+        with pytest.raises(TypeError, match="dispatch_strategy"):
+            HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(),
+                dispatch_strategy="greedy",
+            )
 
     def test_default_location_is_bristol(self):
         """Default location is Bristol."""
@@ -436,14 +445,14 @@ class TestSimulationResultsHoldsNumbers:
         pd.testing.assert_series_equal(getattr(results, field), series, check_names=False)
 
 
-class TestPerMinuteAmounts:
-    """Test SimulationResults.per_minute_amounts, each row's energy and money, and total_amounts, their run totals."""
+class TestPerStepAmounts:
+    """Test SimulationResults.per_step_amounts, each row's energy and money, and total_amounts, their run totals."""
 
     def test_power_becomes_each_rows_kwh_and_money_stays_its_pounds(self):
         """Each kW series becomes its row's kWh, each £ series stays as it is, and a level has no column."""
         results = _results_with_every_series_set()
 
-        amounts = results.per_minute_amounts()
+        amounts = results.per_step_amounts()
 
         expected = pd.DataFrame(
             {
@@ -467,7 +476,7 @@ class TestPerMinuteAmounts:
         """An optional series left unset has no amount column."""
         amounts = dataclasses.replace(
             _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None, grid_charge=None
-        ).per_minute_amounts()
+        ).per_step_amounts()
 
         assert sorted(amounts.columns) == sorted(
             [
@@ -492,7 +501,7 @@ class TestPerMinuteAmounts:
         """Each run total is its row-amount column's sum, keyed by that column."""
         results = dataclasses.replace(_results_with_every_series_set(), **unset)
 
-        assert results.total_amounts() == pytest.approx(results.per_minute_amounts().sum().to_dict())
+        assert results.total_amounts() == pytest.approx(results.per_step_amounts().sum().to_dict())
 
 
 class TestSimulationResultsRefusesAnAmountMissingANumber:
@@ -588,7 +597,7 @@ class TestSimulationResultsRefusesAnAmountMissingANumber:
         "read",
         [
             pytest.param(SimulationResults.total_amounts, id="total_amounts"),
-            pytest.param(SimulationResults.per_minute_amounts, id="per_minute_amounts"),
+            pytest.param(SimulationResults.per_step_amounts, id="per_step_amounts"),
             pytest.param(SimulationResults.to_dataframe, id="to_dataframe"),
             pytest.param(calculate_summary, id="calculate_summary"),
         ],
@@ -678,7 +687,7 @@ class TestResultsWindow:
         results = _steady_week(freq)
         hours = pd.Timedelta(freq) / pd.Timedelta(hours=1)
 
-        amounts = results.per_minute_amounts()
+        amounts = results.per_step_amounts()
 
         pd.testing.assert_series_equal(amounts["demand_kwh"], results.demand * hours, check_names=False)
         pd.testing.assert_series_equal(
@@ -690,7 +699,7 @@ class TestResultsWindow:
         twin = _steady_week("30min")
 
         pd.testing.assert_series_equal(
-            twin.per_minute_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
+            twin.per_step_amounts()["demand_kwh"], twin.window.row_energy_kwh(twin.demand), check_names=False
         )
         assert twin.window.energy_kwh(twin.demand) == pytest.approx(
             twin.total_amounts()["demand_kwh"], rel=1e-12
@@ -936,6 +945,107 @@ class TestSimulateHomeExportValuationWithoutATariff:
         assert not [warning for warning in caught if "seg_tariff" in str(warning.message)]
 
 
+class TestRunPricing:
+    """RunPricing holds each grid flow's rate, a finite number of at least 0, or None when nothing priced that flow."""
+
+    @pytest.mark.parametrize(
+        "rates",
+        [pytest.param((0.0, 15.0), id="a-zero-import-rate-is-a-rate"), pytest.param((None, None), id="unpriced")],
+    )
+    def test_it_holds_its_rates_and_refuses_a_field_assignment(self, rates: tuple[float | None, float | None]) -> None:
+        pricing = RunPricing(*rates)
+
+        assert (pricing.import_tariff_mean_rate_gbp_per_kwh, pricing.seg_rate_pence_per_kwh) == rates
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            pricing.seg_rate_pence_per_kwh = 1.0  # type: ignore[misc]
+
+    @pytest.mark.parametrize("field", ["import_tariff_mean_rate_gbp_per_kwh", "seg_rate_pence_per_kwh"])
+    @pytest.mark.parametrize(
+        "value",
+        [pytest.param(-0.01, id="negative"), pytest.param(float("nan"), id="nan"), pytest.param(float("inf"), id="inf")],
+    )
+    def test_a_rate_that_is_negative_or_not_finite_is_refused_naming_its_field_and_the_value(
+        self, field: str, value: float
+    ) -> None:
+        rates: dict[str, float | None] = {"import_tariff_mean_rate_gbp_per_kwh": None, "seg_rate_pence_per_kwh": None}
+
+        with pytest.raises(ValueError) as refused:
+            RunPricing(**{**rates, field: value})
+
+        assert field in str(refused.value)
+        assert repr(value) in str(refused.value)
+
+
+def _home_priced_at(tariff: TariffConfig | None, seg_tariff: SEGTariff | None) -> HomeConfig:
+    """A PV-only home with a seeded load, on tariff and seg_tariff."""
+    return HomeConfig(
+        PVConfig(capacity_kw=4.0),
+        LoadConfig(annual_consumption_kwh=3000.0, seed=42),
+        tariff_config=tariff,
+        seg_tariff=seg_tariff,
+    )
+
+
+def _simulated_june_21(home: HomeConfig, weather_data: pd.DataFrame) -> SimulationResults:
+    """home's results for 21 June 2024, simulated on weather_data."""
+    day = pd.Timestamp("2024-06-21")
+    return simulate_home(home, day, day, weather=weather_for(home, weather_data))
+
+
+def _zero_tariff_home() -> HomeConfig:
+    """A home whose import a £0 flat tariff prices, and whose export an SEG of 15 p/kWh prices."""
+    return _home_priced_at(TariffConfig.flat_rate(0.0), SEGTariff(name="", rate_pence_per_kwh=15.0))
+
+
+class TestSimulateHomeRecordsHowItPricedTheRun:
+    """simulate_home records the rates it priced the run's grid flows at, and calculate_summary carries them; results simulate_home did not make record none."""
+
+    def test_a_zero_tariff_is_recorded_as_a_rate_of_zero_beside_its_seg_rate(self, june21_weather_data):
+        results = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+
+        assert results.pricing == RunPricing(0.0, 15.0)
+        assert calculate_summary(results).pricing == RunPricing(0.0, 15.0)
+
+    def test_a_home_with_no_tariff_and_no_seg_is_recorded_as_unpriced(self, june21_weather_data):
+        results = _simulated_june_21(_home_priced_at(None, None), june21_weather_data)
+
+        assert results.pricing == RunPricing(None, None)
+        assert calculate_summary(results).pricing == RunPricing(None, None)
+
+    def test_the_import_rate_is_the_tariffs_time_weighted_mean_over_the_run(self, june21_weather_data):
+        """(3 h at 0.30 + 21 h at 0.10) / 24 h is 0.125 £/kWh, not the mean of the tariff's three period rates, 0.50 / 3."""
+        tariff = TariffConfig(
+            periods=(
+                TariffPeriod("00:00", "16:00", 0.10, "Day"),
+                TariffPeriod("16:00", "19:00", 0.30, "Peak"),
+                TariffPeriod("19:00", "00:00", 0.10, "Evening"),
+            ),
+            name="Evening peak",
+        )
+
+        pricing = _simulated_june_21(_home_priced_at(tariff, SEG_PRESETS["Octopus"]), june21_weather_data).pricing
+
+        assert pricing is not None
+        assert pricing.import_tariff_mean_rate_gbp_per_kwh == pytest.approx(0.125)
+        assert pricing.seg_rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
+
+    def test_results_read_back_from_their_frame_record_no_pricing(self, june21_weather_data):
+        """A frame holds the run's series, not the rates its run was priced at, so neither the results nor their summary claims any."""
+        results = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+
+        read_back = SimulationResults.from_dataframe(results.to_dataframe(), strategy_name=results.strategy_name)
+
+        assert read_back.pricing is None
+        assert calculate_summary(read_back).pricing is None
+
+    def test_the_pricing_adds_no_column_to_the_frame(self, june21_weather_data):
+        priced = _simulated_june_21(_zero_tariff_home(), june21_weather_data)
+        unpriced = dataclasses.replace(priced, pricing=None)
+
+        assert priced.pricing is not None
+        assert list(priced.to_dataframe().columns) == list(unpriced.to_dataframe().columns)
+
+
 _MIDSUMMER = pd.Timestamp("2024-06-21")
 
 
@@ -1130,20 +1240,10 @@ class TestCalculateSummary:
         ) == pytest.approx((60.0, 10.0, 8.0, 40.0))
         assert summary.heat_pump_load_ratio == pytest.approx(0.2)
 
-    def test_SEG_revenue_with_tariff(self, sample_results):
-        """SEG revenue is computed when tariff is provided."""
-        # total_grid_export_kwh = 0.5 kW * 24 h = 12 kWh
-        # seg_revenue_gbp = 12 * 15 / 100 = 1.80 GBP
-        summary = calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
-
-        assert summary.seg_revenue_gbp is not None
-        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
-
-    def test_SEG_revenue_without_tariff(self, sample_results):
-        """seg_revenue_gbp is None when no tariff is provided."""
-        summary = calculate_summary(sample_results)
-
-        assert summary.seg_revenue_gbp is None
+    def test_calculate_summary_takes_no_seg_rate(self, sample_results):
+        """A run's export revenue is priced when it is simulated, so its summary takes no SEG rate."""
+        with pytest.raises(TypeError):
+            calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
 
     def test_calculates_financial_statistics(self):
         """Calculates financial statistics correctly."""
@@ -1175,41 +1275,10 @@ class TestCalculateSummary:
 
 
 class TestCalculateSummaryUnification:
-    """Test that calculate_summary uses calculate_seg_revenue (unified SEG math)."""
+    """calculate_summary's export revenue is the run's one SEG figure: its export at the SEG rate that priced it."""
 
-    @pytest.fixture
-    def export_results(self) -> SimulationResults:
-        """Hand-built results with 12 kWh daily export (0.5 kW * 24 h)."""
-        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
-        return SimulationResults(
-            generation=pd.Series([3.0] * 1440, index=index),
-            demand=pd.Series([2.0] * 1440, index=index),
-            self_consumption=pd.Series([2.0] * 1440, index=index),
-            battery_charge=pd.Series([0.5] * 1440, index=index),
-            battery_discharge=pd.Series([0.0] * 1440, index=index),
-            battery_soc=pd.Series([2.5] * 1440, index=index),
-            grid_import=pd.Series([0.0] * 1440, index=index),
-            grid_export=pd.Series([0.5] * 1440, index=index),  # 0.5 kW * 24h = 12 kWh
-            import_cost=pd.Series([0.0] * 1440, index=index),
-            export_revenue=pd.Series([0.0] * 1440, index=index),  # will be validated separately
-            tariff_rate=pd.Series([0.10] * 1440, index=index),
-        )
-
-    def test_seg_revenue_preserved(self, export_results):
-        """seg_revenue_gbp with 12 kWh export at 15 p/kWh == £1.80 (existing behaviour)."""
-        # total_export = 0.5 kW * 1440 min / 60 = 12 kWh
-        # seg_revenue = 12 * 15 / 100 = £1.80
-        summary = calculate_summary(export_results, seg_tariff_pence_per_kwh=15.0)
-        assert summary.seg_revenue_gbp is not None
-        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
-
-    def test_negative_seg_rate_raises_value_error(self, export_results):
-        """seg_tariff_pence_per_kwh < 0 now raises ValueError (via SEGTariff validation)."""
-        with pytest.raises(ValueError):
-            calculate_summary(export_results, seg_tariff_pence_per_kwh=-1.0)
-
-    def test_unification_identity(self):
-        """total_export_revenue_gbp == seg_revenue_gbp when export was SEG-priced at rate r."""
+    def test_a_seg_priced_run_s_export_revenue_is_its_export_at_the_seg_rate(self):
+        """A run whose export a 5 p SEG priced has calculate_seg_revenue of its export as its export revenue, and no second SEG figure."""
         rate_pence = 5.0  # p/kWh
         rate_pounds = rate_pence / 100.0
         index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
@@ -1232,11 +1301,11 @@ class TestCalculateSummaryUnification:
             export_revenue=pd.Series([export_rev_per_min] * 1440, index=index),
             tariff_rate=pd.Series([rate_pounds] * 1440, index=index),
         )
-        summary = calculate_summary(results, seg_tariff_pence_per_kwh=rate_pence)
+        summary = calculate_summary(results)
 
-        # total_export_revenue_gbp (from series) == seg_revenue_gbp (from unified calc)
         assert summary.total_export_revenue_gbp == pytest.approx(
-            summary.seg_revenue_gbp, rel=1e-6
+            calculate_seg_revenue(summary.total_grid_export_kwh, SEGTariff(name="", rate_pence_per_kwh=rate_pence)),
+            rel=1e-6,
         )
 
 
@@ -1265,43 +1334,104 @@ class TestCalculateSummaryWindow:
 
 _TWO_JUNE_DAYS = SimulationWindow(date(2024, 6, 1), date(2024, 6, 2), timedelta(minutes=1), "Europe/London")
 
+_SIXTEEN_REQUIRED_FIGURES = {
+    "total_generation_kwh": 100.0,
+    "total_demand_kwh": 80.0,
+    "total_self_consumption_kwh": 60.0,
+    "total_grid_import_kwh": 20.0,
+    "total_grid_export_kwh": 40.0,
+    "total_battery_charge_kwh": 15.0,
+    "total_battery_discharge_kwh": 15.0,
+    "peak_generation_kw": 4.0,
+    "peak_demand_kw": 3.0,
+    "self_consumption_ratio": 0.6,
+    "grid_dependency_ratio": 0.25,
+    "export_ratio": 0.4,
+    "window": _TWO_JUNE_DAYS,
+    "total_import_cost_gbp": 5.0,
+    "total_export_revenue_gbp": 8.0,
+    "net_cost_gbp": -3.0,
+}
+"""A summary's sixteen required figures, by keyword."""
+
+_FIGURES_IN_THE_POSITIONS_OF_0_5_0 = (100.0, 80.0, 60.0, 20.0, 40.0, 10.0, 8.0, 3.5, 2.5, 0.6, 0.25, 0.4, 7, 5.0, 6.0, -1.0)
+"""A summary's sixteen required figures as a 0.5.0 caller passed them by position: simulation_days, 7, is the thirteenth."""
+
 
 class TestSummaryStatistics:
     """Test SummaryStatistics dataclass."""
 
     def test_all_fields_present(self):
         """SummaryStatistics has all required fields."""
-        stats = SummaryStatistics(
-            total_generation_kwh=100.0,
-            total_demand_kwh=80.0,
-            total_self_consumption_kwh=60.0,
-            total_grid_import_kwh=20.0,
-            total_grid_export_kwh=40.0,
-            total_battery_charge_kwh=15.0,
-            total_battery_discharge_kwh=15.0,
-            peak_generation_kw=4.0,
-            peak_demand_kw=3.0,
-            self_consumption_ratio=0.6,
-            grid_dependency_ratio=0.25,
-            export_ratio=0.4,
-            simulation_days=7,
-            total_import_cost_gbp=5.0,
-            total_export_revenue_gbp=8.0,
-            net_cost_gbp=-3.0,
-        )
+        stats = SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES)
         assert stats.total_generation_kwh == 100.0
-        assert stats.simulation_days == 7
+        assert stats.window == _TWO_JUNE_DAYS
 
-    def test_a_summary_holds_the_window_whose_days_are_its_simulation_days(self):
-        """A summary whose simulation_days is its window's days holds that window."""
-        summary = home_summary(simulation_days=2, window=_TWO_JUNE_DAYS)
+    def test_a_summary_takes_no_seg_revenue(self):
+        """A run's SEG income is its total_export_revenue_gbp, priced at its home's SEG rate, so a summary holds no second copy."""
+        with pytest.raises(TypeError, match="seg_revenue_gbp"):
+            SummaryStatistics(**_SIXTEEN_REQUIRED_FIGURES, seg_revenue_gbp=None)
 
-        assert summary.window == _TWO_JUNE_DAYS
+    def test_a_summarys_simulation_days_are_its_windows_days(self):
+        assert home_summary(window=_TWO_JUNE_DAYS).simulation_days == 2
 
-    def test_a_simulation_days_other_than_its_windows_days_is_refused_naming_both(self):
-        """A summary whose simulation_days is not its window's days is refused, naming both."""
-        with pytest.raises(ValueError, match=r"simulation_days=3 for a window of 2 days"):
-            home_summary(simulation_days=3, window=_TWO_JUNE_DAYS)
+    @pytest.mark.parametrize(
+        ("build", "window"),
+        [
+            pytest.param(lambda: home_summary(window=None), None, id="none"),
+            pytest.param(
+                lambda: SummaryStatistics(*_FIGURES_IN_THE_POSITIONS_OF_0_5_0), 7, id="a-0.5.0-positional-day-count"
+            ),
+        ],
+    )
+    def test_a_window_that_is_not_a_simulation_window_is_refused_naming_it_and_calculate_summary(
+        self, build: typing.Callable[[], SummaryStatistics], window: object
+    ) -> None:
+        """A 0.5.0 caller's positional simulation_days lands in window, where it is refused by name rather than read as a total."""
+        with pytest.raises(ValueError) as refused:
+            build()
+
+        message = str(refused.value)
+        assert f"window={window!r}" in message
+        assert "SimulationWindow" in message
+        assert "calculate_summary" in message
+
+    @pytest.mark.parametrize(
+        ("discharge_kwh", "self_consumption_kwh"),
+        [
+            pytest.param(8.0, 6.0, id="more-than-self-consumed"),
+            pytest.param(math.nextafter(60.0, math.inf), 60.0, id="by-one-ulp"),
+            pytest.param(math.inf, 60.0, id="infinite"),
+            pytest.param(float("nan"), 60.0, id="discharge-not-a-number"),
+            pytest.param(8.0, float("nan"), id="self-consumption-not-a-number"),
+        ],
+    )
+    def test_a_discharge_above_its_self_consumption_is_refused_naming_both_totals(
+        self, discharge_kwh: float, self_consumption_kwh: float
+    ) -> None:
+        """The error states the invariant and the totals that break it."""
+        with pytest.raises(ValueError) as refused:
+            home_summary(total_battery_discharge_kwh=discharge_kwh, total_self_consumption_kwh=self_consumption_kwh)
+
+        message = str(refused.value)
+        assert "total_battery_discharge_kwh is a part of total_self_consumption_kwh" in message
+        assert f"total_battery_discharge_kwh={discharge_kwh!r}" in message
+        assert f"total_self_consumption_kwh={self_consumption_kwh!r}" in message
+
+    def test_a_discharge_that_is_all_of_its_self_consumption_is_accepted_with_no_direct_use(self) -> None:
+        summary = home_summary(total_battery_discharge_kwh=60.0, total_self_consumption_kwh=60.0)
+
+        assert summary.total_direct_self_consumption_kwh == 0.0
+
+    def test_refuses_a_field_assignment(self) -> None:
+        """A summary is a frozen value: neither its window nor simulation_days, a read-only property of its window, can be assigned after construction."""
+        summary = home_summary(window=_TWO_JUNE_DAYS)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            summary.window = SimulationWindow(date(2024, 6, 1), date(2024, 6, 3), timedelta(minutes=1), "Europe/London")  # type: ignore[misc]
+        with pytest.raises(AttributeError):
+            summary.simulation_days = 3  # type: ignore[misc]
+        assert (summary.window, summary.simulation_days) == (_TWO_JUNE_DAYS, 2)
 
     def test_each_flow_property_is_the_difference_of_two_of_its_totals(self):
         summary = home_summary(

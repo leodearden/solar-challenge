@@ -1,6 +1,8 @@
 """Tests for the CLI module."""
 
+import errno
 import io
+import os
 import re
 import sys
 import tempfile
@@ -19,11 +21,10 @@ from rich.progress import Progress
 from rich.style import Style
 from typer.testing import CliRunner, Result
 
-import solar_challenge.cli.home as _cli_home_module
-import solar_challenge.home as _home_module
 from solar_challenge.cli.config import HOME_TEMPLATE
 from solar_challenge.cli.main import app
 from solar_challenge.cli.utils import (
+    CliInvocation,
     console,
     create_fleet_progress,
     create_progress,
@@ -33,21 +34,26 @@ from solar_challenge.cli.utils import (
     print_error,
     print_info,
     print_report,
+    print_status,
     print_success,
     print_warning,
-    status_console,
 )
-from solar_challenge.config import load_config, parse_finance_config
+from solar_challenge.config import load_config
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, bill_distribution
-from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
-from solar_challenge.location import parse_location
+from solar_challenge.home import SummaryStatistics, calculate_summary
 from solar_challenge.output import generate_finance_report
-from solar_challenge.seg import SEG_PRESETS
+from solar_challenge.scenario_blocks import parse_finance_config
 from solar_challenge.timebase import ONE_MINUTE
 from solar_challenge.weather import WeatherCache, WeatherDataError
-from tests._cli_fleet_simulator import invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import (
+    ReachedTheSweep,
+    answering,
+    invoke_cli,
+    invoke_finance_run,
+    simulate_reaching_the_sweep,
+)
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
 from tests._repository_paths import SCENARIOS_DIR
@@ -208,6 +214,23 @@ class TestConfigCLI:
             content = output_path.read_text()
             assert "location" in content or "pv" in content
 
+    @pytest.mark.parametrize("template_type", ["home", "scenario"])
+    def test_a_written_home_or_scenario_template_sets_no_output_block_and_validates(
+        self, tmp_path: Path, template_type: str
+    ) -> None:
+        """The file `config template home` or `config template scenario` writes holds no output: block, which no command reads, and `validate config` finds it valid."""
+        template_file = tmp_path / f"{template_type}.yaml"
+
+        written = runner.invoke(
+            app, ["config", "template", template_type, "-o", str(template_file)], catch_exceptions=False
+        )
+        assert written.exit_code == 0
+        assert "output" not in yaml.safe_load(template_file.read_text())
+
+        validated = runner.invoke(app, ["validate", "config", str(template_file)], catch_exceptions=False)
+        assert validated.exit_code == 0
+        assert "OK Configuration is valid" in table_text(validated.stdout)
+
     def test_config_template_reports_its_output_path_verbatim(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -305,6 +328,8 @@ def _simulate_raising_a_plain_value_error(fleet_config: object, start: object, e
 _HANDLED_ERRORS_AND_LABELS = [
     pytest.param(ConfigurationError, "Configuration error", id="ConfigurationError"),
     pytest.param(FileNotFoundError, "File not found", id="FileNotFoundError"),
+    pytest.param(OSError, "System error", id="OSError"),
+    pytest.param(PermissionError, "System error", id="PermissionError"),
     pytest.param(ValueError, "Invalid value", id="ValueError"),
     pytest.param(WeatherDataError, "Weather data unavailable", id="WeatherDataError"),
 ]
@@ -354,11 +379,25 @@ class TestErrorHandling:
             "Weather data unavailable: Failed to retrieve TMY data from PVGIS: PVGIS is unreachable"
         )
 
+    def test_a_weather_cache_entry_it_cannot_read_is_reported_in_one_line(self, weather_cache: WeatherCache) -> None:
+        """`home quick`, whose Bristol TMY entry in the weather cache is a directory, so reading it raises IsADirectoryError even as root, exits 1 with nothing on stdout, and its stderr ends with one line naming the entry. It raises nothing. The stderr is compared with its whitespace removed, since Rich folds a word wider than CliRunner's 80 columns, as a long TMPDIR's path is."""
+        _JUNE_DAYS.seed_as_bristol_tmy(weather_cache)
+        (entry,) = weather_cache.cache_dir.iterdir()
+        entry.unlink()
+        entry.mkdir()
+
+        result = runner.invoke(app, ["home", "quick", "4", "--days", "1"], catch_exceptions=False)
+
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        expected = f"System error: [Errno {errno.EISDIR}] {os.strerror(errno.EISDIR)}: {str(entry)!r}"
+        assert "".join(result.stderr.split()).endswith("".join(expected.split()))
+
     @pytest.mark.usefixtures("bristol_june_tmy")
     def test_home_run_refuses_grid_charging_its_dispatch_would_ignore_before_it_simulates(self, tmp_path: Path) -> None:
-        """scenarios/bristol-arbitrage.yaml dispatched greedy: stderr starts with the refusal, ahead of the status line a run prints."""
+        """scenarios/bristol-arbitrage.yaml whose battery dispatches self_consumption: stderr starts with the refusal, ahead of the status line a run prints."""
         document = yaml.safe_load((SCENARIOS_DIR / "bristol-arbitrage.yaml").read_text())
-        document["home"]["dispatch_strategy"] = "greedy"
+        document["home"]["battery"]["dispatch_strategy"] = {"strategy_type": "self_consumption"}
         config_file = tmp_path / "bristol-arbitrage.yaml"
         config_file.write_text(yaml.safe_dump(document))
 
@@ -394,7 +433,7 @@ class TestErrorHandling:
         [
             pytest.param(
                 {"loan_term_years": float("inf")},
-                "loan_term_years must be a finite number, got inf",
+                "finance: loan_term_years must be a finite number, got inf",
                 id="infinite-loan-term",
             ),
             pytest.param(
@@ -406,7 +445,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "months[0] must be between 1 and 12, got 13",
+                "finance.grid_services_events.event_windows[0]: months[0] must be between 1 and 12, got 13",
                 id="event-window-month-13",
             ),
             pytest.param(
@@ -424,7 +463,7 @@ class TestErrorHandling:
                         ]
                     }
                 },
-                "event_hours must be a finite number, got inf",
+                "finance.grid_services_events.event_windows[0]: event_hours must be a finite number, got inf",
                 id="event-window-infinite-event-hours",
             ),
         ],
@@ -444,7 +483,7 @@ class TestErrorHandling:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A finance command on a scenario whose finance block a type refuses exits 1, printing nothing on stdout and one configuration-error line on stderr: the refusal as the refusing type words it. It raises nothing."""
+        """A finance command on a scenario whose finance block a type refuses exits 1, printing nothing on stdout and one configuration-error line on stderr: the refusal as the refusing type words it, prefixed by the refused block's path. It raises nothing."""
         monkeypatch.chdir(tmp_path)
         self._write_one_home_scenario(finance={"standing_charge_pence_per_day": 28.0, **finance})
 
@@ -477,7 +516,7 @@ class TestErrorHandling:
         monkeypatch.chdir(tmp_path)
         self._write_one_home_scenario(**blocks)
 
-        result = invoke_cli(["finance", "run", "scenario.yaml"], _simulate_raising_a_plain_value_error)
+        result = invoke_cli(["finance", "run", "scenario.yaml"], answering(_simulate_raising_a_plain_value_error))
 
         assert result.exit_code == 1
         assert result.stdout == ""
@@ -556,19 +595,44 @@ class TestErrorHandling:
         assert lines == f"Invalid value: {error_text_with_notes(error)}".splitlines()
 
 
+_STATUS_PRINTERS = [
+    pytest.param(print_success, id="print_success"),
+    pytest.param(print_info, id="print_info"),
+    pytest.param(print_status, id="print_status"),
+    pytest.param(lambda cli, message: print_status(cli, (message, "bold")), id="print_status-styled-part"),
+]
+
+
+def _make_stderr_a_colour_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Rich treat the captured stderr as a standard colour terminal for the rest of the test: TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset."""
+    monkeypatch.setenv("TTY_COMPATIBLE", "1")
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
+
+
 class TestPrintHelpers:
     """Tests for the print_* message helpers."""
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_status_message_is_printed_verbatim_on_stderr(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it, styled or not."""
+        print_message(CliInvocation(), _TEXT_RICH_WOULD_PARSE)
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
         "print_message",
         [
-            pytest.param(print_success, id="print_success"),
             pytest.param(print_warning, id="print_warning"),
-            pytest.param(print_info, id="print_info"),
             pytest.param(print_error, id="print_error"),
         ],
     )
-    def test_a_message_is_printed_verbatim_on_stderr(
+    def test_a_warning_or_an_error_is_printed_verbatim_on_stderr(
         self, capsys: pytest.CaptureFixture[str], print_message: Callable[[str], None]
     ) -> None:
         """Nothing reaches stdout, which carries only a command's product. Text Rich would read as markup ([ghi, dni], [/b]) or an emoji code (:sun:), or that ends in a backslash, prints on stderr as the caller gave it."""
@@ -579,23 +643,63 @@ class TestPrintHelpers:
         assert " ".join(captured.err.split()) == _TEXT_RICH_WOULD_PARSE
 
     @pytest.mark.parametrize(
-        ("print_message", "target", "colour"),
+        ("print_message", "colour"),
         [
-            pytest.param(print_success, status_console, "green", id="print_success"),
-            pytest.param(print_warning, error_console, "yellow", id="print_warning"),
-            pytest.param(print_info, status_console, "blue", id="print_info"),
-            pytest.param(print_error, error_console, "red", id="print_error"),
+            pytest.param(print_success, "green", id="print_success"),
+            pytest.param(print_info, "blue", id="print_info"),
         ],
     )
-    def test_a_message_is_printed_in_its_colour_on_its_console(
-        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], target: Console, colour: str
+    def test_a_status_message_is_printed_in_its_colour_on_a_colour_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        print_message: Callable[[CliInvocation, str], None],
+        colour: str,
     ) -> None:
-        """Success prints green and info blue on the status console, and warning yellow and error red on the error console, all on stderr; recorded, because a test run is no colour terminal."""
-        monkeypatch.setattr(target, "record", True)
+        """Success prints green and info blue on stderr. TTY_COMPATIBLE=1 and TERM=xterm, with NO_COLOR and COLORTERM unset, make Rich treat the captured stderr as a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_message(CliInvocation(), "saved")
+
+        assert capsys.readouterr().err == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize(
+        ("print_message", "colour"),
+        [
+            pytest.param(print_warning, "yellow", id="print_warning"),
+            pytest.param(print_error, "red", id="print_error"),
+        ],
+    )
+    def test_a_warning_or_an_error_is_printed_in_its_colour_on_the_error_console(
+        self, monkeypatch: pytest.MonkeyPatch, print_message: Callable[[str], None], colour: str
+    ) -> None:
+        """Warning prints yellow and error red on the error console, on stderr; recorded, because a test run is no colour terminal."""
+        monkeypatch.setattr(error_console, "record", True)
 
         print_message("saved")
 
-        assert target.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+        assert error_console.export_text(styles=True) == Style.parse(colour).render("saved") + "\n"
+
+    @pytest.mark.parametrize("print_message", _STATUS_PRINTERS)
+    def test_a_quiet_invocations_status_message_is_not_printed(
+        self, capsys: pytest.CaptureFixture[str], print_message: Callable[[CliInvocation, str], None]
+    ) -> None:
+        """A status message for a quiet invocation prints on neither stream."""
+        print_message(CliInvocation(quiet=True), "Simulating 2 homes")
+
+        assert capsys.readouterr() == ("", "")
+
+    def test_print_status_prints_its_parts_side_by_side_on_stderr_each_in_its_own_style(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`web start`'s Ctrl+C hint prints as its three parts give it, the middle one bold and the others plain, on a colour terminal."""
+        _make_stderr_a_colour_terminal(monkeypatch)
+
+        print_status(CliInvocation(), "  Press ", ("Ctrl+C", "bold"), " to stop the server.")
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == "  Press " + Style.parse("bold").render("Ctrl+C") + " to stop the server.\n"
 
 
 class TestProgress:
@@ -609,10 +713,10 @@ class TestProgress:
         ],
     )
     def test_progress_is_printed_on_stderr(
-        self, capsys: pytest.CaptureFixture[str], create: Callable[[], Progress]
+        self, capsys: pytest.CaptureFixture[str], create: Callable[[CliInvocation], Progress]
     ) -> None:
         """Progress prints on stderr, so stdout carries only a command's product."""
-        with create() as progress:
+        with create(CliInvocation()) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
 
         captured = capsys.readouterr()
@@ -626,14 +730,16 @@ class TestProgress:
             pytest.param(create_fleet_progress, id="create_fleet_progress"),
         ],
     )
-    def test_a_display_on_the_quiet_status_console_leaves_other_stderr_output_alone_on_a_terminal(
-        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, create: Callable[[], Progress]
+    def test_a_quiet_invocations_display_leaves_other_stderr_output_alone_on_a_terminal(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+        create: Callable[[CliInvocation], Progress],
     ) -> None:
-        """Text written on stderr while a display on the quiet status console runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
+        """Text written on stderr while a quiet invocation's display runs still prints, even on a terminal. TTY_COMPATIBLE=1 makes Rich treat the captured stderr as a terminal."""
         monkeypatch.setenv("TTY_COMPATIBLE", "1")
-        monkeypatch.setattr(status_console, "quiet", True)
 
-        with create() as progress:
+        with create(CliInvocation(quiet=True)) as progress:
             progress.add_task("Simulating 2 homes...", total=2)
             print("richardsonpy fell back to the Elexon profile", file=sys.stderr)
 
@@ -714,141 +820,6 @@ class TestCreateSummaryTableTitle:
         assert any("Results" in s.text and s.style is not None and s.style.italic for s in segments)
 
 
-@pytest.mark.usefixtures("bristol_june_tmy")
-class TestHomeRunFullConfigParity:
-    """Tests that `home run` threads tariff + SEG via canonical parser (step-3/step-4)."""
-
-    def _write_home_config(self, tmp_dir: Path, seg_yaml: str) -> Path:
-        """Write a temp YAML config with tariff, followed by *seg_yaml*.
-
-        Uses economy_7 (not flat_rate) because flat_rate has a known gap at 23:59
-        that causes a simulation error on a full-day run; economy_7 fully covers
-        all 24 hours via a midnight-crossing peak period.
-        """
-        cfg_path = tmp_dir / "home_seg.yaml"
-        cfg_path.write_text(
-            """
-home:
-  pv:
-    capacity_kw: 4.0
-  load:
-    annual_consumption_kwh: 3400
-    use_stochastic: false
-  tariff:
-    type: economy_7
-
-"""
-            + seg_yaml
-        )
-        return cfg_path
-
-    def _run_home(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        seg_yaml: str,
-        *extra_args: str,
-    ) -> tuple[Result, dict[str, HomeConfig]]:
-        """Run `home run --report` for _DAY on a config ending in *seg_yaml*.
-
-        *extra_args* are appended to the command line after ``--report``.
-        Returns the CLI result and the spy's capture; ``captured["home_config"]``
-        is the HomeConfig passed to simulate_home, absent if it was never called.
-        """
-        # Capture the home_config passed to simulate_home by wrapping the real function
-        captured: dict[str, HomeConfig] = {}
-        real_simulate_home = _home_module.simulate_home
-
-        def spy_simulate_home(home_config, *args, **kwargs):  # type: ignore[no-untyped-def]
-            captured["home_config"] = home_config
-            return real_simulate_home(home_config, *args, **kwargs)
-
-        # Patch simulate_home in the CLI module (local binding)
-        monkeypatch.setattr(_cli_home_module, "simulate_home", spy_simulate_home)
-
-        cfg_path = self._write_home_config(tmp_path, seg_yaml)
-        result = runner.invoke(
-            app,
-            [
-                "home", "run", str(cfg_path),
-                "--start", _DAY,
-                "--end", _DAY,
-                "--report",
-                *extra_args,
-            ],
-            catch_exceptions=False,
-        )
-        return result, captured
-
-    def test_home_run_threads_tariff_and_seg(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """home run passes tariff + seg to simulate_home and reports SEG Revenue."""
-        result, captured = self._run_home(
-            monkeypatch, tmp_path, "seg:\n  rate_pence_per_kwh: 15.0\n"
-        )
-
-        assert result.exit_code == 0, f"CLI failed: {result.stdout}"
-
-        # Tariff must be honoured by the canonical parser
-        home_cfg = captured.get("home_config")
-        assert home_cfg is not None, "spy was not called"
-        assert home_cfg.tariff_config is not None, (
-            "tariff_config should not be None — canonical parser must pick it up"
-        )
-
-        # SEG must be threaded onto the HomeConfig
-        assert home_cfg.seg_tariff is not None, (
-            "seg_tariff should not be None — SEG must be threaded from top-level seg block"
-        )
-        assert home_cfg.seg_tariff.rate_pence_per_kwh == 15.0
-
-        # SEG Revenue section must appear in the --report output
-        assert "SEG Revenue" in result.stdout, (
-            "generate_summary_report must include a SEG Revenue section"
-        )
-
-    def test_home_run_resolves_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """A top-level ``seg: {preset: Octopus}`` block prices exports at Octopus's rate."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Octopus\n")
-
-        assert result.exit_code == 0, f"CLI failed: {result.output}"
-        seg_tariff = captured["home_config"].seg_tariff
-        assert seg_tariff is not None
-        assert seg_tariff.rate_pence_per_kwh == SEG_PRESETS["Octopus"].rate_pence_per_kwh
-        assert "SEG Revenue" in result.stdout
-
-    def test_home_run_rejects_unknown_seg_preset(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """An unknown SEG preset is refused with exit 1 before anything is simulated."""
-        result, captured = self._run_home(monkeypatch, tmp_path, "seg:\n  preset: Nonexistent\n")
-
-        assert result.exit_code == 1
-        assert "Nonexistent" in result.output
-        assert "home_config" not in captured
-
-    def test_home_run_location_option_reaches_home_config(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, weather_cache: WeatherCache
-    ) -> None:
-        """``--location`` places the simulated home where location.parse_location puts it."""
-        edinburgh = parse_location("55.95,-3.19")
-        weather_cache.put(_JUNE_DAYS.hourly_weather(), "tmy", edinburgh)
-
-        result, captured = self._run_home(
-            monkeypatch,
-            tmp_path,
-            "seg:\n  rate_pence_per_kwh: 15.0\n",
-            "--location",
-            "55.95,-3.19",
-        )
-
-        assert result.exit_code == 0, f"CLI failed: {result.output}"
-        assert captured["home_config"].location == edinburgh
-
-
 @pytest.fixture
 def clear_june_in_tmp_path(
     bristol_june_tmy: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -921,6 +892,76 @@ def _run_optimize_configs() -> Result:
         ],
         catch_exceptions=False,
     )
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestHomeRunReportPricesExportOnce:
+    """`home run --report` on a home with a seg: block prints one export revenue, and the SEG rate that priced it."""
+
+    def test_home_run_report_shows_the_seg_rate_beside_the_one_export_revenue(self) -> None:
+        """The report's Grid Export Revenue is the run's export at the SEG rate it names, and no SEG Revenue section repeats it."""
+        rate_pence_per_kwh = 15.0
+        Path("home.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "home": {
+                        "name": "Bristol",
+                        "pv": {"capacity_kw": 4.0},
+                        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+                    },
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["home", "run", "home.yaml", "--start", _DAY, "--end", _DAY, "--report"], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        lines = result.stdout.splitlines()
+        cells = {
+            row[1].strip(): row[2].strip()
+            for row in (line.split("|") for line in lines if line.startswith("| "))
+        }
+        assert "| SEG Rate | 15.0 p/kWh |" in lines
+        export_kwh = float(cells["Grid Export"])
+        assert export_kwh > 0
+        # The report rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(cells["Grid Export Revenue"]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
+        assert "## SEG Revenue" not in result.stdout
+
+
+@pytest.mark.usefixtures("clear_june_in_tmp_path")
+class TestFleetRunPricesExportAtTheFilesSegRate:
+    """R4: `fleet run` books a fleet file's export at its seg: rate, which reaches every home it reads."""
+
+    def test_the_grid_export_revenue_is_the_export_at_the_seg_rate(self) -> None:
+        rate_pence_per_kwh = 15.0
+        Path("scenario.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "homes": [
+                        {"pv": {"capacity_kw": 4.0}, "load": {"annual_consumption_kwh": 3400, "use_stochastic": False}}
+                    ],
+                    "seg": {"rate_pence_per_kwh": rate_pence_per_kwh},
+                }
+            )
+        )
+
+        result = runner.invoke(
+            app, ["fleet", "run", "scenario.yaml", "--start", _DAY, "--end", _DAY], catch_exceptions=False
+        )
+
+        assert result.exit_code == 0, result.output
+        text = table_text(result.stdout)
+        export = re.search(r"Grid Export ([0-9.]+) kWh", text)
+        revenue = re.search(r"Grid Export Revenue £([0-9.]+)", text)
+        assert export is not None and revenue is not None, text
+        export_kwh = float(export[1])
+        assert export_kwh > 0
+        # The table rounds the export to 0.1 kWh and the revenue to the penny: £0.0125 at most at 15 p.
+        assert float(revenue[1]) == pytest.approx(export_kwh * rate_pence_per_kwh / 100, abs=0.02)
 
 
 @pytest.mark.usefixtures("clear_june_in_tmp_path")
@@ -1045,15 +1086,6 @@ def test_home_run_counts_the_calendar_days_of_a_run_crossing_the_october_clock_c
 _SPRING_FORWARD_FIRST, _SPRING_FORWARD_LAST = "2024-03-31", "2024-04-01"
 
 
-class _ReachedTheSweep(Exception):
-    """Raised by _simulate_reaching_the_sweep, the sign that a command got as far as its first fleet simulation."""
-
-
-def _simulate_reaching_the_sweep(fleet_config: object, start: object, end: object) -> NoReturn:
-    """A fleet simulator that stops the command at its first fleet simulation, raising _ReachedTheSweep."""
-    raise _ReachedTheSweep
-
-
 def _finance_run_over(first_day: date, days: int) -> tuple[Result, list[SummaryStatistics], FinanceConfig]:
     """Run `finance run` over *days* days from *first_day* on _write_scenario's scenario, named Bristol, every fleet simulation answered by one home's minute results over those days; with those results' summaries and the scenario's finance."""
     _write_scenario("Bristol")
@@ -1089,8 +1121,8 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result = runner.invoke(
             app,
             [
-                "fleet", "run", "scenario.yaml",
-                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST, "--sequential",
+                "--sequential", "fleet", "run", "scenario.yaml",
+                "--start", _SPRING_FORWARD_FIRST, "--end", _SPRING_FORWARD_LAST,
             ],
             catch_exceptions=False,
         )
@@ -1105,7 +1137,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert result.exit_code == 0
         window = summaries[0].window
         assert window is not None and len(window.rows()) == (23 + 24) * 60
-        assert generate_finance_report(bill_distribution(summaries, finance, 2), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
         assert f"×183.000 from a 2-day window ({_SPRING_FORWARD_FIRST} to {_SPRING_FORWARD_LAST})" in result.stdout
         assert summaries[0].simulation_days == 2
         assert f"Simulating fleet of 1 homes for {summaries[0].simulation_days} days…" in " ".join(
@@ -1117,7 +1149,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         result, summaries, finance = _finance_run_over(date(2023, 1, 1), 365)
 
         assert result.exit_code == 0
-        assert generate_finance_report(bill_distribution(summaries, finance, 365), scenario_name="Bristol") in result.stdout
+        assert generate_finance_report(bill_distribution(summaries, finance), scenario_name="Bristol") in result.stdout
         assert "extrapolated" not in result.stdout
         assert "Simulating fleet of 1 homes for 365 days…" in " ".join(result.stderr.split())
 
@@ -1134,7 +1166,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", "",
                 "--start", "2024-03-15", "--end", "2024-04-13",
             ],
-            lambda fleet_config, start, end: fleet,
+            answering(lambda fleet_config, start, end: fleet),
         )
 
         assert result.exit_code == 0
@@ -1144,7 +1176,13 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert "×12.200 from a 30-day window (2024-03-15 to 2024-04-13)" in result.stdout
 
     def test_optimize_configs_warns_of_a_large_sweep_by_its_calendar_days(self) -> None:
-        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward: 550 configs over one home for 182 days are 100,100 home-days, over the 100,000 that warrant the warning, where 181 days would be 99,550."""
+        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward.
+
+        110 configs, each one projection simulating at least 5 ages over the
+        scenario's default 25-year asset life, over one home for 182 calendar
+        days are 100,100 home-days, over the 100,000 that warrant the warning;
+        181 days would be 99,550.
+        """
         _write_scenario("Bristol")
 
         result = invoke_cli(
@@ -1152,15 +1190,18 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "optimize", "configs", "scenario.yaml",
                 "--pv", "1,2,3,4,5,6,7,8,9,10",
                 "--battery", "0,1,2,3,4,5,6,7,8,9,10",
-                "--inverter", "3,4,5,6,7",
+                "--inverter", "3",
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
-            _simulate_reaching_the_sweep,
+            answering(simulate_reaching_the_sweep),
         )
 
-        assert isinstance(result.exception, _ReachedTheSweep)
-        assert "550 config(s) × 1 home(s) × 182 day(s) ≈ 100,100 home-days" in " ".join(result.stderr.split())
+        assert isinstance(result.exception, ReachedTheSweep)
+        assert (
+            "110 config(s) × at least 5 simulated age(s) per projection × 1 home(s) × 182 day(s) ≈ 100,100 home-days"
+            in " ".join(result.stderr.split())
+        )
 
 
 _ECONOMY_7_TARIFF = {
@@ -1194,7 +1235,7 @@ _SWEEP_PATHS = (
 
 
 def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, object]) -> None:
-    """Write file_name in the working directory: a fleet file under the top-level tariff, of two tou_optimized homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that charges and discharges at 2.5 kW and grid-charges to 90%."""
+    """Write file_name in the working directory: a fleet file under the top-level tariff, of two homes with 4 kW of PV, a deterministic 3400 kWh a year of load, and a battery of capacity_kwh that dispatches tou_optimized on the tariff's clock, charges and discharges at 2.5 kW and grid-charges to 90%."""
     Path(file_name).write_text(
         yaml.safe_dump(
             {
@@ -1204,8 +1245,8 @@ def _write_fleet_file(file_name: str, capacity_kwh: object, tariff: dict[str, ob
                     "seed": 42,
                     "pv": {"capacity_kw": 4.0},
                     "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
-                    "dispatch_strategy": "tou_optimized",
                     "battery": {
+                        "dispatch_strategy": {"strategy_type": "tou_optimized"},
                         "max_charge_kw": 2.5,
                         "max_discharge_kw": 2.5,
                         "grid_charging": {"target_soc_fraction": 0.9},
@@ -1221,7 +1262,7 @@ def _run_fleet(*argv: str) -> Result:
     """Run the `fleet` command argv for _DAY, simulating its homes one after another."""
     return runner.invoke(
         app,
-        ["fleet", *argv, "--start", _DAY, "--end", _DAY, "--sequential"],
+        ["--sequential", "fleet", *argv, "--start", _DAY, "--end", _DAY],
         catch_exceptions=False,
     )
 
@@ -1289,7 +1330,7 @@ class TestFleetSweepGivesEachPointTheFleetFilesBlocks:
         result = _run_fleet("sweep", "sweep.yaml", "--output-dir", "sweep", *options)
 
         assert result.exit_code == 1
-        assert "Unknown tariff type 'economy_8'" in " ".join(result.stderr.split())
+        assert "tariff.type: unknown tariff type 'economy_8'; supported types:" in " ".join(result.stderr.split())
         assert not Path("sweep", point_file).exists()
         assert not Path("sweep", "sweep_summary.csv").exists()
 
@@ -1342,11 +1383,6 @@ class TestFleetSweepRefusesAFileItCannotSweep:
 
 class TestQuietOption:
     """Tests that --quiet silences a command's status messages and progress on stderr, and leaves its product, its warnings and its errors."""
-
-    @pytest.fixture(autouse=True)
-    def _restore_status_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """CliRunner runs every invocation in this process, on the one status_console, so a --quiet invocation here must not silence a later test."""
-        monkeypatch.setattr(status_console, "quiet", status_console.quiet)
 
     def test_quiet_config_template_writes_its_file_and_prints_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1423,3 +1459,17 @@ class TestQuietOption:
 
         assert quiet.stderr == ""
         assert " ".join(loud.stderr.split()) == "Template written to loud.yaml"
+
+    def test_a_status_message_after_a_quiet_invocation_still_prints(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A --quiet invocation leaves nothing quiet behind it in the process: a loud invocation's status message printed after it reaches stderr."""
+        monkeypatch.chdir(tmp_path)
+        quiet = runner.invoke(
+            app, ["--quiet", "config", "template", "home", "--output", "q.yaml"], catch_exceptions=False
+        )
+        assert quiet.exit_code == 0
+
+        print_info(CliInvocation(), "after")
+
+        assert capsys.readouterr() == ("", "after\n")

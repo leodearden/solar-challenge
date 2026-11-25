@@ -1,0 +1,235 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Tests for solar_challenge.web.dashboard: the Dashboard an app holds, attached with attach_dashboard and read back with dashboard_of, its close(), and the accessors the views read the current app's services with."""
+
+import threading
+import time
+from collections.abc import Callable
+from contextlib import ExitStack
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+pytest.importorskip("flask")
+from flask import Flask
+
+from solar_challenge.home import HomeConfig
+from solar_challenge.load import LoadConfig
+from solar_challenge.pv import PVConfig
+from solar_challenge.web.dashboard import (
+    Dashboard,
+    attach_dashboard,
+    dashboard_of,
+    get_database,
+    get_job_manager,
+    get_job_stream_policy,
+    get_storage,
+)
+from solar_challenge.web.database import Database
+from solar_challenge.web.jobs import JobManager, JobState
+from solar_challenge.web.sse import JobStreamPolicy
+from solar_challenge.web.storage import RunQuery, RunStorage
+from solar_challenge.web.store_lock import acquire_store_lock
+from tests._job_manager_double import autospecced_job_manager
+from tests._run_stores import empty_run_storage
+from tests._web_app import store_lock_is_free
+from tests._web_job_runner import jobs_running
+from tests.unit.web_jobs._app_client import serve_job_streams_under
+from tests.unit.web_jobs._fakes import BlockingSimulation, RecordingSimulation
+
+_A_HOME = HomeConfig(pv_config=PVConfig(capacity_kw=4.0), load_config=LoadConfig(annual_consumption_kwh=3500))
+_JUNE_1 = pd.Timestamp("2024-06-01", tz="UTC")
+_JUNE_2 = pd.Timestamp("2024-06-02", tz="UTC")
+_DROPPED = "Dropped: the server shut down before the job ran"
+
+
+def _dashboard_over(
+    directory: Path, jobs: Callable[[RunStorage], JobManager], closes_at_teardown: ExitStack
+) -> Dashboard:
+    """A Dashboard over a new, empty store in *directory*, holding the store's lock and a JobManager *jobs* builds over its storage; the test's teardown shuts the manager down, then releases the lock."""
+    storage = empty_run_storage(directory)
+    lock = acquire_store_lock(directory)
+    closes_at_teardown.callback(lock.release)
+    manager = jobs(storage)
+    closes_at_teardown.callback(manager.shutdown, wait=True)
+    return Dashboard(storage=storage, jobs=manager, database=storage.database, lock=lock)
+
+
+class _ShutdownFailed(Exception):
+    """What a job manager whose shutdown fails raises."""
+
+
+def _wait_for_state(manager: JobManager, job_id: str, reached: Callable[[JobState], bool]) -> JobState:
+    """Job *job_id*'s state as soon as *reached* holds for it, polling *manager*; the test fails after 30 s without it."""
+    deadline = time.monotonic() + 30
+    while (state := manager.job_state(job_id)) is None or not reached(state):
+        if time.monotonic() > deadline:
+            pytest.fail(f"job {job_id} did not reach the state awaited within 30 s; its last state was {state}")
+        time.sleep(0.01)
+    return state
+
+
+class TestDashboardOf:
+    """dashboard_of reads back the one Dashboard attach_dashboard attached to an app, and refuses an app that holds none."""
+
+    def test_an_app_holding_no_dashboard_is_refused_by_name(self) -> None:
+        with pytest.raises(LookupError, match="'not-a-dashboard'") as refused:
+            dashboard_of(Flask("not-a-dashboard"))
+
+        assert "create_app" in str(refused.value)
+
+    def test_an_app_holding_something_else_under_the_dashboards_key_is_refused_by_name(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        attached_to = Flask("attached-to")
+        keys_before = set(attached_to.extensions)
+        attach_dashboard(attached_to, _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown))
+        [dashboard_key] = set(attached_to.extensions) - keys_before
+        holding_something_else = Flask("holds-something-else")
+        holding_something_else.extensions[dashboard_key] = "not a Dashboard"
+
+        with pytest.raises(LookupError, match="'holds-something-else'"):
+            dashboard_of(holding_something_else)
+
+    def test_the_dashboard_attached_to_an_app_is_the_one_read_back(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        app = Flask("dashboard")
+        dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+
+        attach_dashboard(app, dashboard)
+
+        assert dashboard_of(app) is dashboard
+
+
+class TestTheCurrentAppsServices:
+    """The accessors read the services of the current Flask app: the storage, jobs and database of the Dashboard attached to it, and the JobStreamPolicy its job progress streams are served under; each refuses, naming the app, a current app that holds no such service."""
+
+    def test_the_storage_jobs_and_database_read_are_those_of_the_dashboard_attached_to_the_current_app(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        app = Flask("dashboard")
+        dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+        attach_dashboard(app, dashboard)
+
+        with app.app_context():
+            assert get_storage() is dashboard.storage
+            assert get_job_manager() is dashboard.jobs
+            assert get_database() is dashboard.database
+
+    @pytest.mark.parametrize(
+        "accessor",
+        [
+            pytest.param(get_storage, id="get_storage"),
+            pytest.param(get_job_manager, id="get_job_manager"),
+            pytest.param(get_database, id="get_database"),
+            pytest.param(get_job_stream_policy, id="get_job_stream_policy"),
+        ],
+    )
+    def test_reading_a_service_the_current_app_does_not_hold_is_refused_naming_the_app_and_create_app(
+        self, accessor: Callable[[], object]
+    ) -> None:
+        with (
+            Flask("holds-no-services").app_context(),
+            pytest.raises(LookupError, match="'holds-no-services'") as refused,
+        ):
+            accessor()
+
+        assert "create_app" in str(refused.value)
+
+    def test_the_job_stream_policy_read_is_the_one_the_current_apps_job_streams_are_served_under(self) -> None:
+        app = Flask("serves-job-streams")
+        policy = JobStreamPolicy(limit_seconds=30.0)
+        serve_job_streams_under(app, policy)
+
+        with app.app_context():
+            assert get_job_stream_policy() is policy
+
+    def test_a_job_stream_policy_extension_that_is_not_a_policy_is_refused_naming_its_type(self) -> None:
+        app = Flask("holds-something-else")
+        app.extensions["job_stream_policy"] = object()
+
+        with app.app_context(), pytest.raises(TypeError, match=r"\bobject\b"):
+            get_job_stream_policy()
+
+
+class TestDashboardConstruction:
+    """A Dashboard's storage keeps its runs in the Dashboard's database: they are one store."""
+
+    def test_a_storage_keeping_its_runs_in_another_database_is_refused_naming_both(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        held = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+        another = Database(tmp_path / "another.db")
+
+        with pytest.raises(ValueError) as refused:
+            Dashboard(storage=held.storage, jobs=held.jobs, database=another, lock=held.lock)
+
+        assert str(held.storage.database.path) in str(refused.value)
+        assert str(another.path) in str(refused.value)
+
+
+class TestDashboardClose:
+    """close() drops the queued jobs, waits for the running ones, and only then releases the store's lock."""
+
+    def test_a_closed_dashboards_jobs_refuse_a_job_and_its_store_is_free(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+
+        dashboard.close()
+
+        with pytest.raises(RuntimeError, match="shutdown"):
+            dashboard.jobs.submit_home_job(_A_HOME, _JUNE_1, _JUNE_2)
+        assert dashboard.storage.page_runs(RunQuery()).total == 0
+        assert store_lock_is_free(tmp_path)
+
+    def test_closing_a_closed_dashboard_is_harmless(self, tmp_path: Path, closes_at_teardown: ExitStack) -> None:
+        dashboard = _dashboard_over(tmp_path, jobs_running(RecordingSimulation()), closes_at_teardown)
+        dashboard.close()
+
+        dashboard.close()
+
+        assert store_lock_is_free(tmp_path)
+
+    def test_a_close_whose_jobs_shutdown_raises_raises_its_error_and_keeps_the_stores_lock(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        """A shutdown that raised may have left a job running that can still write the store, so the lock is kept: StoreLock.release requires none can."""
+        storage = empty_run_storage(tmp_path)
+        lock = acquire_store_lock(tmp_path)
+        closes_at_teardown.callback(lock.release)
+        jobs = autospecced_job_manager()
+        jobs.shutdown.side_effect = _ShutdownFailed("the jobs did not shut down")
+        dashboard = Dashboard(storage=storage, jobs=jobs, database=storage.database, lock=lock)
+
+        with pytest.raises(_ShutdownFailed, match="did not shut down"):
+            dashboard.close()
+
+        jobs.shutdown.assert_called_once_with(wait=True)
+        assert not store_lock_is_free(tmp_path)
+
+    def test_close_releases_the_store_only_once_the_running_job_has_finished(
+        self, tmp_path: Path, closes_at_teardown: ExitStack
+    ) -> None:
+        blocking_simulation = BlockingSimulation()
+        dashboard = _dashboard_over(tmp_path, jobs_running(blocking_simulation, max_workers=1), closes_at_teardown)
+        closes_at_teardown.callback(blocking_simulation.release)
+        running, running_run = dashboard.jobs.submit_home_job(_A_HOME, _JUNE_1, _JUNE_2)
+        blocking_simulation.wait_until_started()
+        queued, _ = dashboard.jobs.submit_home_job(_A_HOME, _JUNE_1, _JUNE_2)
+        closing = threading.Thread(target=dashboard.close, daemon=True)
+        closing.start()
+
+        _wait_for_state(dashboard.jobs, queued, lambda state: (state.status, state.message) == ("failed", _DROPPED))
+        still_running = dashboard.storage.run_record(running_run)
+
+        assert closing.is_alive()
+        assert not store_lock_is_free(tmp_path)
+        assert still_running is not None and still_running.status == "running"
+        blocking_simulation.release()
+        closing.join(timeout=30)
+        assert not closing.is_alive()
+        finished = dashboard.jobs.job_state(running)
+        assert finished is not None and finished.status == "completed"
+        assert store_lock_is_free(tmp_path)

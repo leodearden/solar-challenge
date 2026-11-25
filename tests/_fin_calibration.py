@@ -49,10 +49,12 @@ from types import MappingProxyType
 
 import pandas as pd
 
-from solar_challenge.config import ScenarioConfig, SimulationPeriod
-from solar_challenge.finance import FinanceConfig, MultiYearCurve, spreadsheet_revenue_curve
+from solar_challenge.config import ScenarioConfig
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, default_runner
 from solar_challenge.load import LoadConfig
+from solar_challenge.projection import MultiYearCurve, spreadsheet_revenue_curve
+from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._finance_builders import make_sized_home
 from tests._seeded_tmy import ClearJuneDays
 
@@ -156,9 +158,7 @@ def make_physics_column_scenario() -> ScenarioConfig:
     first_day, last_day = PHYSICS_COLUMN_DAYS.window()
     return ScenarioConfig(
         name="FIN-Physics-Column",
-        period=SimulationPeriod(
-            start_date=first_day.date().isoformat(), end_date=last_day.date().isoformat()
-        ),
+        period=SimulationWindow(first_day.date(), last_day.date(), ONE_MINUTE, home.location.timezone),
         homes=(home,) * 2,
     )
 

@@ -18,6 +18,35 @@ saved them through that tree's RunStorage.save_fleet_run into a temporary store.
 also wrote a format.json, which was then deleted, so the run reads as one stored before a run
 carried a format version, and every step brings it forward.
 
+pre_839_flat_grid_charging_fleet is a run that the code of main at commit bb2ec17 ("Merge task/908
+into main") saved, before task 839 refused grid_charging on a tariff with no cheap period. It was
+made as pre_787_dispatch_fleet was: a one-off script, which is not committed, simulated each home
+for one day, 2024-06-15, offline with that tree's synthetic_june_weather; it summarised them with
+that tree's calculate_home_summaries and calculate_fleet_summary; it saved them through that
+tree's RunStorage.save_fleet_run into a temporary store; and the format.json that save wrote was
+deleted.
+
+pre_975_seg_fleet is a run that the code of main at commit b0fb49ae ("Merge task/892 into main"),
+the base of task 975, saved, while a fleet's summary still recomputed its homes' export revenue at
+a SEG rate it was given. A one-off script, which is not committed, simulated each home for one
+day, 2024-06-21, offline with that tree's synthetic_june_weather; it summarised them with that
+tree's calculate_home_summaries at a 15 p SEG rate and aggregate_home_summaries; it saved them
+through that tree's RunStorage.save_fleet_run into a temporary store, then marked the run
+completed; and the format.json that save wrote was deleted. Its FleetSummary holds a non-null
+total_seg_revenue_gbp and per_home_seg_revenue_mean_gbp, which the stored-run format's v6 step
+drops, and each home summary a non-null seg_revenue_gbp, which the stored-run format's v9 step
+drops.
+
+pre_867_round_trip_home is a run that the code of main at commit 14e44124 ("Merge task/975 into
+main"), the base of task 867, saved in format 6, while a battery still had a round-trip efficiency
+field. A one-off script, which is not committed, built one day of synthetic SimulationResults at
+1-minute resolution, with no simulation and no network; it summarised them with that tree's
+calculate_summary, so its summary holds a window; it saved them through that tree's
+RunStorage.save_home_run into a temporary store, then marked the run completed; and the
+format.json that save wrote was deleted. Its battery holds efficiency 0.81 beside the pair it
+derived, charge_efficiency and discharge_efficiency 0.9, which the stored-run format's v7 step
+keeps when it drops the efficiency.
+
 Each fixture holds:
 
 - run/: the run's directory as that save wrote it, without a format.json. A home run's
@@ -25,7 +54,11 @@ Each fixture holds:
   ({"homes": [...], "n_homes": N}), summary.json, and in homes/ each home's home_<i>.parquet
   and home_<i>_summary.json.
 - runs_row.json: every column of the runs row that save wrote, read back from its database,
-  with config_json and summary_json as their verbatim text.
+  with config_json and summary_json as their verbatim text, which fixture_runs_row reads.
+
+pre_469_home, legacy_fleet and pre_786_dispatch_home were saved before summaries carried a
+window, so none of their SummaryStatistics documents holds one; the stored-run format's v5 step
+derives each from the time series the summary's results stored.
 
 The fixtures, in STORED_RUN_FIXTURES' order:
 
@@ -41,9 +74,23 @@ The fixtures, in STORED_RUN_FIXTURES' order:
   dispatch_strategy "greedy"; homes[1]'s battery dispatches tou_optimized with peak_hours
   [[16, 19]], with no tariff; homes[2] has home dispatch_strategy "tou_optimized", a battery
   that names no dispatch strategy and no tariff, so it ran self-consumption.
+- pre_839_flat_grid_charging_fleet: a fleet run of three homes on a flat tariff of 0.25 £/kWh,
+  each with a 5 kWh battery that grid-charges to 0.8, whose dispatch charged nothing from the
+  grid, as a tariff whose periods all charge one rate has no cheap period: homes[0]'s battery
+  dispatches tou_optimized with peak_hours [[16, 19]]; homes[1]'s dispatches peak_shaving with
+  import_limit_kw 3.0; homes[2] has home dispatch_strategy "tou_optimized" and a battery that
+  names no dispatch strategy, so it ran the tariff's rates.
+- pre_975_seg_fleet: a fleet run of two homes on a 15 p SEG and no tariff, "SEG home 1" with a
+  5 kWh battery that names no dispatch strategy and "SEG home 2" with no battery. Its summary's
+  total_seg_revenue_gbp equals its total_export_revenue_gbp, as every export earned the SEG rate.
+- pre_867_round_trip_home: a home run, "Round Trip Row", with no tariff and a 5 kWh battery built
+  with round-trip efficiency 0.81, so its charge_efficiency and discharge_efficiency are 0.9.
 
 PRE_DISPATCH_UNION_HOME_CONFIGS is a JSON file of FIXTURES_DIR beside those directories, whose
 docstring says what it holds; pre_dispatch_union_home_config reads one of its configs.
+
+fixture_summary_statistics_documents names the documents of a fixture that hold a
+SummaryStatistics, as they are named in an installed copy too.
 
 install_stored_run_fixture puts a fixture into a store: its row into the runs table, with SQL,
 and a copy of its run/ as that run's directory, under the fixture's run id or another, so a
@@ -64,7 +111,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from solar_challenge.web.database import Database
@@ -82,8 +129,15 @@ STORED_RUN_FIXTURES: tuple[str, ...] = (
     "legacy_fleet",
     "pre_786_dispatch_home",
     "pre_787_dispatch_fleet",
+    "pre_839_flat_grid_charging_fleet",
+    "pre_975_seg_fleet",
+    "pre_867_round_trip_home",
 )
 """The name of each legacy stored-run fixture, a directory of FIXTURES_DIR."""
+
+PRE_975_FLEET_SEG_REVENUE_KEYS: tuple[str, ...] = ("total_seg_revenue_gbp", "per_home_seg_revenue_mean_gbp")
+"""The SEG revenue pair a fleet summary held before task 975, which pre_975_seg_fleet's holds non-null
+and the stored-run format's v6 step drops, in the order that FleetSummary declared them."""
 
 
 def stored_run_fixture_dir(name: str) -> Path:
@@ -104,7 +158,42 @@ def fixture_run_type(name: str) -> RunType:
     from solar_challenge.web.stored_runs import RUN_TYPES
     from solar_challenge.web.text_options import one_of
 
-    return one_of(_runs_row(name)["type"], RUN_TYPES, f"the type in {name}'s runs_row.json")
+    return one_of(fixture_runs_row(name)["type"], RUN_TYPES, f"the type in {name}'s runs_row.json")
+
+
+def fixture_runs_row(name: str) -> dict[str, Any]:
+    """Every column of the runs row of fixture *name*, by column name, as its runs_row.json holds it.
+
+    Raises:
+        ValueError: *name* is not one of STORED_RUN_FIXTURES.
+    """
+    row: dict[str, Any] = json.loads((_fixture_dir(name) / "runs_row.json").read_text())
+    return row
+
+
+class SummaryStatisticsDocuments(NamedTuple):
+    """The documents of a stored run that hold a SummaryStatistics: its files, by their POSIX path in its run directory, and its runs row's columns."""
+
+    files: frozenset[str]
+    columns: frozenset[str]
+
+
+def fixture_summary_statistics_documents(name: str) -> SummaryStatisticsDocuments:
+    """The documents of fixture *name* that hold a SummaryStatistics.
+
+    A home run's are its summary.json and its runs row's summary_json. A fleet run's are the
+    homes/home_<i>_summary.json of each home its config.json holds; its runs row holds its
+    FleetSummary alone.
+
+    Raises:
+        ValueError: *name* is not one of STORED_RUN_FIXTURES.
+    """
+    if fixture_run_type(name) == "home":
+        return SummaryStatisticsDocuments(frozenset({"summary.json"}), frozenset({"summary_json"}))
+    homes = json.loads((stored_run_fixture_dir(name) / "config.json").read_text())["homes"]
+    return SummaryStatisticsDocuments(
+        frozenset(f"homes/home_{index}_summary.json" for index in range(len(homes))), frozenset()
+    )
 
 
 def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *, run_id: str | None = None) -> str:
@@ -123,7 +212,7 @@ def install_stored_run_fixture(name: str, database: Database, data_dir: Path, *,
 
     from tests._run_storage_layout import stored_run_dir
 
-    row = _runs_row(name)
+    row = fixture_runs_row(name)
     if run_id is not None:
         row["id"] = run_id
     columns = ", ".join(row)
@@ -159,9 +248,3 @@ def _fixture_dir(name: str) -> Path:
     if name not in STORED_RUN_FIXTURES:
         raise ValueError(f"{name!r} is not a stored-run fixture; the fixtures are {list(STORED_RUN_FIXTURES)}")
     return FIXTURES_DIR / name
-
-
-def _runs_row(name: str) -> dict[str, Any]:
-    """Every column of the runs row of fixture *name*, by column name, as its runs_row.json holds it."""
-    row: dict[str, Any] = json.loads((_fixture_dir(name) / "runs_row.json").read_text())
-    return row

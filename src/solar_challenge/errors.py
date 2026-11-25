@@ -21,6 +21,10 @@ class ConfigurationError(ValueError):
     and §11) names the work that converts it.
     """
 
+    def __init__(self, *args: object) -> None:
+        """Take the arguments ValueError takes; defined with def so inspect reads one signature on every Python minor (docs/surface-forms-inspect-readings.md)."""
+        super().__init__(*args)
+
     @classmethod
     def must_be(cls, field: str, requirement: str, *, got: object) -> Self:
         """Return the refusal of *got*, the value given for *field*, which must be *requirement*: "<field> must be <requirement>, got <got!r>"; the caller raises it."""

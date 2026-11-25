@@ -27,7 +27,9 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import calculate_home_summaries
 from solar_challenge.home import HomeConfig, SimulationResults, calculate_summary
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import SimulationWindow
+from solar_challenge.web.field_tree import field_tree
 from solar_challenge.web.storage import RunStorage
 from solar_challenge.web.stored_runs import RUN_FORMAT_VERSION, StoredFleetRun, StoredHomeRun, StoredRunUnreadable
 from tests._damaged_time_series import rewrite_time_series
@@ -241,8 +243,8 @@ def test_a_config_value_of_a_type_its_field_cannot_be_is_refused_naming_its_path
         ),
         pytest.param(
             "summary.json",
-            _set("seg_revenue_gbp", value=-(10**400)),
-            "seg_revenue_gbp",
+            _set("total_heat_pump_load_kwh", value=-(10**400)),
+            "total_heat_pump_load_kwh",
             id="an-optional-summary-figure-below-every-float",
         ),
         pytest.param(
@@ -275,6 +277,28 @@ def test_a_tariff_whose_periods_do_not_tile_the_day_is_refused_naming_the_tariff
     refusal = _refusal(storage, _HOME_RUN_ID, "config.json", "tariff_config")
 
     assert isinstance(refusal.__cause__, ConfigurationError)
+
+
+def test_a_home_whose_tou_peak_hours_reach_a_cheap_minute_of_its_tariff_is_refused_naming_the_window_caused_by_its_refusal(
+    storage: RunStorage,
+) -> None:
+    """The home page's former default window, 16:00-21:00, on Economy 10, whose 20:00-21:00 is cheap: the 409 a store holding such a run answers.
+
+    Its run discharged in cheap minutes, which no configuration now accepted dispatches, so no
+    run-document step brings it forward and TOUOptimizedStrategy's own refusal is the cause.
+    """
+    _store_home_run_of_every_shape(storage)
+    config_path = stored_run_dir(storage, _HOME_RUN_ID) / "config.json"
+    window_on_economy_10 = {"strategy_type": "tou_optimized", "peak_hours": [[16, 21]]}
+    _edit_document(config_path, _set("battery_config", "dispatch_strategy", value=window_on_economy_10))
+    _edit_document(config_path, _set("battery_config", "grid_charging", value=None))
+    _edit_document(config_path, _set("tariff_config", value=field_tree(TariffConfig.economy_10())))
+
+    refusal = _refusal(storage, _HOME_RUN_ID, "config.json", None)
+
+    assert isinstance(refusal.__cause__, ConfigurationError)
+    assert "peak_hours[0]" in str(refusal)
+    assert "20:00-21:00" in str(refusal)
 
 
 def test_a_summary_its_dataclass_refuses_is_refused_as_a_whole(storage: RunStorage) -> None:

@@ -14,16 +14,18 @@ from solar_challenge.cli.utils import (
     console,
     error_console,
     handle_errors,
+    invocation,
     print_success,
 )
 from solar_challenge.config import load_config
 from solar_challenge.location import LOCATION_PRESETS
+from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Configuration management commands")
 
 
 # Template configurations
-HOME_TEMPLATE = """\
+HOME_TEMPLATE = f"""\
 # Single home simulation configuration
 # Any block may be deleted entirely, or any key left out of it, to take its
 # default, except that a location: block that sets any key must set both
@@ -40,8 +42,8 @@ location:
 
 # Simulation period
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Home configuration
 home:
@@ -64,11 +66,6 @@ home:
     annual_consumption_kwh: 3400.0  # Target annual consumption
     household_occupants: 3          # Used if consumption not specified
     use_stochastic: true            # Use stochastic model if available
-
-# Output configuration (optional)
-output:
-  csv_path: results.csv
-  include_summary: true
 """
 
 FLEET_TEMPLATE = """\
@@ -111,7 +108,7 @@ homes:
       annual_consumption_kwh: 4200.0
 """
 
-SCENARIO_TEMPLATE = """\
+SCENARIO_TEMPLATE = f"""\
 # Scenario configuration
 # Can define single home or fleet with simulation period
 
@@ -124,8 +121,8 @@ location:
   timezone: Europe/London
 
 period:
-  start_date: "2024-01-01"
-  end_date: "2024-12-31"
+  start_date: "{DEFAULT_FIRST_DAY.isoformat()}"
+  end_date: "{DEFAULT_LAST_DAY.isoformat()}"
 
 # Single home scenario (use 'homes' instead for fleet)
 home:
@@ -137,10 +134,6 @@ home:
     capacity_kwh: 5.0
   load:
     annual_consumption_kwh: 3400.0
-
-output:
-  csv_path: scenario_results.csv
-  include_summary: true
 """
 
 
@@ -205,6 +198,7 @@ def show(
 @app.command()
 @handle_errors
 def template(
+    ctx: typer.Context,
     template_type: Annotated[
         str,
         typer.Argument(
@@ -224,7 +218,7 @@ def template(
     Available templates:
     - home: Single home configuration
     - fleet: Multiple homes configuration
-    - scenario: Full scenario with period and output settings
+    - scenario: Full scenario with its simulation period
     """
     templates = {
         "home": HOME_TEMPLATE,
@@ -247,7 +241,7 @@ def template(
 
     if output is not None:
         output.write_text(content)
-        print_success(f"Template written to {output}")
+        print_success(invocation(ctx), f"Template written to {output}")
     else:
         syntax = Syntax(content, "yaml", theme="monokai")
         console.print(syntax)

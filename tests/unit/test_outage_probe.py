@@ -6,15 +6,17 @@ import os
 import re
 import socket
 import socketserver
+import ssl
 import textwrap
 import threading
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum, auto
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path, PurePosixPath
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -23,14 +25,23 @@ import requests
 from solar_challenge.location import Location
 from solar_challenge.weather import CLIMATE_YEARS
 from tests._network_guard import refusing_network
+from tests._repository_paths import REPOSITORY_ROOT
 from tests._scripts import load_script
 
 _THIS_MACHINE = "127.0.0.1"
 
+_LOOPBACK_TLS = REPOSITORY_ROOT / "tests" / "fixtures" / "tls"
+_LOOPBACK_CERTIFICATE = _LOOPBACK_TLS / "loopback-cert.pem"
+"""A self-signed certificate for this machine's address, valid for a century, whose key is loopback-key.pem beside it. It guards nothing: a client that trusts it trusts only a stand-in on this machine."""
+_LOOPBACK_KEY = _LOOPBACK_TLS / "loopback-key.pem"
 
-def _origin_on(port: int) -> str:
-    """The origin of a server on *port* of this machine."""
-    return f"http://{_THIS_MACHINE}:{port}"
+_STAND_IN_PATIENCE_S = 10.0
+"""Seconds a TLS stand-in waits for the probe's connection before it gives up, so a probe that never connects fails its test instead of hanging it."""
+
+
+def _origin_on(port: int, scheme: str = "http") -> str:
+    """The origin of a server speaking *scheme* on *port* of this machine."""
+    return f"{scheme}://{_THIS_MACHINE}:{port}"
 
 
 def _pvgis_api_url_at(origin: str) -> str:
@@ -46,16 +57,31 @@ class _ReceivedRequest:
     query: dict[str, list[str]]
 
 
+class _BodyFault(Enum):
+    """How an answer fails to deliver the whole body its Content-Length gives: it sends the first half, then ..."""
+
+    CUT_SHORT = auto()
+    """... closes the connection, as PVGIS's did partway through a TMY."""
+
+    STALLED = auto()
+    """... sends nothing more until the stand-in's stalls are over."""
+
+
 class _ServiceStandIn(socketserver.TCPServer):
-    """An HTTP server on this machine that answers each GET with the status *statuses* sets for its name, 200 for any other, recording each request it receives."""
+    """An HTTP server on this machine that answers each GET with the status *statuses* sets for its name, 200 for any other, and with the whole of its body unless *body_faults* sets a fault for the name, recording each request it receives.
 
-    def __init__(self, statuses: Mapping[str, int]) -> None:
+    The stalls of its answers end when *stalls_over* is set.
+    """
+
+    def __init__(self, statuses: Mapping[str, int], body_faults: Mapping[str, _BodyFault]) -> None:
         self.statuses = statuses
+        self.body_faults = body_faults
+        self.stalls_over = threading.Event()
         self.received: list[_ReceivedRequest] = []
-        super().__init__((_THIS_MACHINE, 0), _AnswersWithTheNamesStatus)
+        super().__init__((_THIS_MACHINE, 0), _AnswersWithTheNamesStatusAndBodyFault)
 
 
-class _AnswersWithTheNamesStatus(BaseHTTPRequestHandler):
+class _AnswersWithTheNamesStatusAndBodyFault(BaseHTTPRequestHandler):
     server: _ServiceStandIn
 
     def do_GET(self) -> None:
@@ -63,25 +89,57 @@ class _AnswersWithTheNamesStatus(BaseHTTPRequestHandler):
         name = PurePosixPath(url.path).name
         self.server.received.append(_ReceivedRequest(name, parse_qs(url.query)))
         body = b"stand-in"
+        fault = self.server.body_faults.get(name)
         self.send_response(self.server.statuses.get(name, HTTPStatus.OK))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(body if fault is None else body[: len(body) // 2])
+        if fault is _BodyFault.STALLED:
+            self.server.stalls_over.wait()
 
     def log_message(self, format: str, *args: object) -> None:
         pass
 
 
 @contextmanager
-def _stand_in(statuses: Mapping[str, int]) -> Iterator[tuple[str, list[_ReceivedRequest]]]:
-    """Serve a _ServiceStandIn answering with *statuses*, and yield its origin and the requests it receives."""
-    with _ServiceStandIn(statuses) as server:
+def _stand_in(
+    statuses: Mapping[str, int], *, body_faults: Mapping[str, _BodyFault] = MappingProxyType({})
+) -> Iterator[tuple[str, list[_ReceivedRequest]]]:
+    """Serve a _ServiceStandIn answering with *statuses* and failing the bodies *body_faults* names, and yield its origin and the requests it receives."""
+    with _ServiceStandIn(statuses, body_faults) as server:
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
             yield _origin_on(server.server_address[1]), server.received
         finally:
+            server.stalls_over.set()
             server.shutdown()
+            thread.join()
+
+
+@contextmanager
+def _tls_stand_in_whose_stream_turns_to_garbage_in_the_body() -> Iterator[tuple[str, threading.Event]]:
+    """Serve over TLS a client trusting _LOOPBACK_CERTIFICATE accepts one answer whose headers and first half of its body arrive intact and whose next TLS record is garbage; yield its origin and the event set once the garbage is sent, which a request that never got that far leaves unset."""
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(_LOOPBACK_CERTIFICATE, _LOOPBACK_KEY)
+    garbage_sent = threading.Event()
+
+    def answer(listener: socket.socket) -> None:
+        connection, _ = listener.accept()
+        with tls.wrap_socket(connection, server_side=True) as stream:
+            stream.recv(1 << 16)
+            stream.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nstan")
+            with socket.socket(fileno=os.dup(stream.fileno())) as beneath_the_tls:
+                beneath_the_tls.sendall(b"\x17\x03\x03\x00\x20" + bytes(32))
+            garbage_sent.set()
+
+    with socket.create_server((_THIS_MACHINE, 0)) as listener:
+        listener.settimeout(_STAND_IN_PATIENCE_S)
+        thread = threading.Thread(target=answer, args=(listener,))
+        thread.start()
+        try:
+            yield _origin_on(listener.getsockname()[1], "https"), garbage_sent
+        finally:
             thread.join()
 
 
@@ -131,6 +189,54 @@ def test_an_answer_pvgis_gave_to_a_request_it_judged_is_no_outage(
         exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
 
     assert (exit_status, capsys.readouterr().out) == (0, "")
+
+
+@pytest.mark.parametrize("fault", list(_BodyFault))
+@pytest.mark.parametrize("status", [403, 429, 503])
+def test_an_endpoint_pvgis_refuses_or_fails_is_named_by_its_status_whatever_its_body_does(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], status: int, fault: _BodyFault
+) -> None:
+    """The body is read only after a status that is no outage, so one outage prints one line: otherwise a body cut short or stalled would name its own cause on some runs and the status on others."""
+    with _stand_in({"tmy": status}, body_faults={"tmy": fault}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: tmy: HTTP {status}\n")
+
+
+@pytest.mark.parametrize("endpoint", ["tmy", "seriescalc"])
+def test_a_pvgis_answer_whose_body_is_cut_short_is_an_outage_named_on_one_line(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], endpoint: str
+) -> None:
+    """The tests read each body whole, so an answer that closes the connection before its body is whole was not served."""
+    with _stand_in({}, body_faults={endpoint: _BodyFault.CUT_SHORT}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, f"PVGIS: {endpoint}: ChunkedEncodingError\n")
+
+
+def test_a_pvgis_answer_whose_body_stops_arriving_is_an_outage_within_the_timeout(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A body that stops arriving for the timeout is no answer within it, as a status line that never comes is (test_no_answer_within_the_timeout_is_an_outage), so one stall prints one line wherever in the answer it falls."""
+    with _stand_in({}, body_faults={"tmy": _BodyFault.STALLED}) as (origin, _):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
+
+    assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: no answer within 0.2 s\n")
+
+
+def test_a_pvgis_body_that_fails_for_a_cause_other_than_a_stall_keeps_the_cause_requests_names(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a stall is renamed 'no answer within <timeout> s': a TLS stream that turns to garbage partway through the body is the connection failing, as a refused one is, so it keeps its own cause. The stand-in's event shows the failure fell in the body, not in the handshake that would name the same cause."""
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(_LOOPBACK_CERTIFICATE))
+    with _tls_stand_in_whose_stream_turns_to_garbage_in_the_body() as (origin, garbage_sent):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
+
+    assert (exit_status, capsys.readouterr().out, garbage_sent.is_set()) == (
+        os.EX_TEMPFAIL,
+        "PVGIS: tmy: SSLError\n",
+        True,
+    )
 
 
 def test_a_connection_this_machine_refuses_is_an_outage(probe: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
@@ -273,6 +379,46 @@ def test_the_npm_registry_is_asked_for_the_first_tarball_resolved_at_an_http_url
 
     assert (exit_status, capsys.readouterr().out) == (0, "")
     assert [request.name for request in received] == ["demo-1.0.0.tgz"]
+
+
+@pytest.mark.parametrize(
+    ("service", "option", "lock_name", "lock_text_at", "asked"),
+    [
+        pytest.param(
+            "pypi",
+            "--uv-lock",
+            "uv.lock",
+            lambda origin: _uv_lock(_EDITABLE_PROJECT, _demo_package_pinned_from(origin)),
+            ["demo-package", "demo_package-1.0-py3-none-any.whl"],
+            id="pypi",
+        ),
+        pytest.param(
+            "npm",
+            "--package-lock",
+            "package-lock.json",
+            lambda origin: _package_lock(_NPM_ROOT, _demo_resolved_at(origin)),
+            ["demo-1.0.0.tgz"],
+            id="npm",
+        ),
+    ],
+)
+def test_the_pypi_and_npm_probes_read_no_body(
+    probe: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    service: str,
+    option: str,
+    lock_name: str,
+    lock_text_at: Callable[[str], str],
+    asked: list[str],
+) -> None:
+    """Reading a wheel or a tarball would download it, so the answer to each request they send has a body cut short, and is still served."""
+    with _stand_in({}, body_faults=dict.fromkeys(asked, _BodyFault.CUT_SHORT)) as (origin, received):
+        lock = _write(tmp_path / lock_name, lock_text_at(origin))
+        exit_status = probe.main([service, option, str(lock)])
+
+    assert (exit_status, capsys.readouterr().out) == (0, "")
+    assert [request.name for request in received] == asked
 
 
 @pytest.mark.parametrize(

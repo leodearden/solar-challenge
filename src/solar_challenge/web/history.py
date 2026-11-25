@@ -19,7 +19,7 @@ from flask import (
 from werkzeug.wrappers import Response
 
 from solar_challenge.web.charts import ComparedRun, comparison_tabs
-from solar_challenge.web.shared import get_storage
+from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 
 bp = Blueprint("history", __name__)
@@ -51,8 +51,9 @@ def compare_page() -> str | Response:
     empty ``ids`` renders the no-runs-selected empty state instead.
 
     Each run found is charted from its RunRecord.headline(), under its name. The page also
-    gets each run's columns and, as ``summary``, its RunRecord.summary_tree(), for the Key
-    Metrics table. A run that cannot be compared is not compared as a run of zeros: the page
+    gets each run's columns and, as ``headline``, that same headline, which its Key Metrics
+    table reads, so the table and the charts show a fleet's figures by one mapping of its
+    names. A run that cannot be compared is not compared as a run of zeros: the page
     redirects to the runs page and flashes why. For a run whose summary cannot be read, or
     holds a figure its headline cannot show, the flash is its StoredRunUnreadable's message,
     which names the run, the document and the field. For a run with no summary yet, such as
@@ -79,13 +80,12 @@ def compare_page() -> str | Response:
         if record is None:
             continue
         try:
-            summary_tree = record.summary_tree()
             headline = record.headline()
         except StoredRunUnreadable as unreadable:
             return _back_to_runs(str(unreadable))
         if headline is None:
             return _back_to_runs(f"The run {record.name!r} ({record.id}) cannot be compared: it has no summary.")
-        runs.append({**asdict(record), "summary": summary_tree})
+        runs.append({**asdict(record), "headline": headline})
         compared.append(ComparedRun(record.name, headline))
 
     if len(runs) < 2:

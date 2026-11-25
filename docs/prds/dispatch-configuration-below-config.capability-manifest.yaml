@@ -87,13 +87,13 @@ tasks:
     title: "Refuse at construction what the dispatcher would ignore"
     capabilities:
       - name: "home-level-vocabulary-owned-by-home"
-        binding: "config._VALID_DISPATCH_STRATEGIES exists at 1251be0; β moves it to home.py as HOME_DISPATCH_STRATEGIES"
+        binding: "config._VALID_DISPATCH_STRATEGIES exists at 1251be0; β moves it to home.py as HOME_DISPATCH_STRATEGIES. Retired on purpose by successor task 790 (ε, 3a19dd82), which deleted the home-level vocabulary; per Leo's 2026-11-24 ruling (sitting item 14) the check now asserts no home-level dispatch vocabulary anywhere in src"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "HOME_DISPATCH_STRATEGIES"
-          paths: ["src/solar_challenge/home.py"]
-          expect: present
+          pattern: "HOME_DISPATCH_STRATEGIES|_VALID_DISPATCH_STRATEGIES"
+          paths: ["src/solar_challenge"]
+          expect: absent
       - name: "config-vocabulary-copy-deleted"
         binding: "config._VALID_DISPATCH_STRATEGIES exists at 1251be0"
         verdict: PASS

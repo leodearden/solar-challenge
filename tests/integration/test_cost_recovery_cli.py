@@ -3,17 +3,22 @@
 """Integration tests for CR5: --cost-recovery CLI flag and report block."""
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 from typer.testing import CliRunner
 
+from solar_challenge.battery import Battery
 from solar_challenge.cli.main import app
 from solar_challenge.finance import BillDistribution
 from solar_challenge.fleet import FleetResults
+from solar_challenge.home import HomeConfig
 from solar_challenge.output import generate_finance_report
-from tests._cli_fleet_simulator import invoke_finance_run
+from solar_challenge.projection import fewest_simulated_ages
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._factories import (
     make_bill_breakdown,
     make_bill_distribution,
@@ -21,6 +26,7 @@ from tests._factories import (
     make_cost_recovery_solution,
 )
 from tests._finance_builders import make_fleet_results
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 
 # ---------------------------------------------------------------------------
@@ -316,12 +322,28 @@ class TestFinanceCLICostRecoveryHelp:
 
 
 # ---------------------------------------------------------------------------
-# §E — The fast CLI tests' scenario writer
+# §E — The fast CLI tests' scenario writers
 # ---------------------------------------------------------------------------
 
+_INTERIOR_FINANCE: dict[str, float | int] = {
+    "standing_charge_pence_per_day": 28.0,
+    # Interior-regime cost-recovery params: high capex, no grant, floor=100, retail=30p
+    "pv_cost_per_kwp_gbp": 2000.0,
+    "grant_gbp": 0.0,
+    "own_use_rate_pence_per_kwh": 15.0,
+    "retained_cash_floor_per_home_per_year_gbp": 100.0,
+    "retail_baseline_rate_pence_per_kwh": 30.0,
+    "asset_life_years": 25,
+    "vat_rate": 0.05,
+}
+"""The interior-regime finance block every scenario writer here writes: the --cost-recovery solve binds at the floor."""
 
-def _write_interior_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
-    """Write a minimal interior-regime scenario YAML to tmp_path."""
+
+def _write_interior_scenario(tmp_path: Path, n_homes: int = 5, *, battery_kwh: float | None = None) -> Path:
+    """Write a minimal scenario YAML under the interior-regime finance block to tmp_path.
+
+    Its n_homes seeded homes each have a fixed battery_kwh battery with no soh set, and no battery by default.
+    """
     scenario = {
         "name": "CR5 CLI Test",
         "location": {
@@ -333,23 +355,34 @@ def _write_interior_scenario(tmp_path: Path, n_homes: int = 5) -> Path:
             "n_homes": n_homes,
             "seed": 42,
             "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
-            "battery": {"capacity_kwh": None},
+            "battery": {"capacity_kwh": battery_kwh},
             "load": {"annual_consumption_kwh": 3500},
         },
-        "finance": {
-            "standing_charge_pence_per_day": 28.0,
-            # Interior-regime cost-recovery params: high capex, no grant, floor=100, retail=30p
-            "pv_cost_per_kwp_gbp": 2000.0,
-            "grant_gbp": 0.0,
-            "own_use_rate_pence_per_kwh": 15.0,
-            "retained_cash_floor_per_home_per_year_gbp": 100.0,
-            "retail_baseline_rate_pence_per_kwh": 30.0,
-            "asset_life_years": 25,
-            "vat_rate": 0.05,
-        },
+        "finance": _INTERIOR_FINANCE,
     }
     path = tmp_path / "interior_scenario.yaml"
     path.write_text(yaml.dump(scenario))
+    return path
+
+
+def _write_unaged_battery_scenario(tmp_path: Path) -> Path:
+    """Write _write_interior_scenario's scenario of two homes, each with a 5 kWh battery: its age-0 fleet differs from its configured homes only in each battery's soh."""
+    return _write_interior_scenario(tmp_path, n_homes=2, battery_kwh=5.0)
+
+
+def _write_aged_pv_scenario(tmp_path: Path) -> Path:
+    """Write a homes-list scenario of two homes under _INTERIOR_FINANCE, each with 6-year-old 4 kW PV and a 5 kWh battery.
+
+    Its age-0 fleet resets the PV's age, so it differs from the bill run's homes
+    and no projection age is answered by the bill run.
+    """
+    home = {
+        "pv": {"capacity_kw": 4.0, "system_age_years": 6.0},
+        "battery": {"capacity_kwh": 5.0},
+        "load": {"annual_consumption_kwh": 3400, "use_stochastic": False},
+    }
+    path = tmp_path / "aged_pv_scenario.yaml"
+    path.write_text(yaml.safe_dump({"name": "Aged PV", "homes": [home, home], "finance": _INTERIOR_FINANCE}))
     return path
 
 
@@ -429,3 +462,78 @@ class TestFinanceCLICostRecoveryE2EFast:
         assert "cost-recovery analysis" not in result.output.lower(), (
             f"'Cost-Recovery Analysis' should NOT appear without --cost-recovery:\n{result.output}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §G — The age-0 fleet simulated once per finance run (B16, L10)
+# ---------------------------------------------------------------------------
+
+
+def _at_starting_soh(homes: Sequence[HomeConfig]) -> list[HomeConfig]:
+    """*homes* with each battery's soh set to the soh a Battery built from it holds, the battery-less homes as they are."""
+    return [
+        home
+        if home.battery_config is None
+        else replace(home, battery_config=replace(home.battery_config, soh=Battery(home.battery_config).soh))
+        for home in homes
+    ]
+
+
+class TestFinanceRunSimulatesTheAge0FleetOnce:
+    """`finance run --project --cost-recovery` on an unaged scenario asks its simulator once for the fleet whose homes are, at their starting soh, its bill run's."""
+
+    def test_project_and_cost_recovery_ask_the_simulator_for_the_age_0_fleet_once(self, tmp_path: Path) -> None:
+        scenario = _write_unaged_battery_scenario(tmp_path)
+        recorder = RecordingSimulate()
+
+        result = invoke_cli(
+            [
+                "finance", "run", "--project", "--cost-recovery",
+                "--start", "2024-06-01", "--end", "2024-06-07", str(scenario),
+            ],
+            answering(recorder),
+        )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert all(home.battery_config is not None for home in recorder.fleets[0].homes), (
+            "premise: every home of the bill run has a battery, whose soh each age of the projection sets"
+        )
+        bill_run = _at_starting_soh(recorder.fleets[0].homes)
+        age_0 = [fleet for fleet in recorder.fleets if _at_starting_soh(fleet.homes) == bill_run]
+        assert len(age_0) == 1, (
+            f"the simulator was asked for the age-0 fleet {len(age_0)} times, as {[fleet.name for fleet in age_0]}, "
+            f"among the fleets {[fleet.name for fleet in recorder.fleets]}"
+        )
+        assert len(recorder.fleets) > 1, "the projection's other ages reach the simulator"
+        assert "## Project Economics" in result.stdout, result.output
+        assert "## Cost-Recovery Analysis" in result.stdout, result.output
+
+
+_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK = ["finance", "run", "--project", "--cost-recovery", "--start", "2024-06-01", "--end", "2024-06-07"]
+"""`finance run` with both economics blocks over the first week of June 2024, its scenario file to follow."""
+
+
+class TestFinanceRunMakesOneProjection:
+    """`finance run --project --cost-recovery` asks its simulator for its bill run and one projection's ages, no more."""
+
+    def test_an_aged_fleet_is_simulated_for_its_bill_and_one_projection(self, tmp_path: Path) -> None:
+        recorder = RecordingSimulate()
+
+        result = invoke_cli([*_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK, str(_write_aged_pv_scenario(tmp_path))], answering(recorder))
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert tuple(fleet.name for fleet in recorder.fleets[1:]) == PROJECTION_AGES_OVER_25_YEARS
+        assert len(recorder.fleets) == 1 + fewest_simulated_ages(25)
+        assert "## Project Economics" in result.stdout, result.output
+        assert "## Cost-Recovery Analysis" in result.stdout, result.output
+
+    def test_an_unaged_fleets_age_0_projection_age_is_answered_by_its_bill_run(self, tmp_path: Path) -> None:
+        """The bill run, then the projection's four later ages."""
+        recorder = RecordingSimulate()
+
+        result = invoke_cli(
+            [*_PROJECT_AND_COST_RECOVERY_OVER_A_WEEK, str(_write_unaged_battery_scenario(tmp_path))], answering(recorder)
+        )
+
+        assert result.exit_code == 0, f"Exit {result.exit_code}. Output:\n{result.output}"
+        assert len(recorder.fleets) == fewest_simulated_ages(25), [fleet.name for fleet in recorder.fleets]

@@ -14,7 +14,6 @@ from solar_challenge.dispatch import (
     GridChargeContext,
     SelfConsumptionStrategy,
     StepLimits,
-    compute_grid_charge_power_kw,
     require_valid_step_powers,
 )
 from solar_challenge.tariff import TariffConfig
@@ -124,7 +123,7 @@ def calculate_shortfall(
     return result
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 
@@ -132,6 +131,13 @@ class EnergyFlowResult:
     so never negative. Construction raises ValueError naming each flow below 0
     or NaN, and its value. battery_soc is the state of charge after the
     timestep, in kWh.
+
+    Every flow is an energy at the home's bus: battery_charge is what the battery
+    drew, before its charge losses, and battery_discharge what it delivered, after
+    its discharge losses. So generation + grid_import = demand + grid_export +
+    battery_charge - battery_discharge closes with no loss term, and the battery's
+    SOC changes by charge_efficiency × battery_charge - battery_discharge /
+    discharge_efficiency (docs/prds/one-dispatch-engine.md §5.2).
     """
 
     generation: float
@@ -142,7 +148,7 @@ class EnergyFlowResult:
     grid_export: float
     grid_import: float
     battery_soc: float  # SOC after this timestep
-    grid_charge: float = 0.0  # informational: kWh stored in battery from grid (sub-set of battery_charge and grid_import)
+    grid_charge: float = 0.0  # informational: kWh the battery drew from the grid, a part of battery_charge and grid_import
 
     def __post_init__(self) -> None:
         """Refuse a flow that is negative or NaN, naming each such flow and its value."""
@@ -160,15 +166,15 @@ _FLOWS = tuple(field.name for field in fields(EnergyFlowResult) if field.name !=
 def _build_grid_charge_context(
     battery: "Battery",
     tariff: TariffConfig,
-    timestamp: pd.Timestamp,
+    timestamp: datetime,
     *,
     target_soc_kwh: float,
+    useful_charge_ceiling_kwh: Optional[float],
 ) -> GridChargeContext:
-    """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh.
+    """Build a GridChargeContext from a battery and tariff for the given timestamp, filling the battery to target_soc_kwh, or to useful_charge_ceiling_kwh when that is lower.
 
-    Its cheap-period classification is TariffConfig.is_cheap_at's, which
-    :func:`simulate_timestep_tou` also reads, so both dispatch paths classify each
-    minute alike; a tariff with no rate spread has no cheap minute.
+    Its cheap-period classification is TariffConfig.is_cheap_at's, the clock of a
+    TOUOptimizedStrategy built with the tariff; a tariff with no rate spread has no cheap minute.
     """
     return GridChargeContext(
         current_rate=tariff.get_rate(timestamp),
@@ -178,14 +184,14 @@ def _build_grid_charge_context(
         max_charge_kw=battery.max_charge_kw,
         round_trip_efficiency=battery.charge_efficiency * battery.discharge_efficiency,
         charge_efficiency=battery.charge_efficiency,
+        useful_charge_ceiling_kwh=useful_charge_ceiling_kwh,
     )
 
 
 @dataclass(frozen=True)
 class _StepEnergies:
-    """A timestep's duration in hours, its generation and demand as energies in kWh, and the excess and shortfall between them."""
+    """A timestep's generation and demand as energies in kWh, and the excess and shortfall between them."""
 
-    duration_hours: float
     generation_kwh: float
     demand_kwh: float
     excess_kwh: float
@@ -203,7 +209,6 @@ class _StepEnergies:
         generation_kwh = generation_kw * duration_hours
         demand_kwh = demand_kw * duration_hours
         return cls(
-            duration_hours=duration_hours,
             generation_kwh=generation_kwh,
             demand_kwh=demand_kwh,
             excess_kwh=max(0.0, generation_kwh - demand_kwh),
@@ -213,8 +218,8 @@ class _StepEnergies:
 
 @dataclass(frozen=True)
 class _BatteryExchange:
-    """The energies a battery stored from PV and from the grid (after charge losses)
-    and delivered to the home's bus in one timestep, in kWh."""
+    """The energies a battery drew from PV and from the grid (before charge losses)
+    and delivered to the home's bus (after discharge losses) in one timestep, in kWh."""
 
     pv_charge_kwh: float
     grid_charge_kwh: float
@@ -238,16 +243,15 @@ def _execute(decision: DispatchDecision, battery: Battery, timestep_minutes: flo
 
 
 def _settle(step: _StepEnergies, exchange: _BatteryExchange, battery_soc_kwh: float) -> EnergyFlowResult:
-    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not store or supply."""
+    """Return a timestep's EnergyFlowResult, settling with the grid what its battery did not draw or supply."""
     battery_charge_kwh = exchange.pv_charge_kwh + exchange.grid_charge_kwh
 
     # Self-consumption: direct PV consumption + battery discharge (capped at demand)
     direct_consumption_kwh = min(step.generation_kwh, step.demand_kwh)
     self_consumption_kwh = min(direct_consumption_kwh + exchange.discharge_kwh, step.demand_kwh)
 
-    # Split-source grid flows, which keep validate_energy_balance closed
-    # (docs/prds/tou-grid-charging-battery-arbitrage.md §3.1): only PV charge
-    # reduces export, and grid charge adds the energy it stored to import.
+    # Export is the excess the battery did not draw; import adds what it drew from the grid
+    # (docs/prds/one-dispatch-engine.md §5.2).
     grid_export_kwh = max(0.0, step.excess_kwh - exchange.pv_charge_kwh)
     grid_import_kwh = max(0.0, step.shortfall_kwh - exchange.discharge_kwh) + exchange.grid_charge_kwh
 
@@ -268,11 +272,12 @@ def simulate_timestep(
     generation_kw: float,
     demand_kw: float,
     battery: Optional[Battery],
-    timestep_minutes: float = 1.0,
+    timestep_minutes: float,
     timestamp: Optional[datetime] = None,
     strategy: Optional[DispatchStrategy] = None,
     *,
     tariff: Optional[TariffConfig] = None,
+    useful_charge_ceiling_kwh: Optional[float] = None,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep.
 
@@ -298,16 +303,22 @@ def simulate_timestep(
             can emit ``grid_charge_kw > 0``.  When ``None`` (default), the
             grid-charge context is not built and results are bit-identical to
             omitting the argument entirely.
+        useful_charge_ceiling_kwh: Optional SOC in kWh above which this step's grid
+            charge is forecast to be stranded by PV, carried in the grid-charge context
+            as ``GridChargeContext.useful_charge_ceiling_kwh``: grid charging then fills
+            to the lower of it and ``battery.grid_charge_target_kwh``.  ``None``
+            (default) means no ceiling.  It has no effect when no context is built.
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
 
     Raises:
         ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
-            or demand_kw is not finite and at least 0, naming it; then if the strategy's decision
-            asks for more than the step allows (StepLimits.require_admissible), naming the
-            strategy and each power above its limit. Each check runs before any battery moves
-            energy.
+            or demand_kw is not finite and at least 0, naming it; then, when a grid-charge context
+            is built, if useful_charge_ceiling_kwh is neither None nor finite and at least 0,
+            naming it; then if the strategy's decision asks for more than the step allows
+            (StepLimits.require_admissible), naming the strategy and each power above its limit.
+            Each check runs before any battery moves energy.
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
@@ -322,7 +333,13 @@ def simulate_timestep(
 
     target_soc_kwh = battery.grid_charge_target_kwh
     grid_charge_ctx = (
-        _build_grid_charge_context(battery, tariff, pd.Timestamp(timestamp), target_soc_kwh=target_soc_kwh)
+        _build_grid_charge_context(
+            battery,
+            tariff,
+            timestamp,
+            target_soc_kwh=target_soc_kwh,
+            useful_charge_ceiling_kwh=useful_charge_ceiling_kwh,
+        )
         if tariff is not None and target_soc_kwh is not None
         else None
     )
@@ -344,98 +361,6 @@ def simulate_timestep(
     return _settle(step, exchange, battery.soc_kwh)
 
 
-def simulate_timestep_tou(
-    generation_kw: float,
-    demand_kw: float,
-    battery: Optional[Battery],
-    timestamp: pd.Timestamp,
-    tariff: TariffConfig,
-    timestep_minutes: float = 1.0,
-) -> EnergyFlowResult:
-    """Simulate energy flow for a single timestep with TOU-optimized battery dispatch.
-
-    TOU-optimized energy flow strategy:
-    1. PV generation meets demand directly (self-consumption)
-    2. Classify the current minute as cheap or expensive with
-       TariffConfig.is_cheap_at, as the grid-charge context does.  A tariff
-       with no rate spread has no cheap minute, so every step takes the
-       expensive-period branch, which is plain self-consumption.
-    3. During cheap periods (off-peak):
-       - Excess PV charges battery aggressively
-       - Remaining excess exports to grid
-       - When ``battery.grid_charge_target_kwh`` is not None, the battery tops up
-         from the grid toward it by the power :func:`compute_grid_charge_power_kw`
-         returns for the SOC before the PV charge and that PV charge
-    4. During expensive periods (peak):
-       - Discharge battery to meet demand before importing from grid, asking it
-         for the shortfall power demand_kw - generation_kw whenever that is above
-         0, as the dispatch strategies ask
-       - Excess PV charges battery (saving for later peak use)
-       - Export only if battery is full
-
-    Args:
-        generation_kw: PV generation power in kW
-        demand_kw: Demand power in kW
-        battery: Battery object (or None for no battery)
-        timestamp: Current timestamp for tariff rate lookup
-        tariff: Tariff configuration with rate periods
-        timestep_minutes: Duration of timestep in minutes
-
-    Returns:
-        EnergyFlowResult with all energy flows in kWh
-
-    Raises:
-        ValueError: If timestep_minutes is not positive and finite, naming it; then if generation_kw
-            or demand_kw is not finite and at least 0, naming it. Each check runs before any battery
-            moves energy.
-    """
-    require_valid_duration(timestep_minutes, "Timestep")
-    step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
-    is_cheap_period = tariff.is_cheap_at(timestamp)
-    if battery is None:
-        return _settle(step, _NO_EXCHANGE, 0.0)
-
-    pv_charge_kwh = 0.0
-    grid_charge_kwh = 0.0
-    discharge_kwh = 0.0
-    if is_cheap_period:
-        # Off-peak: charge from excess PV, then optionally top-up from grid
-        soc_before_pv_kwh = battery.soc_kwh
-        if step.excess_kwh > 0:
-            excess_power_kw = step.excess_kwh / step.duration_hours
-            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
-
-        target_soc_kwh = battery.grid_charge_target_kwh
-        if target_soc_kwh is not None:
-            pv_charge_power_kw = min(
-                step.excess_kwh / step.duration_hours if step.excess_kwh > 0 else 0.0,
-                battery.max_charge_kw,
-            )
-            ctx = _build_grid_charge_context(battery, tariff, timestamp, target_soc_kwh=target_soc_kwh)
-            grid_power = compute_grid_charge_power_kw(
-                ctx,
-                battery_soc_kwh=soc_before_pv_kwh,
-                pv_charge_power_kw=pv_charge_power_kw,
-                timestep_minutes=timestep_minutes,
-            )
-            if grid_power > 0:
-                grid_charge_kwh = battery.charge(grid_power, timestep_minutes)
-    else:
-        # Peak: discharge to meet shortfall, then charge from excess PV
-        shortfall_kw = max(0.0, demand_kw - generation_kw)
-        if shortfall_kw > 0:
-            discharge_kwh = battery.discharge(shortfall_kw, timestep_minutes)
-
-        if step.excess_kwh > 0:
-            excess_power_kw = step.excess_kwh / step.duration_hours
-            pv_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
-
-    exchange = _BatteryExchange(
-        pv_charge_kwh=pv_charge_kwh, grid_charge_kwh=grid_charge_kwh, discharge_kwh=discharge_kwh
-    )
-    return _settle(step, exchange, battery.soc_kwh)
-
-
 def validate_energy_balance(
     result: EnergyFlowResult,
     tolerance: float = 0.001,
@@ -443,9 +368,11 @@ def validate_energy_balance(
     """Validate energy balance for a timestep result.
 
     Balance equation:
-    generation + import = consumption + export + storage_delta
+    generation + grid_import = demand + grid_export + battery_net_draw
 
-    Where storage_delta = battery_charge - battery_discharge (net storage)
+    Where battery_net_draw = battery_charge - battery_discharge, the battery's net draw from
+    the bus. Both are bus energies, so the balance carries no loss term; the battery's SOC
+    change is the storage identity in EnergyFlowResult's docstring.
 
     Args:
         result: Energy flow result to validate
@@ -457,11 +384,11 @@ def validate_energy_balance(
     Raises:
         ValueError: If balance is violated beyond tolerance
     """
-    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, as
-    # simulate_timestep_tou's own battery calls are, so _settle's flows close this balance.
+    # StepLimits keeps every step simulate_timestep executes within its excess and its shortfall, so
+    # _settle's flows close this balance.
     energy_in = result.generation + result.grid_import
-    storage_delta = result.battery_charge - result.battery_discharge
-    energy_out = result.demand + result.grid_export + storage_delta
+    battery_net_draw_kwh = result.battery_charge - result.battery_discharge
+    energy_out = result.demand + result.grid_export + battery_net_draw_kwh
 
     imbalance = abs(energy_in - energy_out)
 

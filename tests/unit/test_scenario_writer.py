@@ -2,26 +2,16 @@
 
 import dataclasses
 from pathlib import Path
-from collections.abc import Collection
 from typing import Any, Callable, TypeVar
 
 import pytest
-import yaml
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.cli.home import home_config_for_run
 from solar_challenge.config import (
-    BATTERY_BLOCK,
-    EV_BLOCK,
-    HEAT_PUMP_BLOCK,
-    LOAD_BLOCK,
-    LOCATION_BLOCK,
-    PV_BLOCK,
-    ComponentBlock,
     load_fleet_config,
     load_home_config,
     load_scenarios,
-    parse_seg_rate,
 )
 from solar_challenge.dispatch import (
     GridChargeConfig,
@@ -29,12 +19,21 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategyConfig,
     TOUOptimizedStrategyConfig,
 )
-from solar_challenge.ev import EVConfig
+from solar_challenge.ev import EVChargerType, EVConfig, SmartChargingMode
 from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.scenario_blocks import (
+    BATTERY_BLOCK,
+    EV_BLOCK,
+    HEAT_PUMP_BLOCK,
+    LOAD_BLOCK,
+    LOCATION_BLOCK,
+    PV_BLOCK,
+    ComponentBlock,
+)
 from solar_challenge.scenario_writer import fleet_scenario, home_scenario, scenario_yaml
 from solar_challenge.seg import SEGTariff
 from solar_challenge.tariff import TariffConfig
@@ -43,12 +42,12 @@ from solar_challenge.tariff import TariffConfig
 _Config = TypeVar("_Config")
 
 
-def _setting_every_key(block: ComponentBlock[Any], config: _Config, *, unwritten: Collection[str] = ()) -> _Config:
-    """*config*, refused unless each of *block*'s keys but *unwritten*, those the writer never writes, is set away from what an omitted key reads as."""
+def _setting_every_key(block: ComponentBlock[Any], config: _Config) -> _Config:
+    """*config*, refused unless each of *block*'s keys but its reader-only ones, which the writer never writes, is set away from what an omitted key reads as."""
     unset = [
         key
         for key in block.keys
-        if key not in unwritten and getattr(config, key) == block.value_when_omitted(key)
+        if key not in block.reader_only and getattr(config, key) == block.value_when_omitted(key)
     ]
     assert not unset, f"{block.config_type.__name__} leaves {unset} as an omitted key reads"
     return config
@@ -81,7 +80,7 @@ def _every_grammar_field_home() -> HomeConfig:
                 max_discharge_kw=3.5,
                 name="Wall",
                 dispatch_strategy=TOUOptimizedStrategyConfig(peak_hours=((16, 19),)),
-                grid_charging=GridChargeConfig(target_soc_fraction=0.8),
+                grid_charging=GridChargeConfig(target_soc_fraction=0.8, forecast="trailing_14_days"),
                 min_soc_fraction=0.15,
                 max_soc_fraction=0.95,
                 system_age_years=2.0,
@@ -90,7 +89,6 @@ def _every_grammar_field_home() -> HomeConfig:
                 soh_floor=0.6,
                 soh=0.95,
             ).with_round_trip(0.9),
-            unwritten=("efficiency",),
         ),
         load_config=_setting_every_key(
             LOAD_BLOCK,
@@ -134,7 +132,6 @@ def _every_grammar_field_home() -> HomeConfig:
         ),
         name="Nine kW home",
         tariff_config=TariffConfig.economy_7(),
-        dispatch_strategy="tou_optimized",
         seg_tariff=SEGTariff(name="Octopus Outgoing", rate_pence_per_kwh=15.0),
     )
 
@@ -176,10 +173,10 @@ def _through_home_run(tmp_path: Path) -> tuple[object, object]:
 
 
 def _through_load_home_config(tmp_path: Path) -> tuple[object, object]:
-    """The home load_home_config reads back, and the home written, without the SEG tariff it does not read."""
+    """The home load_home_config reads back, and the home written, its SEG tariff unnamed: a seg: block names none."""
     home = _every_grammar_field_home()
     loaded = load_home_config(_written(home_scenario(home, name="Nine kW home"), tmp_path))
-    return loaded, dataclasses.replace(home, seg_tariff=None)
+    return loaded, dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0))
 
 
 def _through_load_scenarios(tmp_path: Path) -> tuple[object, object]:
@@ -197,10 +194,12 @@ def _through_load_scenarios(tmp_path: Path) -> tuple[object, object]:
 
 
 def _through_load_fleet_config(tmp_path: Path) -> tuple[object, object]:
-    """The homes load_fleet_config reads back, and the homes written, without the SEG tariff it does not read."""
+    """The homes load_fleet_config reads back, and the homes written, their SEG tariff unnamed: a seg: block names none."""
     homes = _two_every_key_homes()
     fleet = load_fleet_config(_written(fleet_scenario(homes, name="Fleet run"), tmp_path))
-    return fleet.homes, [dataclasses.replace(home, seg_tariff=None) for home in homes]
+    return fleet.homes, tuple(
+        dataclasses.replace(home, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0)) for home in homes
+    )
 
 
 @pytest.mark.parametrize(
@@ -240,6 +239,24 @@ def test_a_block_is_written_with_every_key_of_its_table_in_order(
     assert list(written_block(document)) == list(block.keys)
 
 
+@pytest.mark.parametrize(
+    "written_homes",
+    [
+        pytest.param(lambda home: [home_scenario(home, name="One home")["home"]], id="home_scenario"),
+        pytest.param(lambda home: fleet_scenario([home, home], name="Two homes")["homes"], id="fleet_scenario"),
+    ],
+)
+def test_a_written_home_block_holds_no_dispatch_strategy_its_battery_holds_its_own(
+    written_homes: Callable[[HomeConfig], list[dict[str, Any]]],
+) -> None:
+    """The dispatch strategy is the battery's own setting, so a home block carries none, and its battery's carries the battery's."""
+    homes = written_homes(_every_grammar_field_home())
+
+    assert [("dispatch_strategy" in home, home["battery"]["dispatch_strategy"]) for home in homes] == [
+        (False, {"strategy_type": "tou_optimized", "peak_hours": [[16, 19]]})
+    ] * len(homes)
+
+
 def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_order() -> None:
     """R2's one stated exception: a battery block holds the per-direction pair, never efficiency, the round trip."""
     home = _home(
@@ -251,20 +268,47 @@ def test_a_battery_is_written_with_every_key_of_its_table_but_efficiency_in_orde
 
     battery = home_scenario(home, name="Split efficiencies")["home"]["battery"]
 
-    assert list(battery) == [key for key in BATTERY_BLOCK.keys if key != "efficiency"]
+    assert list(battery) == [key for key in BATTERY_BLOCK.keys if key not in BATTERY_BLOCK.reader_only]
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.96, 0.97)
 
 
-def test_a_battery_built_with_a_round_trip_efficiency_is_written_as_the_pair_it_derives(tmp_path: Path) -> None:
-    """Its block holds the derived pair and no efficiency, so it reads back as with_round_trip of its efficiency."""
-    battery_config = BatteryConfig(capacity_kwh=5.0, efficiency=0.81)
+def test_a_battery_given_a_round_trip_efficiency_is_written_as_the_pair_it_derives(tmp_path: Path) -> None:
+    """Its block holds the derived pair and no efficiency, so it reads back as the battery with_round_trip gave."""
+    battery_config = BatteryConfig(capacity_kwh=5.0).with_round_trip(0.81)
     document = home_scenario(_home(4.0, battery_config=battery_config), name="Round trip")
 
     battery = document["home"]["battery"]
 
     assert "efficiency" not in battery
     assert (battery["charge_efficiency"], battery["discharge_efficiency"]) == (0.9, 0.9)
-    assert _load_through_home_run(document, tmp_path).battery_config == battery_config.with_round_trip(0.81)
+    assert _load_through_home_run(document, tmp_path).battery_config == battery_config
+
+
+def test_a_default_battery_is_written_dispatching_self_consumption_and_reads_back_equal(tmp_path: Path) -> None:
+    """A battery that names no strategy dispatches self_consumption, so its block names that strategy."""
+    home = _home(4.0, battery_config=BatteryConfig(capacity_kwh=5.0))
+
+    document = home_scenario(home, name="Default battery")
+
+    assert document["home"]["battery"]["dispatch_strategy"] == {"strategy_type": "self_consumption"}
+    assert _load_through_home_run(document, tmp_path) == home
+
+
+def test_an_ev_holding_its_enum_members_is_written_as_plain_strings_and_reads_back_equal(
+    tmp_path: Path,
+) -> None:
+    """An EV's charger type and smart charging mode are written as the strings its block's reader reads, never as their enum members, which YAML cannot carry."""
+    home = _home(
+        4.0,
+        ev_config=EVConfig(EVChargerType.RAPID, 20, 6, 50.0, SmartChargingMode.SOLAR),
+    )
+
+    document = home_scenario(home, name="Rapid charger")
+
+    ev = document["home"]["ev"]
+    assert (ev["charger_type"], type(ev["charger_type"])) == ("22kW", str)
+    assert (ev["smart_charging_mode"], type(ev["smart_charging_mode"])) == ("solar", str)
+    assert _load_through_home_run(document, tmp_path) == home
 
 
 def test_a_home_without_optional_parts_loads_back_without_them(tmp_path: Path) -> None:
@@ -293,7 +337,6 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
         load_config=LoadConfig(),
         battery_config=BatteryConfig(
             capacity_kwh=5.0,
-            efficiency=None,
             charge_efficiency=0.96,
             discharge_efficiency=0.97,
         ),
@@ -311,6 +354,7 @@ def test_per_direction_battery_efficiencies_load_back(tmp_path: Path) -> None:
         pytest.param(
             TOUOptimizedStrategyConfig(peak_hours=((16, 19), (20, 22))), GridChargeConfig(0.8), id="tou_optimized"
         ),
+        pytest.param(TOUOptimizedStrategyConfig(), GridChargeConfig(0.8), id="tou_optimized-on-the-tariff-clock"),
         pytest.param(PeakShavingStrategyConfig(import_limit_kw=3.0), GridChargeConfig(0.8), id="peak_shaving"),
     ],
 )
@@ -377,9 +421,8 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
             5.0,
             location=_EDINBURGH,
             name="Home 2",
-            battery_config=BatteryConfig(capacity_kwh=5.0),
+            battery_config=BatteryConfig(capacity_kwh=5.0, dispatch_strategy=TOUOptimizedStrategyConfig()),
             tariff_config=TariffConfig.economy_7(),
-            dispatch_strategy="tou_optimized",
         ),
         _home(
             4.0,
@@ -393,24 +436,33 @@ def test_a_fleet_written_as_a_scenario_loads_back_through_load_fleet_config(
 
     fleet = load_fleet_config(path)
 
-    assert fleet.homes == homes
+    assert fleet.homes == tuple(homes)
     assert fleet.name == "Fleet run"
 
 
-def test_a_fleet_seg_block_carries_the_rate_its_homes_share() -> None:
-    """The homes' SEG tariffs share a rate but not a name, which no seg: block carries.
-
-    load_fleet_config does not read seg: yet (pending task 185), so the block is
-    checked through the SEG reader that finance and optimize use.
-    """
+def test_a_fleet_seg_block_carries_the_rate_its_homes_share(tmp_path: Path) -> None:
+    """The homes' SEG tariffs share a rate but not a name, which no seg: block carries."""
     homes = [
         _home(3.0, seg_tariff=SEGTariff(name="Octopus Energy", rate_pence_per_kwh=4.1)),
         _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=4.1)),
     ]
 
-    text = scenario_yaml(fleet_scenario(homes, name="SEG fleet"))
+    fleet = load_fleet_config(_written(fleet_scenario(homes, name="SEG fleet"), tmp_path))
 
-    assert parse_seg_rate(yaml.safe_load(text)["seg"]) == 4.1
+    assert [home.seg_tariff for home in fleet.homes] == [SEGTariff(name="", rate_pence_per_kwh=4.1)] * 2
+
+
+_UNNAMED_SEG_HOME = _home(4.0, seg_tariff=SEGTariff(name="", rate_pence_per_kwh=15.0))
+
+
+def test_a_fleet_exporting_at_an_unnamed_seg_rate_reads_back_equal(tmp_path: Path) -> None:
+    fleet = load_fleet_config(_written(fleet_scenario([_UNNAMED_SEG_HOME] * 2, name="SEG fleet"), tmp_path))
+
+    assert fleet.homes == (_UNNAMED_SEG_HOME, _UNNAMED_SEG_HOME)
+
+
+def test_a_home_exporting_at_an_unnamed_seg_rate_reads_back_equal(tmp_path: Path) -> None:
+    assert load_home_config(_written(home_scenario(_UNNAMED_SEG_HOME, name="SEG home"), tmp_path)) == _UNNAMED_SEG_HOME
 
 
 @pytest.mark.parametrize(

@@ -17,6 +17,7 @@ from solar_challenge.location import LOCATION_PRESETS
 from solar_challenge.number_fields import as_finite_float
 from solar_challenge.web.api import SWEEP_MAX_STEPS
 from solar_challenge.web.charts import SweepPoint, sweep_panels
+from solar_challenge.web.dashboard import get_storage
 from solar_challenge.web.fleet_components import FLEET_COMPONENTS
 from solar_challenge.web.request_boundary import (
     refuse_unrecognised_keys,
@@ -24,8 +25,6 @@ from solar_challenge.web.request_boundary import (
     require_encodable_text,
     require_json_object,
 )
-from solar_challenge.web.shared import get_storage
-from solar_challenge.web.simulation_params import MAX_DAYS
 from solar_challenge.web.stored_runs import StoredRunUnreadable
 from solar_challenge.web.unreadable_run_answer import answer_stored_run_unreadable
 
@@ -42,7 +41,6 @@ def builder() -> str:
     """
     return str(render_template(
         "scenarios/builder.html",
-        fleet_components=FLEET_COMPONENTS,
         script_components=_script_components(),
         location_presets=LOCATION_PRESETS,
     ))
@@ -55,7 +53,7 @@ def _script_components() -> list[dict[str, Any]]:
             "key": component.key,
             "fixed_field": component.fixed_field,
             "grammar_key": component.grammar_key,
-            "dist": component.builder_default.editor_state(),
+            "dist": component.start.editor_state(),
         }
         for component in FLEET_COMPONENTS.values()
     ]
@@ -70,7 +68,6 @@ def sweep() -> str:
     """
     return str(render_template(
         "scenarios/sweep.html",
-        max_days=MAX_DAYS,
         sweep_max_steps=SWEEP_MAX_STEPS,
         location_presets=LOCATION_PRESETS,
     ))

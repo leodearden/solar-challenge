@@ -270,6 +270,60 @@ def test_schema_version_3_is_the_dispatch_as_it_ran_step_and_reports_its_descrip
     assert version_3.description == RUN_DOCUMENT_STEPS[1].description
 
 
+def test_schema_version_4_is_the_no_cheap_period_grid_charging_step_and_reports_its_description() -> None:
+    """Version 4 changes no table: it brings every stored run to the stored-run format of version 4."""
+    version_4 = MIGRATIONS[3]
+
+    assert version_4.version == 4
+    assert version_4.run_documents is RUN_DOCUMENT_STEPS[2]
+    assert version_4.description == RUN_DOCUMENT_STEPS[2].description
+
+
+def test_schema_version_5_is_the_summary_window_step_and_reports_its_description() -> None:
+    """Version 5 changes no table: it brings every stored run to the stored-run format of version 5."""
+    version_5 = MIGRATIONS[4]
+
+    assert version_5.version == 5
+    assert version_5.run_documents is RUN_DOCUMENT_STEPS[3]
+    assert version_5.description == RUN_DOCUMENT_STEPS[3].description
+
+
+def test_schema_version_6_is_the_fleet_seg_revenue_step_and_reports_its_description() -> None:
+    """Version 6 changes no table: it brings every stored run to the stored-run format of version 6."""
+    version_6 = MIGRATIONS[5]
+
+    assert version_6.version == 6
+    assert version_6.run_documents is RUN_DOCUMENT_STEPS[4]
+    assert version_6.description == RUN_DOCUMENT_STEPS[4].description
+
+
+def test_schema_version_7_is_the_battery_round_trip_step_and_reports_its_description() -> None:
+    """Version 7 changes no table: it brings every stored run to the stored-run format of version 7."""
+    version_7 = MIGRATIONS[6]
+
+    assert version_7.version == 7
+    assert version_7.run_documents is RUN_DOCUMENT_STEPS[5]
+    assert version_7.description == RUN_DOCUMENT_STEPS[5].description
+
+
+def test_schema_version_8_is_the_home_dispatch_step_and_reports_its_description() -> None:
+    """Version 8 changes no table: it brings every stored run to the stored-run format of version 8."""
+    version_8 = MIGRATIONS[7]
+
+    assert version_8.version == 8
+    assert version_8.run_documents is RUN_DOCUMENT_STEPS[6]
+    assert version_8.description == RUN_DOCUMENT_STEPS[6].description
+
+
+def test_schema_version_9_is_the_home_summary_seg_revenue_step_and_reports_its_description() -> None:
+    """Version 9 changes no table: it brings every stored run to the stored-run format of version 9."""
+    version_9 = MIGRATIONS[8]
+
+    assert version_9.version == 9
+    assert version_9.run_documents is RUN_DOCUMENT_STEPS[7]
+    assert version_9.description == RUN_DOCUMENT_STEPS[7].description
+
+
 @pytest.fixture
 def legacy_store(tmp_path: Path) -> Path:
     """The pre-548 store, as an older solar-challenge left it: at version 0, with the jobs table and runs with no name."""

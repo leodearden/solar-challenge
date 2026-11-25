@@ -27,7 +27,12 @@ from solar_challenge.community import (
     simulate_community,
     validate_community_balance,
 )
-from solar_challenge.dispatch import DispatchStrategyConfig, GridChargeConfig, PeakShavingStrategyConfig
+from solar_challenge.dispatch import (
+    DispatchStrategyConfig,
+    GridChargeConfig,
+    PeakShavingStrategyConfig,
+    SelfConsumptionStrategyConfig,
+)
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import FleetResults
 from solar_challenge.output import compute_community_metrics
@@ -46,14 +51,9 @@ def _community_battery(
     dispatch_strategy: DispatchStrategyConfig | None = None,
     grid_charging: GridChargeConfig | None = None,
 ) -> BatteryConfig:
-    """A 20 kWh community battery with 10 kW power limits, dispatched by *dispatch_strategy*, self-consumption when None."""
-    return BatteryConfig(
-        capacity_kwh=20.0,
-        max_charge_kw=10.0,
-        max_discharge_kw=10.0,
-        dispatch_strategy=dispatch_strategy,
-        grid_charging=grid_charging,
-    )
+    """A 20 kWh community battery with 10 kW power limits, dispatched by *dispatch_strategy*, or naming no strategy when None."""
+    battery = BatteryConfig(capacity_kwh=20.0, max_charge_kw=10.0, max_discharge_kw=10.0, grid_charging=grid_charging)
+    return battery if dispatch_strategy is None else dataclasses.replace(battery, dispatch_strategy=dispatch_strategy)
 
 
 def _grid_charging_peak_shaving_battery() -> BatteryConfig:
@@ -143,6 +143,36 @@ class TestCommunityConfig:
 
     def test_a_grid_charging_peak_shaving_community_battery_with_a_billing_tariff_is_accepted(self) -> None:
         battery = _grid_charging_peak_shaving_battery()
+        cfg = CommunityConfig(
+            sharing_mode="community_battery",
+            community_battery=battery,
+            billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+        )
+        assert cfg.community_battery is battery
+
+    @pytest.mark.parametrize("forecast", ["trailing_14_days", "perfect_foresight"])
+    def test_a_community_battery_whose_grid_charge_a_forecast_sizes_is_refused(self, forecast: str) -> None:
+        """The community dispatch computes no useful-charge ceilings, so a forecast there would be silently ignored."""
+        battery = _community_battery(
+            dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9, forecast=forecast)
+        )
+        with pytest.raises(ConfigurationError) as refused:
+            CommunityConfig(
+                sharing_mode="community_battery",
+                community_battery=battery,
+                billing=CommunityBillingConfig(tariff=TariffConfig.economy_7()),
+            )
+
+        message = str(refused.value)
+        assert "community battery" in message
+        assert "forecast" in message
+        assert repr(forecast) in message
+        assert "'pv_blind'" in message
+
+    def test_a_pv_blind_community_battery_builds(self) -> None:
+        battery = _community_battery(
+            dispatch_strategy=PeakShavingStrategyConfig(3.0), grid_charging=GridChargeConfig(0.9, forecast="pv_blind")
+        )
         cfg = CommunityConfig(
             sharing_mode="community_battery",
             community_battery=battery,
@@ -637,6 +667,7 @@ class TestSimulateCommunityBattery:
 
     def test_a_peak_shaving_community_battery_discharges_only_the_import_above_its_limit(self) -> None:
         """The battery dispatches by the strategy it names; one naming none runs self-consumption, which covers the whole deficit."""
+        assert _community_battery().dispatch_strategy == SelfConsumptionStrategyConfig()
         evening = pd.date_range("2024-01-15 18:00", periods=3, freq="1min", tz="Europe/London")
         fleet = make_balanced_fleet(evening, [([0.0] * 3, [5.0] * 3)])
 
@@ -803,6 +834,29 @@ class TestCommunityBillingSavings:
         assert cr.community_savings_gbp is not None
         assert cr.community_savings_gbp >= 0
         assert cr.community_net_cost_gbp < cr.baseline_net_cost_gbp  # type: ignore[operator]
+
+    @pytest.mark.parametrize("field_name", [f.name for f in dataclasses.fields(CommunityResults)])
+    def test_assigning_a_field_of_a_result_raises_frozen_instance_error(
+        self, billing_fleet: FleetResults, billing_cfg: CommunityConfig, field_name: str
+    ) -> None:
+        cr = simulate_community(billing_fleet, billing_cfg)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(cr, field_name, getattr(cr, field_name))
+
+    def test_a_community_battery_prices_the_grid_flows_left_after_it_stores_the_surplus(
+        self, billing_fleet: FleetResults
+    ) -> None:
+        """The battery stores the fleet's 1 kW net surplus each hour, so the community's grid flows, and its net cost, are zero."""
+        config = CommunityConfig(
+            sharing_mode="community_battery", community_battery=_community_battery(), billing=self._COMPLETE_BILLING
+        )
+
+        cr = simulate_community(billing_fleet, config)
+
+        assert cr.baseline_net_cost_gbp == pytest.approx(0.954, abs=1e-6)
+        assert cr.community_net_cost_gbp == pytest.approx(0.0, abs=1e-6)
+        assert cr.community_savings_gbp == pytest.approx(0.954, abs=1e-6)
 
     def test_no_billing_fields_are_none_when_billing_absent(
         self, billing_fleet: FleetResults
@@ -1010,17 +1064,11 @@ class TestCommunityRowLength:
     def test_community_battery_dispatches_a_single_row_as_one_minute(
         self, single_row: pd.DatetimeIndex
     ) -> None:
-        # Lossless, so no charge loss is booked as export. Starting half full, the battery
-        # takes all of a 10 kW surplus for a minute; over an hour its 4 kWh of headroom
-        # would bind, leaving 4 kW of charge and 6 kW of export.
+        # Starting half full, the battery draws all of a 10 kW surplus for a minute; over an
+        # hour its 4 kWh of headroom would bind, so it would draw only 4 / 0.975 kWh and
+        # export the rest.
         fleet = make_balanced_fleet(single_row, [([11.0], [1.0])])
-        battery = BatteryConfig(
-            capacity_kwh=10.0,
-            max_charge_kw=30.0,
-            max_discharge_kw=30.0,
-            charge_efficiency=1.0,
-            discharge_efficiency=1.0,
-        )
+        battery = BatteryConfig(capacity_kwh=10.0, max_charge_kw=30.0, max_discharge_kw=30.0)
 
         cr = simulate_community(
             fleet, CommunityConfig(sharing_mode="community_battery", community_battery=battery)

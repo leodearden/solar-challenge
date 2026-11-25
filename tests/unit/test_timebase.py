@@ -11,10 +11,13 @@ import pandas as pd
 import pytest
 
 from solar_challenge.timebase import (
+    DEFAULT_FIRST_DAY,
+    DEFAULT_LAST_DAY,
     HOURS_PER_MINUTE,
     MINUTES_PER_DAY,
     MINUTES_PER_HOUR,
     ONE_MINUTE,
+    SHORT_WINDOW_START,
     LocalDay,
     SimulationWindow,
     covered_days,
@@ -163,6 +166,26 @@ def test_minutes_per_hour_is_the_whole_minutes_in_an_hour() -> None:
     """An int, since its readers build whole minute counts from it: range and slice bounds, an index into a minute table, and a divmod whose quotient and remainder are formatted :02d."""
     assert MINUTES_PER_HOUR == timedelta(hours=1) // ONE_MINUTE
     assert isinstance(MINUTES_PER_HOUR, int)
+
+
+def test_the_default_window_is_the_whole_calendar_year_2024_at_one_minute() -> None:
+    """A window built from the two days annualises unextrapolated, and constructing it proves each is exactly a date, the only kind a window's days hold."""
+    assert DEFAULT_FIRST_DAY == date(2024, 1, 1)
+    assert DEFAULT_LAST_DAY == date(2024, 12, 31)
+
+    window = SimulationWindow(DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY, ONE_MINUTE, "Europe/London")
+
+    assert window.days == 366
+    assert window.extrapolated is False
+
+
+def test_the_short_window_starts_on_1_june_2024_and_is_exactly_a_date() -> None:
+    """A one-day window built from it constructs, which proves it is exactly a date, the kind a window's days and pd.Timestamp(day, tz=zone) both take."""
+    assert SHORT_WINDOW_START == date(2024, 6, 1)
+
+    window = SimulationWindow(SHORT_WINDOW_START, SHORT_WINDOW_START, ONE_MINUTE, "Europe/London")
+
+    assert window.days == 1
 
 
 @pytest.mark.parametrize("quantity", ["Timestep", "Charge duration"])

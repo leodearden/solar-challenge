@@ -2,41 +2,58 @@
 # SPDX-FileCopyrightText: 2024 Solar Challenge Contributors
 """Unit tests for project_multi_year's CBS revenue.
 
-They cover own-use and SEG export income with and without the
-self-consumption override, grid-services income, a negative simulated revenue,
-which the projection and the cost-recovery solve both carry as a loss,
-grid-charge energy paid once on householder import, and the SEG income helper
-_seg_export_income_gbp, all on an injected synthetic simulate.
+They cover own-use income and SEG export income, each home's export priced at
+the SEG rate its results record, with and without the self-consumption
+override, under which the fleet's export and import are the override's split
+of its generation and demand, grid-services income, grid-charge energy paid once on householder
+import, and the refusal of a simulate whose fleet lacks the batteries it was
+asked for or whose results record no pricing, all on an injected synthetic
+simulate.
 """
 from __future__ import annotations
 
 import dataclasses
+import re
+from collections.abc import Callable, Sequence
 
 import pandas as pd
 import pytest
 
 from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
-from solar_challenge.finance import (
-    CostRecoverySolution,
-    FinanceConfig,
+from solar_challenge.finance import FinanceConfig, householder_bill
+from solar_challenge.fleet import FleetConfig, FleetResults
+from solar_challenge.home import HomeConfig, RunPricing, SimulationResults, SummaryStatistics, calculate_summary
+from solar_challenge.projection import (
     YearPoint,
-    _annualise_physics,
-    _seg_export_income_gbp,
-    householder_bill,
     project_multi_year,
     solve_cost_recovery_rate,
 )
-from solar_challenge.fleet import FleetResults
-from solar_challenge.home import SimulationResults, SummaryStatistics, calculate_summary
 from tests._finance_builders import (
     make_fleet_results,
     make_fleet_results_of,
     make_home_config,
     make_period,
     make_scenario_and_finance,
-    make_window,
+    make_scenario_of,
+    make_sim_results,
 )
+
+
+def _fleet_whose_export_revenue_sums_to(
+    export_revenue_gbp: float,
+    homes: Sequence[HomeConfig],
+    *,
+    self_kwh: float,
+    export_kwh: float,
+    import_kwh: float,
+    pricing: RunPricing,
+) -> FleetResults:
+    """Each of *homes* with make_sim_results of the totals at *pricing*, its export_revenue series replaced by one summing to *export_revenue_gbp*."""
+    results = make_sim_results(self_kwh=self_kwh, export_kwh=export_kwh, import_kwh=import_kwh, pricing=pricing)
+    rows = results.export_revenue.index
+    with_revenue = dataclasses.replace(results, export_revenue=pd.Series(export_revenue_gbp / len(rows), index=rows))
+    return make_fleet_results_of([with_revenue for _ in homes], homes=homes)
 
 
 class TestProjectMultiYearRevenue:
@@ -69,24 +86,23 @@ class TestProjectMultiYearRevenue:
     def test_fleet_revenue_at_sampled_age_matches_householder_bill_sum(self) -> None:
         """fleet_revenue_gbp at age 0 equals CBS formula: own_use + seg (no grid-charge term).
 
-        Own-use is own_use_rate_pence_per_kwh × fleet own-use and SEG is the sum of
-        _seg_export_income_gbp; neither is priced at retail_baseline_rate.
+        Own-use is own_use_rate_pence_per_kwh × fleet own-use and SEG is each home's
+        export at the 5 p SEG rate its results record; neither is priced at
+        retail_baseline_rate.
         """
         n_homes = 2
         sc, exp, imp = 3000.0, 1500.0, 500.0
         scenario, finance = self._make_revenue_scenario(n_homes=n_homes)
-        fr = make_fleet_results(n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp)
+        fr = make_fleet_results(
+            n_homes=n_homes, self_kwh=sc, export_kwh=exp, import_kwh=imp, pricing=RunPricing(None, 5.0)
+        )
 
         # Expected CBS revenue (docs/prds/cost-recovery-householder-billing.md §3.2)
-        summaries = [calculate_summary(r, seg_tariff_pence_per_kwh=scenario.seg_tariff_pence_per_kwh)
-                     for r in fr.per_home_results]
+        summaries = [calculate_summary(r) for r in fr.per_home_results]
         fleet_sc_kwh = sum(s.total_self_consumption_kwh for s in summaries)
         # No grid services: the homes have no battery
         own_use_revenue = finance.own_use_rate_pence_per_kwh * fleet_sc_kwh / 100.0
-        seg_revenue = sum(
-            _seg_export_income_gbp(_annualise_physics(s), finance)
-            for s in summaries
-        )
+        seg_revenue = sum(s.total_grid_export_kwh * 5.0 / 100.0 for s in summaries)
         expected_revenue = own_use_revenue + seg_revenue
 
         curve = project_multi_year(scenario, finance, simulate=lambda fc, s, e: fr)
@@ -123,7 +139,7 @@ class TestProjectMultiYearRevenue:
         One home: 5,000 kWh generation, 4,500 kWh demand and 4,000 kWh basis-C own-use.
         The physics curve bills basis C at 15 p; the 0.50 override bills
         min(0.50 × 5,000, 4,500) = 2,500 kWh, where the cap does not bind.  SEG adds £0
-        on both paths: the builder's exports earn £0, so the effective export rate is 0 p.
+        on both paths: its results carry no SEG rate, whatever the scenario's.
         """
         fr = make_fleet_results(n_homes=1, self_kwh=4000.0, export_kwh=1000.0, import_kwh=500.0)
 
@@ -146,11 +162,12 @@ class TestProjectMultiYearRevenue:
 
         Own-use is capped at demand, so each home is billed 2,800 kWh of own-use at 15 p,
         and the rest of its 4,000 kWh generation, 1,200 kWh, is exported at its physics
-        export rate (£72 / 2,400 kWh = 3 p).  Both are priced.
+        export rate (£72 / 2,400 kWh = 3 p).  Both are priced, and the year reports
+        the export its SEG income was priced on and no import.
         """
         n_homes = 2
         fleet = make_fleet_results(
-            n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, export_revenue_gbp=72.0
+            n_homes=n_homes, self_kwh=1600.0, export_kwh=2400.0, import_kwh=1200.0, pricing=RunPricing(None, 3.0)
         )
         scenario, finance = self._make_revenue_scenario(
             n_homes=n_homes, self_consumption_override=0.90
@@ -162,6 +179,8 @@ class TestProjectMultiYearRevenue:
         assert year_0.fleet_revenue_gbp == pytest.approx(
             n_homes * (15.0 * 2800.0 / 100.0 + 1200.0 * 3.0 / 100.0)
         )
+        assert year_0.fleet_export_kwh == pytest.approx(n_homes * 1200.0)
+        assert year_0.fleet_import_kwh == pytest.approx(0.0)
 
     def test_fleet_revenue_non_negative(self) -> None:
         """fleet_revenue_gbp is non-negative for all years."""
@@ -172,61 +191,244 @@ class TestProjectMultiYearRevenue:
         for pt in curve.points:
             assert pt.fleet_revenue_gbp >= 0.0
 
-    def test_a_negative_simulated_revenue_is_projected_as_a_loss(self) -> None:
-        """A fleet whose simulated revenue is negative is projected at that loss, not at £0.
 
-        A caller's simulate, such as solve_cost_recovery_rate's public simulate
-        parameter, may report negative export revenue, and YearPoint accepts a
-        revenue of any sign.  The projection reports the resulting loss rather
-        than £0, so the cost-recovery solve prices against the revenue the fleet
-        earns.  Each year earns own-use of 15 p × 100 kWh = £15 and the simulated
-        SEG income of −£50.
-        """
+class TestSegIncomeAtTheHomesRate:
+    """The CBS earns each home's export at the SEG rate its results record.
+
+    The export is the simulated export on the physics basis, and generation −
+    own-use with the override set, whatever the simulated export.  A home whose
+    results record no SEG rate earns none.  A home's export_revenue series never
+    moves the income, and results that record no pricing at all are refused.
+    The default finance has no grid services.
+    """
+
+    @pytest.mark.parametrize(
+        ("self_kwh", "export_kwh", "discharge_kwh"),
+        [
+            pytest.param(4000.0, 0.0, 600.0, id="no-simulated-export"),
+            pytest.param(3999.0, 1.0, 599.0, id="1-kwh-simulated-export"),
+        ],
+    )
+    def test_the_overrides_export_earns_the_homes_seg_rate_whatever_it_simulated(
+        self, self_kwh: float, export_kwh: float, discharge_kwh: float
+    ) -> None:
+        """At override 0.7 the 4,000 kWh generation against 3,400 kWh demand exports 1,200 kWh, which earns £49.20 at 4.1 p."""
         scenario, finance = make_scenario_and_finance(asset_life_years=5)
-        assert finance.own_use_rate_pence_per_kwh == 15.0, "premise: own-use at 15 p"
-        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services"
+        finance = dataclasses.replace(finance, self_consumption_override=0.7, own_use_rate_pence_per_kwh=0.0)
 
         curve = project_multi_year(
             scenario,
             finance,
             simulate=lambda fc, s, e: make_fleet_results(
-                homes=fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, export_revenue_gbp=-50.0
+                homes=fc.homes,
+                self_kwh=self_kwh,
+                export_kwh=export_kwh,
+                import_kwh=0.0,
+                discharge_kwh=discharge_kwh,
+                pricing=RunPricing(None, 4.1),
             ),
         )
 
-        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([-35.0] * 5)
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(1200.0 * 4.1 / 100.0)
 
-    def test_the_cost_recovery_solve_prices_a_negative_simulated_revenue(self) -> None:
-        """A £50 SEG loss raises the solved own-use rate by £50 / 1,000 kWh = 5 p/kWh.
-
-        One home bills 1,000 kWh of own-use a year.  The solve meets the floor where
-        the home's own-use revenue + SEG income covers its costs and the floor, so
-        recovering a £50 loss over that own-use takes 5 p/kWh more than a £0 SEG
-        income does.  At the configured 0 p the projection the solve prices earns
-        the loss itself, −£50 a year.
-        """
+    @pytest.mark.parametrize(
+        ("pricing", "seg_income_gbp"),
+        [
+            pytest.param(RunPricing(None, 5.0), 800.0 * 5.0 / 100.0, id="5p"),
+            pytest.param(RunPricing(None, None), 0.0, id="no-seg-rate"),
+        ],
+    )
+    def test_the_simulated_export_earns_the_homes_seg_rate(self, pricing: RunPricing, seg_income_gbp: float) -> None:
+        """800 kWh exported at 5 p adds £40 to the own-use revenue of 15 p × 100 kWh = £15; with no SEG rate it adds nothing."""
         scenario, finance = make_scenario_and_finance(asset_life_years=5)
-        finance = dataclasses.replace(finance, own_use_rate_pence_per_kwh=0.0)
+        assert finance.own_use_rate_pence_per_kwh == 15.0, "premise: own-use at 15 p"
 
-        def solve(seg_income_gbp: float) -> CostRecoverySolution:
-            return solve_cost_recovery_rate(
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=lambda fc, s, e: make_fleet_results(
+                homes=fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, pricing=pricing
+            ),
+        )
+
+        assert curve.points[0].fleet_revenue_gbp == pytest.approx(15.0 + seg_income_gbp)
+
+    @pytest.mark.parametrize(
+        ("pricing", "seg_income_gbp"),
+        [
+            pytest.param(RunPricing(None, 5.0), 800.0 * 5.0 / 100.0, id="5p"),
+            pytest.param(RunPricing(None, None), 0.0, id="no-seg-rate"),
+        ],
+    )
+    def test_an_export_revenue_series_does_not_move_the_seg_income(
+        self, pricing: RunPricing, seg_income_gbp: float
+    ) -> None:
+        """The home's export_revenue series sums to −£50, yet it projects 15 p × 100 kWh = £15 of own-use a year plus its 800 kWh at the SEG rate its results record: £40 at 5 p, nothing with none."""
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+        assert finance.own_use_rate_pence_per_kwh == 15.0, "premise: own-use at 15 p"
+        assert finance.self_consumption_override is None, "premise: the physics basis"
+
+        curve = project_multi_year(
+            scenario,
+            finance,
+            simulate=lambda fc, s, e: _fleet_whose_export_revenue_sums_to(
+                -50.0, fc.homes, self_kwh=100.0, export_kwh=800.0, import_kwh=300.0, pricing=pricing
+            ),
+        )
+
+        assert [point.fleet_revenue_gbp for point in curve.points] == pytest.approx([15.0 + seg_income_gbp] * 5)
+
+    def test_a_negative_export_at_a_seg_rate_is_refused_naming_it(self) -> None:
+        """seg.calculate_seg_revenue prices the SEG income, as it prices simulate_home's, and refuses an export below 0 kWh."""
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
+
+        with pytest.raises(ValueError, match="Export energy must be non-negative, got -"):
+            project_multi_year(
                 scenario,
                 finance,
                 simulate=lambda fc, s, e: make_fleet_results(
-                    homes=fc.homes,
-                    self_kwh=1000.0,
-                    export_kwh=800.0,
-                    import_kwh=300.0,
-                    export_revenue_gbp=seg_income_gbp,
+                    homes=fc.homes, self_kwh=500.0, export_kwh=-100.0, import_kwh=300.0, pricing=RunPricing(None, 5.0)
                 ),
             )
 
-        seg_loss, no_seg = solve(-50.0), solve(0.0)
+    @pytest.mark.parametrize(
+        "run_it",
+        [
+            pytest.param(project_multi_year, id="project_multi_year"),
+            pytest.param(solve_cost_recovery_rate, id="solve_cost_recovery_rate"),
+        ],
+    )
+    def test_results_that_record_no_pricing_are_refused_naming_calculate_summary(
+        self, run_it: Callable[..., object]
+    ) -> None:
+        scenario, finance = make_scenario_and_finance(asset_life_years=5)
 
-        assert (seg_loss.binding, no_seg.binding) == ("floor", "floor"), "premise: both rates are interior"
-        assert seg_loss.own_use_rate_pence_per_kwh - no_seg.own_use_rate_pence_per_kwh == pytest.approx(
-            50.0 * 100.0 / 1000.0
-        )
+        with pytest.raises(ValueError) as excinfo:
+            run_it(scenario, finance, simulate=lambda fc, s, e: make_fleet_results(homes=fc.homes, pricing=None))
+
+        assert "pricing" in str(excinfo.value)
+        assert "calculate_summary" in str(excinfo.value)
+
+
+class TestSimulateMustReturnTheFleetsBatteries:
+    """project_multi_year refuses a simulate whose FleetResults lack the batteries of the fleet it asked for.
+
+    Grid-services income is priced from the batteries of the home_configs that
+    simulate returns, so an answer without the asked homes' batteries would price
+    it silently wrong: a battery-less answer prices a flat rate at £0.  Each age
+    asks for the scenario's batteries at that age's state of health, which the
+    comparison sets aside.
+    """
+
+    _BATTERY = BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, max_discharge_kw=2.5)
+
+    @staticmethod
+    def _homes_with(*batteries: BatteryConfig) -> list[HomeConfig]:
+        """A default home fitted with each of *batteries*, in order."""
+        return [make_home_config(battery_config=battery) for battery in batteries]
+
+    def _scenario_and_flat_finance(
+        self, batteries: tuple[BatteryConfig, ...] = (_BATTERY, _BATTERY)
+    ) -> tuple[ScenarioConfig, FinanceConfig]:
+        """The homes fitted with *batteries*, two with _BATTERY by default, and a finance paying £12 per kW of battery discharge power per year."""
+        _, finance = make_scenario_and_finance(asset_life_years=5)
+        scenario = make_scenario_of(self._homes_with(*batteries))
+        return scenario, dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+
+    @staticmethod
+    def _battery_less(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        """Answer any fleet with two default homes, which have no battery."""
+        return make_fleet_results(n_homes=2)
+
+    def test_an_answer_without_the_batteries_is_refused_naming_the_fleet_the_home_and_both_batteries(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+        asked = dataclasses.replace(self._BATTERY, soh=None)
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=self._battery_less)
+
+        message = str(excinfo.value)
+        assert "proj-age-0" in message
+        assert "home 0" in message
+        assert repr(asked) in message
+        assert "None" in message.replace(repr(asked), "")
+
+    def test_an_answer_with_other_batteries_is_refused_naming_both(self) -> None:
+        """A 10 kWh battery is refused, although its discharge power would price the same flat income."""
+        scenario, finance = self._scenario_and_flat_finance()
+        other = BatteryConfig(capacity_kwh=10.0)
+        assert other.max_discharge_kw == self._BATTERY.max_discharge_kw, "premise: the same discharge power"
+        answer = make_fleet_results(homes=[make_home_config(battery_config=other)] * 2)
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        message = str(excinfo.value)
+        assert repr(dataclasses.replace(other, soh=None)) in message
+        assert repr(dataclasses.replace(self._BATTERY, soh=None)) in message
+
+    def test_the_refusal_names_the_first_home_whose_batteries_differ_and_both_of_its_batteries(self) -> None:
+        """Asked for a 5 and a 7.5 kWh battery and answered with a 5 and a 10 kWh one, it names home 1, 7.5 and 10 kWh."""
+        asked_second, answered_second = BatteryConfig(capacity_kwh=7.5), BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, asked_second))
+        answer = make_fleet_results(homes=self._homes_with(self._BATTERY, answered_second))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        message = str(excinfo.value)
+        assert "home 1" in message
+        assert repr(dataclasses.replace(asked_second, soh=None)) in message
+        assert repr(dataclasses.replace(answered_second, soh=None)) in message
+
+    def test_the_asked_batteries_answered_in_another_order_are_refused_at_the_first_home(self) -> None:
+        """Asked for a 5 and a 10 kWh battery and answered with the two swapped, it names home 0."""
+        larger = BatteryConfig(capacity_kwh=10.0)
+        scenario, finance = self._scenario_and_flat_finance((self._BATTERY, larger))
+        answer = make_fleet_results(homes=self._homes_with(larger, self._BATTERY))
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: answer)
+
+        assert "home 0" in str(excinfo.value)
+
+    def test_an_answer_of_another_number_of_homes_is_refused_naming_both_counts(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+
+        with pytest.raises(ValueError) as excinfo:
+            project_multi_year(scenario, finance, simulate=lambda fc, s, e: make_fleet_results(n_homes=3))
+
+        message = str(excinfo.value)
+        assert "proj-age-0" in message
+        assert re.search(r"\b3\b", message)
+        assert re.search(r"\b2\b", message)
+
+    def test_the_cost_recovery_solve_refuses_it_as_the_projection_does(self) -> None:
+        scenario, finance = self._scenario_and_flat_finance()
+
+        with pytest.raises(ValueError) as from_projection:
+            project_multi_year(scenario, finance, simulate=self._battery_less)
+        with pytest.raises(ValueError) as from_solve:
+            solve_cost_recovery_rate(scenario, finance, simulate=self._battery_less)
+
+        assert "proj-age-0" in str(from_solve.value)
+        assert str(from_solve.value) == str(from_projection.value)
+
+    def test_the_scenarios_unaged_batteries_are_accepted_at_every_age(self) -> None:
+        """An answer of the scenario's own homes at every age prices the 0.5.0 tag's flat income, 12 × 2 × 2.5 = £60.
+
+        Those are the established canned simulate's homes, whose batteries carry
+        no state of health while each age asks for its own.
+        """
+        scenario, finance = make_scenario_and_finance(n_homes=2, asset_life_years=5, battery_config=self._BATTERY)
+        assert finance.grid_services_income_per_kw_per_year_gbp == 0.0, "premise: no grid services by default"
+        flat = dataclasses.replace(finance, grid_services_income_per_kw_per_year_gbp=12.0)
+        answer = make_fleet_results(homes=scenario.homes, self_kwh=3000.0, export_kwh=500.0, import_kwh=300.0)
+
+        def year_0_revenue_gbp(priced: FinanceConfig) -> float:
+            return project_multi_year(scenario, priced, simulate=lambda fc, s, e: answer).points[0].fleet_revenue_gbp
+
+        assert year_0_revenue_gbp(flat) - year_0_revenue_gbp(finance) == pytest.approx(60.0)
 
 
 def _make_grid_charging_sim_results(
@@ -245,7 +447,10 @@ def _make_grid_charging_sim_results(
     grid-charge slice of import_cost.  self_consumption is B-style (it includes the
     grid-charged discharge), so basis-C own-use = demand − import = sc − grid_charge.
     Defaults give per home: total_import_cost_gbp £258.00, of which
-    total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.
+    total_grid_charge_cost_gbp £18.00; basis-C own-use 1800 kWh.  Every row imports
+    at the same blended rate, £258.00 / 1,000 kWh = 0.258 £/kWh, which each
+    tariff_rate row holds and the pricing records as the tariff's time-weighted
+    rate, with no SEG.
 
     Hourly index with kW = kWh / n_steps, so calculate_summary, which integrates
     each row over the hour it lasts, returns the kWh totals and simulation_days is 365:
@@ -261,6 +466,8 @@ def _make_grid_charging_sim_results(
 
     zeros = pd.Series(0.0, index=idx)
     grid_charge_pence = grid_charge_kwh * off_peak_pence
+    import_pence = import_to_load_kwh * peak_pence + grid_charge_pence
+    blended_rate_gbp_per_kwh = import_pence / (import_to_load_kwh + grid_charge_kwh) / 100.0
     return SimulationResults(
         generation=constant_kw(sc_kwh + export_kwh),
         demand=constant_kw(sc_kwh + import_to_load_kwh),
@@ -270,10 +477,11 @@ def _make_grid_charging_sim_results(
         battery_soc=zeros.copy(),
         grid_import=constant_kw(import_to_load_kwh + grid_charge_kwh),
         grid_export=constant_kw(export_kwh),
-        import_cost=constant_gbp(import_to_load_kwh * peak_pence + grid_charge_pence),
+        import_cost=constant_gbp(import_pence),
         export_revenue=zeros.copy(),
-        tariff_rate=zeros.copy(),
+        tariff_rate=pd.Series(blended_rate_gbp_per_kwh, index=idx),
         grid_charge_cost=constant_gbp(grid_charge_pence),
+        pricing=RunPricing(blended_rate_gbp_per_kwh, None),
     )
 
 
@@ -307,7 +515,7 @@ class TestGridChargeEnergyPaidOnce:
     ) -> float:
         basis_c_own_use_kwh = summary.total_demand_kwh - summary.total_grid_import_kwh
         return householder_bill(
-            summary, basis_c_own_use_kwh, finance, summary.simulation_days
+            summary, basis_c_own_use_kwh, finance
         ).import_cost_gbp
 
     @staticmethod
@@ -376,143 +584,3 @@ class TestGridChargeEnergyPaidOnce:
             f"CBS £{cbs_gbp:.2f} vs metered £{metered_gbp:.2f}; "
             f"excess £{householder_gbp + cbs_gbp - metered_gbp:.2f})"
         )
-
-
-def _make_seg_summary(
-    total_generation_kwh: float = 4000.0,
-    total_grid_export_kwh: float = 800.0,
-    total_export_revenue_gbp: float = 24.0,
-) -> SummaryStatistics:
-    """Minimal SummaryStatistics for testing _seg_export_income_gbp."""
-    sc_kwh = total_generation_kwh - total_grid_export_kwh
-    return SummaryStatistics(
-        total_generation_kwh=total_generation_kwh,
-        total_demand_kwh=sc_kwh + 1200.0,
-        total_self_consumption_kwh=sc_kwh,
-        total_grid_import_kwh=1200.0,
-        total_grid_export_kwh=total_grid_export_kwh,
-        total_battery_charge_kwh=0.0,
-        total_battery_discharge_kwh=0.0,
-        peak_generation_kw=2.0,
-        peak_demand_kw=1.5,
-        self_consumption_ratio=sc_kwh / total_generation_kwh if total_generation_kwh > 0 else 0.0,
-        grid_dependency_ratio=0.3,
-        export_ratio=total_grid_export_kwh / total_generation_kwh if total_generation_kwh > 0 else 0.0,
-        simulation_days=365,
-        total_import_cost_gbp=276.0,
-        total_export_revenue_gbp=total_export_revenue_gbp,
-        net_cost_gbp=276.0 - total_export_revenue_gbp,
-        window=make_window(days=365),
-    )
-
-
-class TestSegExportIncomeGbp:
-    """Direct unit tests for _seg_export_income_gbp.
-
-    The helper's zero-export fallback and override-path arithmetic are not
-    covered by hand-computed assertions in the projection tests (which use the
-    function under test to compute expected values, making them wiring tests
-    rather than contract tests).  These tests verify the helper's own logic.
-    """
-
-    def _make_finance_seg(
-        self,
-        self_consumption_override: float | None = None,
-    ) -> FinanceConfig:
-        return FinanceConfig(
-            standing_charge_pence_per_day=28.0,
-            asset_life_years=5,
-            loan_term_years=5,
-            self_consumption_override=self_consumption_override,
-            own_use_rate_pence_per_kwh=15.0,
-        )
-
-    def test_physics_path_returns_annualised_export_revenue(self) -> None:
-        """Physics path (no override): returns total_export_revenue_gbp directly."""
-        summary = _make_seg_summary(
-            total_generation_kwh=4000.0,
-            total_grid_export_kwh=800.0,
-            total_export_revenue_gbp=24.0,
-        )
-        finance = self._make_finance_seg(self_consumption_override=None)
-
-        result = _seg_export_income_gbp(_annualise_physics(summary), finance)
-
-        assert result == pytest.approx(24.0, rel=1e-9)
-
-    def test_override_zero_export_kwh_returns_zero(self) -> None:
-        """Override path with zero physics export kWh: returns 0.0 (rate fallback).
-
-        When total_grid_export_kwh == 0, the effective export rate cannot be
-        derived from physics figures and falls back to 0.0 p/kWh.  The result
-        must be exactly 0.0 regardless of the override fraction.
-        """
-        # Summary with no export at all (e.g. all generation self-consumed)
-        summary_no_export = _make_seg_summary(
-            total_generation_kwh=4000.0,
-            total_grid_export_kwh=0.0,
-            total_export_revenue_gbp=0.0,
-        )
-        finance = self._make_finance_seg(self_consumption_override=0.60)
-
-        result = _seg_export_income_gbp(_annualise_physics(summary_no_export), finance)
-
-        # effective_export_rate_pence = 0.0 (fallback), so result = override_export * 0 = 0
-        assert result == pytest.approx(0.0, abs=1e-9)
-
-    def test_override_nonzero_export_computes_override_kwh_times_effective_rate(self) -> None:
-        """Override path with nonzero physics export: returns override_export_kwh × effective_rate.
-
-        Contract (§3.2):
-          own_use         = min(override × gen_kwh, demand_kwh)
-          override_export = gen_kwh − own_use
-          effective_rate  = (export_rev / export_kwh) × 100  p/kWh
-          result          = override_export × effective_rate / 100
-
-        Using override=0.60 (own-use 0.60×4000 = 2400 kWh, within the 4400 kWh
-        demand) against physics that had 20% export (800 kWh, 24 £ → 3 p/kWh):
-          override_export = 4000 - 2400 = 1600 kWh
-          effective_rate  = (24/800)×100 = 3 p/kWh
-          result          = 1600×3/100 = 48 £
-        """
-        summary = _make_seg_summary(
-            total_generation_kwh=4000.0,
-            total_grid_export_kwh=800.0,   # physics: 20% of gen
-            total_export_revenue_gbp=24.0,  # => 3 p/kWh effective rate
-        )
-        # Override: 60% self-consumption → 40% export → 1600 kWh
-        finance = self._make_finance_seg(self_consumption_override=0.60)
-
-        result = _seg_export_income_gbp(_annualise_physics(summary), finance)
-
-        # hand-checked: 1600 * 3 / 100 = 48.0
-        assert result == pytest.approx(48.0, rel=1e-9)
-
-    def test_short_period_annualises_physics_export_revenue(self) -> None:
-        """Physics path: short simulation period is annualised to 365 days."""
-        # Build a summary with a 182-day simulation (half year)
-        summary_182 = SummaryStatistics(
-            total_generation_kwh=2000.0,
-            total_demand_kwh=2600.0,
-            total_self_consumption_kwh=1600.0,
-            total_grid_import_kwh=1000.0,
-            total_grid_export_kwh=400.0,
-            total_battery_charge_kwh=0.0,
-            total_battery_discharge_kwh=0.0,
-            peak_generation_kw=2.0,
-            peak_demand_kw=1.5,
-            self_consumption_ratio=0.80,
-            grid_dependency_ratio=0.38,
-            export_ratio=0.20,
-            simulation_days=182,
-            total_import_cost_gbp=230.0,
-            total_export_revenue_gbp=12.0,  # half-year figure
-            net_cost_gbp=218.0,
-            window=make_window(days=182),
-        )
-        finance = self._make_finance_seg(self_consumption_override=None)
-
-        result = _seg_export_income_gbp(_annualise_physics(summary_182), finance)
-
-        expected = 12.0 * (365 / 182)
-        assert result == pytest.approx(expected, rel=1e-6)

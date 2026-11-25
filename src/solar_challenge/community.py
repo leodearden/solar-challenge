@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategyConfig, build_dispatch_strategy
+from solar_challenge.dispatch import DispatchStrategy, build_dispatch_strategy
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.flow import simulate_timestep, validate_energy_balance
 from solar_challenge.number_fields import NON_NEGATIVE, as_finite_float, read_field
@@ -70,20 +70,42 @@ def _billing_tariff(billing: CommunityBillingConfig | None) -> TariffConfig | No
 
 
 def _battery_strategy(battery: BatteryConfig, billing: CommunityBillingConfig | None) -> DispatchStrategy:
-    """The strategy the community battery's dispatch_strategy names, self-consumption when it names none, built for its grid_charging at the billing tariff.
+    """The strategy the community battery's dispatch_strategy names, built for its grid_charging at the billing tariff.
 
     Raises
     ------
     ConfigurationError
         :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses the
         battery's grid_charging, which the strategy would ignore; its refusal
-        propagates unchanged.
+        propagates unchanged. Or the grid_charging names a forecast other than
+        'pv_blind' (:func:`_refuse_a_grid_charge_forecast`).
     """
+    _refuse_a_grid_charge_forecast(battery)
     return build_dispatch_strategy(
-        battery.dispatch_strategy or SelfConsumptionStrategyConfig(),
+        battery.dispatch_strategy,
         grid_charging=battery.grid_charging,
         tariff=_billing_tariff(billing),
     )
+
+
+def _refuse_a_grid_charge_forecast(battery: BatteryConfig) -> None:
+    """Refuse a community battery whose grid charge a forecast other than 'pv_blind' sizes.
+
+    The community dispatch computes no useful-charge ceilings, so it would fill every cheap
+    period to the target whatever the forecast said.
+
+    Raises
+    ------
+    ConfigurationError
+        Naming the community battery, its forecast and 'pv_blind'.
+    """
+    grid_charging = battery.grid_charging
+    if grid_charging is not None and grid_charging.forecast != "pv_blind":
+        raise ConfigurationError(
+            f"The community battery's grid_charging forecast is {grid_charging.forecast!r}, but the community "
+            "dispatch computes no useful-charge ceilings and fills every cheap period to its target: "
+            "set the forecast to 'pv_blind', or leave it out"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -115,9 +137,8 @@ class CommunityConfig:
         ``"community_battery"`` config has none; or if the community
         battery's dispatch would ignore its grid_charging, as
         :func:`~solar_challenge.dispatch.build_dispatch_strategy` refuses it:
-        the strategy its dispatch_strategy names, self-consumption when it
-        names none, does not charge from the grid, or billing names no tariff
-        to find a cheap period in.
+        the strategy its dispatch_strategy names does not charge from the
+        grid, or billing names no tariff to find a cheap period in.
     """
 
     sharing_mode: Literal["p2p", "community_battery"]
@@ -146,7 +167,7 @@ class CommunityConfig:
 # CommunityResults
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class CommunityResults:
     """Output of :func:`simulate_community`.
 
@@ -180,7 +201,7 @@ class CommunityResults:
     battery_soc: pd.Series
     fleet_results: "FleetResults"
     sharing_mode: Literal["p2p", "community_battery"]
-    # Set by simulate_community when _grid_flow_prices_or_warn prices config.billing; None otherwise.
+    # Priced by simulate_community when config.billing sets every billing input; None otherwise.
     baseline_net_cost_gbp: Optional[float] = None
     community_net_cost_gbp: Optional[float] = None
     community_savings_gbp: Optional[float] = None
@@ -246,13 +267,30 @@ def _price_grid_flows(
     (import_cost_gbp, export_revenue_gbp)
         Both values in GBP.
     """
-    # Import cost: per-timestep TOU-aware pricing via the canonical loop.
+    # Import cost: each row priced at its own TOU rate by calculate_bill.
     import_cost_gbp: float = calculate_bill(window.row_energy_kwh(import_kw), tariff)
 
     # Export revenue: flat SEG rate → sum kWh first, then price once (exact).
     export_revenue_gbp: float = calculate_seg_revenue(window.energy_kwh(export_kw), seg)
 
     return import_cost_gbp, export_revenue_gbp
+
+
+def _net_costs(
+    window: SimulationWindow,
+    fleet_import_kw: pd.Series,
+    fleet_export_kw: pd.Series,
+    community_import_kw: pd.Series,
+    community_export_kw: pd.Series,
+    prices: tuple[TariffConfig, SEGTariff] | None,
+) -> tuple[float | None, float | None, float | None]:
+    """The fleet's net cost without sharing, its net cost after sharing, and the saving between them, each import cost less export revenue at prices; all None when prices is None."""
+    if prices is None:
+        return None, None, None
+    baseline_import, baseline_export = _price_grid_flows(window, fleet_import_kw, fleet_export_kw, *prices)
+    community_import, community_export = _price_grid_flows(window, community_import_kw, community_export_kw, *prices)
+    baseline, community = baseline_import - baseline_export, community_import - community_export
+    return baseline, community, baseline - community
 
 
 # ---------------------------------------------------------------------------
@@ -289,8 +327,8 @@ def simulate_community(
         and each net surplus/deficit step, the fleet window's ``step_minutes``
         long, is dispatched in order via
         :func:`~solar_challenge.flow.simulate_timestep` with the strategy the
-        battery's ``dispatch_strategy`` names, self-consumption when it names
-        none, built by :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
+        battery's ``dispatch_strategy`` names, built by
+        :func:`~solar_challenge.dispatch.build_dispatch_strategy`,
         and with ``billing.tariff`` as the step's tariff.  The
         sequential loop is required because SOC is stateful and cannot be
         vectorised.  Per-step outputs (kWh/step) are scaled back to kW by
@@ -343,19 +381,10 @@ def simulate_community(
     if cb_config is None:
         # Vectorised P2P netting — exact for p2p because there is no SOC state
         # to track sequentially.
-        cg_exp: pd.Series = (surplus - deficit).clip(lower=0)
-        cg_imp: pd.Series = (deficit - surplus).clip(lower=0)
+        grid_export: pd.Series = (surplus - deficit).clip(lower=0)
+        grid_import: pd.Series = (deficit - surplus).clip(lower=0)
         zeros: pd.Series = pd.Series(0.0, index=index, dtype=float)
-
-        result = CommunityResults(
-            grid_export=cg_exp,
-            grid_import=cg_imp,
-            battery_charge=zeros.copy(),
-            battery_discharge=zeros.copy(),
-            battery_soc=zeros.copy(),
-            fleet_results=fleet_results,
-            sharing_mode=config.sharing_mode,
-        )
+        battery_charge, battery_discharge, battery_soc = zeros.copy(), zeros.copy(), zeros.copy()
     else:
         # Community battery dispatch — sequential because SOC is stateful.
         # Like each home's battery, it starts at the midpoint of its usable SOC window.
@@ -397,28 +426,33 @@ def simulate_community(
             cb_dis_vals.append(r.battery_discharge * scale)
             soc_vals.append(r.battery_soc)
 
-        result = CommunityResults(
-            grid_export=pd.Series(cg_exp_vals, index=index, dtype=float),
-            grid_import=pd.Series(cg_imp_vals, index=index, dtype=float),
-            battery_charge=pd.Series(cb_ch_vals, index=index, dtype=float),
-            battery_discharge=pd.Series(cb_dis_vals, index=index, dtype=float),
-            battery_soc=pd.Series(soc_vals, index=index, dtype=float),
-            fleet_results=fleet_results,
-            sharing_mode=config.sharing_mode,
-        )
+        grid_export = pd.Series(cg_exp_vals, index=index, dtype=float)
+        grid_import = pd.Series(cg_imp_vals, index=index, dtype=float)
+        battery_charge = pd.Series(cb_ch_vals, index=index, dtype=float)
+        battery_discharge = pd.Series(cb_dis_vals, index=index, dtype=float)
+        battery_soc = pd.Series(soc_vals, index=index, dtype=float)
 
-    # --- Virtual-net-metering billing: baseline vs community net cost ---
-    prices = _grid_flow_prices_or_warn(config.billing)
-    if prices is not None:
-        # Baseline: what the fleet would pay/earn WITHOUT community sharing
-        base_imp, base_exp = _price_grid_flows(
-            window, fleet_results.total_grid_import, fleet_results.total_grid_export, *prices
-        )
-        # Community: what the fleet pays/earns AFTER sharing
-        comm_imp, comm_exp = _price_grid_flows(window, result.grid_import, result.grid_export, *prices)
-        result.baseline_net_cost_gbp = base_imp - base_exp
-        result.community_net_cost_gbp = comm_imp - comm_exp
-        result.community_savings_gbp = result.baseline_net_cost_gbp - result.community_net_cost_gbp
+    # Virtual net metering: the fleet's net cost without sharing (its own grid flows) and after it.
+    baseline_net_cost, community_net_cost, community_savings = _net_costs(
+        window,
+        fleet_import_kw=deficit,
+        fleet_export_kw=surplus,
+        community_import_kw=grid_import,
+        community_export_kw=grid_export,
+        prices=_grid_flow_prices_or_warn(config.billing),
+    )
+    result = CommunityResults(
+        grid_import=grid_import,
+        grid_export=grid_export,
+        battery_charge=battery_charge,
+        battery_discharge=battery_discharge,
+        battery_soc=battery_soc,
+        fleet_results=fleet_results,
+        sharing_mode=config.sharing_mode,
+        baseline_net_cost_gbp=baseline_net_cost,
+        community_net_cost_gbp=community_net_cost,
+        community_savings_gbp=community_savings,
+    )
 
     if validate_balance:
         validate_community_balance(fleet_results, result)

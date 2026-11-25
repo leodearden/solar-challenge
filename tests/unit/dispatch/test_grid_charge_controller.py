@@ -8,13 +8,17 @@ from datetime import datetime
 
 import pytest
 
+from solar_challenge.battery import Battery, BatteryConfig
 from solar_challenge.dispatch import (
+    GridChargeConfig,
     GridChargeContext,
     PeakShavingStrategy,
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
     compute_grid_charge_power_kw,
 )
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep
+from solar_challenge.tariff import TariffConfig
 
 
 class TestGridChargeContext:
@@ -403,6 +407,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=3.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     def _baseline_tou(self):
@@ -414,6 +419,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=1.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     def _baseline_ps(self):
@@ -425,6 +431,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             demand_kw=5.0,
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
         )
 
     # --- SelfConsumptionStrategy ---
@@ -439,6 +446,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_sc()
         assert with_ctx.charge_kw == without.charge_kw
@@ -455,6 +463,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=None,
+            timestep_minutes=1.0,
         )
         without = self._baseline_sc()
         assert with_none.charge_kw == without.charge_kw
@@ -485,6 +494,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_tou()
         assert with_ctx.charge_kw == without.charge_kw
@@ -511,6 +521,7 @@ class TestDecideActionAcceptsGridChargeCtx:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
             grid_charge_ctx=self._CHEAP_CTX,
+            timestep_minutes=1.0,
         )
         without = self._baseline_ps()
         assert with_ctx.charge_kw == without.charge_kw
@@ -524,3 +535,164 @@ class TestDecideActionAcceptsGridChargeCtx:
             s.decide_action(  # type: ignore[misc]
                 self._TS, 0.0, 5.0, 2.5, 5.0, 1.0, self._CHEAP_CTX
             )
+
+
+class TestUsefulChargeCeiling:
+    """The one grid-charge gate fills to the lower of the target and the context's useful-charge ceiling, the SOC above which the step's grid charge is forecast to be stranded."""
+
+    _CHARGE_EFFICIENCY = 0.9
+    _ONE_MINUTE_H = 1.0 / 60.0
+    _FILLING_TO_4_5: dict[str, float | bool] = dict(
+        current_rate=0.10,
+        peak_rate=0.40,
+        is_cheap_period=True,
+        target_soc_kwh=4.5,
+        max_charge_kw=500.0,
+        round_trip_efficiency=0.81,
+        charge_efficiency=_CHARGE_EFFICIENCY,
+    )
+    """A cheap, profitable context filling to 4.5 kWh, with a charge limit no one-minute step here reaches."""
+
+    def _ctx(self, ceiling_kwh: float | None) -> GridChargeContext:
+        """_FILLING_TO_4_5 under ceiling_kwh."""
+        return GridChargeContext(**self._FILLING_TO_4_5, useful_charge_ceiling_kwh=ceiling_kwh)  # type: ignore[arg-type]
+
+    def _power_kw(self, ctx: GridChargeContext, *, soc_kwh: float, pv_kw: float = 0.0) -> float:
+        """compute_grid_charge_power_kw for a one-minute step from soc_kwh with pv_kw of PV charge."""
+        return compute_grid_charge_power_kw(
+            ctx, battery_soc_kwh=soc_kwh, pv_charge_power_kw=pv_kw, timestep_minutes=1.0
+        )
+
+    def test_the_ceiling_defaults_to_none(self) -> None:
+        assert GridChargeContext(**self._FILLING_TO_4_5).useful_charge_ceiling_kwh is None  # type: ignore[arg-type]
+
+    def test_no_ceiling_charges_to_the_target(self) -> None:
+        assert self._power_kw(self._ctx(None), soc_kwh=1.0) == pytest.approx(
+            (4.5 - 1.0) / self._CHARGE_EFFICIENCY / self._ONE_MINUTE_H
+        )
+
+    def test_a_ceiling_below_the_target_asks_for_the_gap_to_the_ceiling(self) -> None:
+        """SOC 1.0, ceiling 2.0, target 4.5: the step draws (2.0 - 1.0) / charge_efficiency over one minute."""
+        assert self._power_kw(self._ctx(2.0), soc_kwh=1.0) == pytest.approx(
+            (2.0 - 1.0) / self._CHARGE_EFFICIENCY / self._ONE_MINUTE_H
+        )
+
+    def test_the_headroom_still_caps_the_gap_to_the_ceiling(self) -> None:
+        ctx = dataclasses.replace(self._ctx(2.0), max_charge_kw=5.0)
+
+        assert compute_grid_charge_power_kw(
+            ctx, battery_soc_kwh=1.0, pv_charge_power_kw=1.0, timestep_minutes=1.0
+        ) == pytest.approx(4.0)
+
+    @pytest.mark.parametrize(
+        ("soc_kwh", "pv_kw"),
+        [
+            pytest.param(2.0, 0.0, id="at-the-ceiling"),
+            pytest.param(2.5, 0.0, id="above-the-ceiling"),
+            pytest.param(1.99, 1.0, id="the-steps-pv-charge-reaches-it"),
+        ],
+    )
+    def test_no_grid_power_once_the_post_pv_soc_is_at_or_above_the_ceiling(self, soc_kwh: float, pv_kw: float) -> None:
+        assert self._power_kw(self._ctx(2.0), soc_kwh=soc_kwh, pv_kw=pv_kw) == 0.0
+
+    def test_a_ceiling_above_the_target_changes_nothing(self) -> None:
+        assert self._power_kw(self._ctx(6.0), soc_kwh=1.0) == self._power_kw(self._ctx(None), soc_kwh=1.0)
+
+    def test_a_zero_ceiling_asks_for_no_grid_power(self) -> None:
+        assert self._power_kw(self._ctx(0.0), soc_kwh=0.0) == 0.0
+
+    @pytest.mark.parametrize(
+        "ceiling",
+        [
+            pytest.param(-0.1, id="negative"),
+            pytest.param(math.nan, id="nan"),
+            pytest.param(math.inf, id="infinite"),
+            pytest.param(-math.inf, id="minus-infinite"),
+        ],
+    )
+    def test_a_ceiling_that_is_negative_or_not_finite_is_refused_naming_it(self, ceiling: float) -> None:
+        with pytest.raises(ValueError, match=rf"useful_charge_ceiling_kwh.*{re.escape(repr(ceiling))}"):
+            self._ctx(ceiling)
+
+    @pytest.mark.parametrize(
+        "strategy",
+        [
+            pytest.param(TOUOptimizedStrategy(tariff=TariffConfig.economy_7()), id="tou_optimized"),
+            pytest.param(PeakShavingStrategy(import_limit_kw=3.0), id="peak_shaving"),
+        ],
+    )
+    def test_every_grid_charging_strategy_charges_to_the_ceiling_not_the_target(
+        self, strategy: TOUOptimizedStrategy | PeakShavingStrategy
+    ) -> None:
+        """At 03:00 on Economy 7, with a 0.5 kW shortfall below the peak-shaving limit, both strategies grid-charge from 1.0 kWh to the 2.0 kWh ceiling."""
+        decision = strategy.decide_action(
+            timestamp=datetime(2024, 1, 1, 3, 0),
+            generation_kw=0.0,
+            demand_kw=0.5,
+            battery_soc_kwh=1.0,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
+            grid_charge_ctx=self._ctx(2.0),
+        )
+
+        assert decision.grid_charge_kw == pytest.approx((2.0 - 1.0) / self._CHARGE_EFFICIENCY / self._ONE_MINUTE_H)
+
+
+def _battery_filling_to_0_9() -> Battery:
+    """A 5 kWh battery at 2.0 kWh whose grid charging fills it to 0.9 of its capacity, 4.5 kWh, at up to 2.5 kW."""
+    return Battery(
+        BatteryConfig(capacity_kwh=5.0, max_charge_kw=2.5, grid_charging=GridChargeConfig(0.9)),
+        initial_soc_kwh=2.0,
+    )
+
+
+class TestSimulateTimestepUsefulChargeCeiling:
+    """simulate_timestep passes useful_charge_ceiling_kwh into the grid-charge context it builds."""
+
+    _CHEAP_MINUTE = datetime(2024, 1, 1, 3, 0)
+    """03:00, inside Economy 7's 00:30-07:30 cheap period."""
+
+    def _step(
+        self, battery: Battery, timestep_minutes: float, *, tariff: TariffConfig | None, ceiling_kwh: float | None
+    ) -> EnergyFlowResult:
+        """One sunless, demandless step of battery under TOUOptimizedStrategy on Economy 7's clock, at tariff under ceiling_kwh."""
+        return simulate_timestep(
+            0.0,
+            0.0,
+            battery,
+            timestep_minutes,
+            self._CHEAP_MINUTE,
+            TOUOptimizedStrategy(tariff=TariffConfig.economy_7()),
+            tariff=tariff,
+            useful_charge_ceiling_kwh=ceiling_kwh,
+        )
+
+    def test_an_hour_the_power_allows_ends_at_the_ceiling(self) -> None:
+        battery = _battery_filling_to_0_9()
+
+        self._step(battery, 60.0, tariff=TariffConfig.economy_7(), ceiling_kwh=3.0)
+
+        assert battery.soc_kwh == pytest.approx(3.0)
+
+    def test_a_minute_the_power_limits_ends_below_the_ceiling(self) -> None:
+        battery = _battery_filling_to_0_9()
+
+        self._step(battery, 1.0, tariff=TariffConfig.economy_7(), ceiling_kwh=3.0)
+
+        assert battery.soc_kwh == pytest.approx(2.0 + 2.5 / 60 * battery.charge_efficiency)
+        assert battery.soc_kwh <= 3.0
+
+    def test_no_ceiling_fills_to_the_target(self) -> None:
+        battery = _battery_filling_to_0_9()
+
+        self._step(battery, 120.0, tariff=TariffConfig.economy_7(), ceiling_kwh=None)
+
+        assert battery.soc_kwh == pytest.approx(4.5)
+
+    def test_without_a_tariff_the_ceiling_changes_nothing(self) -> None:
+        with_ceiling, without = _battery_filling_to_0_9(), _battery_filling_to_0_9()
+
+        assert self._step(with_ceiling, 60.0, tariff=None, ceiling_kwh=3.0) == self._step(
+            without, 60.0, tariff=None, ceiling_kwh=None
+        )
+        assert with_ceiling.soc_kwh == without.soc_kwh == 2.0
