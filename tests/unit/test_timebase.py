@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How long simulated time lasts: the minutes in an hour and in a day; which durations in minutes are refused; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
+"""How long simulated time lasts: the minutes in an hour and in a day; which durations in minutes are refused; the row counts of one calendar year; and a simulated series' window: the calendar days it covers, how long one of its rows lasts, and its rows, split into local days read on the wall clock."""
 
 import math
 import re
@@ -22,6 +22,7 @@ from solar_challenge.timebase import (
     SimulationWindow,
     covered_days,
     require_valid_duration,
+    year_row_counts,
 )
 
 
@@ -47,6 +48,22 @@ def test_covered_days_refuses_a_last_day_before_the_first_naming_both() -> None:
 
     assert "2024-06-01" in str(refusal.value)
     assert "2024-06-02" in str(refusal.value)
+
+
+def test_one_calendar_year_of_hourly_rows_is_365_to_366_days_of_24() -> None:
+    assert year_row_counts(24) == range(8760, 8785)
+
+
+def test_one_calendar_year_of_one_minute_rows_runs_from_365_to_366_days_of_1440() -> None:
+    counts = year_row_counts(1440)
+
+    assert counts.start == 525_600
+    assert counts[-1] == 527_040
+
+
+def test_a_leap_year_of_hours_is_one_calendar_year_and_one_hour_more_is_not() -> None:
+    assert 8784 in year_row_counts(24)
+    assert 8785 not in year_row_counts(24)
 
 
 @pytest.mark.parametrize(
