@@ -3,10 +3,11 @@
 import dataclasses
 import functools
 import math
+import operator
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -1498,7 +1499,7 @@ class TestASunlessStepsDischargeIsPartOfItsSelfConsumption:
 
 
 # ---------------------------------------------------------------------------
-# A flow is an energy a step moved, so never negative
+# A flow is an energy a step moved, so a finite number at least 0
 # ---------------------------------------------------------------------------
 
 # EnergyFlowResult's flows, in field order; battery_soc is a level, not a flow.
@@ -1513,28 +1514,48 @@ FLOWS = (
     "grid_charge",
 )
 
-NEGATIVE_OR_NAN = [pytest.param(-0.5, id="negative"), pytest.param(float("nan"), id="nan")]
+NOT_A_FINITE_NUMBER_AT_LEAST_0 = [
+    pytest.param(-0.5, id="negative"),
+    pytest.param(math.nan, id="nan"),
+    pytest.param(math.inf, id="infinity"),
+    pytest.param(-math.inf, id="negative-infinity"),
+]
 
 
-class TestEnergyFlowResultRefusesANegativeFlow:
-    """Each flow is an energy the timestep moved, so construction refuses one below 0 or NaN."""
+class TestEnergyFlowResultRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
+    """Each flow is an energy the timestep moved, so construction refuses one that is not a finite number at least 0."""
 
     def test_every_field_but_battery_soc_is_a_flow(self) -> None:
         names = tuple(field.name for field in dataclasses.fields(EnergyFlowResult))
         assert tuple(name for name in names if name != "battery_soc") == FLOWS
 
     @pytest.mark.parametrize("flow", FLOWS)
-    @pytest.mark.parametrize("value", NEGATIVE_OR_NAN)
-    def test_a_negative_or_nan_flow_is_refused_naming_it_and_its_value(
+    @pytest.mark.parametrize("value", NOT_A_FINITE_NUMBER_AT_LEAST_0)
+    def test_a_flow_that_is_not_a_finite_number_at_least_0_is_refused_naming_it_and_its_value(
         self, flow: str, value: float
     ) -> None:
         with pytest.raises(ValueError, match=re.escape(f"{flow}={value!r}")):
             EnergyFlowResult(**{**dict.fromkeys(FLOWS, 0.0), "battery_soc": 0.0, flow: value})
 
-    @pytest.mark.parametrize("soc", NEGATIVE_OR_NAN)
-    def test_battery_soc_is_a_level_not_a_flow_so_one_below_0_or_nan_is_accepted(
-        self, soc: float
-    ) -> None:
+    def test_the_refusal_names_every_refused_flow_in_field_order_with_the_rule(self) -> None:
+        refusal = (
+            "EnergyFlowResult's flows are the energies its timestep moved, so each is a finite number at least 0: "
+            "got generation=inf, battery_charge=-0.5, grid_export=inf"
+        )
+        with pytest.raises(ValueError, match=f"^{re.escape(refusal)}$") as refused:
+            EnergyFlowResult(
+                **{
+                    **dict.fromkeys(FLOWS, 0.0),
+                    "battery_soc": 0.0,
+                    "generation": math.inf,
+                    "grid_export": math.inf,
+                    "battery_charge": -0.5,
+                }
+            )
+        assert refused.type is ValueError
+
+    @pytest.mark.parametrize("soc", NOT_A_FINITE_NUMBER_AT_LEAST_0)
+    def test_battery_soc_is_a_level_not_a_flow_so_any_number_is_accepted(self, soc: float) -> None:
         result = EnergyFlowResult(**dict.fromkeys(FLOWS, 0.0), battery_soc=soc)
         assert result.battery_soc == pytest.approx(soc, nan_ok=True)
 
@@ -1557,8 +1578,34 @@ class _BatteryReportingANegativeDischarge(Battery):
         return -0.975
 
 
-class TestStepRefusesANegativeFlow:
-    """A step raises rather than return a flow below 0 or NaN that its battery reports."""
+class _OverflowingPowers(NamedTuple):
+    """Finite powers that pass a step's input checks, but whose energy over two hours is beyond a float."""
+
+    generation_kw: float
+    demand_kw: float
+    infinite_flows: tuple[str, ...]
+    # How a battery's SOC after the step compares with its SOC before: the step charges it from the surplus, or
+    # discharges it into the shortfall, before it checks its flows.
+    soc_moved: Callable[[float, float], bool]
+
+
+# 1e308 kW for two hours is 2e308 kWh, beyond a float, so the step computes infinite flows.
+OVERFLOWING_POWERS = [
+    pytest.param(
+        _OverflowingPowers(1e308, 0.0, ("generation=inf", "grid_export=inf"), soc_moved=operator.gt),
+        id="generation-overflows",
+    ),
+    pytest.param(
+        _OverflowingPowers(0.0, 1e308, ("demand=inf", "grid_import=inf"), soc_moved=operator.lt),
+        id="demand-overflows",
+    ),
+]
+
+
+class TestStepRefusesAFlowThatIsNotAFiniteNumberAtLeast0:
+    """A step raises rather than return a flow that is not a finite number at least 0, one its battery reports or one
+    beyond a float.
+    """
 
     @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
     def test_a_battery_reporting_a_negative_discharge_makes_the_step_raise(
@@ -1570,6 +1617,48 @@ class TestStepRefusesANegativeFlow:
         message = str(refused.value)
         assert "self_consumption=-0.975" in message
         assert "battery_discharge=-0.975" in message
+
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
+    @pytest.mark.parametrize(
+        "new_battery",
+        [
+            pytest.param(lambda: None, id="no-battery"),
+            pytest.param(lambda: Battery(BatteryConfig.default_5kwh()), id="battery"),
+        ],
+    )
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_step_whose_energy_overflows_a_float_raises_naming_each_infinite_flow(
+        self,
+        step: Callable[..., EnergyFlowResult],
+        new_battery: Callable[[], Optional[Battery]],
+        powers: _OverflowingPowers,
+    ) -> None:
+        with pytest.raises(ValueError) as refused:
+            step(
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
+                battery=new_battery(),
+                timestep_minutes=120,
+            )
+        message = str(refused.value)
+        for flow in powers.infinite_flows:
+            assert flow in message
+
+    @pytest.mark.parametrize("powers", OVERFLOWING_POWERS)
+    @pytest.mark.parametrize("step", SELF_CONSUMING_STEPS)
+    def test_a_step_whose_energy_overflows_a_float_raises_after_its_battery_has_moved(
+        self, step: Callable[..., EnergyFlowResult], powers: _OverflowingPowers
+    ) -> None:
+        battery = Battery(BatteryConfig.default_5kwh())
+        soc_before = battery.soc_kwh
+        with pytest.raises(ValueError):
+            step(
+                generation_kw=powers.generation_kw,
+                demand_kw=powers.demand_kw,
+                battery=battery,
+                timestep_minutes=120,
+            )
+        assert powers.soc_moved(battery.soc_kwh, soc_before)
 
 
 # ---------------------------------------------------------------------------
