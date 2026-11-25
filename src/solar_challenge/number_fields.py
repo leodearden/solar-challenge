@@ -27,6 +27,7 @@ from solar_challenge.errors import ConfigurationError
 from solar_challenge.whole_numbers import whole_number
 
 _Number = TypeVar("_Number", int, float)
+_Key = TypeVar("_Key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,18 @@ class Interval:
         return (self.low <= number if self._low_admitted else self.low < number) and (
             number <= self.high if self._high_admitted else number < self.high
         )
+
+    def refused(self, numbers: Mapping[_Key, float]) -> Mapping[_Key, float]:
+        """The entries of *numbers* whose number this interval does not admit (see :meth:`admits`), in their order and each as given; empty when it admits them all."""
+        low, high, low_admitted, high_admitted = self.low, self.high, self._low_admitted, self._high_admitted
+        return {
+            key: number
+            for key, number in numbers.items()
+            if not (
+                (low <= number if low_admitted else low < number)
+                and (number <= high if high_admitted else number < high)
+            )
+        }
 
     def __str__(self) -> str:
         """The bounds as a refusal phrases them, each printed as given: "between 0 and 360", "greater than 0 and at most 1", or "" when there are none."""
