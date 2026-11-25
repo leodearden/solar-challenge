@@ -11,7 +11,9 @@ own-use + export = generation, each to a relative 1e-12; and a year capped but
 not the override's own-use cut to demand.  ``home_ledger`` is the
 one assembly of a ledger from a home's AnnualPhysics, holding every pricing rule
 of the PRD's table and warning about nothing.  householder_bill and
-project_multi_year read the same ledger of a home (B5).
+project_multi_year read the same ledger of a home (B5).  ``own_use_basis`` is
+the one rule of a finance's own-use basis, which the ledger is on, and
+``with_own_use_basis`` the one way to put a finance on a basis.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from typing import Any
 import pytest
 
 from solar_challenge.finance import (
+    DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
     AnnualPhysics,
     FinanceConfig,
     HomeLedger,
@@ -31,6 +34,8 @@ from solar_challenge.finance import (
     basis_c_own_use_kwh,
     home_ledger,
     householder_bill,
+    own_use_basis,
+    with_own_use_basis,
 )
 from solar_challenge.home import RunPricing, SummaryStatistics, calculate_summary
 from solar_challenge.projection import project_multi_year
@@ -394,6 +399,55 @@ class TestHomeLedgerPricingRules:
             home_ledger(_physics(), _finance(override), simulated_own_use_kwh=own_use_kwh)
 
         assert repr(own_use_kwh) in str(refusal.value)
+
+
+_OVERRIDES = pytest.mark.parametrize("override", [None, 0.6], ids=["no-override", "override-0.6"])
+_BASES = pytest.mark.parametrize("basis", list(OwnUseBasis), ids=[basis.name for basis in OwnUseBasis])
+
+
+class TestOneOwnUseRule:
+    """own_use_basis is the one rule of a finance's own-use basis, and with_own_use_basis the one way to set it."""
+
+    @_OVERRIDES
+    @_BASES
+    def test_a_finance_set_to_a_basis_is_on_that_basis(self, override: float | None, basis: OwnUseBasis) -> None:
+        assert own_use_basis(with_own_use_basis(_finance(override), basis)) is basis
+
+    @pytest.mark.parametrize(
+        ("override", "basis"),
+        [(None, OwnUseBasis.SIMULATED), (0.6, OwnUseBasis.OVERRIDE), (0.0, OwnUseBasis.OVERRIDE)],
+        ids=["no-override", "override-0.6", "override-zero"],
+    )
+    def test_any_override_zero_included_puts_a_finance_on_the_override_basis(
+        self, override: float | None, basis: OwnUseBasis
+    ) -> None:
+        assert own_use_basis(_finance(override)) is basis
+
+    def test_the_override_basis_keeps_a_finances_own_override(self) -> None:
+        assert with_own_use_basis(_finance(0.6), OwnUseBasis.OVERRIDE).self_consumption_override == 0.6
+
+    def test_the_override_basis_of_a_finance_without_one_is_the_spreadsheets_default(self) -> None:
+        overridden = with_own_use_basis(_finance(None), OwnUseBasis.OVERRIDE)
+
+        assert overridden.self_consumption_override == DEFAULT_SPREADSHEET_SELF_CONSUMPTION
+
+    def test_the_simulated_basis_clears_the_override(self) -> None:
+        assert with_own_use_basis(_finance(0.6), OwnUseBasis.SIMULATED).self_consumption_override is None
+
+    @_OVERRIDES
+    @_BASES
+    def test_setting_a_basis_changes_no_other_field(self, override: float | None, basis: OwnUseBasis) -> None:
+        finance = _finance(override)
+
+        result = with_own_use_basis(finance, basis)
+
+        assert dataclasses.replace(result, self_consumption_override=finance.self_consumption_override) == finance
+
+    @_OVERRIDES
+    def test_the_ledger_is_on_its_finances_basis(self, override: float | None) -> None:
+        finance = _finance(override)
+
+        assert home_ledger(_physics(), finance).basis is own_use_basis(finance)
 
 
 _HOMES_TOTALS = (
