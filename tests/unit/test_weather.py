@@ -790,6 +790,140 @@ class TestPvgisTmy:
         pvgis_requests.hourly.assert_not_called()
 
 
+class TestPvgisTmyScalesToLongTermMeanGhi:
+    """PvgisTmy.get scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
+
+    def test_annual_ghi_is_the_series_mean(self, pvgis_tmy, pvgis_requests):
+        """The TMY's GHI sums to the mean of the series' calendar-year totals; its temperatures are PVGIS's."""
+        result = PvgisTmy(None).get(Location.bristol())
+
+        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+        pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
+
+    def test_tmy_is_requested_with_pvgis_tmy_request(self, pvgis_requests):
+        """The TMY request is PVGIS_TMY_REQUEST at the location's point, so whatever imports it asks for the same TMY."""
+        bristol = Location.bristol()
+        PvgisTmy(None).get(bristol)
+
+        assert pvgis_requests.tmy.call_args == call(
+            latitude=bristol.latitude, longitude=bristol.longitude, **PVGIS_TMY_REQUEST
+        )
+
+    def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
+        """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
+        PvgisTmy(None).get(Location.bristol())
+
+        tmy_request = pvgis_requests.tmy.call_args.kwargs
+        series_request = pvgis_requests.hourly.call_args.kwargs
+        for series_arg, tmy_arg in [
+            ("latitude", "latitude"),
+            ("longitude", "longitude"),
+            ("url", "url"),
+            ("start", "startyear"),
+            ("end", "endyear"),
+            ("usehorizon", "usehorizon"),
+        ]:
+            assert series_request[series_arg] == tmy_request[tmy_arg], series_arg
+        assert series_request["surface_tilt"] == 0
+        assert series_request["components"] is False
+
+    def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
+        """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
+        pvgis_tmy.to_csv(weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.csv")
+        (weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.meta.json").write_text(
+            json.dumps(
+                {
+                    "prefix": "tmy",
+                    "latitude": 51.45,
+                    "longitude": -2.58,
+                    "start_date": None,
+                    "end_date": None,
+                    "timezone": "UTC",
+                    "freq": None,
+                }
+            )
+        )
+
+        result = PvgisTmy(weather_cache).get(Location.bristol())
+
+        pvgis_requests.tmy.assert_called_once()
+        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
+
+    @pytest.mark.parametrize(
+        "make_series",
+        [
+            pytest.param(lambda series: series.loc[:"2019"], id="year 2020 missing"),
+            pytest.param(lambda series: series.loc[:"2020-12-30"], id="last day of 2020 missing"),
+            pytest.param(
+                lambda series: pd.concat([series, series.loc["2020-06-01"]]).sort_index(), id="a day of 2020 repeated"
+            ),
+        ],
+    )
+    def test_refuses_a_series_lacking_or_repeating_a_climate_years_hours(
+        self, weather_cache, pvgis_hourly_series, pvgis_requests, make_series
+    ):
+        """A series lacking or repeating any hour of the climate years raises, naming the year, and leaves nothing cached."""
+        pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
+
+        with pytest.raises(WeatherDataError, match="2020"):
+            PvgisTmy(weather_cache).get(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+    @pytest.mark.parametrize(
+        "make_tmy",
+        [
+            pytest.param(lambda tmy: tmy.iloc[:24], id="TMY not one year"),
+            pytest.param(lambda tmy: tmy.assign(ghi=0.0), id="TMY without GHI"),
+        ],
+    )
+    def test_refuses_a_tmy_it_cannot_scale(self, weather_cache, pvgis_tmy, pvgis_requests, make_tmy):
+        """A TMY scale_tmy_to_annual_ghi refuses raises WeatherDataError, as any bad PVGIS response does, and leaves nothing cached."""
+        pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
+
+        with pytest.raises(WeatherDataError) as refusal:
+            PvgisTmy(weather_cache).get(Location.bristol())
+
+        assert isinstance(refusal.value.__cause__, ValueError)
+        assert str(refusal.value.__cause__) in str(refusal.value)
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+
+class TestPvgisTmyReportsPvgisFailures:
+    """Every failure at the PVGIS boundary raises WeatherDataError naming why, and leaves nothing cached."""
+
+    @pytest.mark.parametrize(
+        "failing_request",
+        [
+            pytest.param("tmy", id="TMY request"),
+            pytest.param("hourly", id="long-term series request"),
+        ],
+    )
+    def test_a_failed_request_raises_weather_data_error(self, weather_cache, pvgis_requests, failing_request):
+        """A PVGIS request that fails raises WeatherDataError carrying the failure's own text."""
+        getattr(pvgis_requests, failing_request).side_effect = ConnectionError("PVGIS is unreachable")
+
+        with pytest.raises(WeatherDataError, match="PVGIS is unreachable"):
+            PvgisTmy(weather_cache).get(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+    def test_a_tmy_lacking_a_required_column_raises_weather_data_error(
+        self, weather_cache, pvgis_tmy, pvgis_requests
+    ):
+        """A TMY lacking any of temp_air, ghi, dni and dhi raises WeatherDataError naming the missing column."""
+        pvgis_requests.tmy.return_value = (pvgis_tmy.drop(columns="ghi"), {})
+
+        with pytest.raises(WeatherDataError, match="ghi"):
+            PvgisTmy(weather_cache).get(Location.bristol())
+
+        assert weather_cache.get("tmy", Location.bristol()) is None
+
+    def test_weather_data_error_is_a_runtime_error(self):
+        """Callers that catch RuntimeError still catch every PVGIS failure."""
+        assert issubclass(WeatherDataError, RuntimeError)
+
+
 class TestDefaultWeather:
     """default_weather() is PvgisTmy over a new WeatherCache() at each call, so it reads the directory CACHE_DIR_VARIABLE names at that call, else DEFAULT_CACHE_DIR under the working directory."""
 
@@ -935,140 +1069,6 @@ class TestPrefetchedWeather:
         pd.testing.assert_frame_equal(restored.get(self.BATH), bath_frame, check_exact=True)
         with pytest.raises(TypeError):
             restored.frames[self.UNHELD] = bath_frame
-
-
-class TestPvgisTmyScalesToLongTermMeanGhi:
-    """PvgisTmy.get scales PVGIS's TMY to the mean annual GHI of PVGIS's 2005-2020 hourly series."""
-
-    def test_annual_ghi_is_the_series_mean(self, pvgis_tmy, pvgis_requests):
-        """The TMY's GHI sums to the mean of the series' calendar-year totals; its temperatures are PVGIS's."""
-        result = PvgisTmy(None).get(Location.bristol())
-
-        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-        pd.testing.assert_series_equal(result["temp_air"], pvgis_tmy["temp_air"])
-
-    def test_tmy_is_requested_with_pvgis_tmy_request(self, pvgis_requests):
-        """The TMY request is PVGIS_TMY_REQUEST at the location's point, so whatever imports it asks for the same TMY."""
-        bristol = Location.bristol()
-        PvgisTmy(None).get(bristol)
-
-        assert pvgis_requests.tmy.call_args == call(
-            latitude=bristol.latitude, longitude=bristol.longitude, **PVGIS_TMY_REQUEST
-        )
-
-    def test_series_is_requested_as_ghi_for_the_tmys_point_years_and_horizon(self, pvgis_requests):
-        """The series request asks for the TMY request's data as one GHI column, the response pvgis_hourly_series mirrors."""
-        PvgisTmy(None).get(Location.bristol())
-
-        tmy_request = pvgis_requests.tmy.call_args.kwargs
-        series_request = pvgis_requests.hourly.call_args.kwargs
-        for series_arg, tmy_arg in [
-            ("latitude", "latitude"),
-            ("longitude", "longitude"),
-            ("url", "url"),
-            ("start", "startyear"),
-            ("end", "endyear"),
-            ("usehorizon", "usehorizon"),
-        ]:
-            assert series_request[series_arg] == tmy_request[tmy_arg], series_arg
-        assert series_request["surface_tilt"] == 0
-        assert series_request["components"] is False
-
-    def test_a_tmy_cached_before_scaling_is_never_served(self, weather_cache, pvgis_tmy, pvgis_requests):
-        """Bristol's unscaled TMY, as the cache stored it before task 285, is fetched afresh and scaled instead."""
-        pvgis_tmy.to_csv(weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.csv")
-        (weather_cache.cache_dir / f"{PRE_SCALING_BRISTOL_TMY_STEM}.meta.json").write_text(
-            json.dumps(
-                {
-                    "prefix": "tmy",
-                    "latitude": 51.45,
-                    "longitude": -2.58,
-                    "start_date": None,
-                    "end_date": None,
-                    "timezone": "UTC",
-                    "freq": None,
-                }
-            )
-        )
-
-        result = PvgisTmy(weather_cache).get(Location.bristol())
-
-        pvgis_requests.tmy.assert_called_once()
-        assert result["ghi"].sum() / 1000 == pytest.approx(1075.0, rel=1e-9)
-
-    @pytest.mark.parametrize(
-        "make_series",
-        [
-            pytest.param(lambda series: series.loc[:"2019"], id="year 2020 missing"),
-            pytest.param(lambda series: series.loc[:"2020-12-30"], id="last day of 2020 missing"),
-            pytest.param(
-                lambda series: pd.concat([series, series.loc["2020-06-01"]]).sort_index(), id="a day of 2020 repeated"
-            ),
-        ],
-    )
-    def test_refuses_a_series_lacking_or_repeating_a_climate_years_hours(
-        self, weather_cache, pvgis_hourly_series, pvgis_requests, make_series
-    ):
-        """A series lacking or repeating any hour of the climate years raises, naming the year, and leaves nothing cached."""
-        pvgis_requests.hourly.return_value = (make_series(pvgis_hourly_series), {})
-
-        with pytest.raises(WeatherDataError, match="2020"):
-            PvgisTmy(weather_cache).get(Location.bristol())
-
-        assert weather_cache.get("tmy", Location.bristol()) is None
-
-    @pytest.mark.parametrize(
-        "make_tmy",
-        [
-            pytest.param(lambda tmy: tmy.iloc[:24], id="TMY not one year"),
-            pytest.param(lambda tmy: tmy.assign(ghi=0.0), id="TMY without GHI"),
-        ],
-    )
-    def test_refuses_a_tmy_it_cannot_scale(self, weather_cache, pvgis_tmy, pvgis_requests, make_tmy):
-        """A TMY scale_tmy_to_annual_ghi refuses raises WeatherDataError, as any bad PVGIS response does, and leaves nothing cached."""
-        pvgis_requests.tmy.return_value = (make_tmy(pvgis_tmy), {})
-
-        with pytest.raises(WeatherDataError) as refusal:
-            PvgisTmy(weather_cache).get(Location.bristol())
-
-        assert isinstance(refusal.value.__cause__, ValueError)
-        assert str(refusal.value.__cause__) in str(refusal.value)
-        assert weather_cache.get("tmy", Location.bristol()) is None
-
-
-class TestPvgisTmyReportsPvgisFailures:
-    """Every failure at the PVGIS boundary raises WeatherDataError naming why, and leaves nothing cached."""
-
-    @pytest.mark.parametrize(
-        "failing_request",
-        [
-            pytest.param("tmy", id="TMY request"),
-            pytest.param("hourly", id="long-term series request"),
-        ],
-    )
-    def test_a_failed_request_raises_weather_data_error(self, weather_cache, pvgis_requests, failing_request):
-        """A PVGIS request that fails raises WeatherDataError carrying the failure's own text."""
-        getattr(pvgis_requests, failing_request).side_effect = ConnectionError("PVGIS is unreachable")
-
-        with pytest.raises(WeatherDataError, match="PVGIS is unreachable"):
-            PvgisTmy(weather_cache).get(Location.bristol())
-
-        assert weather_cache.get("tmy", Location.bristol()) is None
-
-    def test_a_tmy_lacking_a_required_column_raises_weather_data_error(
-        self, weather_cache, pvgis_tmy, pvgis_requests
-    ):
-        """A TMY lacking any of temp_air, ghi, dni and dhi raises WeatherDataError naming the missing column."""
-        pvgis_requests.tmy.return_value = (pvgis_tmy.drop(columns="ghi"), {})
-
-        with pytest.raises(WeatherDataError, match="ghi"):
-            PvgisTmy(weather_cache).get(Location.bristol())
-
-        assert weather_cache.get("tmy", Location.bristol()) is None
-
-    def test_weather_data_error_is_a_runtime_error(self):
-        """Callers that catch RuntimeError still catch every PVGIS failure."""
-        assert issubclass(WeatherDataError, RuntimeError)
 
 
 class TestScaleTmyToAnnualGhi:
