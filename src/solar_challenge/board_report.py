@@ -124,8 +124,8 @@ def _computations_carried(section: AssumptionSection) -> tuple[str, ...]:
     return tuple(name for name, computation in computations.items() if computation is not None)
 
 
-def _one_window_of(sections: Mapping[OwnUseBasis, AssumptionSection]) -> SimulationWindow:
-    """The one window every bill of *sections* is annualised from, once the sections agree.
+def _refuse_unrenderable_sections(sections: Mapping[OwnUseBasis, AssumptionSection]) -> None:
+    """Refuse *sections* a finance report cannot render (PRD §5.2's R1-R4).
 
     Raises:
         ValueError: Checked in this order, naming the values: R1, *sections* is
@@ -149,7 +149,6 @@ def _one_window_of(sections: Mapping[OwnUseBasis, AssumptionSection]) -> Simulat
     first_window, *other_windows = windows.values()
     if any(window != first_window for window in other_windows):
         raise ValueError(f"every bill of a finance report is annualised from one window, got {windows!r}")
-    return first_window
 
 
 _Value = TypeVar("_Value")
@@ -336,8 +335,9 @@ def generate_finance_report(
             annualised from different windows.  Also when a cost-recovery
             binding has no label, naming it.
     """
-    window = _one_window_of(sections)
+    _refuse_unrenderable_sections(sections)
     ordered = [sections[basis] for basis in OwnUseBasis if basis in sections]
+    window = ordered[0].bill.annualised_from
     labels = [_column_label(section) for section in ordered]
     title = f"# Finance Report: {scenario_name}" if scenario_name else "# Finance Report"
     notice = _extrapolation_notice(window) + grid_charge_forecast_notice(
