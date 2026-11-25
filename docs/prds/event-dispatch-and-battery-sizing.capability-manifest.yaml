@@ -6,7 +6,7 @@ schema_version: 1
 signal_leaves: ["ζ"]
 tasks:
   - label: "α"
-    task_id: null
+    task_id: 1702
     title: "Battery export in the dispatch engine"
     capabilities:
       - name: "decision-carries-export-power"
@@ -45,7 +45,7 @@ tasks:
         binding: "`grep:src/solar_challenge/dispatch.py::DispatchDecision` `grep:src/solar_challenge/dispatch.py::StepLimits.require_admissible` `grep:src/solar_challenge/flow.py::_settle` `grep:src/solar_challenge/flow.py::_execute`"
         verdict: PASS
   - label: "β"
-    task_id: null
+    task_id: 1703
     title: "Event discharge strategy on the battery"
     capabilities:
       - name: "event-discharge-strategy-defined"
@@ -87,7 +87,7 @@ tasks:
         binding: "`grep:src/solar_challenge/dispatch.py::build_dispatch_strategy` `grep:src/solar_challenge/home.py` `grep:src/solar_challenge/community.py` called from home.py and community.py"
         verdict: PASS
   - label: "γ"
-    task_id: null
+    task_id: 1704
     title: "Enrolment, the event-day draw and the site export limit"
     capabilities:
       - name: "participation-vocabulary-defined"
@@ -135,7 +135,7 @@ tasks:
           kind: manual
           reason: "a refusal raised at scenario construction; boundary test B6 and the leaf's own refusal test cover it"
   - label: "δ"
-    task_id: null
+    task_id: 1705
     title: "Metered events income in pricing and the report"
     capabilities:
       - name: "breakdown-reports-battery-export-per-event"
@@ -170,7 +170,7 @@ tasks:
         binding: "producer task 1434 upstream"
         verdict: PASS
   - label: "ε"
-    task_id: null
+    task_id: 1706
     title: "Battery power and inverter cost in the sweep, with the marginal verdict"
     capabilities:
       - name: "config-point-carries-battery-power"
@@ -217,7 +217,7 @@ tasks:
         binding: "`grep:src/solar_challenge/optimize.py::_apply_install` `grep:src/solar_challenge/optimize.py::ConfigPoint`"
         verdict: PASS
   - label: "ζ"
-    task_id: null
+    task_id: 1707
     title: "The board's sizing answer, recorded"
     capabilities:
       - name: "sizing-answer-recorded"
