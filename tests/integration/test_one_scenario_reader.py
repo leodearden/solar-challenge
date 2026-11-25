@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import pytest
 import yaml
@@ -21,6 +21,7 @@ from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.scenario_writer import location_block
 from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli
 
 _PERIOD = {"start_date": "2024-06-03", "end_date": "2024-06-09"}
 _TARIFF = {"type": "economy_7"}
@@ -89,11 +90,44 @@ class _Flags:
         return scenario.with_window(first_day=self.first_day, last_day=self.last_day)
 
 
-FLAG_VARIANTS = (
-    pytest.param(_Flags(), id="no-flags"),
-    pytest.param(_Flags(first_day=date(2024, 6, 5)), id="start-flag"),
-    pytest.param(_Flags(last_day=date(2024, 6, 6)), id="end-flag"),
-)
+_FLAG_VARIANTS = {
+    "no-flags": _Flags(),
+    "start-flag": _Flags(first_day=date(2024, 6, 5)),
+    "end-flag": _Flags(last_day=date(2024, 6, 6)),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class _Command:
+    """A command that reads a scenario file: the words that run it, the id of its rows, and the leaf that turned its rows green."""
+
+    name: str
+    words: tuple[str, ...]
+    leaf: str
+
+
+_HOME_RUN = _Command("home-run", ("home", "run"), "task958-delta")
+_FLEET_RUN = _Command("fleet-run", ("fleet", "run"), "task957-gamma-seg_task960-zeta-period")
+_FINANCE_RUN = _Command("finance-run", ("finance", "run"), "task959-epsilon")
+_OPTIMIZE_CONFIGS = _Command("optimize-configs", ("optimize", "configs"), "task959-epsilon")
+_VALIDATE_CONFIG = _Command("validate-config", ("validate", "config"), "task957-gamma")
+
+_DOCUMENTS: dict[str, Mapping[str, Any]] = {
+    "home-doc": HOME,
+    "homes-doc": HOMES,
+    "fleet-distribution-doc": FLEET_DISTRIBUTION,
+}
+_FLEET_DOCUMENTS = {name: document for name, document in _DOCUMENTS.items() if name != "home-doc"}
+
+
+def _flag_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]]) -> list[Any]:
+    """One row of (command, document, flags) for each command, document and flag variant, its id '<command>-<document>-<flags>-<leaf>'."""
+    return [
+        pytest.param(command, document, flags, id=f"{command.name}-{document_name}-{flags_name}-{command.leaf}")
+        for command in commands
+        for document_name, document in documents.items()
+        for flags_name, flags in _FLAG_VARIANTS.items()
+    ]
 
 
 def _written(tmp_path: Path, document: Mapping[str, Any], *, name: str = "scenario.yaml") -> Path:
@@ -126,3 +160,25 @@ def test_the_reader_gives_each_documents_homes_its_location_tariff_and_seg_over_
     assert all(home.seg_tariff is not None for home in homes)
     assert (window.first_day, window.last_day) == (date(2024, 6, 3), date(2024, 6, 9))
     assert (window.first_day, window.last_day) != (DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY)
+
+
+@pytest.mark.parametrize(
+    ("command", "document", "flags"),
+    [
+        *_flag_rows([_HOME_RUN], {"home-doc": HOME}),
+        *_flag_rows([_FLEET_RUN, _FINANCE_RUN], _DOCUMENTS),
+    ],
+)
+def test_each_command_simulates_the_readers_homes_over_its_bounds(
+    tmp_path: Path, command: _Command, document: Mapping[str, Any], flags: _Flags
+) -> None:
+    """The command asks its runner for the homes and window of the reader's scenario with the flags' days replaced, and for nothing else."""
+    path = _written(tmp_path, document)
+    recorder = RecordingSimulate()
+
+    result = invoke_cli([*command.words, str(path), *flags.cli_args()], answering(recorder))
+
+    expected = flags.applied(load_scenario(path))
+    assert result.exit_code == 0, result.output
+    assert [fleet.homes for fleet in recorder.fleets] == [expected.simulated_homes()]
+    assert recorder.bounds == [expected.simulation_bounds()]
