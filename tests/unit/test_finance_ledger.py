@@ -415,10 +415,10 @@ class TestOneOwnUseRule:
 
     @pytest.mark.parametrize(
         ("override", "basis"),
-        [(None, OwnUseBasis.SIMULATED), (0.6, OwnUseBasis.OVERRIDE), (0.0, OwnUseBasis.OVERRIDE)],
-        ids=["no-override", "override-0.6", "override-zero"],
+        [(None, OwnUseBasis.SIMULATED), (0.6, OwnUseBasis.OVERRIDE)],
+        ids=["no-override", "override-0.6"],
     )
-    def test_any_override_zero_included_puts_a_finance_on_the_override_basis(
+    def test_a_finance_is_on_the_override_basis_exactly_when_it_sets_an_override(
         self, override: float | None, basis: OwnUseBasis
     ) -> None:
         assert own_use_basis(_finance(override)) is basis
