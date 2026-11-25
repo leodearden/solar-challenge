@@ -230,7 +230,7 @@ def test_compare_radar_chart_in_a_hidden_tab_is_drawn_only_once_its_tab_is_shown
 ) -> None:
     """The radar chart, in the Efficiency Ratios tab hidden on load, is not drawn until its tab is shown, and is then as wide as its container."""
     (id1, _), (id2, _) = seeded_home_runs_pair
-    page.goto(live_server + f"/history/compare?ids={id1},{id2}")
+    page.goto(live_server + f"/history/compare?ids={id1},{id2}", wait_until="domcontentloaded")
     expect(page.locator(f"{_BAR_CHART}.js-plotly-plot")).to_be_visible()
     expect(page.locator(f"{_RADAR_CHART}.js-plotly-plot")).to_have_count(0)
 
