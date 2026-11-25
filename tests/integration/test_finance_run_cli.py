@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -37,27 +37,30 @@ def _write_scenario(
     seg_rate: float | None = None,
     tariff: dict[str, object] | None = None,
     name: str | None = "Finance Run CLI Test",
+    n_homes: int = 2,
+    finance: Mapping[str, float] | None = None,
 ) -> Path:
-    """Write a scenario of two battery-less homes to *directory*, and return its path.
+    """Write a scenario of *n_homes* battery-less homes to *directory*, and return its path.
 
-    Its finance block carries *self_consumption_override*, the scenario has a
-    top-level SEG rate of *seg_rate*, its top-level tariff: block, which every
+    Its finance block is a 28 p/day standing charge with *finance*'s keys
+    merged over it, and carries *self_consumption_override*; the scenario has
+    a top-level SEG rate of *seg_rate*, its top-level tariff: block, which every
     home it generates is priced at, is *tariff*, and its name is *name*, each
     only when given.
     """
-    finance: dict[str, float] = {"standing_charge_pence_per_day": 28.0}
+    finance_block: dict[str, float] = {"standing_charge_pence_per_day": 28.0, **(finance or {})}
     if self_consumption_override is not None:
-        finance["self_consumption_override"] = self_consumption_override
+        finance_block["self_consumption_override"] = self_consumption_override
     scenario: dict[str, object] = {
         "location": {"latitude": 51.45, "longitude": -2.58, "timezone": "Europe/London"},
         "fleet_distribution": {
-            "n_homes": 2,
+            "n_homes": n_homes,
             "seed": 1,
             "pv": {"capacity_kw": 4.0, "azimuth": 180, "tilt": 35},
             "battery": {"capacity_kwh": None},
             "load": {"annual_consumption_kwh": 3500},
         },
-        "finance": finance,
+        "finance": finance_block,
     }
     if seg_rate is not None:
         scenario["seg"] = {"rate_pence_per_kwh": seg_rate}
@@ -142,6 +145,30 @@ def test_the_spreadsheet_column_bills_the_scenarios_override_and_the_physics_col
 
     assert physics_with == physics_without
     assert spreadsheet_with != spreadsheet_without
+
+
+def _own_use_payment_cell(report: str) -> str:
+    """The one cell of the report's Own-Use Payment row after its label: a single bill's own-use payment."""
+    rows = [line for line in report.splitlines() if line.startswith("| Own-Use Payment |")]
+    assert len(rows) == 1, report
+    (cell,) = [cell.strip() for cell in rows[0].strip("|").split("|")][1:]
+    return cell
+
+
+def test_the_spreadsheet_bill_is_headed_by_its_override_and_names_no_physics(tmp_path: Path) -> None:
+    """One home generating 4,000 kWh and demanding 3,400, of which it imports 2,200, owes £420.00 of own-use at 70% of its generation and £180.00 at its simulated 1,200 kWh, each at 15 p/kWh."""
+    scenario = _write_scenario(tmp_path, n_homes=1, finance={"standing_charge_pence_per_day": 60.0})
+    one_home = make_fleet_results(n_homes=1, self_kwh=1200.0, export_kwh=2800.0, import_kwh=2200.0)
+
+    spreadsheet = invoke_finance_run(["--assumptions", "spreadsheet", str(scenario)], one_home)
+    physics = invoke_finance_run(["--assumptions", "physics", str(scenario)], one_home)
+
+    assert spreadsheet.exit_code == 0, spreadsheet.output
+    assert physics.exit_code == 0, physics.output
+    assert "| Line Item | Spreadsheet (70% self-consumption) |" in spreadsheet.stdout.splitlines()
+    assert _own_use_payment_cell(spreadsheet.stdout) == "£420.00"
+    assert "Physics" not in spreadsheet.stdout
+    assert _own_use_payment_cell(physics.stdout) == "£180.00"
 
 
 @pytest.mark.parametrize(
