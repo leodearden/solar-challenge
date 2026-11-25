@@ -16,12 +16,12 @@ from solar_challenge.finance import (
     OwnUseBasis,
     own_use_basis,
 )
+from solar_challenge.gridservices import FlatGridServices, GridServicesAtEvents, GridServicesEventsConfig
 from solar_challenge.output import grid_charge_forecast_notice
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
     from solar_challenge.flex import FlexibilityValueBand
-    from solar_challenge.gridservices import GridServicesAtEvents
     from solar_challenge.optimize import ConfigPoint, RankedSweep, SensitivityPanel
     from solar_challenge.projection import FleetProjection, ProjectEconomics
 
@@ -149,6 +149,106 @@ def _refuse_unrenderable_sections(sections: Mapping[OwnUseBasis, AssumptionSecti
     first_window, *other_windows = windows.values()
     if any(window != first_window for window in other_windows):
         raise ValueError(f"every bill of a finance report is annualised from one window, got {windows!r}")
+
+
+@dataclass(frozen=True)
+class GridServicesIncome:
+    """What the scenario's grid-services pricing books on the bill run's fleet, the same under every assumption mode.
+
+    Construction refuses, naming the rule and the values, a figure the pricing
+    could not have printed.
+    """
+
+    pricing: FlatGridServices | GridServicesEventsConfig
+    """The pricing that booked the income."""
+    annual_income_gbp: float
+    """The fleet's grid-services income (£/yr), as ``pricing`` priced the bill run's fleet; finite and ≥ 0."""
+    battery_homes: int
+    """How many of the fleet's homes have a battery; ≥ 0."""
+    battery_discharge_kw: float
+    """Σ max_discharge_kw of those batteries (kW); finite, and > 0 exactly when there is a battery home."""
+    at_events: Optional[GridServicesAtEvents] = None
+    """The capacity-at-events breakdown the income is, under events pricing; None under flat pricing."""
+
+    def __post_init__(self) -> None:
+        """Refuse another pricing, a figure out of range, and an income its pricing did not book, in that order."""
+        self._refuse_another_pricing()
+        self._refuse_figures_out_of_range()
+        self._refuse_an_income_its_pricing_did_not_book()
+
+    def _refuse_another_pricing(self) -> None:
+        """Refuse a pricing that books no income, and a breakdown its pricing does not make or one it lacks."""
+        if not isinstance(self.pricing, (FlatGridServices, GridServicesEventsConfig)):
+            raise ValueError(
+                "GridServicesIncome is booked by a FlatGridServices or a GridServicesEventsConfig; "
+                f"NoGridServices books nothing, so it has no income to render: got pricing={self.pricing!r}"
+            )
+        if isinstance(self.pricing, FlatGridServices) and self.at_events is not None:
+            raise ValueError(
+                "GridServicesIncome's at_events is the capacity-at-events breakdown, which flat pricing does "
+                f"not make: got pricing={self.pricing!r} with at_events={self.at_events!r}"
+            )
+        if isinstance(self.pricing, GridServicesEventsConfig) and self.at_events is None:
+            raise ValueError(
+                "GridServicesIncome under events pricing carries the capacity-at-events breakdown its income is: "
+                f"got pricing={self.pricing!r} with at_events=None"
+            )
+
+    def _refuse_figures_out_of_range(self) -> None:
+        """Refuse a figure out of range, an income with no battery home, and kW without battery homes or homes without kW."""
+        refused = [
+            f"{name}={value!r}"
+            for name, value in (
+                ("annual_income_gbp", self.annual_income_gbp),
+                ("battery_discharge_kw", self.battery_discharge_kw),
+            )
+            if not 0.0 <= value < math.inf
+        ]
+        if self.battery_homes < 0:
+            refused.append(f"battery_homes={self.battery_homes!r}")
+        if refused:
+            raise ValueError(
+                "GridServicesIncome's annual_income_gbp and battery_discharge_kw are each finite and at least 0, "
+                f"and its battery_homes at least 0: got {', '.join(refused)}"
+            )
+        if self.annual_income_gbp > 0.0 and self.battery_homes == 0:
+            raise ValueError(
+                "GridServicesIncome books income only on battery homes: "
+                f"got annual_income_gbp={self.annual_income_gbp!r} with battery_homes=0"
+            )
+        if (self.battery_discharge_kw > 0.0) != (self.battery_homes > 0):
+            raise ValueError(
+                "GridServicesIncome's battery_discharge_kw is > 0 exactly when battery_homes is, every battery "
+                f"discharging at a positive max_discharge_kw: got battery_homes={self.battery_homes!r} "
+                f"with battery_discharge_kw={self.battery_discharge_kw!r}"
+            )
+
+    def _refuse_an_income_its_pricing_did_not_book(self) -> None:
+        """Refuse an events income other than its breakdown's, and a flat income other than the rate × the battery kW."""
+        if self.at_events is not None and self.annual_income_gbp != self.at_events.annual_income_gbp:
+            raise ValueError(
+                "GridServicesIncome's annual_income_gbp under events pricing is its at_events' annual_income_gbp, "
+                f"{self.at_events.annual_income_gbp!r}, got {self.annual_income_gbp!r}"
+            )
+        if isinstance(self.pricing, FlatGridServices):
+            rate = self.pricing.income_per_kw_per_year_gbp
+            booked = rate * self.battery_discharge_kw
+            if not math.isclose(self.annual_income_gbp, booked):
+                raise ValueError(
+                    "GridServicesIncome's annual_income_gbp under flat pricing is income_per_kw_per_year_gbp × "
+                    f"battery_discharge_kw, {rate!r} × {self.battery_discharge_kw!r} = {booked!r}, "
+                    f"got {self.annual_income_gbp!r}"
+                )
+
+    @property
+    def per_battery_home_gbp(self) -> Optional[float]:
+        """The income per battery home (£/yr); None for a fleet with no battery home."""
+        return self.annual_income_gbp / self.battery_homes if self.battery_homes else None
+
+    @property
+    def per_discharge_kw_gbp(self) -> Optional[float]:
+        """The income per kW of battery discharge (£/kW-yr); None for a fleet with no battery home."""
+        return self.annual_income_gbp / self.battery_discharge_kw if self.battery_homes else None
 
 
 _Value = TypeVar("_Value")
