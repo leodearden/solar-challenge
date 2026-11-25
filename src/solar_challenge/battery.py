@@ -286,7 +286,7 @@ class BatteryConfig:
 
     @property
     def resolved_soh(self) -> float:
-        """The state of health a Battery built from this config holds, resolved once.
+        """The state of health a Battery holds while this config is its own, built from it or assigned to it.
 
         The ``soh`` override wins and is used as given, without clamping to
         ``soh_floor``: supply one consistent with ``soh_floor`` if the
