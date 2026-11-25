@@ -23,6 +23,7 @@ from solar_challenge.optimize import (
     SensitivityPanel,
 )
 from solar_challenge.output import generate_config_ranking_report
+from solar_challenge.projection import fewest_simulated_ages
 from tests._cli_fleet_simulator import ReachedTheSweep, answering, invoke_cli, simulate_reaching_the_sweep
 from tests._factories import (
     make_bill_distribution_from_statistics,
@@ -386,9 +387,12 @@ class TestGenerateConfigRankingReportTable1:
 # §D — generate_config_ranking_report Table (2)
 # ---------------------------------------------------------------------------
 
+_TRADE_OFF = "## Configured-Rate Trade-Off"
+"""The heading of the report's second table: each feasible config's baseline pair at its configured own-use rate."""
+
 
 class TestGenerateConfigRankingReportTable2:
-    """generate_config_ranking_report renders the FIXED-15p TRADE-OFF table."""
+    """generate_config_ranking_report renders the CONFIGURED-RATE TRADE-OFF table."""
 
     def _make_sweep_with_pareto(self) -> RankedSweep:
         """Build a RankedSweep where some (not all) feasible configs are on the Pareto front."""
@@ -437,17 +441,22 @@ class TestGenerateConfigRankingReportTable2:
             floor=27.0,
         )
 
-    def test_fixed15p_table_heading_present(self) -> None:
-        """Report must contain a fixed-15p trade-off table heading."""
+    def test_configured_rate_table_heading_present(self) -> None:
+        """Report must contain the configured-rate trade-off table heading."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
-        assert "fixed-15p" in report.lower() or "trade-off" in report.lower() or "trade‑off" in report.lower(), (
-            f"Expected fixed-15p trade-off heading in report:\n{report}"
-        )
+        assert f"{_TRADE_OFF}\n" in report, f"Expected {_TRADE_OFF!r} heading in report:\n{report}"
+
+    def test_each_row_names_the_configured_rate_its_baseline_pair_is_priced_at(self) -> None:
+        result = make_config_result(baseline_own_use_rate_pence_per_kwh=12.0)
+        report = generate_config_ranking_report(make_ranked_sweep([result]))
+
+        row = _config_row(report, _TRADE_OFF, "4.0 kWp / 6.0 kWh / 3.6 kW")
+        assert row["Configured Rate (p/kWh)"] == "12.00 p/kWh", report
 
     def test_baseline_outlay_values_present(self) -> None:
-        """Report must show each feasible config's baseline_outlay_gbp in its Fixed-15p Trade-Off row."""
+        """Report must show each feasible config's baseline_outlay_gbp in its Configured-Rate Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -456,11 +465,11 @@ class TestGenerateConfigRankingReportTable2:
             "5.0 kWp / 5.0 kWh / 5.0 kW": "£420.00",
             "6.0 kWp / 5.0 kWh / 5.0 kW": "£450.00",
         }
-        shown = _column(report, "## Fixed-15p Trade-Off", "Baseline Outlay (£/yr)", expected)
+        shown = _column(report, _TRADE_OFF, "Baseline Outlay (£/yr)", expected)
         assert shown == expected, f"baseline outlays not shown in their configs' rows:\n{report}"
 
     def test_baseline_surplus_values_present(self) -> None:
-        """Report must show each feasible config's baseline_surplus_per_home_gbp in its Fixed-15p Trade-Off row."""
+        """Report must show each feasible config's baseline_surplus_per_home_gbp in its Configured-Rate Trade-Off row."""
         ranked = self._make_sweep_with_pareto()
         report = generate_config_ranking_report(ranked)
 
@@ -469,7 +478,7 @@ class TestGenerateConfigRankingReportTable2:
             "5.0 kWp / 5.0 kWh / 5.0 kW": "£80.00",
             "6.0 kWp / 5.0 kWh / 5.0 kW": "£60.00",
         }
-        shown = _column(report, "## Fixed-15p Trade-Off", "Baseline CBS Surplus (£/home/yr)", expected)
+        shown = _column(report, _TRADE_OFF, "Baseline CBS Surplus (£/home/yr)", expected)
         assert shown == expected, f"baseline surpluses not shown in their configs' rows:\n{report}"
 
     def test_pareto_flag_set_for_pareto_configs(self) -> None:
@@ -479,8 +488,8 @@ class TestGenerateConfigRankingReportTable2:
 
         # Scope to Table 2 section — both tables print config dim labels so un-scoped
         # line filters would also match Table 1 rows which carry no Pareto column.
-        assert "## Fixed-15p Trade-Off" in report, "Table 2 heading not found"
-        table2 = report.split("## Fixed-15p Trade-Off", 1)[1]
+        assert _TRADE_OFF in report, "Table 2 heading not found"
+        table2 = report.split(_TRADE_OFF, 1)[1]
 
         # Exactly two '✔ Pareto' tokens: one for Config A, one for Config B
         pareto_count = table2.count("✔ Pareto")
@@ -505,8 +514,8 @@ class TestGenerateConfigRankingReportTable2:
         # labels but has NO Pareto column; an un-scoped line filter on dims would match Table-1
         # rows and falsify the assertion.  Splitting on the Table-2 heading isolates the section
         # that actually carries the Pareto flag column.
-        assert "## Fixed-15p Trade-Off" in report, "Table 2 heading not found"
-        table2 = report.split("## Fixed-15p Trade-Off", 1)[1]
+        assert _TRADE_OFF in report, "Table 2 heading not found"
+        table2 = report.split(_TRADE_OFF, 1)[1]
         table2_lines = table2.split("\n")
 
         # Config C row (6.0 kWp / 5.0 kWh): dominated → must carry '—' (U+2014), NOT '✔ Pareto'
@@ -546,8 +555,8 @@ class TestGenerateConfigRankingReportTable2:
         infeasible = "9.9 kWp / 15.0 kWh / 5.0 kW"
         infeasible_section = _section(report, "### Infeasible Configurations")
         assert infeasible in infeasible_section, f"infeasible config {infeasible!r} not listed under '### Infeasible Configurations':\n{infeasible_section}"
-        table2 = _section(report, "## Fixed-15p Trade-Off")
-        assert infeasible not in table2, f"infeasible config {infeasible!r} listed under '## Fixed-15p Trade-Off':\n{table2}"
+        table2 = _section(report, _TRADE_OFF)
+        assert infeasible not in table2, f"infeasible config {infeasible!r} listed under {_TRADE_OFF!r}:\n{table2}"
 
     def test_no_feasible_config_renders_a_nothing_to_compare_note_even_with_a_pareto_front(self) -> None:
         """With every config infeasible, Table 2 is a nothing-to-compare note alone, though run_sweep's Pareto front, taken over all configs, holds the infeasible one."""
@@ -555,9 +564,9 @@ class TestGenerateConfigRankingReportTable2:
         sweep = make_ranked_sweep((), infeasible=(infeasible_pt,), pareto=(infeasible_pt,))
         report = generate_config_ranking_report(sweep)
 
-        table2 = _section(report, "## Fixed-15p Trade-Off")
+        table2 = _section(report, _TRADE_OFF)
         assert table2.strip() == "*No feasible configurations to compare.*", (
-            f"'## Fixed-15p Trade-Off' is not the nothing-to-compare note alone:\n{report}"
+            f"{_TRADE_OFF!r} is not the nothing-to-compare note alone:\n{report}"
         )
 
     def test_two_tables_both_present(self) -> None:
@@ -566,7 +575,7 @@ class TestGenerateConfigRankingReportTable2:
         report = generate_config_ranking_report(ranked)
 
         assert "cost-recovery rank" in report.lower()
-        assert "fixed-15p" in report.lower() or "trade-off" in report.lower() or "baseline" in report.lower()
+        assert f"{_TRADE_OFF}\n" in report, report
 
 
 # ---------------------------------------------------------------------------
@@ -894,8 +903,8 @@ class TestOptimizeCLIE2EFast:
             f"Expected cost-recovery rank heading in output:\n{result.output}"
         )
         # Exact heading — guards against regressions that drop the section.
-        assert "## Fixed-15p Trade-Off" in result.output, (
-            f"Expected '## Fixed-15p Trade-Off' heading in output:\n{result.output}"
+        assert f"{_TRADE_OFF}\n" in result.output, (
+            f"Expected {_TRADE_OFF!r} heading in output:\n{result.output}"
         )
         assert "sensitivity" in result.output.lower(), (
             f"Expected sensitivity section heading in output:\n{result.output}"
@@ -1034,12 +1043,45 @@ class TestOptimizeCLIE2EFast:
                 n_homes=1,
             )
             assert result.exit_code == 0, result.output
-            row = _config_row(result.stdout, "## Fixed-15p Trade-Off", "4.0 kWp / 5.0 kWh / 5.0 kW")
+            row = _config_row(result.stdout, _TRADE_OFF, "4.0 kWp / 5.0 kWh / 5.0 kW")
             return float(row["Baseline CBS Surplus (£/home/yr)"].removeprefix("£"))
 
         assert baseline_surplus_gbp(["--grid-services-kw", "20"]) - baseline_surplus_gbp(
             []
         ) == pytest.approx(20.0 * battery.max_discharge_kw, abs=0.01)
+
+    def test_the_trade_off_table_names_the_scenarios_own_use_rate(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        result, _ = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
+            n_homes=1,
+            finance_overrides={"own_use_rate_pence_per_kwh": 12.0},
+        )
+
+        assert result.exit_code == 0, result.output
+        row = _config_row(result.stdout, _TRADE_OFF, "4.0 kWp / 0.0 kWh / 5.0 kW")
+        assert row["Configured Rate (p/kWh)"] == "12.00 p/kWh", result.stdout
+
+    def test_each_config_asks_its_simulator_for_one_projection(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """Two configs over _write_optimize_scenario's 25-year asset life, each one smooth projection."""
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4,5", "--battery", "0", "--inverter", "5", "--sensitivity", ""],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert len(simulated_fleets) == 2 * fewest_simulated_ages(25), [fleet.name for fleet in simulated_fleets]
 
     def test_unknown_sensitivity_alias_exits_one(
         self,
