@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import json
 from contextlib import ExitStack
 from datetime import date
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 import pandas as pd
 import pytest
 import yaml
+from typer.testing import Result
 
 from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.errors import ConfigurationError
@@ -74,6 +76,7 @@ FLEET_DISTRIBUTION: dict[str, Any] = {
     "seg": _SEG,
     "finance": _FINANCE,
 }
+FLEET_DISTRIBUTION_AT_EDINBURGH: dict[str, Any] = {**FLEET_DISTRIBUTION, "location": location_block(_EDINBURGH)}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -110,35 +113,50 @@ _FLAG_VARIANTS = {
 }
 
 
+def _shown_on_stderr(result: Result) -> str:
+    return stderr_text(result)
+
+
+def _shown_in_table(result: Result) -> str:
+    return table_text(result.stdout)
+
+
 @dataclasses.dataclass(frozen=True)
 class _Command:
-    """A command that reads a scenario file: the words that run it, the id of its rows, and the leaf that turned its rows green."""
+    """A command that reads a scenario file: the words that run it, the id of its rows, the leaf that turned its rows green, and how it reports a refusal.
+
+    A refusal is reported as the text refusal_prefix then the reader's message, in the text shown(result) gives.
+    """
 
     name: str
     words: tuple[str, ...]
     leaf: str
+    shown: Callable[[Result], str] = _shown_on_stderr
+    refusal_prefix: str = "Configuration error: "
 
 
 _HOME_RUN = _Command("home-run", ("home", "run"), "task958-delta")
 _FLEET_RUN = _Command("fleet-run", ("fleet", "run"), "task957-gamma-seg_task960-zeta-period")
 _FINANCE_RUN = _Command("finance-run", ("finance", "run"), "task959-epsilon")
 _OPTIMIZE_CONFIGS = _Command("optimize-configs", ("optimize", "configs"), "task959-epsilon")
-_VALIDATE_CONFIG = _Command("validate-config", ("validate", "config"), "task957-gamma")
+_VALIDATE_CONFIG = _Command(
+    "validate-config", ("validate", "config"), "task957-gamma", shown=_shown_in_table, refusal_prefix="ERROR "
+)
 
 _DOCUMENTS: dict[str, Mapping[str, Any]] = {
     "home-doc": HOME,
     "homes-doc": HOMES,
-    "fleet-distribution-doc": FLEET_DISTRIBUTION,
+    "fleet-distribution-doc": FLEET_DISTRIBUTION_AT_EDINBURGH,
 }
 _FLEET_DOCUMENTS = {name: document for name, document in _DOCUMENTS.items() if name != "home-doc"}
 
 
-def _flags_rows(leaf: str) -> list[Any]:
+def _flags_only_rows(leaf: str) -> list[Any]:
     """One row of (flags) for each flag variant, its id '<flags>-<leaf>'."""
     return [pytest.param(flags, id=f"{flags_name}-{leaf}") for flags_name, flags in _FLAG_VARIANTS.items()]
 
 
-def _document_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]], *, tag: str) -> list[Any]:
+def _command_document_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]], *, tag: str) -> list[Any]:
     """One row of (command, document) for each command and document, its id '<command>-<document>-<tag>-<leaf>'."""
     return [
         pytest.param(command, document, id=f"{command.name}-{document_name}-{tag}-{command.leaf}")
@@ -147,7 +165,7 @@ def _document_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping
     ]
 
 
-def _flag_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]]) -> list[Any]:
+def _command_document_flags_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str, Any]]) -> list[Any]:
     """One row of (command, document, flags) for each command, document and flag variant, its id '<command>-<document>-<flags>-<leaf>'."""
     return [
         pytest.param(command, document, flags, id=f"{command.name}-{document_name}-{flags_name}-{command.leaf}")
@@ -158,9 +176,13 @@ def _flag_rows(commands: Sequence[_Command], documents: Mapping[str, Mapping[str
 
 
 def _written(tmp_path: Path, document: Mapping[str, Any], *, name: str = "scenario.yaml") -> Path:
-    """The path of *document*, written to *name* under *tmp_path* as YAML."""
+    """The path of *document*, written to *name* under *tmp_path* as YAML.
+
+    The document goes through JSON first so that a block it holds twice is two blocks in the
+    file, as a user's file has them, not an &anchor and its *alias.
+    """
     path = tmp_path / name
-    path.write_text(yaml.safe_dump(dict(document), sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.safe_dump(json.loads(json.dumps(document)), sort_keys=False), encoding="utf-8")
     return path
 
 
@@ -169,13 +191,18 @@ def _written(tmp_path: Path, document: Mapping[str, Any], *, name: str = "scenar
     [
         pytest.param(HOME, _EDINBURGH, id="home-doc"),
         pytest.param(HOMES, _EDINBURGH, id="homes-doc"),
-        pytest.param(FLEET_DISTRIBUTION, _BRISTOL, id="fleet-distribution-doc"),
+        pytest.param(FLEET_DISTRIBUTION_AT_EDINBURGH, _EDINBURGH, id="fleet-distribution-doc"),
+        pytest.param(FLEET_DISTRIBUTION, _BRISTOL, id="fleet-page-doc"),
     ],
 )
 def test_the_reader_gives_each_documents_homes_its_location_tariff_and_seg_over_its_period(
     tmp_path: Path, document: Mapping[str, Any], location: Location
 ) -> None:
-    """Every row below compares against homes that carry the document's location, tariff and SEG over its period, so an entry point that drops one of them (task 957, γ) or runs the default year (task 956, β) cannot equal them."""
+    """Every CLI row below compares against homes that carry the document's location, tariff and SEG over its period, none of them the reader's default, so an entry point that drops one of them (task 957, γ) or runs the default year (task 956, β) cannot equal them.
+
+    The fleet page's document sits at Bristol, the reader's default, because the fleet form has no location
+    control; its dashboard rows therefore discriminate on the tariff, the SEG and the period alone.
+    """
     scenario = load_scenario(_written(tmp_path, document))
 
     window = scenario.window()
@@ -192,8 +219,8 @@ def test_the_reader_gives_each_documents_homes_its_location_tariff_and_seg_over_
 @pytest.mark.parametrize(
     ("command", "document", "flags"),
     [
-        *_flag_rows([_HOME_RUN], {"home-doc": HOME}),
-        *_flag_rows([_FLEET_RUN, _FINANCE_RUN], _DOCUMENTS),
+        *_command_document_flags_rows([_HOME_RUN], {"home-doc": HOME}),
+        *_command_document_flags_rows([_FLEET_RUN, _FINANCE_RUN], _DOCUMENTS),
     ],
 )
 def test_each_command_simulates_the_readers_homes_over_its_bounds(
@@ -243,7 +270,7 @@ def _install_point(home: HomeConfig) -> tuple[float, Optional[float], float]:
 
 @pytest.mark.parametrize(
     ("command", "document", "flags"),
-    _flag_rows([_OPTIMIZE_CONFIGS], {name: _DOCUMENTS[name] for name in ("homes-doc", "fleet-distribution-doc")}),
+    _command_document_flags_rows([_OPTIMIZE_CONFIGS], _FLEET_DOCUMENTS),
 )
 def test_optimize_configs_simulates_the_readers_homes_at_its_install_point_over_its_bounds(
     tmp_path: Path, command: _Command, document: Mapping[str, Any], flags: _Flags
@@ -285,9 +312,9 @@ def test_validate_config_reads_each_document_as_valid(tmp_path: Path, document: 
 @pytest.mark.parametrize(
     ("command", "document"),
     [
-        *_document_rows([_HOME_RUN], {"home-doc": HOME}, tag="finanse"),
-        *_document_rows([_FLEET_RUN, _FINANCE_RUN, _VALIDATE_CONFIG], _DOCUMENTS, tag="finanse"),
-        *_document_rows([_OPTIMIZE_CONFIGS], _FLEET_DOCUMENTS, tag="finanse"),
+        *_command_document_rows([_HOME_RUN], {"home-doc": HOME}, tag="finanse"),
+        *_command_document_rows([_FLEET_RUN, _FINANCE_RUN, _VALIDATE_CONFIG], _DOCUMENTS, tag="finanse"),
+        *_command_document_rows([_OPTIMIZE_CONFIGS], _FLEET_DOCUMENTS, tag="finanse"),
     ],
 )
 def test_every_command_refuses_a_document_the_reader_refuses_with_the_readers_message(
@@ -304,10 +331,7 @@ def test_every_command_refuses_a_document_the_reader_refuses_with_the_readers_me
 
     assert result.exit_code == 1, result.output
     assert recorder.fleets == []
-    if command is _VALIDATE_CONFIG:
-        assert f"ERROR {message}" in table_text(result.stdout)
-    else:
-        assert stderr_text(result) == f"Configuration error: {message}"
+    assert f"{command.refusal_prefix}{message}" in command.shown(result)
 
 
 @pytest.mark.parametrize(
@@ -327,7 +351,7 @@ def test_home_run_refuses_a_fleet_document_naming_fleet_run(tmp_path: Path, docu
 _ALL_JOBS_DONE_WITHIN_SECONDS = 60
 
 
-@pytest.mark.parametrize("flags", _flags_rows("task961-eta"))
+@pytest.mark.parametrize("flags", _flags_only_rows("task961-eta"))
 def test_the_fleet_import_then_the_fleet_form_runs_the_readers_homes_over_its_bounds(
     tmp_path: Path, closes_at_teardown: ExitStack, flags: _Flags
 ) -> None:
@@ -370,7 +394,7 @@ def test_the_fleet_import_refuses_a_document_the_reader_refuses_with_the_readers
     assert recorder.fleets == []
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class _KeepingHomeSimulator:
     """A HomeSimulator that simulates each home as home.simulate_home does and keeps the results it returns in kept."""
 
@@ -384,7 +408,7 @@ class _KeepingHomeSimulator:
         return results
 
 
-@pytest.mark.parametrize("flags", _flags_rows("task894-s12-beta_task956-beta"))
+@pytest.mark.parametrize("flags", _flags_only_rows("task894-s12-beta_task956-beta"))
 def test_home_run_simulates_the_scenarios_window(tmp_path: Path, weather_cache: WeatherCache, flags: _Flags) -> None:
     """G2: home run's real simulate_home runs over the window of the scenario the reader reads, the flags' days replacing the file's: simulate_home builds its window first (S12 β, task 894) and the scenario gives the window (S6 β, task 956)."""
     path = _written(tmp_path, HOME)

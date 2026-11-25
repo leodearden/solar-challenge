@@ -399,14 +399,16 @@ conventions:
       _cbs_own_use_kwh diverge from self-consumption should know it's correct by design.
 
   - rule: >
-      Every scenario command reads its file through config.load_scenario, and the dashboard's
-      fleet import and fleet form read theirs through config.parse_scenario. Home run, fleet run,
-      finance run and the fleet form simulate the reader's simulated_homes() over its
+      Home run, fleet run, finance run and optimize configs read their file through
+      config.load_scenario, validate config reads its through config.load_scenarios, and the
+      dashboard's fleet import and fleet form read theirs through config.parse_scenario. Home run,
+      fleet run, finance run and the fleet form simulate the reader's simulated_homes() over its
       simulation_bounds(). Optimize configs simulates those homes in every field its install
-      point and the projection's ages leave alone. Each command's --start and --end, and the
-      fleet form's start and end, replace only their own day. Home run, fleet run, finance run,
-      optimize configs, validate config and the fleet import refuse a document the reader
-      refuses, with the reader's message (tests/integration/test_one_scenario_reader.py).
+      point and the projection's ages leave alone. The --start and --end of home run, fleet run,
+      finance run and optimize configs, and the fleet form's start and end, replace only their
+      own day. Home run, fleet run, finance run, optimize configs, validate config and the fleet
+      import refuse a document the reader refuses, with the reader's message
+      (tests/integration/test_one_scenario_reader.py).
     why: >
       Before the one reader, each command decided for itself which top-level blocks reached the
       homes and which window ran: fleet run dropped seg:, finance run ignored period:, home run
