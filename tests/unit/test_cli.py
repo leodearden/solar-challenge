@@ -1176,7 +1176,13 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         assert "×12.200 from a 30-day window (2024-03-15 to 2024-04-13)" in result.stdout
 
     def test_optimize_configs_warns_of_a_large_sweep_by_its_calendar_days(self) -> None:
-        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward: 550 configs over one home for 182 days are 100,100 home-days, over the 100,000 that warrant the warning, where 181 days would be 99,550."""
+        """1 January to 30 June 2024 are 182 calendar days, though the whole 24-hour days between their midnights, plus one, are 181 once the clocks have gone forward.
+
+        110 configs, each one projection simulating at least 5 ages over the
+        scenario's default 25-year asset life, over one home for 182 calendar
+        days are 100,100 home-days, over the 100,000 that warrant the warning;
+        181 days would be 99,550.
+        """
         _write_scenario("Bristol")
 
         result = invoke_cli(
@@ -1184,7 +1190,7 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
                 "optimize", "configs", "scenario.yaml",
                 "--pv", "1,2,3,4,5,6,7,8,9,10",
                 "--battery", "0,1,2,3,4,5,6,7,8,9,10",
-                "--inverter", "3,4,5,6,7",
+                "--inverter", "3",
                 "--sensitivity", "",
                 "--start", "2024-01-01", "--end", "2024-06-30",
             ],
@@ -1192,7 +1198,10 @@ class TestCommandsCountTheCalendarDaysOfTheirRun:
         )
 
         assert isinstance(result.exception, ReachedTheSweep)
-        assert "550 config(s) × 1 home(s) × 182 day(s) ≈ 100,100 home-days" in " ".join(result.stderr.split())
+        assert (
+            "110 config(s) × at least 5 simulated age(s) per projection × 1 home(s) × 182 day(s) ≈ 100,100 home-days"
+            in " ".join(result.stderr.split())
+        )
 
 
 _ECONOMY_7_TARIFF = {
