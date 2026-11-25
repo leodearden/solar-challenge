@@ -44,7 +44,7 @@ YAML_SWEEP = SweepPath(
         "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
     },
     options=(),
-    param_name="multiplier",
+    param_name="battery.capacity_kwh.multiplier",
     values=(1.25, 2.5),
 )
 

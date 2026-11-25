@@ -57,7 +57,7 @@ from tests._cli_fleet_simulator import (
 )
 from tests._cli_table_text import table_text
 from tests._finance_builders import make_fleet_results_of, make_sim_results
-from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
+from tests._misplaced_sweeps import SHIPPED_SWEEP, misplaced_sweep_refusal, sweep_moved_to
 from tests._repository_paths import SCENARIOS_DIR
 from tests._seeded_tmy import ClearJuneDays
 
@@ -1229,7 +1229,7 @@ _SWEEP_PATHS = (
             "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
         },
         (),
-        "multiplier_1.2500.csv",
+        "battery.capacity_kwh.multiplier_1.2500.csv",
         id="yaml-sweep",
     ),
     pytest.param(
@@ -1402,6 +1402,19 @@ class TestFleetRefusesASweepMultiplierOffTheBatteryCapacity:
 
         assert result.exit_code == 1
         assert misplaced_sweep_refusal("fleet_distribution.battery.max_charge_kw") in " ".join(result.stderr.split())
+
+
+class TestFleetRunRefusesASweepFile:
+    """C6: `fleet run` refuses a file whose fleet sweeps, naming the sweep's placement and `fleet sweep`, which runs it."""
+
+    def test_fleet_run_refuses_the_shipped_sweep_file_naming_its_placement_and_fleet_sweep(self) -> None:
+        result = _run_fleet("run", str(SHIPPED_SWEEP))
+
+        assert result.exit_code == 1
+        assert (
+            "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 16 points, "
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+        ) in " ".join(result.stderr.split())
 
 
 class TestQuietOption:
