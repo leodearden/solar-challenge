@@ -4,21 +4,23 @@
 
 import dataclasses
 import enum
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Optional
 
 import typer
 
-from solar_challenge.cli.utils import CliInvocation, handle_errors, invocation, print_info, print_report
-from solar_challenge.config import (
-    ScenarioConfig,
-    load_config,
-    load_fleet_config,
-    load_scenario,
-    period_window,
+from solar_challenge.cli.utils import (
+    CliInvocation,
+    EndOption,
+    StartOption,
+    handle_errors,
+    invocation,
+    print_info,
+    print_report,
+    required_finance,
+    with_window_options,
 )
-from solar_challenge.errors import ConfigurationError
+from solar_challenge.config import ScenarioConfig, load_scenario
 from solar_challenge.finance import (
     DEFAULT_SPREADSHEET_SELF_CONSUMPTION,
     BillDistribution,
@@ -45,12 +47,6 @@ from solar_challenge.projection import (
     run_cost_recovery,
     scenario_fleet,
 )
-from solar_challenge.scenario_blocks import (
-    parse_finance_config,
-    parse_seg_rate,
-)
-from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Financial analysis commands")
 
@@ -61,28 +57,6 @@ class AssumptionMode(str, enum.Enum):
     physics = "physics"
     spreadsheet = "spreadsheet"
     both = "both"
-
-
-def _required_finance_block(raw: Mapping[str, Any]) -> FinanceConfig:
-    """The scenario's parsed finance: block, raising ConfigurationError when it has none."""
-    finance = parse_finance_config(raw.get("finance"))
-    if finance is None:
-        raise ConfigurationError(
-            "No 'finance:' block found in the scenario file. "
-            "Add a finance: block with at least standing_charge_pence_per_day."
-        )
-    return finance
-
-
-def _with_seg_tariff(fleet_config: FleetConfig, seg_rate: Optional[float]) -> FleetConfig:
-    """*fleet_config* with *seg_rate* pence/kWh as every home's SEG export tariff, or *fleet_config* itself when *seg_rate* is None."""
-    if seg_rate is None:
-        return fleet_config
-    seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-    return dataclasses.replace(
-        fleet_config,
-        homes=tuple(dataclasses.replace(home, seg_tariff=seg_tariff) for home in fleet_config.homes),
-    )
 
 
 def _grid_services_at_events(
@@ -158,20 +132,8 @@ def run(
             case_sensitive=False,
         ),
     ] = AssumptionMode.physics,
-    start: Annotated[
-        str,
-        typer.Option(
-            "--start",
-            help="Simulation start date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_FIRST_DAY.isoformat(),
-    end: Annotated[
-        str,
-        typer.Option(
-            "--end",
-            help="Simulation end date (YYYY-MM-DD)",
-        ),
-    ] = DEFAULT_LAST_DAY.isoformat(),
+    start: StartOption = None,
+    end: EndOption = None,
     project: Annotated[
         bool,
         typer.Option(
@@ -205,8 +167,9 @@ def run(
     """Run a householder bill analysis for a fleet scenario.
 
     Loads the fleet from the scenario YAML, simulates all homes over the
-    specified date range, and prints a finance report showing the
-    representative householder bill and fleet bill distribution.
+    scenario's period:, each of --start and --end replacing its own day, and
+    prints a finance report showing the representative householder bill and
+    fleet bill distribution.
 
     The scenario file must contain a ``finance:`` block with at least
     ``standing_charge_pence_per_day``.
@@ -217,30 +180,16 @@ def run(
         solar-challenge finance run scenarios/bristol-phase1.yaml \\
             --assumptions both --start 2024-06-01 --end 2024-08-31
     """
-    raw = load_config(scenario)
-    finance = _required_finance_block(raw)
+    scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
+    finance = required_finance(scenario_config)
     pricing = grid_services_model_of(finance)
-    band = flex_band if flex_band is not None else load_scenario(scenario).flex_band
+    band = flex_band if flex_band is not None else scenario_config.flex_band
 
-    fleet_config = load_fleet_config(scenario)
-    seg_rate = parse_seg_rate(raw.get("seg"))
-    fleet_config = _with_seg_tariff(fleet_config, seg_rate)
-
-    loc = fleet_config.homes[0].location
-    scenario_config = ScenarioConfig(
-        name=raw.get("name", str(scenario)),
-        period=period_window(start, end, timezone=loc.timezone),
-        homes=fleet_config.homes,
-        location=loc,
-        finance=finance,
-        # Only --cost-recovery passes the rate on:
-        # tests/integration/test_finance_run_cli.py::test_project_economics_are_the_same_with_and_without_cost_recovery
-        seg_tariff_pence_per_kwh=seg_rate if cost_recovery else None,
-    )
+    fleet_config = FleetConfig(homes=scenario_config.simulated_homes(), name=scenario_config.name)
     start_date, end_date = scenario_config.simulation_bounds()
 
     cli = invocation(ctx)
-    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {scenario_config.period.days} days…")
+    print_info(cli, f"Simulating fleet of {len(fleet_config.homes)} homes for {scenario_config.window().days} days…")
     fleet_results = cli.runner.simulate(fleet_config, start_date, end_date)
     grid_services_at_events = _grid_services_at_events(fleet_results, pricing)
 
@@ -261,7 +210,7 @@ def run(
     report = generate_finance_report(
         primary_bill,
         spreadsheet_bill,
-        scenario_name=scenario_config.name,
+        scenario_name=scenario_config.name or str(scenario),
         economics=economics_result,
         cost_recovery=cost_recovery_result,
         flex_band=resolve_flex_band(band) if band is not None else None,
