@@ -95,15 +95,29 @@ def _banded_knob(name: str) -> Knob:
 
 
 def _banded_axes(names: Iterable[str]) -> tuple[_NamedAxis, ...]:
-    """Each of *names*, in order, paired with the banded knob it names."""
-    return tuple((name, _banded_knob(name)) for name in names)
+    """Each of *names*, in order, paired with the banded knob it names.
+
+    Raises:
+        ConfigurationError: As _banded_knob refuses a name, or if two of *names*
+            name one knob, naming both as written.
+    """
+    name_of: dict[Knob, str] = {}
+    for name in names:
+        knob = _banded_knob(name)
+        if knob in name_of:
+            raise ConfigurationError(
+                f"--sensitivity names the knob {knob.name} twice, as {name_of[knob]} and as {name}; "
+                "name each knob once"
+            )
+        name_of[knob] = name
+    return tuple((name, knob) for knob, name in name_of.items())
 
 
 def _parse_sensitivity(raw: str) -> tuple[_NamedAxis, ...]:
     """The sensitivity axes the comma-separated *raw* names, in order; '' names none.
 
     Raises:
-        ConfigurationError: As _banded_knob refuses a name.
+        ConfigurationError: As _banded_axes refuses *raw*'s names.
     """
     return _banded_axes(name.strip() for name in raw.split(",") if name.strip())
 

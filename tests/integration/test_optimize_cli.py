@@ -1001,6 +1001,26 @@ class TestOptimizeCLIE2EFast:
         assert [knob.name for knob in SENSITIVITY_BANDS if knob.name not in refusal] == [], refusal
         assert simulated_fleets == []
 
+    def test_a_knob_named_twice_is_refused_naming_both_spellings_before_any_simulation(
+        self,
+        tmp_path: Path,
+        one_home_fleet_results: FleetResults,
+    ) -> None:
+        """A knob named by its alias and by its canonical name is a configuration error naming both, refused before the sweep."""
+        canonical = "retained_cash_floor_per_home_per_year_gbp"
+        result, simulated_fleets = self._invoke_configs(
+            tmp_path,
+            one_home_fleet_results,
+            ["--pv", "4", "--battery", "0", "--inverter", "5", "--sensitivity", f"retained_floor,{canonical}"],
+            n_homes=1,
+        )
+
+        assert result.exit_code == 1, result.output
+        refusal = stderr_text(result)
+        assert refusal.startswith("Configuration error:"), refusal
+        assert f"as retained_floor and as {canonical}" in refusal, refusal
+        assert simulated_fleets == []
+
     def test_parse_robustness_single_pv_value_works(
         self,
         tmp_path: Path,
