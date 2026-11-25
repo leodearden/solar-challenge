@@ -54,6 +54,22 @@ def _fleet(command: tuple[str, ...], *flags: str) -> tuple[Result, RecordingSimu
 
 _COMMANDS = [
     pytest.param(5.0, ("run",), 1, id="fleet-run"),
+    pytest.param(
+        {
+            "type": "proportional_to",
+            "source": "pv.capacity_kw",
+            "multiplier": {"type": "sweep", "min": 1.25, "max": 2.5, "steps": 2, "mode": "linear"},
+        },
+        ("sweep",),
+        2,
+        id="fleet-sweep-yaml",
+    ),
+    pytest.param(
+        "${CAP}",
+        ("sweep", "--param", "CAP", "--min", "5", "--max", "10", "--steps", "2", "--mode", "linear"),
+        2,
+        id="fleet-sweep-param",
+    ),
 ]
 
 _WINDOWS = [

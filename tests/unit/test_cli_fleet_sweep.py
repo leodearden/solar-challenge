@@ -138,14 +138,13 @@ def test_a_param_sweep_without_both_bounds_is_refused_before_it_simulates(
 
 
 @pytest.mark.parametrize(("capacity_kwh", "options", "param_name", "values"), _SWEEP_PATHS)
-def test_a_start_date_it_cannot_read_is_refused_without_creating_the_output_directory(
+def test_flags_that_leave_no_window_are_refused_without_creating_the_output_directory(
     capacity_kwh: object, options: tuple[str, ...], param_name: str, values: tuple[float, ...]
 ) -> None:
-    """The period is read in the timezone of the first point's fleet, so only once the points are built; the output directory is created after that."""
-    result = _sweep(capacity_kwh, *options, start="not-a-date")
+    result = _sweep(capacity_kwh, *options, start="2024-06-22")
 
     assert result.exit_code == 1
-    assert "Invalid value" in " ".join(result.stderr.split())
+    assert "Configuration error: --start 2024-06-22" in " ".join(result.stderr.split())
     assert not Path("out").exists()
 
 
