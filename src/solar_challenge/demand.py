@@ -141,7 +141,7 @@ class Demand:
 
     @property
     def total_kw(self) -> pd.Series:
-        """The home's demand in kW on the window's rows: its loads summed."""
+        """The home's demand in kW on the window's rows: its loads summed, on each read, so bind it once."""
         total: pd.Series = functools.reduce(operator.add, self.loads.values())
         return total
 

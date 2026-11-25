@@ -359,7 +359,11 @@ class SimulationResults:
 
     @property
     def loads(self) -> Mapping[LoadKind, pd.Series]:
-        """Every load within demand in kW, by LoadKind: the household's, demand less the additional loads and at least 0, then each additional load."""
+        """Every load within demand in kW, by LoadKind: the household's, demand less the additional loads and at least 0, then each additional load.
+
+        The household's load is computed on each read, so bind the mapping once rather than
+        index the property repeatedly.
+        """
         household = self._household_kw().clip(lower=0.0)
         return PerLoad({LoadKind.HOUSEHOLD: household, **self.additional_loads})
 
@@ -953,9 +957,10 @@ def simulate_home(
         DemandInputs(window, hourly_weather["temp_air"], minute_generation, config.tariff_config),
     )
     generation_kw = align_tmy_to_index(minute_generation, rows)
-    ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
+    demand_kw = demand.total_kw
+    ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand_kw)
     flows = _row_flows(
-        dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, ceilings_kwh, validate_balance
+        dispatch.timestep, config.battery_config, generation_kw, demand_kw, ceilings_kwh, validate_balance
     )
     import_pricing = _price_imports(config.tariff_config, flows, rows)
     export_revenue = _export_revenue(config.seg_tariff, flows, rows)
