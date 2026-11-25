@@ -17,6 +17,7 @@ import pytest
 import yaml
 
 from solar_challenge.config import ScenarioConfig, load_scenario
+from solar_challenge.home import HomeConfig
 from solar_challenge.location import LOCATION_PRESETS, Location
 from solar_challenge.scenario_blocks import parse_tariff_config
 from solar_challenge.scenario_writer import location_block
@@ -182,3 +183,60 @@ def test_each_command_simulates_the_readers_homes_over_its_bounds(
     assert result.exit_code == 0, result.output
     assert [fleet.homes for fleet in recorder.fleets] == [expected.simulated_homes()]
     assert recorder.bounds == [expected.simulation_bounds()]
+
+
+def _as_installed_and_aged_like(read_home: HomeConfig, recorded_home: HomeConfig) -> HomeConfig:
+    """*read_home* with the PV and battery fields an optimize point and a projection age set taken from *recorded_home*: PV capacity, inverter and age, and battery capacity and SOH.
+
+    Age and SOH are set aside because run_cost_recovery simulates the projection's ages, and
+    that ageing is projection.py's own, not the reader's. Every other field of the result is
+    the reader's, so equal to *recorded_home* only when the sweep left the rest alone.
+    """
+    assert read_home.battery_config is not None and recorded_home.battery_config is not None
+    return dataclasses.replace(
+        read_home,
+        pv_config=dataclasses.replace(
+            read_home.pv_config,
+            capacity_kw=recorded_home.pv_config.capacity_kw,
+            inverter_capacity_kw=recorded_home.pv_config.inverter_capacity_kw,
+            system_age_years=recorded_home.pv_config.system_age_years,
+        ),
+        battery_config=dataclasses.replace(
+            read_home.battery_config,
+            capacity_kwh=recorded_home.battery_config.capacity_kwh,
+            soh=recorded_home.battery_config.soh,
+        ),
+    )
+
+
+def _install_point(home: HomeConfig) -> tuple[float, Optional[float], float]:
+    """The PV capacity, inverter capacity and battery capacity of *home*, which has a battery."""
+    assert home.battery_config is not None
+    return (home.pv_config.capacity_kw, home.pv_config.inverter_capacity_kw, home.battery_config.capacity_kwh)
+
+
+@pytest.mark.parametrize(
+    ("command", "document", "flags"),
+    _flag_rows([_OPTIMIZE_CONFIGS], {name: _DOCUMENTS[name] for name in ("homes-doc", "fleet-distribution-doc")}),
+)
+def test_optimize_configs_simulates_the_readers_homes_at_its_install_point_over_its_bounds(
+    tmp_path: Path, command: _Command, document: Mapping[str, Any], flags: _Flags
+) -> None:
+    """Every fleet optimize asks for is the reader's homes in every field its install point and the projection's ages leave alone, at the one install point asked for, over the reader's bounds."""
+    path = _written(tmp_path, document)
+    recorder = RecordingSimulate()
+    install_point = ("--pv", "4", "--battery", "5", "--inverter", "3.68", "--sensitivity", "")
+
+    result = invoke_cli([*command.words, str(path), *install_point, *flags.cli_args()], answering(recorder))
+
+    expected = flags.applied(load_scenario(path))
+    assert result.exit_code == 0, result.output
+    assert recorder.fleets
+    assert set(recorder.bounds) == {expected.simulation_bounds()}
+    assert {_install_point(home) for home in recorder.homes} == {(4.0, 3.68, 5.0)}
+    for fleet in recorder.fleets:
+        read_homes = tuple(
+            _as_installed_and_aged_like(read_home, recorded_home)
+            for read_home, recorded_home in zip(expected.simulated_homes(), fleet.homes, strict=True)
+        )
+        assert fleet.homes == read_homes
