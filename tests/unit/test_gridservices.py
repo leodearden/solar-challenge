@@ -1001,6 +1001,14 @@ _PER_WINDOW_FIELD_NAMES = [
     "per_window_displaced_import_gbp_per_year",
 ]
 _FIGURE_FIELD_NAMES = ["annual_income_gbp", *_PER_WINDOW_FIELD_NAMES]
+_REFUSED_FIGURES = [
+    *(pytest.param(name, float("nan"), id=f"{name}-nan") for name in _FIGURE_FIELD_NAMES),
+    *(
+        pytest.param(name, -0.5, id=f"{name}-negative")
+        for name in _FIGURE_FIELD_NAMES
+        if name != "per_window_displaced_import_gbp_per_year"
+    ),
+]
 
 
 def _two_window_breakdown() -> GridServicesAtEvents:
@@ -1090,10 +1098,9 @@ class TestGridServicesAtEvents:
                 per_window_displaced_import_gbp_per_year=(),
             )
 
-    @pytest.mark.parametrize("name", _FIGURE_FIELD_NAMES)
-    @pytest.mark.parametrize("bad", [-0.5, float("nan")], ids=["negative", "nan"])
-    def test_a_figure_below_zero_or_nan_is_refused(self, name: str, bad: float) -> None:
-        """A capacity, energy or income below 0 or NaN is refused as such, before the income sum is checked."""
+    @pytest.mark.parametrize(("name", "bad"), _REFUSED_FIGURES)
+    def test_a_nan_figure_or_a_capacity_energy_or_income_below_zero_is_refused(self, name: str, bad: float) -> None:
+        """A NaN figure, or a capacity, energy or income below 0, is refused as such, before the income sum is checked."""
         valid = _two_window_breakdown()
         if name == "annual_income_gbp":
             replacement: object = bad
@@ -1104,6 +1111,12 @@ class TestGridServicesAtEvents:
         with pytest.raises(ValueError) as refusal:
             dataclasses.replace(valid, **{name: replacement})
         assert offender in str(refusal.value)
+
+    def test_a_displaced_import_value_below_zero_is_kept(self) -> None:
+        """A displaced import's value takes its import price's sign, so a negative price makes it below 0."""
+        breakdown = dataclasses.replace(_two_window_breakdown(), per_window_displaced_import_gbp_per_year=(-0.5, 7.5))
+
+        assert breakdown.per_window_displaced_import_gbp_per_year == (-0.5, 7.5)
 
     def test_an_annual_income_that_is_not_the_sum_of_the_per_window_incomes_is_refused(self) -> None:
         """annual_income_gbp is sum(per_window_income_gbp): a breakdown whose total differs is refused, naming both."""
@@ -2020,26 +2033,46 @@ class TestDisplacedEveningSelfUse:
 
         assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((3.0,))
 
-    def test_the_span_stops_at_the_next_event_day_or_the_end_of_the_index(self) -> None:
-        """One home, avail 1.0 kW each day, never recharging and discharging 0.05 kW outside the window at 0.10 £/kWh.
+    @staticmethod
+    def _one_home_never_recharging(tariff_rate: float) -> FleetResults:
+        """One home, avail 1.0 kW each day, never recharging and discharging 0.05 kW outside the window at *tariff_rate* £/kWh.
 
         2 December's span runs from 19:00 to 15:59 on 3 December, 21 h × 0.05 = 1.05 kWh;
         3 December's runs to the index's end at 23:59, 5 h × 0.05 = 0.25 kWh. Per event,
-        (1.05 + 0.25) / 2 = 0.65 kWh, worth 0.65 × 0.10 × 12 = £0.78 a year.
+        (1.05 + 0.25) / 2 = 0.65 kWh.
         """
         index = _TWO_DECEMBER_EVENT_DAYS
         sim = _make_gs_sim_results(
             [3.5] * len(index),
             _by_time_of_day(index, {("16:00", "18:59"): 0.5}, elsewhere=0.05),
             index,
-            tariff_rate=[0.10] * len(index),
+            tariff_rate=[tariff_rate] * len(index),
         )
-        fleet = _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
+        return _make_gs_fleet_results([(sim, _make_gs_home_config(BatteryConfig.default_5kwh()))])
 
-        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+    def test_the_span_stops_at_the_next_event_day_or_the_end_of_the_index(self) -> None:
+        """0.65 kWh per event at 0.10 £/kWh is worth 0.65 × 0.10 × 12 = £0.78 a year."""
+        result = compute_grid_services_at_events(self._one_home_never_recharging(0.10), GridServicesEventsConfig())
 
         assert result.per_window_displaced_self_use_kwh_per_event == pytest.approx((0.65,))
         assert result.per_window_displaced_import_gbp_per_year == pytest.approx((0.78,))
+
+    def test_a_negative_import_price_values_the_displaced_self_use_below_zero(self) -> None:
+        """0.65 kWh per event at -0.05 £/kWh is worth 0.65 × -0.05 × 12 = -£0.39 a year; the income is the configuration's."""
+        fleet = self._one_home_never_recharging(-0.05)
+
+        result = compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+
+        assert result.per_window_displaced_import_gbp_per_year == pytest.approx((-0.39,))
+        assert result.annual_income_gbp == GridServicesEventsConfig().annual_income_gbp(fleet)
+
+    def test_a_negative_discharge_after_the_window_is_refused_only_by_the_breakdown(self) -> None:
+        """A -1.0 kW evening discharge displaces a self-use below 0, which the breakdown refuses; the income still prices the fleet."""
+        fleet = _two_event_day_fleet(evening_discharge_kw=-1.0)
+
+        with pytest.raises(ValueError, match="per_window_displaced_self_use_kwh_per_event"):
+            compute_grid_services_at_events(fleet, GridServicesEventsConfig())
+        assert GridServicesEventsConfig().annual_income_gbp(fleet) == pytest.approx(1.5 * 9.972)
 
     def test_a_recharge_straight_after_the_window_displaces_nothing(self) -> None:
         """A charge at 19:00 leaves an empty span: 0 kWh worth £0, not a NaN mean tariff."""
