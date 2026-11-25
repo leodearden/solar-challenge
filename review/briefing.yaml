@@ -295,9 +295,13 @@ conventions:
       additive is breaking. An additive entry lands in its own leaf with its FROZEN_* row and its
       release note, docs/unreleased/domain-library-consumption/<task id>.md, in the same commit.
       A breaking entry, such as a removed, renamed or retyped name, parameter or member, lands
-      only with a deliberate version/tag bump — never a silent edit. Under D29
+      only with a deliberate version/tag bump — never a silent edit: under D29
       (plans/review-all-program-solar_challenge-20261014.md), a leaf whose own edit prints
-      `breaking` is a held leaf for S29's release. Each class
+      `breaking` is a held leaf for S29's release. The one exception, ruled by Leo on
+      esc-review-20261120T232056-5, is a member form change that needs no consumer edit, such as a
+      plain attribute becoming a settable property still read and assigned as before (tasks 540
+      and 1691): it lands in-leaf with its FROZEN_* row and its release note in the same commit,
+      although the lock prints it `breaking`. Each class
       the contract covers declares in its class body each public attribute it sets on its
       instances, as an annotation such as `cache_dir: Path`.
     why: >
@@ -307,7 +311,13 @@ conventions:
       DispatchStrategy.decide_action and name, and the consumption guide's own recipe calls
       WeatherCache.put. Public instance attributes are members too (task 426): the platform reads
       Battery.config and max_soc_fraction, and reads and assigns min_soc_fraction. Battery.config
-      stays a plain attribute declared as an annotation. Battery's SOC limits and efficiencies are
+      is a settable property (task 1691): assigning a BatteryConfig makes soh, soc_envelope and
+      what reads it, grid_charge_target_kwh and the power limits follow the new config before the
+      assignment returns, keeps the battery's own SOC limits, efficiencies and SOC, and refuses
+      with ConfigurationError, leaving the battery unchanged, a config whose envelope cannot be
+      built (tests/unit/test_battery.py::TestBatteryConfigAssignment). Its form is pinned by
+      tests/unit/test_public_api_surface.py::test_every_pinned_class_member_matches_frozen_members.
+      Battery's SOC limits and efficiencies are
       settable properties (task 540): their setters refuse, with ValueError, a value outside the
       bounds Battery() checks for them, and do not check a new SOC limit against the current SOC.
       Keep both: the platform assigns min_soc_fraction, and may raise the floor above the SOC, as a
