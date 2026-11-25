@@ -2,7 +2,7 @@
 """A dataclass's field tree in JSON, written by field_tree and read back strictly by read_field_tree, as the class's annotations declare.
 
 A field tree is a dataclass's fields as a JSON object, each value in its JSON form: a dataclass
-as an object, a list or tuple as an array, a dict as an object of its keys, a pd.Timestamp or a
+as an object, a list or tuple as an array, a dict or other Mapping as an object of its keys, a pd.Timestamp or a
 date as its ISO 8601 text, a timedelta as its ISO 8601 duration. read_field_tree reads one
 strictly: each JSON value must be one its field's annotation can be, and the dataclass built
 from them must accept them. A key no field has, a missing field that has no default, a value
@@ -18,7 +18,8 @@ spares it.
 The reader and the drop both walk a value by its _shape: a dataclass's object, an array, a dict's
 object or a leaf, each child with the annotation it is read as and its path. The writer, _shape
 and _stored_form all take the containers stored as an array from _ARRAY_CONTAINERS, so a new such
-container is one entry of it. A leaf codec, as the pd.Timestamp, date and timedelta ones, is a
+container is one entry of it; _shape and _stored_form take the annotations read from an object
+from _OBJECT_MAPPINGS. A leaf codec, as the pd.Timestamp, date and timedelta ones, is a
 branch of _read_leaf, of _field_tree_value, and of _stored_form unless it is stored as a string.
 Neither needs an edit of the drop.
 
@@ -40,6 +41,9 @@ T = TypeVar("T")
 
 _ARRAY_CONTAINERS: tuple[type[Collection[Any]], ...] = (list, tuple)
 """The containers a field tree stores as an array: field_tree writes each as one, and an annotation of one, as list[X], is read from an array into it."""
+
+_OBJECT_MAPPINGS: tuple[type[Mapping[Any, Any]], ...] = (dict, Mapping)
+"""The annotation origins read from a JSON object of keys: an annotation of one, as dict[K, V] or Mapping[K, V], is read into a dict, which the dataclass's own construction may hold as it chooses."""
 
 
 def field_tree(obj: Any) -> dict[str, Any]:
@@ -71,8 +75,8 @@ def _field_tree_value(value: Any) -> Any:
     reader reads back as itself, so it is returned unchanged. The value's type, not its
     field's annotation, picks the form, so a pd.Timestamp in a date field becomes datetime
     text, which the reader refuses as no date. A value of one of _ARRAY_CONTAINERS becomes a
-    list, and a dict keeps its keys, with every item serialized the same way. Anything else,
-    None included, is returned unchanged.
+    list, and any Mapping a dict of its keys, a str-Enum key a str that json writes as its value,
+    with every item serialized the same way. Anything else, None included, is returned unchanged.
     """
     if is_dataclass(value):
         return field_tree(value)
@@ -84,7 +88,7 @@ def _field_tree_value(value: Any) -> Any:
         return pd.Timedelta(value).isoformat()
     if isinstance(value, _ARRAY_CONTAINERS):
         return [_field_tree_value(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _field_tree_value(item) for key, item in value.items()}
     return value
 
@@ -212,7 +216,7 @@ def _shape(value: Any, annotation: Any, path: str | None) -> _Shape:
         return _dataclass_object(value, annotation, path)
     if origin in _ARRAY_CONTAINERS:
         return _array(value, annotation, path)
-    if origin is dict:
+    if origin in _OBJECT_MAPPINGS:
         return _mapping(value, annotation, path)
     return _Leaf(value, annotation, path)
 
@@ -523,7 +527,7 @@ def _stored_form(annotation: Any) -> str:
         return f"an object, as a {annotation.__name__} is stored"
     if origin in _ARRAY_CONTAINERS:
         return "an array"
-    if origin is dict:
+    if origin in _OBJECT_MAPPINGS:
         return "an object"
     if origin is Literal:
         return f"one of {list(get_args(annotation))}"
@@ -595,6 +599,6 @@ def _item_annotations(sequence_annotation: Any, length: int) -> tuple[Any, ...] 
 
 
 def _value_annotation(dict_annotation: Any) -> Any:
-    """The annotation of each value of dict[K, V], V; Any for a bare dict."""
+    """The annotation of each value of dict[K, V] or Mapping[K, V], V; Any for a bare dict."""
     args = get_args(dict_annotation)
     return args[1] if args else Any
