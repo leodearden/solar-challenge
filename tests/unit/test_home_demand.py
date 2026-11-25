@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for the demand simulate_home dispatches a home against, and the rows it runs on.
+"""Tests for the demand simulate_home dispatches a home against, the loads it is made of, and the rows it runs on.
 
 The heat pump's share of that demand is tested in tests/unit/test_home_heat_pump.py.
 """
@@ -12,14 +12,16 @@ import numpy as np
 import pandas as pd
 import pytest
 from numpy.lib.stride_tricks import sliding_window_view
+from solar_challenge.demand import LoadKind
 from solar_challenge.ev import EVConfig, generate_ev_charging_profile
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.home import HomeConfig, simulate_home
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from solar_challenge.weather import WeatherCache
-from tests._home_run_demand import home_run_demand_kw
+from tests._home_run_demand import home_run_demand_kw, home_run_frame
 from tests._synthetic_weather import synthetic_june_weather, synthetic_tmy, weather_for
 
 _BRISTOL_ELEXON_HOME = HomeConfig(
@@ -181,3 +183,52 @@ def test_a_homes_demand_on_a_day_is_the_same_whatever_run_holds_it() -> None:
     april_4th = from_march.demand.loc["2024-04-04"]
     assert april_4th.equals(from_april.demand.loc["2024-04-04"])
     assert april_4th.idxmax() == pd.Timestamp("2024-04-04 17:30", tz="Europe/London")
+
+
+_EV_BLOCK = {
+    "charger_type": "7kW",
+    "arrival_hour": 18,
+    "departure_hour": 7,
+    "required_charge_kwh": 35,
+    "smart_charging_mode": "none",
+}
+
+
+def test_a_run_carries_the_household_s_the_heat_pump_s_and_the_ev_s_loads_summing_to_its_demand() -> None:
+    """A Bristol home with a heat pump and an EV, over the spring change, carries its three loads on the window's 4,260 rows."""
+    home = HomeConfig(
+        pv_config=PVConfig(capacity_kw=4.0),
+        load_config=LoadConfig(3400, use_stochastic=False),
+        heat_pump_config=HeatPumpConfig.default_ashp(),
+        ev_config=EVConfig("7kW", 18, 7, 35, "none"),
+    )
+    window = _london_window("2024-03-30", "2024-04-01")
+
+    results = simulate_home(
+        home, pd.Timestamp("2024-03-30"), pd.Timestamp("2024-04-01"), weather=weather_for(home, synthetic_tmy())
+    )
+
+    assert list(results.loads) == [LoadKind.HOUSEHOLD, LoadKind.HEAT_PUMP, LoadKind.EV]
+    pd.testing.assert_series_equal(
+        sum(results.loads.values()), results.demand, check_names=False, rtol=0.0, atol=1e-9
+    )
+    assert len(window.rows()) == 4260
+    for load in results.loads.values():
+        assert load.index.equals(window.rows())
+
+
+def test_home_run_writes_the_heat_pump_s_and_the_ev_s_loads_but_not_the_household_s(
+    tmp_path: Path, weather_cache: WeatherCache
+) -> None:
+    frame = home_run_frame(
+        tmp_path,
+        weather_cache,
+        ev_block=_EV_BLOCK,
+        heat_pump_block={"heat_pump_type": "ASHP"},
+        start="2024-03-30",
+        end="2024-04-01",
+    )
+
+    assert len(frame) == 4260
+    assert {"heat_pump_load_kw", "ev_load_kw"} <= set(frame.columns)
+    assert "household_load_kw" not in frame.columns

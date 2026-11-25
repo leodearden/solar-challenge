@@ -50,6 +50,7 @@ import pytest
 pytest.importorskip("flask")
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.dispatch import (
     GridChargeConfig,
     GridChargeForecast,
@@ -1081,6 +1082,14 @@ class TestStoredParquetColumns:
             "grid_charge_cost": "grid_charge_cost_gbp",
             "grid_charge": "grid_charge_kw",
         }
+        stored_column_by_additional_load = {LoadKind.EV: "ev_load_kw"}
+        value_by_column = {
+            column: float(position)
+            for position, column in enumerate(
+                [*stored_column_by_field.values(), *stored_column_by_additional_load.values()]
+            )
+        }
+        value_by_column["demand_kw"] = sum(value_by_column.values())
         storage.save_home_run(
             run_id="columns-home-001",
             config=_make_home_config(),
@@ -1090,10 +1099,7 @@ class TestStoredParquetColumns:
         )
         index = _make_index()
         stored_frame = pd.DataFrame(
-            {
-                column: np.full(len(index), float(position))
-                for position, column in enumerate(stored_column_by_field.values())
-            },
+            {column: np.full(len(index), value) for column, value in value_by_column.items()},
             index=index,
         )
         stored_frame.to_parquet(
@@ -1102,10 +1108,12 @@ class TestStoredParquetColumns:
 
         loaded_results = storage.load_run("columns-home-001").results
 
-        for position, field_name in enumerate(stored_column_by_field):
+        for field_name, column in stored_column_by_field.items():
             series = getattr(loaded_results, field_name)
             assert series is not None, field_name
-            assert (series == float(position)).all(), field_name
+            assert (series == value_by_column[column]).all(), field_name
+        for kind, column in stored_column_by_additional_load.items():
+            assert (loaded_results.additional_loads[kind] == value_by_column[column]).all(), kind
 
 
 class TestRunSavedWithRetiredOptionalField:
