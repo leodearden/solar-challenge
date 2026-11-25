@@ -992,6 +992,29 @@ class TestComputeFleetSpareCapacityKw:
 # Step-1 (γ): TestGridServicesAtEvents — frozen dataclass structure
 # ---------------------------------------------------------------------------
 
+_PER_WINDOW_FIELD_NAMES = [
+    "per_window_avail_kw",
+    "per_window_income_gbp",
+    "per_window_avail_p50_kw",
+    "per_window_avail_p90_kw",
+    "per_window_displaced_self_use_kwh_per_event",
+    "per_window_displaced_import_gbp_per_year",
+]
+_FIGURE_FIELD_NAMES = ["annual_income_gbp", *_PER_WINDOW_FIELD_NAMES]
+
+
+def _two_window_breakdown() -> GridServicesAtEvents:
+    """A breakdown of two event windows that holds every invariant GridServicesAtEvents enforces."""
+    return GridServicesAtEvents(
+        annual_income_gbp=150.0,
+        per_window_avail_kw=(1.0, 2.0),
+        per_window_income_gbp=(60.0, 90.0),
+        per_window_avail_p50_kw=(1.5, 2.5),
+        per_window_avail_p90_kw=(0.5, 1.0),
+        per_window_displaced_self_use_kwh_per_event=(2.0, 3.0),
+        per_window_displaced_import_gbp_per_year=(5.0, 7.5),
+    )
+
 
 class TestGridServicesAtEvents:
     """GridServicesAtEvents frozen dataclass: construction, immutability, pickling."""
@@ -1001,27 +1024,94 @@ class TestGridServicesAtEvents:
         assert GridServicesAtEvents.__module__ == "solar_challenge.gridservices"
 
     def test_fields_round_trip(self) -> None:
-        """All three fields survive construction and read back equal to inputs."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.0, 2.0),
-            per_window_income_gbp=(60.0, 90.0),
-        )
+        """All seven fields survive construction and read back equal to inputs."""
+        obj = _two_window_breakdown()
         assert obj.annual_income_gbp == 150.0
         assert obj.per_window_avail_kw == (1.0, 2.0)
         assert obj.per_window_income_gbp == (60.0, 90.0)
+        assert obj.per_window_avail_p50_kw == (1.5, 2.5)
+        assert obj.per_window_avail_p90_kw == (0.5, 1.0)
+        assert obj.per_window_displaced_self_use_kwh_per_event == (2.0, 3.0)
+        assert obj.per_window_displaced_import_gbp_per_year == (5.0, 7.5)
 
-    def test_a_breakdown_built_from_its_three_original_fields_has_none_of_the_added_figures(self) -> None:
-        """The reliability and displaced-self-use fields are additive: a breakdown built as before they existed holds () for each."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.0, 2.0),
-            per_window_income_gbp=(60.0, 90.0),
-        )
-        assert obj.per_window_avail_p50_kw == ()
-        assert obj.per_window_avail_p90_kw == ()
-        assert obj.per_window_displaced_self_use_kwh_per_event == ()
-        assert obj.per_window_displaced_import_gbp_per_year == ()
+    def test_a_breakdown_built_from_its_three_original_fields_is_refused(self) -> None:
+        """The reliability and displaced-self-use figures are required: a breakdown cannot be built without them."""
+        with pytest.raises(TypeError, match="per_window_displaced_import_gbp_per_year"):
+            GridServicesAtEvents(  # type: ignore[call-arg]
+                annual_income_gbp=14.958,
+                per_window_avail_kw=(1.5,),
+                per_window_income_gbp=(14.958,),
+            )
+
+    def test_a_breakdown_that_never_computed_its_displaced_value_is_refused(self) -> None:
+        """A breakdown whose displaced-import tuple holds no entry for its window is refused, so no table sums () into £0 a year."""
+        with pytest.raises(ValueError) as refusal:
+            GridServicesAtEvents(
+                annual_income_gbp=14.958,
+                per_window_avail_kw=(1.5,),
+                per_window_income_gbp=(14.958,),
+                per_window_avail_p50_kw=(2.0,),
+                per_window_avail_p90_kw=(1.0,),
+                per_window_displaced_self_use_kwh_per_event=(2.3,),
+                per_window_displaced_import_gbp_per_year=(),
+            )
+        assert "per_window_displaced_import_gbp_per_year" in str(refusal.value)
+        assert "()" in str(refusal.value)
+
+    @pytest.mark.parametrize("name", _PER_WINDOW_FIELD_NAMES)
+    @pytest.mark.parametrize(
+        "reshape",
+        [
+            pytest.param(lambda entries: (), id="empty"),
+            pytest.param(lambda entries: (*entries, 0.0), id="one-longer"),
+        ],
+    )
+    def test_a_per_window_field_without_one_entry_per_window_is_refused(
+        self, name: str, reshape: Callable[[tuple[float, ...]], tuple[float, ...]]
+    ) -> None:
+        """A per-window field holding other than one entry per event window is refused, naming it and its value."""
+        valid = _two_window_breakdown()
+        bad = reshape(getattr(valid, name))
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(valid, **{name: bad})
+        assert name in str(refusal.value)
+        assert repr(bad) in str(refusal.value)
+
+    def test_a_breakdown_of_no_event_window_is_refused(self) -> None:
+        """A breakdown prices at least one event window, as GridServicesEventsConfig requires."""
+        with pytest.raises(ValueError, match="at least one event window"):
+            GridServicesAtEvents(
+                annual_income_gbp=0.0,
+                per_window_avail_kw=(),
+                per_window_income_gbp=(),
+                per_window_avail_p50_kw=(),
+                per_window_avail_p90_kw=(),
+                per_window_displaced_self_use_kwh_per_event=(),
+                per_window_displaced_import_gbp_per_year=(),
+            )
+
+    @pytest.mark.parametrize("name", _FIGURE_FIELD_NAMES)
+    @pytest.mark.parametrize("bad", [-0.5, float("nan")], ids=["negative", "nan"])
+    def test_a_figure_below_zero_or_nan_is_refused(self, name: str, bad: float) -> None:
+        """A capacity, energy or income below 0 or NaN is refused as such, before the income sum is checked."""
+        valid = _two_window_breakdown()
+        if name == "annual_income_gbp":
+            replacement: object = bad
+            offender = f"{name}={bad!r}"
+        else:
+            replacement = (bad, *getattr(valid, name)[1:])
+            offender = f"{name}[0]={bad!r}"
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(valid, **{name: replacement})
+        assert offender in str(refusal.value)
+
+    def test_an_annual_income_that_is_not_the_sum_of_the_per_window_incomes_is_refused(self) -> None:
+        """annual_income_gbp is sum(per_window_income_gbp): a breakdown whose total differs is refused, naming both."""
+        with pytest.raises(ValueError) as refusal:
+            dataclasses.replace(_two_window_breakdown(), annual_income_gbp=151.0)
+        assert "annual_income_gbp" in str(refusal.value)
+        assert "151.0" in str(refusal.value)
+        assert "150.0" in str(refusal.value)
 
     def test_single_window_fields(self) -> None:
         """Single-window construction works and fields have correct types."""
@@ -1029,6 +1119,10 @@ class TestGridServicesAtEvents:
             annual_income_gbp=9.972,
             per_window_avail_kw=(1.0,),
             per_window_income_gbp=(9.972,),
+            per_window_avail_p50_kw=(1.2,),
+            per_window_avail_p90_kw=(0.8,),
+            per_window_displaced_self_use_kwh_per_event=(1.5,),
+            per_window_displaced_import_gbp_per_year=(3.0,),
         )
         assert isinstance(obj.annual_income_gbp, float)
         assert isinstance(obj.per_window_avail_kw, tuple)
@@ -1042,17 +1136,17 @@ class TestGridServicesAtEvents:
             annual_income_gbp=10.0,
             per_window_avail_kw=(1.0,),
             per_window_income_gbp=(10.0,),
+            per_window_avail_p50_kw=(1.2,),
+            per_window_avail_p90_kw=(0.8,),
+            per_window_displaced_self_use_kwh_per_event=(1.5,),
+            per_window_displaced_import_gbp_per_year=(3.0,),
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             obj.annual_income_gbp = 20.0  # type: ignore[misc]
 
     def test_is_picklable(self) -> None:
         """GridServicesAtEvents survives a pickle round-trip equal to the original."""
-        obj = GridServicesAtEvents(
-            annual_income_gbp=150.0,
-            per_window_avail_kw=(1.5, 2.5),
-            per_window_income_gbp=(75.0, 75.0),
-        )
+        obj = _two_window_breakdown()
         assert pickle.loads(pickle.dumps(obj)) == obj
 
 
