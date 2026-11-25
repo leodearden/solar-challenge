@@ -610,7 +610,7 @@ each grid-charged kWh twice.
 
 ## 5. Cost-Recovery Solve + Feasibility Cases
 
-Source: `projection.py:solve_cost_recovery_rate()`.
+Source: `projection.py:run_cost_recovery()`, whose solution `solve_cost_recovery_rate()` returns for a scenario's fleet.
 
 The solve reconstructs the CBS net surplus per home as an **affine** function of the own-use rate `r`:
 
@@ -642,7 +642,8 @@ rates of 0, 15 and 23 p solve to one `r*`, and a re-projection at it meets the f
 
 The solver uses this affine structure to avoid re-simulating for each trial rate:
 
-1. Run `project_fleet` **once** at the configured `r0`.
+1. Run `project_fleet` **once** at the configured `r0`.  The one projection also serves
+   the economics at `r0` and the outlay below.
 2. Evaluate `s0 = net_surplus(0)`, `s_ret = net_surplus(retail)`.
 3. `slope = (s_ret − s0) / retail`.
 4. `r* = (floor − s0) / slope`  (closed-form).
@@ -655,8 +656,11 @@ The solver uses this affine structure to avoid re-simulating for each trial rate
 | `r* > retail` — impossible to meet floor | `retail` | `infeasible_above_retail` | False |
 | Degenerate (no billed own-use) | 0 or retail | one of the above | as above |
 
-After the solve, a separate age-0 fleet simulation provides per-home granularity
-for the `BillDistribution` (representative median-outlay home, min/mean/median/max).
+The `BillDistribution` (representative median-outlay home, min/mean/median/max) bills
+the projection's age-0 summaries (`FleetProjection.age0_summaries`) at the solved rate.
+The projection simulated that age-0 fleet, a new install with the scenario's SEG filled,
+so the solve runs no second simulation.  `run_cost_recovery` returns the projection, its
+configured-rate economics and the solution together (`CostRecoveryRun`).
 
 **[FIN] override solve** (`tests/integration/test_cost_recovery_calibration.py::TestOverrideOwnUseCappedAtDemand`; the §7.2 anchor fleet
 and finance with `self_consumption_override` 0.70: 3,400 kWh demand, 5,775 kWh
