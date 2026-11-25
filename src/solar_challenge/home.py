@@ -17,6 +17,7 @@ from solar_challenge.dispatch import (
     GridChargeForecast,
     SelfConsumptionStrategyConfig,
     build_dispatch_strategy,
+    refuse_grid_charging_it_would_ignore,
 )
 from solar_challenge.ev import EVConfig, RowWeights, generate_ev_charging_profile, require_tariff_for_smart_charging
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
@@ -632,11 +633,19 @@ def _dispatch_path(
     A home with a battery runs strategy when given, else its battery's _battery_strategy. A home
     with no battery runs none: it only settles each row, and is named after strategy when given,
     else after self-consumption.
+
+    Raises:
+        ConfigurationError: strategy is given and would ignore the battery's grid_charging, as
+            refuse_grid_charging_it_would_ignore refuses it.
     """
     if config.battery_config is None:
         name = strategy.name if strategy is not None else SelfConsumptionStrategyConfig().strategy_type
         return _DispatchPath(name, _settling_timestep(step_minutes))
-    if strategy is None:
+    if strategy is not None:
+        refuse_grid_charging_it_would_ignore(
+            strategy, grid_charging=config.battery_config.grid_charging, tariff=config.tariff_config
+        )
+    else:
         strategy = _battery_strategy(config, config.battery_config)
     return _DispatchPath(strategy.name, _strategy_timestep(strategy, config.tariff_config, step_minutes))
 
@@ -831,6 +840,8 @@ def simulate_home(
             GridChargeContext exactly when a configured strategy is: with a
             tariff and battery_config.grid_charging, each row's carrying the
             same useful-charge ceiling. The results' strategy_name is its name.
+            It is refused when battery_config sets grid_charging and its
+            charges_from_the_grid is False.
 
     The home's demand is its household's load plus any EV's charging, which
     generate_ev_charging_profile places on the home's tariff, a 'solar' EV
@@ -854,19 +865,23 @@ def simulate_home(
         ValueError: If end_date's date is before start_date's, naming both;
             or if a heat pump is configured and the weather is not one year
             of hourly rows.
+        ConfigurationError: If strategy is given, battery_config sets
+            grid_charging and the strategy does not charge from the grid
+            (refuse_grid_charging_it_would_ignore); raised before weather is
+            asked for, naming grid_charging and the strategy.
         LookupError: If weather holds none for config.location, as a
             PrefetchedWeather refuses it. Whatever else weather.get raises,
             e.g. PvgisTmy's WeatherDataError, propagates too.
     """
     window = run_window(config.location, start_date, end_date)
     rows = window.rows()
+    dispatch = _dispatch_path(config, window.step_minutes, strategy)
     hourly_weather = _hourly_weather(config, weather)
     minute_generation = interpolate_to_minute_resolution(
         simulate_pv_output(config.pv_config, config.location, hourly_weather)
     )
     demand = _demand(config, hourly_weather, minute_generation, window)
     generation_kw = align_tmy_to_index(minute_generation, rows)
-    dispatch = _dispatch_path(config, window.step_minutes, strategy)
     ceilings_kwh = _grid_charge_ceilings(config, generation_kw, demand.total_kw)
     flows = _row_flows(
         dispatch.timestep, config.battery_config, generation_kw, demand.total_kw, ceilings_kwh, validate_balance
