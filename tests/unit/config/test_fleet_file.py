@@ -15,6 +15,7 @@ from solar_challenge.config import (
     detect_fleet_sweep_spec,
     load_fleet_config,
     load_scenario,
+    load_scenarios,
     parse_fleet_config,
     parse_scenario,
     parse_sweep_fleet_configs,
@@ -948,6 +949,43 @@ class TestASweepDocumentIsReadOnlyAsASweep:
             "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
             "so the file defines one fleet per point; run it with 'fleet sweep'"
         )
+
+    @pytest.mark.parametrize(
+        ("read", "scenario_path"),
+        [
+            pytest.param(
+                lambda scenario, tmp_path: parse_fleet_config({"scenario": scenario}),
+                "scenario",
+                id="parse_fleet_config-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenario(_written_to(tmp_path, {"scenario": scenario})),
+                "scenario",
+                id="load_scenario-scenario-block",
+            ),
+            pytest.param(
+                lambda scenario, tmp_path: load_scenarios(_written_to(tmp_path, {"scenarios": [scenario]})),
+                "scenarios[0]",
+                id="load_scenarios-scenarios-entry",
+            ),
+        ],
+    )
+    def test_a_nested_sweep_is_refused_saying_fleet_sweep_reads_the_scenario_as_a_file_of_its_own(
+        self, tmp_path: Path, read: Callable[[Mapping[str, Any], Path], object], scenario_path: str
+    ) -> None:
+        scenario = _fleet_file(
+            _proportional_to_pv({"type": "sweep", "min": 0.5, "max": 2.0, "steps": 3}), tariff=_ECONOMY_7
+        )
+
+        with pytest.raises(ConfigurationError) as refused:
+            read(scenario, tmp_path)
+
+        assert str(refused.value) == (
+            f"{scenario_path}.fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points, "
+            "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        )
+        assert len(parse_sweep_fleet_configs(scenario)) == 3
 
     @pytest.mark.parametrize(
         "read",

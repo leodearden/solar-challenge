@@ -25,7 +25,7 @@ from solar_challenge.tariff import TariffConfig
 from tests._cli_table_text import table_text
 from tests._construction_refusals import prefixed_construction_refusal
 from tests._flex_band_refusal import flex_band_refusal
-from tests._misplaced_sweeps import misplaced_sweep_refusal, sweep_moved_to
+from tests._misplaced_sweeps import SHIPPED_SWEEP, misplaced_sweep_refusal, sweep_moved_to
 from tests._names_as_a_word import names_as_a_word
 from tests._proportional_source_refusals import proportional_source_refusal
 from tests._repository_paths import SCENARIOS_DIR
@@ -769,6 +769,21 @@ home:
         assert f"ERROR {misplaced_sweep_refusal('fleet_distribution.battery.max_charge_kw')}" in table_text(
             result.stdout
         )
+
+    def test_the_shipped_sweep_as_a_scenario_block_is_an_error_row_saying_fleet_sweep_reads_it_as_a_file_of_its_own(
+        self, tmp_path: Path
+    ) -> None:
+        """`fleet sweep` reads only a bare document's fleet_distribution, so the advice names that form."""
+        result = self._validate_config(
+            tmp_path, yaml.safe_dump({"scenario": yaml.safe_load(SHIPPED_SWEEP.read_text())})
+        )
+
+        assert result.exit_code == 1
+        assert (
+            "ERROR scenario.fleet_distribution.battery.capacity_kwh: a sweep multiplier of 16 points, "
+            "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        ) in table_text(result.stdout)
 
     @pytest.mark.parametrize(
         ("document", "field", "value_repr"),

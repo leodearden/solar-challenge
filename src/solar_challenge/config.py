@@ -337,16 +337,25 @@ def _listed_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -
     )
 
 
+#: The path of the one fleet_distribution: block a sweep is read from, a bare scenario document's,
+#: which the sweep readers and so 'fleet sweep' read.
+_SWEEP_BLOCK_PATH = "fleet_distribution"
+
+
 def _generated_homes(blocks: _ScenarioLevelBlocks, data: Any, *, block_path: str) -> ScenarioConfig:
-    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates, refusing a block that sweeps, which defines one fleet per point, naming the sweep's field and 'fleet sweep'."""
+    """The fleet scenario of the homes the fleet_distribution: block at *block_path* generates, refusing a block that sweeps, which defines one fleet per point, naming the sweep's field and 'fleet sweep', which reads only the block at _SWEEP_BLOCK_PATH."""
     distribution = parse_fleet_distribution_config(data, block_path=block_path)
     found = detect_sweep_spec(distribution)
     if found is not None:
         placement, sweep = found
+        where_it_runs = (
+            "so the file defines one fleet per point; run it with 'fleet sweep'"
+            if block_path == _SWEEP_BLOCK_PATH
+            else "but only a bare scenario document's top-level fleet_distribution sweeps: "
+            "give the scenario a file of its own, unwrapped, and run that with 'fleet sweep'"
+        )
         raise refusal(
-            child_path(block_path, placement.dotted),
-            f"a sweep multiplier of {sweep.steps} points, so the file defines one fleet per point; "
-            "run it with 'fleet sweep'",
+            child_path(block_path, placement.dotted), f"a sweep multiplier of {sweep.steps} points, {where_it_runs}"
         )
     return blocks.scenario(homes=blocks.homes_generated_by(distribution))
 
@@ -466,7 +475,9 @@ def parse_scenario(document: object, *, block_path: str = "") -> ScenarioConfig:
             then a key no scenario reads; then for the first block, in that order, its reader
             refuses; then for a scenario setting no homes source or more than one; and for a
             fleet_distribution: block that sweeps, naming the sweep's field and 'fleet sweep',
-            which runs one fleet per sweep point.
+            which runs one fleet per sweep point of a bare scenario document's
+            fleet_distribution: block, and so, for a block at any other path, saying to give
+            the scenario a file of its own.
     """
     scenario, blocks = _read_scenario_level_blocks(document, block_path=block_path)
     source = _homes_source(scenario, block_path=block_path)
@@ -816,7 +827,7 @@ def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelB
     scenario, blocks = _read_scenario_level_blocks(document, block_path="")
     require_held_keys("", scenario, ["fleet_distribution"])
     _refuse_unless_one_homes_source(scenario, block_path="")
-    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"])
+    return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"], block_path=_SWEEP_BLOCK_PATH)
 
 
 def detect_fleet_sweep_spec(document: object) -> Optional[tuple[FleetFieldPath, SweepSpec]]:
