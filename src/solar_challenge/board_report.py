@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from solar_challenge.finance import BillDistribution, CostRecoverySolution
     from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.gridservices import GridServicesAtEvents
-    from solar_challenge.optimize import RankedSweep, SensitivityPanel
+    from solar_challenge.optimize import ConfigPoint, RankedSweep, SensitivityPanel
     from solar_challenge.projection import ProjectEconomics
 
 
@@ -62,6 +62,11 @@ def _fmt_irr(val: float) -> str:
 def _fmt_payback(val: "Optional[float]") -> str:
     """Format payback: None → '—', otherwise '{val:.1f} yr'."""
     return "—" if val is None else f"{val:.1f} yr"
+
+
+def _config_label(config: "ConfigPoint") -> str:
+    """The board's label for an install *config*: its PV, battery and inverter sizes."""
+    return f"{config.pv_kwp:.1f} kWp / {config.battery_kwh:.1f} kWh / {config.inverter_kw:.1f} kW"
 
 
 def generate_finance_report(
@@ -201,24 +206,6 @@ def generate_finance_report(
 
     # ---- Optional project-economics block --------------------------------
     if economics is not None:
-        # Format IRR: NaN → "n/a"
-        if math.isnan(economics.equity_irr):
-            irr_str = "n/a"
-        else:
-            irr_str = f"{economics.equity_irr:.1%}"
-
-        # Format payback: None → "—"
-        payback_str = (
-            "—" if economics.payback_years is None
-            else f"{economics.payback_years:.1f} yr"
-        )
-
-        # Format min DSCR: inf → "∞"
-        if math.isinf(economics.min_dscr):
-            dscr_str = "∞"
-        else:
-            dscr_str = f"{economics.min_dscr:.2f}×"
-
         report += f"""
 ## Project Economics
 
@@ -232,9 +219,9 @@ def generate_finance_report(
 | Fleet OpEx / yr | £{economics.fleet_opex_gbp:,.0f} |
 | Mean Fleet Surplus / yr | £{economics.mean_fleet_surplus_per_year_gbp:,.0f} |
 | Net Surplus / home / yr | £{economics.net_surplus_per_home_per_year_gbp:,.0f} |
-| Min DSCR (loan years) | {dscr_str} |
-| Equity IRR | {irr_str} |
-| Payback | {payback_str} |
+| Min DSCR (loan years) | {_fmt_dscr(economics.min_dscr)} |
+| Equity IRR | {_fmt_irr(economics.equity_irr)} |
+| Payback | {_fmt_payback(economics.payback_years)} |
 """
 
     # ---- Optional cost-recovery block ----------------------------------
@@ -371,7 +358,7 @@ def generate_config_ranking_report(
         )
         for i, cr in enumerate(ranked.results):
             cp = cr.config
-            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            label = _config_label(cp)
             if i == 0:
                 label += " ★ RECOMMENDATION"
             sol = cr.solution
@@ -398,7 +385,7 @@ def generate_config_ranking_report(
         report += "| Config | Binding |\n"
         report += "|--------|---------|\n"
         for cp in ranked.infeasible:
-            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            label = _config_label(cp)
             report += f"| {label} | {_binding_label('infeasible_above_retail')} |\n"
 
     # ---- Table 2: CONFIGURED-RATE TRADE-OFF ----------------------------------
@@ -420,7 +407,7 @@ def generate_config_ranking_report(
         )
         for cr in ranked.results:
             cp = cr.config
-            label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
+            label = _config_label(cp)
             pareto_flag = "✔ Pareto" if cp in pareto_set else "—"
             report += (
                 f"| {label} "
@@ -435,9 +422,7 @@ def generate_config_ranking_report(
         report += "\n## Sensitivity Analysis\n\n"
         report += f"Rank stability: **{panel.rank_stability:.1%}** "
         report += "(fraction of swept values where cheapest config == baseline top)\n\n"
-        report += f"Baseline top config: {panel.baseline_top.pv_kwp:.1f} kWp / "
-        report += f"{panel.baseline_top.battery_kwh:.1f} kWh / "
-        report += f"{panel.baseline_top.inverter_kw:.1f} kW\n"
+        report += f"Baseline top config: {_config_label(panel.baseline_top)}\n"
 
         for axis in panel.axes:
             report += f"\n### Axis: {axis.name}\n\n"
@@ -447,7 +432,7 @@ def generate_config_ranking_report(
                 if top is None:
                     top_str = "—"
                 else:
-                    top_str = f"{top.pv_kwp:.1f} kWp / {top.battery_kwh:.1f} kWh / {top.inverter_kw:.1f} kW"
+                    top_str = _config_label(top)
                 report += f"| {val:.2f} | {top_str} |\n"
 
     return report
