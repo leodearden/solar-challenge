@@ -41,6 +41,7 @@ import pytest
 pytest.importorskip("jinja2")
 pytest.importorskip("plotly")
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 from solar_challenge.home import SimulationResults, SummaryStatistics
 from solar_challenge.web import charts
@@ -88,6 +89,18 @@ def _year() -> SimulationResults:
 def _year_with_heat_pump() -> SimulationResults:
     year = _year()
     return dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
+
+
+def _year_with_additional_loads() -> SimulationResults:
+    """_year()'s run whose demand also holds a 0.3 kW heat pump and a 0.2 kW EV."""
+    year = _year()
+    heat_pump = pd.Series(0.3, index=year.demand.index)
+    ev = pd.Series(0.2, index=year.demand.index)
+    return dataclasses.replace(
+        year,
+        demand=year.demand + heat_pump + ev,
+        additional_loads={LoadKind.HEAT_PUMP: heat_pump, LoadKind.EV: ev},
+    )
 
 
 def _fleet_year() -> FleetResults:
@@ -163,6 +176,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
     "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
+    "load_panels": _FigureCase(charts.load_panels, lambda build: build(_year_with_additional_loads())),
     "comparison_bar_chart": _FigureCase(charts.comparison_bar_chart, lambda build: (build(_five_home_runs()),)),
     "comparison_radar": _FigureCase(
         charts.comparison_radar, lambda build: (build(_four_home_runs_and_a_fleet_run()),)

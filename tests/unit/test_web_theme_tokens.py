@@ -55,6 +55,8 @@ _CHART_ROLE_COLOURS = {
     "grid_export": "#4a90e2",
     "battery_charge": "#50e3c2",
     "heat_pump": "#9013fe",
+    "household": "#d0021b",
+    "ev": "#50e3c2",
     "cost": "#d0021b",
     "revenue": "#7ed321",
     "soc_low_threshold": "#d0021b",
