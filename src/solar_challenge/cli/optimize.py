@@ -42,7 +42,7 @@ app = typer.Typer(help="Discrete install-config sweep and optimisation commands"
 _FLAT_RATE_KNOB = KNOBS["grid_services_income_per_kw_per_year_gbp"]
 
 # The knob the cost-recovery solve's retained-cash floor reads: what --retained-floor sets.
-_RETAINED_FLOOR_KNOB = knob_named("retained_cash_floor_per_home_per_year_gbp")
+_RETAINED_FLOOR_KNOB = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
 
 # The --sensitivity names swept when the flag is not given, in report order.
 _DEFAULT_SENSITIVITY_NAMES: tuple[str, ...] = ("retained_floor", "grid_services")
