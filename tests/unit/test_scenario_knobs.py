@@ -19,7 +19,10 @@ from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.scenario_knobs import ALIASES, KNOBS, Knob, knob_named, names_with_aliases
 from solar_challenge.seg import SEGTariff, resolve_seg_tariff
 from tests._finance_builders import make_home_config, make_period, make_scenario_and_finance
-from tests._modules_loaded_by_importing import package_modules_loaded_by_importing
+from tests._modules_loaded_by_importing import (
+    package_modules_loaded_by_importing,
+    web_modules_loaded_by_importing,
+)
 
 
 def _default_fleet(n_homes: int = 2) -> ScenarioConfig:
@@ -338,14 +341,13 @@ class TestTheDegradationKnob:
         assert [home.pv_config.degradation_rate_per_year for home in new.homes] == [0.01] * len(scenario.homes)
 
 
-def _is_in(package: str, module: str) -> bool:
-    """Whether *module* is *package* or one of its submodules."""
-    return module == package or module.startswith(f"{package}.")
-
-
-def test_importing_the_registry_loads_no_optimize_cli_or_web_module() -> None:
-    """The registry sits above config and below optimize and the CLI, so importing it loads neither, nor the web."""
+def test_importing_the_registry_loads_neither_optimize_nor_the_cli() -> None:
+    """The registry sits above config and below optimize and the CLI, so importing it loads neither; a CLI module would load its package."""
     loaded = package_modules_loaded_by_importing("solar_challenge.scenario_knobs")
-    above = ("solar_challenge.optimize", "solar_challenge.cli", "solar_challenge.web")
 
-    assert sorted(module for module in loaded if any(_is_in(package, module) for package in above)) == []
+    assert loaded.isdisjoint(frozenset({"solar_challenge.optimize", "solar_challenge.cli"}))
+
+
+def test_importing_the_registry_loads_no_web_module() -> None:
+    """The registry sits below the web, so importing it loads none of the web's modules."""
+    assert web_modules_loaded_by_importing("solar_challenge.scenario_knobs") == frozenset()
