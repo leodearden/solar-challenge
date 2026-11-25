@@ -147,10 +147,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "calculate_degradation_factor": "(system_age_years: float, degradation_rate_per_year: float = 0.005) -> float",
     "interpolate_to_minute_resolution": "(hourly_power: Series) -> Series",
     # --- weather (weather.py) ---
-    "get_tmy_data": "(location: Location, use_cache: bool = True) -> DataFrame",
     "WeatherCache": "(cache_dir: Path | None = None) -> None",
-    "get_weather_cache": "() -> WeatherCache",
-    "set_weather_cache": "(cache: WeatherCache | None) -> None",
     "WeatherProvider": "(*args, **kwargs)",
     "PvgisTmy": "dataclass[eq, frozen, match_args] (cache: WeatherCache | None) -> None",
     "PrefetchedWeather": "dataclass[frozen, match_args] (frames: Mapping[Location, DataFrame]) -> None",

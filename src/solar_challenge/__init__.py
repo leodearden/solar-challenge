@@ -93,10 +93,7 @@ __all__: list[str] = [
     "calculate_degradation_factor",
     "interpolate_to_minute_resolution",
     # --- weather (weather.py) ---
-    "get_tmy_data",
     "WeatherCache",
-    "get_weather_cache",
-    "set_weather_cache",
     "WeatherProvider",
     "PvgisTmy",
     "PrefetchedWeather",
@@ -191,10 +188,7 @@ _SYMBOL_MODULE: dict[str, str] = {
     "calculate_degradation_factor": "pv",
     "interpolate_to_minute_resolution": "pv",
     # weather
-    "get_tmy_data": "weather",
     "WeatherCache": "weather",
-    "get_weather_cache": "weather",
-    "set_weather_cache": "weather",
     "WeatherProvider": "weather",
     "PvgisTmy": "weather",
     "PrefetchedWeather": "weather",
@@ -355,10 +349,7 @@ if TYPE_CHECKING:
     from solar_challenge.pv import calculate_degradation_factor as calculate_degradation_factor
     from solar_challenge.pv import interpolate_to_minute_resolution as interpolate_to_minute_resolution
     # weather
-    from solar_challenge.weather import get_tmy_data as get_tmy_data
     from solar_challenge.weather import WeatherCache as WeatherCache
-    from solar_challenge.weather import get_weather_cache as get_weather_cache
-    from solar_challenge.weather import set_weather_cache as set_weather_cache
     from solar_challenge.weather import WeatherProvider as WeatherProvider
     from solar_challenge.weather import PvgisTmy as PvgisTmy
     from solar_challenge.weather import PrefetchedWeather as PrefetchedWeather

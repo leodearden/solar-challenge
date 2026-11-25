@@ -179,7 +179,7 @@ Accessing any name from `config`, `fleet`, `home`, `pv` or `weather` imports
 ```python
 sc = solar_challenge
 mc = sc.create_model_chain(...)    # ← first access imports pv.py + pvlib
-tmy = sc.get_tmy_data(...)         # ← first access imports weather.py + pvlib
+w = sc.PvgisTmy(...)               # ← first access imports weather.py + pvlib
 cfg = sc.ScenarioConfig            # ← first access imports config.py + pvlib
 ```
 
@@ -194,30 +194,41 @@ by importing one of those submodules at call time.
 
 ### Network I/O
 
-On a cache miss, `weather.get_tmy_data` makes **two outbound HTTPS requests to the
-PVGIS API**: the TMY, and the 2005–2020 hourly series whose mean annual GHI it scales
-the TMY to (see [tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).
-In test environments and CI, consumers **must inject a mock or a pre-cached
-`WeatherCache`** rather than calling `get_tmy_data` directly:
+On a cache miss, `PvgisTmy(cache).get(location)` makes **two outbound HTTPS requests
+to the PVGIS API**: the TMY, and the 2005–2020 hourly series whose mean annual GHI it
+scales the TMY to (see [tmy-irradiation-scaling.md](tmy-irradiation-scaling.md)).
+In test environments and CI, a consumer passes its simulation a provider over a
+pre-seeded cache, or names that cache's directory in `SOLAR_CHALLENGE_WEATHER_CACHE_DIR`,
+rather than letting a run fetch:
 
 ```python
-import solar_challenge
+from pathlib import Path
 
-# Inject a pre-built cache instead of hitting the network
-solar_challenge.set_weather_cache(my_test_cache)
+from solar_challenge import PvgisTmy, WeatherCache
+
+my_test_cache = WeatherCache(Path("my-test-cache"))
+weather = PvgisTmy(my_test_cache)
 ```
+
+```sh
+export SOLAR_CHALLENGE_WEATHER_CACHE_DIR=my-test-cache
+```
+
+`WeatherCache()` given no directory reads that variable at each construction, and so do
+`weather.default_weather()` and `fleet.default_runner()` at each call.
 
 `fleet.FleetRunner` fetches each distinct home location's weather once per call, in the
 calling process, through its weather provider. `fleet.default_runner()`'s provider is
-`weather.default_weather()`, which reads the cache `set_weather_cache` installs, else
-`WeatherCache()`. Each worker job then carries a
-`PrefetchedWeather` holding its own home's location alone, so an injected cache serves a
-parallel fleet under any multiprocessing start method, and a worker reads no cache and
-no network.
+`weather.default_weather()`, which is `PvgisTmy(WeatherCache())`. A consumer with its
+own cache builds
+`FleetRunner(weather=PvgisTmy(WeatherCache(d)), home_simulator=simulate_home)`. Each
+worker job then carries a `PrefetchedWeather` holding its own home's location alone, so
+the runner's cache serves a parallel fleet under any multiprocessing start method, and a
+worker reads no cache and no network.
 
 A cache directory written before that scaling is ignored, because its entries' keys
 changed. Rebuild a pre-built cache with `my_test_cache.put(df, "tmy", location)`, which
-`get_tmy_data` serves exactly as stored.
+`PvgisTmy.get` serves exactly as stored.
 
 ---
 
