@@ -16,6 +16,7 @@ from solar_challenge.dispatch import (
     StepLimits,
     require_valid_step_powers,
 )
+from solar_challenge.number_fields import NON_NEGATIVE
 from solar_challenge.tariff import TariffConfig
 from solar_challenge.timebase import HOURS_PER_MINUTE, require_valid_duration
 
@@ -128,9 +129,9 @@ class EnergyFlowResult:
     """Results of energy flow simulation for a single timestep.
 
     Every field but battery_soc is a flow: an energy the timestep moved, in kWh,
-    so never negative. Construction raises ValueError naming each flow below 0
-    or NaN, and its value. battery_soc is the state of charge after the
-    timestep, in kWh.
+    so a finite number at least 0. Construction raises ValueError naming each
+    flow below 0, NaN or infinite, and its value. battery_soc is the state of
+    charge after the timestep, in kWh.
 
     Every flow is an energy at the home's bus: battery_charge is what the battery
     drew, before its charge losses, and battery_discharge what it delivered, after
@@ -151,12 +152,12 @@ class EnergyFlowResult:
     grid_charge: float = 0.0  # informational: kWh the battery drew from the grid, a part of battery_charge and grid_import
 
     def __post_init__(self) -> None:
-        """Refuse a flow that is negative or NaN, naming each such flow and its value."""
-        refused = [f"{flow}={value!r}" for flow in _FLOWS if not (value := getattr(self, flow)) >= 0.0]
+        """Refuse a flow NON_NEGATIVE does not admit (below 0, NaN or infinite), naming each such flow and its value."""
+        refused = NON_NEGATIVE.refused({flow: getattr(self, flow) for flow in _FLOWS})
         if refused:
             raise ValueError(
-                "EnergyFlowResult's flows are the energies its timestep moved, so each is at least 0: "
-                f"got {', '.join(refused)}"
+                f"EnergyFlowResult's flows are the energies its timestep moved, so each is a finite number {NON_NEGATIVE}: "
+                f"got {', '.join(f'{flow}={value!r}' for flow, value in refused.items())}"
             )
 
 
@@ -318,7 +319,10 @@ def simulate_timestep(
             is built, if useful_charge_ceiling_kwh is neither None nor finite and at least 0,
             naming it; then if the strategy's decision asks for more than the step allows
             (StepLimits.require_admissible), naming the strategy and each power above its limit.
-            Each check runs before any battery moves energy.
+            These checks run before any battery moves energy. Then, after any battery has moved,
+            if a flow the step computes is not a finite number at least 0 (an energy beyond a
+            float, or one its battery reports), naming each such flow and its value
+            (EnergyFlowResult).
     """
     require_valid_duration(timestep_minutes, "Timestep")
     step = _StepEnergies.from_powers(generation_kw, demand_kw, timestep_minutes)
