@@ -12,13 +12,17 @@ from typing import Annotated, Optional
 
 import typer
 
-from solar_challenge.cli.utils import handle_errors, invocation, print_info, print_report
-from solar_challenge.config import (
-    ScenarioConfig,
-    load_config,
-    load_fleet_config,
-    period_window,
+from solar_challenge.cli.utils import (
+    EndOption,
+    StartOption,
+    handle_errors,
+    invocation,
+    print_info,
+    print_report,
+    required_finance,
+    with_window_options,
 )
+from solar_challenge.config import load_scenario
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.finance import FinanceConfig, grid_services_model_of
 from solar_challenge.gridservices import GridServicesEventsConfig, GridServicesModel
@@ -30,12 +34,6 @@ from solar_challenge.optimize import (
 )
 from solar_challenge.output import generate_config_ranking_report
 from solar_challenge.projection import fewest_simulated_ages
-from solar_challenge.scenario_blocks import (
-    parse_finance_config,
-    parse_seg_rate,
-)
-from solar_challenge.seg import SEGTariff
-from solar_challenge.timebase import DEFAULT_FIRST_DAY, DEFAULT_LAST_DAY
 
 app = typer.Typer(help="Discrete install-config sweep and optimisation commands")
 
@@ -220,26 +218,8 @@ def configs(
             ),
         ),
     ] = None,
-    start: Annotated[
-        Optional[str],
-        typer.Option(
-            "--start",
-            help=(
-                "Simulation start date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                f"block if present; defaults to the scenario period start or {DEFAULT_FIRST_DAY.isoformat()}."
-            ),
-        ),
-    ] = None,
-    end: Annotated[
-        Optional[str],
-        typer.Option(
-            "--end",
-            help=(
-                "Simulation end date (YYYY-MM-DD).  Overrides the scenario 'period' "
-                f"block if present; defaults to the scenario period end or {DEFAULT_LAST_DAY.isoformat()}."
-            ),
-        ),
-    ] = None,
+    start: StartOption = None,
+    end: EndOption = None,
 ) -> None:
     """Run a discrete install-config sweep and produce a board-readable ranking report.
 
@@ -274,14 +254,9 @@ def configs(
     # ---- Parse sensitivity aliases -----------------------------------------
     requested_sensitivity = None if sensitivity is None else _parse_sensitivity_aliases(sensitivity)
 
-    # ---- Load raw config + finance block ------------------------------------
-    raw = load_config(scenario)
-    finance = parse_finance_config(raw.get("finance"))
-    if finance is None:
-        raise ConfigurationError(
-            "No 'finance:' block found in the scenario file. "
-            "Add a finance: block with at least standing_charge_pence_per_day."
-        )
+    # ---- Load the scenario and its finance block -----------------------------
+    scenario_config = with_window_options(load_scenario(scenario), start=start, end=end)
+    finance = required_finance(scenario_config)
 
     pricing = grid_services_model_of(finance)
     finance = _with_grid_services_kw(finance, grid_services_kw, pricing)
@@ -293,36 +268,9 @@ def configs(
             f"{_FLAT_RATE_UNREAD_UNDER_EVENTS}."
         )
 
-    # ---- Load fleet config --------------------------------------------------
-    fleet_config = load_fleet_config(scenario)
-
-    # Thread SEG tariff onto each home
-    seg_rate = parse_seg_rate(raw.get("seg"))
-    if seg_rate is not None:
-        seg_tariff = SEGTariff(name="", rate_pence_per_kwh=seg_rate)
-        homes_with_seg = tuple(
-            dataclasses.replace(home, seg_tariff=seg_tariff)
-            for home in fleet_config.homes
-        )
-        fleet_config = dataclasses.replace(fleet_config, homes=homes_with_seg)
-
-    # ---- Build base ScenarioConfig: CLI args override scenario period; fall
-    #      back to timebase's default window when neither is present. -----
-    loc = fleet_config.homes[0].location
-    _scenario_period: dict[str, str] = raw.get("period", {}) or {}
-    _start_str = start or _scenario_period.get("start_date", DEFAULT_FIRST_DAY.isoformat())
-    _end_str = end or _scenario_period.get("end_date", DEFAULT_LAST_DAY.isoformat())
-    base = ScenarioConfig(
-        name=raw.get("name", str(scenario)),
-        period=period_window(_start_str, _end_str, timezone=loc.timezone),
-        homes=fleet_config.homes,
-        location=loc,
-        finance=finance,
-    )
-    if seg_rate is not None:
-        base = dataclasses.replace(base, seg_tariff_pence_per_kwh=seg_rate)
-    days = base.period.days
-    n_homes = len(fleet_config.homes)
+    base = dataclasses.replace(scenario_config, finance=finance)
+    days = base.window().days
+    n_homes = len(base.simulated_homes())
 
     n_configs = len(pv_list) * len(battery_list) * len(inverter_list)
     print_info(

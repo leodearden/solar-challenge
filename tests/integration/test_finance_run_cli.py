@@ -14,7 +14,7 @@ from typer.testing import Result
 
 from solar_challenge.fleet import FleetConfig, FleetResults
 from solar_challenge.home import simulate_home
-from tests._cli_fleet_simulator import answering, invoke_cli, invoke_finance_run
+from tests._cli_fleet_simulator import RecordingSimulate, answering, invoke_cli, invoke_finance_run
 from tests._finance_builders import make_fleet_results, make_fleet_results_of
 from tests._synthetic_weather import synthetic_june_weather, weather_for
 
@@ -36,18 +36,19 @@ def _write_scenario(
     self_consumption_override: float | None = None,
     seg_rate: float | None = None,
     tariff: dict[str, object] | None = None,
+    name: str | None = "Finance Run CLI Test",
 ) -> Path:
     """Write a scenario of two battery-less homes to *directory*, and return its path.
 
     Its finance block carries *self_consumption_override*, the scenario has a
-    top-level SEG rate of *seg_rate*, and its top-level tariff: block, which every
-    home it generates is priced at, is *tariff*, each only when given.
+    top-level SEG rate of *seg_rate*, its top-level tariff: block, which every
+    home it generates is priced at, is *tariff*, and its name is *name*, each
+    only when given.
     """
     finance: dict[str, float] = {"standing_charge_pence_per_day": 28.0}
     if self_consumption_override is not None:
         finance["self_consumption_override"] = self_consumption_override
     scenario: dict[str, object] = {
-        "name": "Finance Run CLI Test",
         "location": {"latitude": 51.45, "longitude": -2.58, "timezone": "Europe/London"},
         "fleet_distribution": {
             "n_homes": 2,
@@ -62,6 +63,8 @@ def _write_scenario(
         scenario["seg"] = {"rate_pence_per_kwh": seg_rate}
     if tariff is not None:
         scenario["tariff"] = tariff
+    if name is not None:
+        scenario["name"] = name
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "scenario.yaml"
     path.write_text(yaml.safe_dump(scenario))
@@ -234,6 +237,36 @@ def test_the_simulator_receives_the_fleet_paid_the_scenarios_seg_rate_over_the_w
     assert start == pd.Timestamp("2024-06-01", tz="Europe/London")
     assert end == pd.Timestamp("2024-06-07", tz="Europe/London")
     assert "Simulating fleet of 2 homes for 7 days…" in " ".join(result.stderr.split())
+
+
+def test_every_simulation_of_project_and_cost_recovery_pays_the_scenarios_seg_rate(tmp_path: Path) -> None:
+    """The bill run and every projection age the economics and the cost-recovery solve ask for simulate homes paid the scenario's SEG rate."""
+    recorder = RecordingSimulate()
+    scenario = _write_scenario(tmp_path, seg_rate=5.5)
+
+    result = invoke_cli(
+        ["finance", "run", "--project", "--cost-recovery", "--start", "2024-06-01", "--end", "2024-06-07", str(scenario)],
+        answering(recorder),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(recorder.fleets) > 1
+    assert [home.seg_tariff.rate_pence_per_kwh if home.seg_tariff is not None else None for home in recorder.homes] == [
+        5.5
+    ] * len(recorder.homes)
+
+
+@pytest.mark.parametrize("name", ["Finance Run CLI Test", None])
+def test_the_report_is_titled_with_the_files_name_else_its_path(tmp_path: Path, name: str | None) -> None:
+    scenario = _write_scenario(tmp_path, name=name)
+
+    result = invoke_cli(
+        ["finance", "run", "--start", "2024-06-01", "--end", "2024-06-07", str(scenario)],
+        answering(RecordingSimulate()),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == f"# Finance Report: {name if name is not None else scenario}"
 
 
 _MIDSUMMER = "2024-06-21"

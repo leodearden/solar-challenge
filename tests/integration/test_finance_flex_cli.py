@@ -279,16 +279,15 @@ class TestFinanceFlexCLIBandEntryPoints:
             in _whitespace_normalised(result.output)
         ), result.output
 
-    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(
-        self, tmp_path: Path, flex_fleet_results: FleetResults
-    ) -> None:
-        scenario_file = _write_scenario(tmp_path, flex_band=5)
+    @pytest.mark.parametrize("value", [1, 5])
+    def test_a_scenario_flex_band_that_is_not_a_string_is_refused(self, tmp_path: Path, value: int) -> None:
+        scenario_file = _write_scenario(tmp_path, flex_band=value)
 
-        result = invoke_finance_run([str(scenario_file)], flex_fleet_results)
+        result = invoke_cli(["finance", "run", str(scenario_file)], answering(_simulate_must_not_run))
 
         assert result.exit_code == 1, result.output
         assert (
-            "Configuration error: flex_band must be one of low, central, high, got 5"
+            f"Configuration error: flex_band must be one of low, central, high, got {value!r}"
             in _whitespace_normalised(result.output)
         ), result.output
 

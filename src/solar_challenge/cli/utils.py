@@ -25,6 +25,9 @@ takes one (task 889).
 A command reads its --start and --end as StartOption and EndOption, and applies
 them to its scenario with with_window_options, so each replaces only its own day
 of the scenario's period.
+
+`finance run` and `optimize configs` take their scenario's finance through
+required_finance, so both refuse a file without a finance: block in one message.
 """
 
 import dataclasses
@@ -52,6 +55,7 @@ from rich.text import Text
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.error_text import error_text_with_notes
 from solar_challenge.errors import ConfigurationError
+from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetSimulator, FleetSummary, default_runner
 from solar_challenge.dispatch import GridChargeForecast, distinct_grid_charge_forecasts
 from solar_challenge.home import SummaryStatistics
@@ -182,6 +186,20 @@ def with_window_options(
             if day is not None
         )
         raise ConfigurationError(f"{given}: {exc.__cause__ or exc}") from exc
+
+
+def required_finance(scenario: ScenarioConfig) -> FinanceConfig:
+    """*scenario*'s finance.
+
+    Raises:
+        ConfigurationError: *scenario* has no finance: block, saying what the block needs.
+    """
+    if scenario.finance is None:
+        raise ConfigurationError(
+            "No 'finance:' block found in the scenario file. "
+            "Add a finance: block with at least standing_charge_pence_per_day."
+        )
+    return scenario.finance
 
 
 def verbatim_table_title(title: str) -> Text:
