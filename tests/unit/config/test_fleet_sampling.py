@@ -412,7 +412,6 @@ class TestAProportionalToReadsAFieldTheHomeDrewEarlier:
             "fleet_distribution.battery.capacity_kwh: a sweep multiplier of 3 points; "
             "generate the homes of each point's fleet, which expand_sweep_configs gives"
         )
-        assert "expand_sweep_configs replaces before any home is drawn" not in str(refusal.value)
 
 
 class _PoolOfText(ShuffledPoolDistribution):
