@@ -15,7 +15,7 @@ Tests cover:
 - TestAdditionalLoadsPickle: results keep their additional loads through pickle, as a
   fleet's worker returns them
 - TestSummaryLoadEnergy: SummaryStatistics.load_energy_kwh, {} by default, held by load
-  kind, each a finite energy of at least 0, agreeing with total_heat_pump_load_kwh, and
+  kind, each an energy of at least 0, an infinite one kept, agreeing with total_heat_pump_load_kwh, and
   load_share, each load's share of demand
 - TestCalculateSummaryLoadEnergy: calculate_summary fills load_energy_kwh with each
   load's energy, summing to demand's, and the heat-pump fields from it
@@ -251,8 +251,8 @@ class TestSummaryLoadEnergy:
         with pytest.raises(ValueError, match="boiler"):
             _summary(load_energy_kwh={"boiler": 1.0})
 
-    @pytest.mark.parametrize("energy", [-0.1, math.nan, math.inf])
-    def test_an_energy_that_is_not_a_finite_number_of_at_least_0_is_refused_naming_the_kind_and_value(
+    @pytest.mark.parametrize("energy", [-0.1, math.nan])
+    def test_an_energy_that_is_not_a_number_of_at_least_0_is_refused_naming_the_kind_and_value(
         self, energy: float
     ) -> None:
         with pytest.raises(ValueError) as refusal:
@@ -260,6 +260,9 @@ class TestSummaryLoadEnergy:
 
         assert "heat_pump" in str(refusal.value)
         assert str(energy) in str(refusal.value)
+
+    def test_an_infinite_energy_is_kept_as_the_summary_s_other_infinite_totals_are(self) -> None:
+        assert _summary(load_energy_kwh={"heat_pump": math.inf}).load_energy_kwh == {LoadKind.HEAT_PUMP: math.inf}
 
     def test_a_heat_pump_total_that_differs_from_its_load_energy_is_refused_naming_both(self) -> None:
         with pytest.raises(ValueError) as refusal:
