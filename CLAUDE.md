@@ -109,6 +109,7 @@ Built on top of simulation results; this is the board-facing decision layer:
 - `finance.py` — Per-householder bills, fleet bill distributions, the home ledger and cash-flow maths
 - `projection.py` — the multi-year projection, project economics and cost-recovery solve, above finance (`scenario_fleet` resolves a scenario's homes and window once)
 - `optimize.py` — Discrete install-config sweeps ranked by cost recovery
+- `scenario_knobs.py` — the settings a sweep or a sensitivity axis varies: each a named `Knob` whose `apply` is its one pure `ScenarioConfig` edit (`KNOBS`), one alias table (`ALIASES`) and `knob_named`, which resolves either; above `config`, below `optimize` and the CLI
 - `flex.py` / `gridservices.py` — Flexibility value model and grid-services event-window pricing
 - `community.py` — Post-hoc peer-to-peer community netting over `FleetResults` (homes are not re-simulated)
 
