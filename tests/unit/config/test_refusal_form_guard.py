@@ -51,6 +51,7 @@ _WHOLE_FLEET_DOCUMENT = Permanent(
 BLOCK_PATH_EXEMPTIONS: Mapping[tuple[str, str], Permanent] = {
     (CONFIG, "parse_fleet_config"): _WHOLE_FLEET_DOCUMENT,
     (CONFIG, "parse_sweep_fleet_configs"): _WHOLE_FLEET_DOCUMENT,
+    (CONFIG, "parse_sweep_scenarios"): _WHOLE_FLEET_DOCUMENT,
 }
 
 
