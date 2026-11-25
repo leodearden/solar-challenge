@@ -365,7 +365,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     },
     # --- battery (battery.py) ---
     "Battery": {
-        "config": "attribute BatteryConfig",
+        "config": "property[settable] (self) -> BatteryConfig",
         "min_soc_fraction": "property[settable] (self) -> float",
         "max_soc_fraction": "property[settable] (self) -> float",
         "charge_efficiency": "property[settable] (self) -> float",
