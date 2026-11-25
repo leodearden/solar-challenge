@@ -595,12 +595,12 @@ class TestRunSweepMultiConfig:
         return simulate
 
     def _make_infeasible_finance(self) -> FinanceConfig:
-        """Finance params that produce infeasible_above_retail."""
+        """Finance params that produce infeasible_above_retail at _interior_finance's floor: a PV capex no rate up to retail recovers."""
         return _make_finance(
             pv_cost_per_kwp_gbp=20000.0,
             grant_gbp=0.0,
             own_use_rate_pence_per_kwh=15.0,
-            retained_cash_floor=10000.0,  # way above what retail rate can deliver
+            retained_cash_floor=_interior_finance().retained_cash_floor_per_home_per_year_gbp,
             retail_baseline_rate=30.0,
         )
 
