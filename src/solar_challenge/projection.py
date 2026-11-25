@@ -13,11 +13,16 @@ Provides:
   - ``FleetProjection`` — frozen dataclass of a fleet's projection curve and
     its age-0 per-home summaries.
   - ``MAX_NODES`` — cap on the number of ages a projection interpolates through.
+  - ``fewest_simulated_ages`` — the fewest ages a projection over an asset life
+    simulates.
   - ``project_fleet`` — forward-march driver for adaptive PCHIP projection of a
     ScenarioFleet.
   - ``project_multi_year`` — ``project_fleet`` of a scenario's fleet, its curve.
   - ``project_economics`` — project-level financial appraisal of a curve.
   - ``spreadsheet_revenue_curve`` — analytic revenue curve from spreadsheet inputs.
+  - ``CostRecoveryRun`` — frozen dataclass of a fleet's one projection, its
+    economics and its cost-recovery solution.
+  - ``run_cost_recovery`` — one projection's economics and cost-recovery solve.
   - ``solve_cost_recovery_rate`` — own-use rate that meets the retained-cash floor.
 
 All monetary values are in GBP (£); energy in kWh.  The model behind these
@@ -386,6 +391,20 @@ def _interpolate_per_year(
 #: Maximum number of simulation nodes before the adaptive loop is capped.
 MAX_NODES: int = 12
 
+#: The largest PCHIP midpoint deviation (%) a projection's bisection accepts, unless its caller sets another.
+_ERROR_TARGET_PCT: float = 1.0
+
+
+def _seed_ages(asset_life: int) -> tuple[int, ...]:
+    """The ages every projection over *asset_life* years simulates first, ascending: 0, asset_life // 2 and asset_life - 1."""
+    return (0, *sorted({asset_life // 2, asset_life - 1} - {0}))
+
+
+def fewest_simulated_ages(asset_life_years: int) -> int:
+    """The fewest ages a projection over *asset_life_years* simulates: its seed ages and the midpoints its first bisection pass always simulates."""
+    seeds = _seed_ages(asset_life_years)
+    return len(seeds) + len(_bisection_midpoints(seeds))
+
 
 class _AggregateShape(Enum):
     """Whether a :class:`_NodeData` aggregate holds one value for the fleet or one per home, in fleet order."""
@@ -677,9 +696,10 @@ def _nodes_of(simulated: Mapping[int, _SimulatedAge]) -> dict[int, _NodeData]:
 
 
 def _simulated_seeds(simulate_at: _SimulateAt, n_homes: int, asset_life: int) -> dict[int, _SimulatedAge]:
-    """The seed ages 0, asset_life // 2 and asset_life - 1 simulated ascending, each aged by :func:`_throughput_at` over the seeds before it."""
-    simulated = {0: simulate_at(0, [0.0] * n_homes)}
-    for age in sorted({asset_life // 2, asset_life - 1} - {0}):
+    """The :func:`_seed_ages` simulated ascending, each aged by :func:`_throughput_at` over the seeds before it."""
+    first, *later = _seed_ages(asset_life)
+    simulated = {first: simulate_at(first, [0.0] * n_homes)}
+    for age in later:
         simulated[age] = simulate_at(age, _throughput_at(age, _nodes_of(simulated)))
     return simulated
 
@@ -892,7 +912,7 @@ def project_fleet(
     finance: FinanceConfig,
     *,
     simulate: FleetSimulate,
-    error_target_pct: float = 1.0,
+    error_target_pct: float = _ERROR_TARGET_PCT,
 ) -> FleetProjection:
     """Project *fleet*'s energy and revenue over the full asset life.
 
@@ -979,7 +999,7 @@ def project_multi_year(
     scenario: ScenarioConfig,
     finance: FinanceConfig,
     *,
-    error_target_pct: float = 1.0,
+    error_target_pct: float = _ERROR_TARGET_PCT,
     simulate: FleetSimulate,
 ) -> MultiYearCurve:
     """Project a scenario's fleet over the full asset life: :func:`project_fleet` of ``scenario_fleet(scenario)``, its curve.
@@ -1249,12 +1269,132 @@ def spreadsheet_revenue_curve(
 
 
 # ---------------------------------------------------------------------------
-# solve_cost_recovery_rate — near-closed-form own-use-rate solve
+# run_cost_recovery — one projection's economics and own-use-rate solve
 # ---------------------------------------------------------------------------
 
 #: Minimum absolute slope (kWh-weighted / pence) below which we treat the
 #: project as having no billed own-use and fall through to the degenerate branch.
 _SLOPE_EPS: float = 1e-9
+
+
+@dataclass(frozen=True)
+class CostRecoveryRun:
+    """A fleet's one projection at the configured own-use rate, its economics, and the own-use rate that meets the retained-cash floor."""
+
+    projection: FleetProjection
+    """The projection at ``finance.own_use_rate_pence_per_kwh``, the configured rate."""
+
+    economics: ProjectEconomics
+    """``project_economics(projection.curve, fleet, finance)``: the economics at the configured rate."""
+
+    solution: CostRecoverySolution
+    """The solved rate, read from the projection's curve, and its outlay billed on ``projection.age0_summaries``."""
+
+
+def _rate_shifted_curve(curve: MultiYearCurve, configured_rate: float, rate: float) -> MultiYearCurve:
+    """*curve*, projected at *configured_rate* p/kWh, at *rate*: each year's revenue plus (rate − configured_rate)/100 × its billed own-use."""
+    points = tuple(
+        dataclasses.replace(
+            point,
+            fleet_revenue_gbp=point.fleet_revenue_gbp + (rate - configured_rate) / 100.0 * point.fleet_billed_own_use_kwh,
+        )
+        for point in curve.points
+    )
+    return dataclasses.replace(curve, points=points)
+
+
+def _surplus_at(rate: float, curve: MultiYearCurve, fleet: ScenarioFleet, finance: FinanceConfig) -> float:
+    """The net surplus per home per year (£) of *curve*, projected at *finance*'s own-use rate, re-projected at *rate* p/kWh."""
+    shifted = _rate_shifted_curve(curve, finance.own_use_rate_pence_per_kwh, rate)
+    return project_economics(shifted, fleet, finance).net_surplus_per_home_per_year_gbp
+
+
+def _clamped_rate(surplus_at_zero: float, slope: float, floor: float, retail: float) -> tuple[float, str, bool]:
+    """The rate, binding and feasibility of the line ``surplus_at_zero + slope × r`` against *floor*, the rate clamped to [0, *retail*].
+
+    A slope within :data:`_SLOPE_EPS` of 0 is a surplus no rate moves: rate 0
+    when it meets the floor, else *retail* and infeasible.
+    """
+    if abs(slope) <= _SLOPE_EPS:
+        return (0.0, "rate_clamped_zero", True) if surplus_at_zero >= floor else (retail, "infeasible_above_retail", False)
+    r_star = (floor - surplus_at_zero) / slope
+    if r_star < 0.0:
+        return 0.0, "rate_clamped_zero", True
+    if r_star <= retail:
+        return r_star, "floor", True
+    return retail, "infeasible_above_retail", False
+
+
+def _solved(projection: FleetProjection, fleet: ScenarioFleet, finance: FinanceConfig) -> CostRecoverySolution:
+    """The own-use rate *projection* meets *finance*'s retained-cash floor at, read from its curve, and its age-0 summaries' outlay at that rate."""
+    surplus_at = functools.partial(_surplus_at, curve=projection.curve, fleet=fleet, finance=finance)
+    retail = finance.retail_baseline_rate_pence_per_kwh
+    surplus_at_zero = surplus_at(0.0)
+    slope = (surplus_at(retail) - surplus_at_zero) / retail
+    rate, binding, feasible = _clamped_rate(
+        surplus_at_zero, slope, finance.retained_cash_floor_per_home_per_year_gbp, retail
+    )
+    outlay = bill_distribution(
+        projection.age0_summaries, dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
+    )
+    representative = outlay.representative
+    return CostRecoverySolution(
+        own_use_rate_pence_per_kwh=rate,
+        outlay=outlay,
+        representative_outlay_gbp=representative.total_outlay_gbp,
+        net_surplus_per_home_per_year_gbp=surplus_at(rate),
+        saving_vs_baseline_gbp=representative.saving_vs_baseline_gbp,
+        saving_pct=representative.saving_pct,
+        feasible=feasible,
+        binding=binding,
+    )
+
+
+def _cost_recovery_run(
+    fleet: ScenarioFleet, finance: FinanceConfig, simulate: FleetSimulate
+) -> tuple[CostRecoveryRun, tuple[Warning, ...]]:
+    """*fleet*'s one projection at *finance*'s configured rate, its economics and its solve, with the warnings its caller is to be shown."""
+    projection, notices = _project(fleet, finance, simulate, _ERROR_TARGET_PCT)
+    run = CostRecoveryRun(
+        projection=projection,
+        economics=project_economics(projection.curve, fleet, finance),
+        solution=_solved(projection, fleet, finance),
+    )
+    return run, notices
+
+
+def run_cost_recovery(fleet: ScenarioFleet, finance: FinanceConfig, *, simulate: FleetSimulate) -> CostRecoveryRun:
+    """Project *fleet* once at the configured own-use rate, and give that projection's economics and cost-recovery solve.
+
+    The one projection, :func:`project_fleet`'s at
+    ``finance.own_use_rate_pence_per_kwh``, serves all three:
+
+    * ``economics`` is ``project_economics`` of its curve, at the configured
+      rate;
+    * ``solution`` is :func:`solve_cost_recovery_rate`'s solve, read from the
+      curve and exact at every rate (docs/cost-recovery-finance-model.md §5);
+    * the solution's outlay bills the projection's age-0 summaries at the
+      solved rate, with no second simulation.
+
+    The projection's warnings name this function's caller.
+
+    Args:
+        fleet: The ScenarioFleet to project, as :func:`scenario_fleet`
+            resolves a scenario.
+        finance: FinanceConfig with cost-recovery fields populated.
+        simulate: The fleet simulator each sampled age runs through, as
+            :func:`project_fleet`'s.
+
+    Returns:
+        The :class:`CostRecoveryRun` of the projection, its economics and its
+        solution.
+
+    Raises:
+        ValueError, ConfigurationError: As :func:`project_fleet` raises them.
+    """
+    run, notices = _cost_recovery_run(fleet, finance, simulate)
+    _warn_the_caller(notices)
+    return run
 
 
 def solve_cost_recovery_rate(
@@ -1268,7 +1408,8 @@ def solve_cost_recovery_rate(
     The CBS charges householders ``own_use_rate_pence_per_kwh`` p/kWh for every
     kWh of CBS-owned solar consumed on-site.  This function finds the lowest such
     rate *r** such that ``project_economics.net_surplus_per_home_per_year_gbp ≥
-    finance.retained_cash_floor_per_home_per_year_gbp``.
+    finance.retained_cash_floor_per_home_per_year_gbp``.  It is the solution of
+    :func:`run_cost_recovery` for ``scenario_fleet(scenario)``.
 
     **Mechanism** (no re-sim per trial rate):
 
@@ -1281,14 +1422,14 @@ def solve_cost_recovery_rate(
     a re-projection at *r*, exactly, and the two-point fit's *r** is the
     re-projected solution whatever r0 is (docs/cost-recovery-finance-model.md §5).
 
-    1. Run ``project_fleet`` **once** at the configured rate ``r0`` → base curve.
+    1. Run the projection **once** at the configured rate ``r0`` → base curve.
     2. ``surplus_at(r)`` rebuilds each ``YearPoint``'s ``fleet_revenue_gbp`` via
        ``dataclasses.replace``: ``rev_y' = rev_y + (r - r0)/100 × own_use_y``.
     3. Compute ``s0 = surplus_at(0)``, ``s_ret = surplus_at(retail)``,
        ``slope = (s_ret - s0) / retail``.
     4. Solve ``r* = (floor - s0) / slope``; clamp to [0, retail]; set *binding*.
-    5. Compute outlay from a dedicated age-0 fleet sim (per-home granularity
-       not available from the multi-year curve).
+    5. Bill the outlay on the projection's age-0 summaries at the solved rate:
+       the projection simulated that age-0 fleet, so no second simulation.
 
     The rate base (``YearPoint.fleet_billed_own_use_kwh``) and the revenue
     are the projection's annualised figures, so a short window is solved
@@ -1304,17 +1445,19 @@ def solve_cost_recovery_rate(
     * Degenerate (slope ≈ 0, no billed own-use): if ``s0 ≥ floor`` →
       ``rate_clamped_zero``; else → ``infeasible_above_retail``.
 
+    The projection's warnings name this function's caller.
+
     Args:
         scenario: ScenarioConfig whose homes, as ``simulated_homes()`` gives
             them, are simulated over ``simulation_bounds()``.
         finance: FinanceConfig with cost-recovery fields populated.
-        simulate: The fleet simulator the projection and the age-0 outlay
-            run through, such as a :class:`~solar_challenge.fleet.FleetRunner`'s
-            ``simulate``.  Grid-services income is priced from the batteries
-            of the ``home_configs`` it returns, so it must return the batteries
-            of the ``fleet_config.homes`` it is given, in order and state of
-            health aside, as ``FleetRunner.simulate`` does;
-            :func:`project_fleet` raises ValueError otherwise.
+        simulate: The fleet simulator the projection runs through, such as a
+            :class:`~solar_challenge.fleet.FleetRunner`'s ``simulate``.
+            Grid-services income is priced from the batteries of the
+            ``home_configs`` it returns, so it must return the batteries of the
+            ``fleet_config.homes`` it is given, in order and state of health
+            aside, as ``FleetRunner.simulate`` does; :func:`project_fleet`
+            raises ValueError otherwise.
 
     Returns:
         A :class:`~solar_challenge.finance.CostRecoverySolution` with the solved rate and outlay.
@@ -1324,84 +1467,6 @@ def solve_cost_recovery_rate(
             grid-charges by one of ANALYSIS_ONLY_FORECASTS, as
             :func:`~solar_challenge.finance.refuse_analysis_only_forecasts` refuses it.
     """
-    fleet = scenario_fleet(scenario)
-    refuse_analysis_only_forecasts(fleet.homes)
-
-    # ---- (1) Base curve at the configured r0 ---------------------------------
-    r0 = finance.own_use_rate_pence_per_kwh
-    base_curve = project_fleet(fleet, finance, simulate=simulate).curve
-
-    # ---- (2) surplus_at(r): rebuild YearPoints with rate-shifted revenue -----
-    def surplus_at(r: float) -> float:
-        """Return net_surplus_per_home_per_year at trial rate r (p/kWh)."""
-        new_points = tuple(
-            dataclasses.replace(
-                yp,
-                fleet_revenue_gbp=yp.fleet_revenue_gbp
-                + (r - r0) / 100.0 * yp.fleet_billed_own_use_kwh,
-            )
-            for yp in base_curve.points
-        )
-        rate_curve = dataclasses.replace(base_curve, points=new_points)
-        # finance passed to project_economics can be the original; capex/debt
-        # are rate-independent.  Surplus formula uses curve.points[y].fleet_revenue_gbp.
-        return project_economics(rate_curve, fleet, finance).net_surplus_per_home_per_year_gbp
-
-    # ---- (3) Two-point fit to recover the affine line ------------------------
-    retail = finance.retail_baseline_rate_pence_per_kwh
-    floor = finance.retained_cash_floor_per_home_per_year_gbp
-
-    s0 = surplus_at(0.0)
-    s_ret = surplus_at(retail)
-    slope = (s_ret - s0) / retail  # retail > 0 (validated in FinanceConfig)
-
-    # ---- (4) Solve + clamp ---------------------------------------------------
-    if abs(slope) > _SLOPE_EPS:
-        r_star = (floor - s0) / slope
-        if r_star < 0.0:
-            rate = 0.0
-            binding = "rate_clamped_zero"
-            feasible = True
-        elif r_star <= retail:
-            rate = r_star
-            binding = "floor"
-            feasible = True
-        else:
-            rate = retail
-            binding = "infeasible_above_retail"
-            feasible = False
-    else:
-        # Degenerate: near-zero billed own-use → surplus is constant
-        if s0 >= floor:
-            rate = 0.0
-            binding = "rate_clamped_zero"
-            feasible = True
-        else:
-            rate = retail
-            binding = "infeasible_above_retail"
-            feasible = False
-
-    # ---- (5) Net surplus at the clamped/solved rate --------------------------
-    net_surplus = surplus_at(rate)
-
-    # ---- (6) Age-0 outlay BillDistribution -----------------------------------
-    aged0 = _aged_homes(fleet.homes, 0)
-    fleet_cfg = FleetConfig(homes=tuple(aged0), name="cr4-solve-age0")
-    fr_age0 = simulate(fleet_cfg, fleet.start, fleet.end)
-
-    summaries = [calculate_summary(r) for r in fr_age0.per_home_results]
-    finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=rate)
-    outlay = bill_distribution(summaries, finance_solved)
-
-    # ---- (7) Assemble result -------------------------------------------------
-    rep = outlay.representative
-    return CostRecoverySolution(
-        own_use_rate_pence_per_kwh=rate,
-        outlay=outlay,
-        representative_outlay_gbp=rep.total_outlay_gbp,
-        net_surplus_per_home_per_year_gbp=net_surplus,
-        saving_vs_baseline_gbp=rep.saving_vs_baseline_gbp,
-        saving_pct=rep.saving_pct,
-        feasible=feasible,
-        binding=binding,
-    )
+    run, notices = _cost_recovery_run(scenario_fleet(scenario), finance, simulate)
+    _warn_the_caller(notices)
+    return run.solution

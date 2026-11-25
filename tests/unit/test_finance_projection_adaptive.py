@@ -18,13 +18,14 @@ import pytest
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.home import RunPricing
-from solar_challenge.projection import MAX_NODES, project_multi_year
+from solar_challenge.projection import MAX_NODES, fewest_simulated_ages, project_multi_year
 from tests._finance_builders import (
     make_fleet_results,
     make_home_config,
     make_period,
     make_scenario_and_finance,
 )
+from tests._fleet_simulate_stand_in import answering_with
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -308,3 +309,26 @@ class TestTheIncomeDeviationScaleSeesAZeroAtAgeZero:
         assert len(curve.sampled_ages) < MAX_NODES, curve.sampled_ages
         assert math.isfinite(curve.interp_error_estimate)
         assert curve.interp_error_estimate <= 1.0
+
+
+class TestTheFewestAgesAProjectionSimulates:
+    @pytest.mark.parametrize("asset_life_years", [3, 10, 25])
+    def test_a_smooth_fleets_projection_simulates_the_fewest_ages(self, asset_life_years: int) -> None:
+        """A constant fleet is flat at every age, so the bisection stops after its first pass."""
+        scenario, finance = make_scenario_and_finance(n_homes=1, asset_life_years=asset_life_years)
+        answer = answering_with(make_fleet_results(n_homes=1))
+        asked: list[str] = []
+
+        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            asked.append(fleet_config.name)
+            return answer(fleet_config, start, end)
+
+        project_multi_year(scenario, finance, simulate=simulate)
+
+        assert len(asked) == fewest_simulated_ages(asset_life_years), asked
+
+    def test_the_fewest_ages_are_the_seeds_and_the_first_passes_midpoints(self) -> None:
+        """Seeds 0, 12 and 24 with midpoints 6 and 18; seeds 0, 1 and 2 with none; seeds 0, 5 and 9 with midpoints 2 and 7."""
+        assert fewest_simulated_ages(25) == 5
+        assert fewest_simulated_ages(3) == 3
+        assert fewest_simulated_ages(10) == 5

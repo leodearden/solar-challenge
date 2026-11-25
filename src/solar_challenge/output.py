@@ -755,9 +755,10 @@ def generate_config_ranking_report(
       RECOMMENDATION.  Infeasible configs (``ranked.infeasible``) appear in a
       separate section (dims only — economics are not retained for infeasible
       configs; see :class:`~solar_challenge.optimize.RankedSweep`).
-    - **Table 2 — Fixed-15p Trade-Off**: one row per feasible config →
-      baseline outlay and CBS surplus at the fixed 15 p/kWh own-use rate, plus
-      a Pareto flag.  Infeasible configs are omitted from this table because
+    - **Table 2 — Configured-Rate Trade-Off**: one row per feasible config →
+      the configured own-use rate it was priced at, the baseline outlay and
+      CBS surplus at that rate, and a Pareto flag.  Infeasible configs are
+      omitted from this table because
       :class:`~solar_challenge.optimize.RankedSweep` retains them only as
       :class:`~solar_challenge.optimize.ConfigPoint` objects without baseline
       economics; they remain visible in Table 1's infeasible list.
@@ -831,25 +832,30 @@ def generate_config_ranking_report(
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
             report += f"| {label} | {_BINDING_LABELS['infeasible_above_retail']} |\n"
 
-    # ---- Table 2: FIXED-15p TRADE-OFF ----------------------------------------
+    # ---- Table 2: CONFIGURED-RATE TRADE-OFF ----------------------------------
     # Infeasible configs are omitted from Table 2 because RankedSweep retains them
     # only as ConfigPoints without baseline_outlay/baseline_surplus economics; they
     # remain visible in Table 1's infeasible list above.
-    report += "\n## Fixed-15p Trade-Off\n\n"
+    report += "\n## Configured-Rate Trade-Off\n\n"
     if not ranked.results:
         report += "*No feasible configurations to compare.*\n"
     else:
         pareto_set = set(ranked.pareto_baseline)
         report += (
-            "| Config | Baseline Outlay (£/yr) | Baseline CBS Surplus (£/home/yr) | Pareto |\n"
+            "| Config | Configured Rate (p/kWh) | Baseline Outlay (£/yr) | "
+            "Baseline CBS Surplus (£/home/yr) | Pareto |\n"
         )
-        report += "|--------|----------------------:|--------------------------------:|--------|\n"
+        report += (
+            "|--------|------------------------:|----------------------:|"
+            "--------------------------------:|--------|\n"
+        )
         for cr in ranked.results:
             cp = cr.config
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
             pareto_flag = "✔ Pareto" if cp in pareto_set else "—"
             report += (
                 f"| {label} "
+                f"| {cr.baseline_own_use_rate_pence_per_kwh:.2f} p/kWh "
                 f"| £{cr.baseline_outlay_gbp:.2f} "
                 f"| £{cr.baseline_surplus_per_home_gbp:.2f} "
                 f"| {pareto_flag} |\n"

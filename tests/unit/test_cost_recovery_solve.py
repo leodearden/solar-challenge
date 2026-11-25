@@ -20,24 +20,29 @@ from solar_challenge.finance import (
     BillDistribution,
     CostRecoverySolution,
     FinanceConfig,
+    bill_distribution,
 )
 from solar_challenge.home import RunPricing
 from solar_challenge.projection import (
+    CostRecoveryRun,
+    fewest_simulated_ages,
     project_economics,
     project_fleet,
     project_multi_year,
+    run_cost_recovery,
     scenario_fleet,
     solve_cost_recovery_rate,
 )
 from tests._factories import make_bill_distribution
 from tests._finance_builders import make_fleet_results, make_scenario
 from tests._fleet_simulate_stand_in import answering_with
+from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
 if TYPE_CHECKING:
     import pandas as pd
 
     from solar_challenge.config import ScenarioConfig
-    from solar_challenge.fleet import FleetConfig, FleetResults
+    from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 
 
 # ---------------------------------------------------------------------------
@@ -838,3 +843,86 @@ class TestTheSolveIsExactAndIndependentOfTheConfiguredRate:
         assert len({curve.interp_error_estimate for curve in curves}) == 1, [
             curve.interp_error_estimate for curve in curves
         ]
+
+
+# ---------------------------------------------------------------------------
+# C7 — one projection serves the economics, the solve and the outlay
+# ---------------------------------------------------------------------------
+
+
+class TestOneProjectionServesTheRun:
+    """run_cost_recovery's one projection, at the configured rate, gives its economics, its solve and its outlay."""
+
+    def _interior(self) -> tuple[ScenarioConfig, FinanceConfig, FleetResults]:
+        """TestSolveCostRecoveryRateInterior's scenario, finance and per-home results: a solve strictly between 0 and retail."""
+        scenario = _make_scenario(n_homes=5)
+        finance = _make_finance(
+            pv_cost_per_kwp_gbp=2000.0,
+            grant_gbp=0.0,
+            retained_cash_floor=100.0,
+            retail_baseline_rate=30.0,
+        )
+        return scenario, finance, make_fleet_results(n_homes=5, self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0)
+
+    def test_the_runs_solution_is_the_scenarios_solve(self) -> None:
+        scenario, finance, fr = self._interior()
+        simulate = answering_with(fr)
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=simulate)
+
+        assert run.solution == solve_cost_recovery_rate(scenario, finance, simulate=simulate)
+
+    def test_the_runs_projection_is_the_fleets_projection_at_the_configured_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+        simulate = answering_with(fr)
+        fleet = scenario_fleet(scenario)
+
+        run = run_cost_recovery(fleet, finance, simulate=simulate)
+
+        projection = project_fleet(fleet, finance, simulate=simulate)
+        assert run.projection.curve == projection.curve
+        assert run.projection.age0_summaries == projection.age0_summaries
+
+    def test_the_runs_economics_are_its_projections_at_the_configured_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+        fleet = scenario_fleet(scenario)
+
+        run = run_cost_recovery(fleet, finance, simulate=answering_with(fr))
+
+        assert run.economics == project_economics(run.projection.curve, fleet, finance)
+
+    def test_the_outlay_bills_the_projections_age_0_summaries_at_the_solved_rate(self) -> None:
+        scenario, finance, fr = self._interior()
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=answering_with(fr))
+
+        finance_solved = dataclasses.replace(finance, own_use_rate_pence_per_kwh=run.solution.own_use_rate_pence_per_kwh)
+        assert run.solution.outlay == bill_distribution(run.projection.age0_summaries, finance_solved)
+
+    def test_the_run_and_the_solve_each_ask_for_one_projections_ages(self) -> None:
+        """Neither simulates an age-0 fleet of its own for the outlay."""
+        scenario, finance, fr = self._interior()
+        answer = answering_with(fr)
+        run_asked: list[str] = []
+        solve_asked: list[str] = []
+
+        def recording(asked: list[str]) -> FleetSimulate:
+            def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+                asked.append(fleet_config.name)
+                return answer(fleet_config, start, end)
+
+            return simulate
+
+        run_cost_recovery(scenario_fleet(scenario), finance, simulate=recording(run_asked))
+        solve_cost_recovery_rate(scenario, finance, simulate=recording(solve_asked))
+
+        assert tuple(run_asked) == PROJECTION_AGES_OVER_25_YEARS
+        assert len(run_asked) == fewest_simulated_ages(finance.asset_life_years)
+        assert tuple(solve_asked) == PROJECTION_AGES_OVER_25_YEARS
+
+    def test_the_run_is_a_cost_recovery_run(self) -> None:
+        scenario, finance, fr = self._interior()
+
+        run = run_cost_recovery(scenario_fleet(scenario), finance, simulate=answering_with(fr))
+
+        assert isinstance(run, CostRecoveryRun)

@@ -29,6 +29,7 @@ from solar_challenge.optimize import (
     sensitivity_panel,
 )
 from solar_challenge.output import generate_config_ranking_report
+from solar_challenge.projection import fewest_simulated_ages
 from solar_challenge.scenario_blocks import (
     parse_finance_config,
     parse_seg_rate,
@@ -245,7 +246,7 @@ def configs(
     Enumerates homogeneous-install scenarios over the cartesian product of
     PV/battery/inverter capacity dimensions, solves the CBS cost-recovery rate
     for each config, ranks by householder outlay, and renders a two-table
-    markdown report (cost-recovery rank + fixed-15p trade-off).
+    markdown report (cost-recovery rank + configured-rate trade-off).
 
     When the sensitivity axes are non-empty, a one-at-a-time (OAT) sensitivity
     panel is appended showing which cost assumptions most affect the top-ranked
@@ -332,11 +333,13 @@ def configs(
     )
 
     _LARGE_SWEEP_THRESHOLD = 100_000
-    if n_configs * n_homes * days > _LARGE_SWEEP_THRESHOLD:
+    ages = fewest_simulated_ages(finance.asset_life_years)
+    home_days = n_configs * ages * n_homes * days
+    if home_days > _LARGE_SWEEP_THRESHOLD:
         print_info(
             cli,
-            f"⚠  Large sweep: {n_configs} config(s) × {n_homes} home(s) × {days} day(s) "
-            f"≈ {n_configs * n_homes * days:,} home-days. "
+            f"⚠  Large sweep: {n_configs} config(s) × at least {ages} simulated age(s) per projection × "
+            f"{n_homes} home(s) × {days} day(s) ≈ {home_days:,} home-days. "
             "For exploratory runs, use --start / --end to limit the simulation window "
             "(e.g. --start 2024-01-01 --end 2024-01-07)."
         )
