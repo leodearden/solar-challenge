@@ -729,7 +729,7 @@ def _required_finance(point: ConfigPoint, scenario: ScenarioConfig) -> FinanceCo
     """*scenario*'s finance block, which a cost-recovery sweep of *point* requires."""
     if scenario.finance is None:
         raise ValueError(
-            "run_sweep requires every scenario to have a finance block; "
+            "a cost-recovery sweep requires every scenario to have a finance block; "
             f"got scenario.finance=None for config {point!r}"
         )
     return scenario.finance
@@ -743,7 +743,7 @@ def _common_floor(configs: Sequence[tuple[ConfigPoint, ScenarioConfig]]) -> floa
         other = _required_finance(point, scenario).retained_cash_floor_per_home_per_year_gbp
         if other != floor:
             raise ValueError(
-                "run_sweep solves every config at one retained-cash floor; "
+                "a cost-recovery sweep solves every config at one retained-cash floor; "
                 f"config {first_point!r} sets {floor!r} £/home/yr but config {point!r} sets {other!r}. "
                 "Set the floor on the base scenario, through its "
                 "retained_cash_floor_per_home_per_year_gbp knob, before enumerate_configs."

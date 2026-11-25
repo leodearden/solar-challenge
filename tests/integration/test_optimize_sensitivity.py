@@ -497,6 +497,30 @@ class TestBaseline:
         assert "60.0" in str(refusal.value)
         assert panel_asked == []
 
+    def test_base_configs_at_two_floors_are_refused_naming_both_floors_and_no_run_sweep(self) -> None:
+        """The panel refuses base_configs at two floors as any cost-recovery sweep does: its refusal names both floors, not a run_sweep its caller never called."""
+        floor_knob = KNOBS["retained_cash_floor_per_home_per_year_gbp"]
+        base_configs = self._base_configs(pv_kwp=4.0) + [
+            (point, floor_knob.apply(scenario, 60.0)) for point, scenario in self._base_configs(pv_kwp=5.0)
+        ]
+        baseline = run_sweep(
+            self._base_configs(pv_kwp=4.0) + self._base_configs(pv_kwp=5.0), simulate=_paired_const_simulate
+        )
+        panel_asked: list[FleetConfig] = []
+
+        with pytest.raises(ValueError, match="one retained-cash floor") as refusal:
+            sensitivity_panel(
+                base_configs,
+                {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
+                baseline=baseline,
+                simulate=_recording(panel_asked),
+            )
+
+        assert "50.0" in str(refusal.value)
+        assert "60.0" in str(refusal.value)
+        assert "run_sweep" not in str(refusal.value)
+        assert panel_asked == []
+
     def test_a_repeated_axis_value_is_refused_before_any_simulation(self) -> None:
         base_configs = self._base_configs()
         baseline = run_sweep(base_configs, simulate=_paired_const_simulate)
