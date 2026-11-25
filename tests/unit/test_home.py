@@ -147,18 +147,22 @@ def _series_field_names() -> list[str]:
     return [
         field.name
         for field in dataclasses.fields(SimulationResults)
-        if pd.Series in (hints[field.name], *typing.get_args(hints[field.name]))
+        if hints[field.name] in (pd.Series, typing.Optional[pd.Series])
     ]
 
 
 def _results_with_every_series_set() -> SimulationResults:
-    """Results whose every series, optional ones included, varies and holds values no other series holds."""
+    """Results whose every series, optional ones included, varies and holds values no other series holds.
+
+    Demand's are the largest, so that it holds the heat pump's load.
+    """
     index = pd.date_range("2024-06-21 10:00", periods=60, freq="1min", tz="Europe/London")
+    names = _series_field_names()
     return SimulationResults(
         strategy_name="tou_optimized",
         **{
-            name: pd.Series(np.arange(60.0) + 100.0 * position, index=index)
-            for position, name in enumerate(_series_field_names())
+            name: pd.Series(np.arange(60.0) + 100.0 * (len(names) if name == "demand" else position), index=index)
+            for position, name in enumerate(names)
         },
     )
 
@@ -257,10 +261,12 @@ class TestSimulationResults:
             built, **{name: getattr(built, name).rename(built_name) for name in _series_field_names()}
         )
 
-        name_by_field = {field_name: getattr(results, field_name).name for field_name in _series_field_names()}
-        column_by_field = dict(zip(name_by_field, results.to_dataframe().columns, strict=True))
+        frame = results.to_dataframe()
 
-        assert name_by_field == column_by_field
+        assert sorted(getattr(results, name).name for name in _series_field_names()) == sorted(frame.columns)
+        for name in _series_field_names():
+            series = getattr(results, name)
+            pd.testing.assert_series_equal(frame[series.name], series, obj=name)
 
     def test_the_series_it_was_built_from_keep_their_names(self):
         """Naming its series does not rename the series a SimulationResults was built from."""
@@ -475,7 +481,11 @@ class TestPerStepAmounts:
     def test_an_unset_optional_series_has_no_amount_column(self):
         """An optional series left unset has no amount column."""
         amounts = dataclasses.replace(
-            _results_with_every_series_set(), heat_pump_load=None, grid_charge_cost=None, grid_charge=None
+            _results_with_every_series_set(),
+            heat_pump_load=None,
+            additional_loads={},
+            grid_charge_cost=None,
+            grid_charge=None,
         ).per_step_amounts()
 
         assert sorted(amounts.columns) == sorted(
@@ -494,7 +504,7 @@ class TestPerStepAmounts:
 
     @pytest.mark.parametrize(
         "unset",
-        [{}, {"heat_pump_load": None, "grid_charge_cost": None, "grid_charge": None}],
+        [{}, {"heat_pump_load": None, "additional_loads": {}, "grid_charge_cost": None, "grid_charge": None}],
         ids=["every_series_set", "optional_series_unset"],
     )
     def test_total_amounts_are_the_row_amounts_summed_over_the_run(self, unset):

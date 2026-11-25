@@ -665,7 +665,8 @@ class TestResultsTabs:
 
     def test_a_home_with_a_battery_and_a_heat_pump_load_lists_every_home_chart(self) -> None:
         year = make_sim_results()
-        results = dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
+        heat_pump = pd.Series(0.3, index=year.demand.index)
+        results = dataclasses.replace(year, demand=year.demand + heat_pump, heat_pump_load=heat_pump)
 
         tabs = home_results_tabs(
             make_home_config(battery_config=BatteryConfig(capacity_kwh=5.0)), results, calculate_summary(results)

@@ -17,9 +17,11 @@ import copy
 import json
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
+from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, Literal
 
 import pandas as pd
@@ -658,3 +660,51 @@ def test_without_unknown_keys_changes_none_of_its_input() -> None:
     without_unknown_keys(content, _EveryShape)
 
     assert content == before
+
+
+class _Colour(StrEnum):
+    RED = "red"
+    BLUE = "blue"
+
+
+@dataclass(frozen=True)
+class _Weights:
+    """Weights held in a read-only mapping, as SummaryStatistics holds its load energies."""
+
+    weights: Mapping[str, float]
+
+    def __post_init__(self) -> None:
+        """Hold a read-only copy of weights, whatever Mapping it was given."""
+        object.__setattr__(self, "weights", MappingProxyType(dict(self.weights)))
+
+
+class TestAMappingField:
+    """A field annotated Mapping[K, V] whose value is no dict is stored as an object of its keys, and read back from one."""
+
+    def test_a_read_only_mapping_is_written_as_an_object_of_its_keys_and_values(self) -> None:
+        tree = field_tree(_Weights({"a": 1.0, "b": 2.0}))
+
+        assert json.loads(json.dumps(tree)) == {"weights": {"a": 1.0, "b": 2.0}}
+
+    def test_a_str_enum_key_is_written_as_its_value(self) -> None:
+        tree = field_tree(_Weights({_Colour.RED: 1.0}))
+
+        assert json.loads(json.dumps(tree)) == {"weights": {"red": 1.0}}
+
+    def test_the_object_is_read_back_into_the_class(self) -> None:
+        weights = _Weights({"a": 1.0, "b": 2.0})
+
+        assert read_field_tree(json.loads(json.dumps(field_tree(weights))), _Weights) == weights
+
+    def test_a_null_is_refused_naming_its_path_as_no_object(self) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"weights": None}, _Weights)
+
+        assert (refusal.value.path, refusal.value.reason) == ("weights", "is null, not an object")
+
+    def test_an_array_is_refused_as_no_object(self) -> None:
+        with pytest.raises(FieldTreeRefused) as refusal:
+            read_field_tree({"weights": [1.0]}, _Weights)
+
+        assert refusal.value.path == "weights"
+        assert refusal.value.reason.endswith("not an object")

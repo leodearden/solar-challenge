@@ -134,9 +134,8 @@ def test_each_chart_on_the_home_results_page_is_drawn_from_the_figure_its_contai
 ) -> None:
     """A year-long run with a battery and a heat-pump load draws all nine charts."""
     year = make_sim_results()
-    results = dataclasses.replace(
-        year, heat_pump_load=pd.Series(0.3, index=year.demand.index)
-    )
+    heat_pump = pd.Series(0.3, index=year.demand.index)
+    results = dataclasses.replace(year, demand=year.demand + heat_pump, heat_pump_load=heat_pump)
 
     page = _home_results_page(app, results, BatteryConfig(capacity_kwh=5.0))
 

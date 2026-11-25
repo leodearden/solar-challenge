@@ -178,7 +178,7 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
     That is the year the heat pump's annual heat demand is shared out over. Synthetic weather, no network.
     """
 
-    def test_one_day_of_weather_raises_naming_the_homes_location_and_its_hourly_rows(self):
+    def test_one_day_of_weather_raises_naming_its_hourly_rows(self):
         home = HomeConfig(
             pv_config=PVConfig(capacity_kw=4.0),
             load_config=LoadConfig(annual_consumption_kwh=3000.0, seed=42),
@@ -190,7 +190,7 @@ class TestSimulateHomeRejectsWeatherThatIsNotOneYear:
         with pytest.raises(ValueError) as refusal:
             simulate_home(home, day, day, weather=weather_for(home, sunless_tmy(temp_air=10.0, wind_speed=_TMY_WIND_SPEED).loc["1990-01-15"]))
 
-        named = (repr(home.location), "24 rows", "(8,760 to 8,784)")
+        named = ("24 rows", "(8,760 to 8,784)", "not one year of hourly rows")
         assert [value for value in named if value not in str(refusal.value)] == []
 
 

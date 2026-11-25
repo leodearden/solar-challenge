@@ -72,7 +72,8 @@ def test_a_chart_of_more_than_2000_steps_draws_the_mean_of_each_evenly_spaced_wi
 def test_every_chart_of_a_runs_time_series_draws_it_at_the_same_instants() -> None:
     """Each chart of a downsampled year draws every trace at the power-flow timeline's instants."""
     base = make_sim_results(days=365)
-    year = dataclasses.replace(base, heat_pump_load=pd.Series(0.3, index=base.demand.index))
+    heat_pump = pd.Series(0.3, index=base.demand.index)
+    year = dataclasses.replace(base, demand=base.demand + heat_pump, heat_pump_load=heat_pump)
     fleet = make_fleet_results_of([year])
     figures = {
         "power_flow_timeline": power_flow_timeline(year).content,

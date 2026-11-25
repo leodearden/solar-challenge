@@ -81,7 +81,7 @@ FROZEN_SURFACE: dict[str, str] = {
     "CostRecoverySolution": "dataclass[eq, frozen, match_args] (own_use_rate_pence_per_kwh: float, outlay: BillDistribution, representative_outlay_gbp: float, net_surplus_per_home_per_year_gbp: float, saving_vs_baseline_gbp: float, saving_pct: float, feasible: bool, binding: str) -> None",
     "FinanceConfig": "dataclass[eq, frozen, match_args] (standing_charge_pence_per_day: float, vat_rate: float = 0.05, retail_baseline_rate_pence_per_kwh: float = 23.0, self_consumption_override: float | None = None, pv_cost_per_kwp_gbp: float = 1000.0, roof_fit_cost_gbp: float = 1000.0, battery_cost_per_kwh_gbp: float = 250.0, inverter_cost_per_kw_gbp: float = 0.0, grant_gbp: float = 250000.0, equity_fraction: float = 0.75, loan_term_years: int = 15, loan_rate: float = 0.07, opex_per_home_per_year_gbp: float = 131.0, asset_life_years: int = 25, own_use_rate_pence_per_kwh: float = 15.0, retained_cash_floor_per_home_per_year_gbp: float = 27.0, grid_services_income_per_kw_per_year_gbp: float = 0.0, grid_services_model: str = 'flat', grid_services_events: GridServicesEventsConfig | None = None) -> None",
     # --- signature-closure types ---
-    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
+    "SummaryStatistics": "dataclass[eq, frozen, match_args] (total_generation_kwh: float, total_demand_kwh: float, total_self_consumption_kwh: float, total_grid_import_kwh: float, total_grid_export_kwh: float, total_battery_charge_kwh: float, total_battery_discharge_kwh: float, peak_generation_kw: float, peak_demand_kw: float, self_consumption_ratio: float, grid_dependency_ratio: float, export_ratio: float, window: SimulationWindow, total_import_cost_gbp: float, total_export_revenue_gbp: float, net_cost_gbp: float, strategy_name: str = 'self_consumption', total_heat_pump_load_kwh: float | None = None, peak_heat_pump_load_kw: float | None = None, heat_pump_load_ratio: float | None = None, total_grid_charge_cost_gbp: float = 0.0, total_grid_charge_kwh: float = 0.0, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, load_energy_kwh: Mapping[LoadKind, float] = <factory>) -> None",
     "ScenarioConfig": "dataclass[eq, frozen, match_args] (name: str, period: SimulationWindow, description: str = '', location: Location | None = None, homes: tuple[HomeConfig, ...] = (), home: HomeConfig | None = None, seg_tariff_pence_per_kwh: float | None = None, finance: FinanceConfig | None = None, flex_band: GridServicesBand | None = None) -> None",
     "FleetConfig": "dataclass[eq, frozen, match_args] (homes: tuple[HomeConfig, ...] = (), name: str = '') -> None",
     "FleetResults": "dataclass[eq, frozen, match_args] (per_home_results: tuple[SimulationResults, ...], home_configs: tuple[HomeConfig, ...]) -> None",
@@ -234,6 +234,7 @@ def test_every_exported_signature_matches_frozen_surface() -> None:
 # ---------------------------------------------------------------------------
 FROZEN_CLOSURE: dict[str, str] = {
     "battery.SocEnvelope": "dataclass[eq, frozen, match_args] (effective_capacity_kwh: float, min_soc_kwh: float, max_soc_kwh: float) -> None",
+    "demand.LoadKind": "HOUSEHOLD='household', HEAT_PUMP='heat_pump', EV='ev'",
     "dispatch.GridChargeConfig": "dataclass[eq, frozen, match_args] (target_soc_fraction: float = 0.9, forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] = 'pv_blind') -> None",
     "dispatch.PeakShavingStrategyConfig": "dataclass[eq, frozen, match_args] (import_limit_kw: float) -> None",
     "dispatch.SelfConsumptionStrategyConfig": "dataclass[eq, frozen] () -> None",
@@ -243,7 +244,7 @@ FROZEN_CLOSURE: dict[str, str] = {
     "heat_pump.HeatPumpConfig": "dataclass[eq, frozen, match_args] (heat_pump_type: Literal['ASHP', 'GSHP'], thermal_capacity_kw: float = 8.0, annual_heat_demand_kwh: float = 8000.0, name: str = '') -> None",
     "home.HomeConfig": "dataclass[eq, frozen, match_args] (pv_config: PVConfig, load_config: LoadConfig, battery_config: BatteryConfig | None = None, heat_pump_config: HeatPumpConfig | None = None, ev_config: EVConfig | None = None, location: Location = Location(latitude=51.45, longitude=-2.58, timezone='Europe/London', altitude=11.0, name='Bristol, UK'), name: str = '', tariff_config: TariffConfig | None = None, seg_tariff: SEGTariff | None = None) -> None",
     "home.RunPricing": "dataclass[eq, frozen, match_args] (import_tariff_mean_rate_gbp_per_kwh: float | None, seg_rate_pence_per_kwh: float | None) -> None",
-    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None) -> None",
+    "home.SimulationResults": "dataclass[eq, frozen, match_args] (generation: Series, demand: Series, self_consumption: Series, battery_charge: Series, battery_discharge: Series, battery_soc: Series, grid_import: Series, grid_export: Series, import_cost: Series, export_revenue: Series, tariff_rate: Series, strategy_name: str = 'self_consumption', heat_pump_load: Series | None = None, grid_charge_cost: Series | None = None, grid_charge: Series | None = None, pricing: RunPricing | None = None, grid_charge_forecast: Literal['pv_blind', 'trailing_14_days', 'perfect_foresight'] | None = None, additional_loads: Mapping[LoadKind, Series] = <factory>) -> None",
     "timebase.LocalDay": "dataclass[frozen, match_args] (date: date, rows: DatetimeIndex) -> None",
     "timebase.SimulationWindow": "dataclass[eq, frozen, match_args] (first_day: date, last_day: date, cadence: timedelta, timezone: str | None = None) -> None",
 }
@@ -306,6 +307,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "total_pv_charge_kwh": "property (self) -> float",
         "total_direct_self_consumption_kwh": "property (self) -> float",
         "total_grid_to_demand_kwh": "property (self) -> float",
+        "load_share": "(self, kind: LoadKind) -> float",
     },
     "ScenarioConfig": {
         "is_fleet": "property (self) -> bool",
@@ -467,6 +469,12 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
     "dispatch.TOUOptimizedStrategyConfig": {
         "strategy_type": "attribute Literal['tou_optimized']",
     },
+    "demand.LoadKind": {
+        "column": "property (self) -> str",
+        "energy_column": "property (self) -> str",
+        "label": "property (self) -> str",
+        "parse": "classmethod (cls, value: object) -> LoadKind",
+    },
     "ev.EVConfig": {
         "get_charger_power_kw": "(self) -> float",
         "get_available_charging_hours": "(self) -> float",
@@ -479,6 +487,7 @@ FROZEN_MEMBERS: dict[str, dict[str, str]] = {
         "default_gshp": "classmethod (cls) -> HeatPumpConfig",
     },
     "home.SimulationResults": {
+        "loads": "property (self) -> Mapping[LoadKind, Series]",
         "window": "property (self) -> SimulationWindow",
         "per_step_amounts": "(self) -> DataFrame",
         "total_amounts": "(self) -> dict[str, float]",
