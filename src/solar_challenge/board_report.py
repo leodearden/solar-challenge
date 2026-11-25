@@ -31,6 +31,39 @@ def _one_window_figure(per_window: tuple[float, ...], unit: str) -> str:
     return f"{per_window[0]:.1f} {unit}" if len(per_window) == 1 else "—"
 
 
+_BINDING_LABELS: Mapping[str, str] = {
+    "floor": "✔ Surplus meets floor",
+    "rate_clamped_zero": "✔ Over-feasible (rate clamped to 0, surplus > floor)",
+    "infeasible_above_retail": "✘ INFEASIBLE: required rate exceeds retail",
+}
+
+
+def _binding_label(binding: str) -> str:
+    """The board's label for a cost-recovery *binding*.
+
+    Raises:
+        ValueError: Naming *binding* and the bindings that have a label, when it has none.
+    """
+    if binding not in _BINDING_LABELS:
+        raise ValueError(f"a cost-recovery binding is one of {tuple(_BINDING_LABELS)}, got {binding!r}")
+    return _BINDING_LABELS[binding]
+
+
+def _fmt_dscr(val: float) -> str:
+    """Format DSCR: inf → '∞', otherwise '{val:.2f}×'."""
+    return "∞" if math.isinf(val) else f"{val:.2f}×"
+
+
+def _fmt_irr(val: float) -> str:
+    """Format IRR: NaN → 'n/a', otherwise '{val:.1%}'."""
+    return "n/a" if math.isnan(val) else f"{val:.1%}"
+
+
+def _fmt_payback(val: "Optional[float]") -> str:
+    """Format payback: None → '—', otherwise '{val:.1f} yr'."""
+    return "—" if val is None else f"{val:.1f} yr"
+
+
 def generate_finance_report(
     bill_physics: "BillDistribution",
     bill_spreadsheet: Optional["BillDistribution"] = None,
@@ -95,6 +128,9 @@ def generate_finance_report(
 
     Returns:
         A markdown-formatted finance report string.
+
+    Raises:
+        ValueError: When ``cost_recovery``'s binding has no label, naming it.
     """
     title = (
         f"# Finance Report: {scenario_name}"
@@ -203,14 +239,7 @@ def generate_finance_report(
 
     # ---- Optional cost-recovery block ----------------------------------
     if cost_recovery is not None:
-        # Human-readable binding/feasibility label
-        if cost_recovery.binding == "floor":
-            binding_label = "✔ Surplus meets floor"
-        elif cost_recovery.binding == "rate_clamped_zero":
-            binding_label = "✔ Over-feasible (rate clamped to 0, surplus > floor)"
-        else:  # infeasible_above_retail
-            binding_label = "✘ INFEASIBLE: required rate exceeds retail"
-
+        binding_label = _binding_label(cost_recovery.binding)
         cr = cost_recovery
         report += f"""
 ## Cost-Recovery Analysis
@@ -278,28 +307,6 @@ grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-
     return report
 
 
-_BINDING_LABELS: Mapping[str, str] = {
-    "floor": "✔ Surplus meets floor",
-    "rate_clamped_zero": "✔ Over-feasible (rate clamped to 0, surplus > floor)",
-    "infeasible_above_retail": "✘ INFEASIBLE: required rate exceeds retail",
-}
-
-
-def _fmt_dscr(val: float) -> str:
-    """Format DSCR: inf → '∞', otherwise '{val:.2f}×'."""
-    return "∞" if math.isinf(val) else f"{val:.2f}×"
-
-
-def _fmt_irr(val: float) -> str:
-    """Format IRR: NaN → 'n/a', otherwise '{val:.1%}'."""
-    return "n/a" if math.isnan(val) else f"{val:.1%}"
-
-
-def _fmt_payback(val: "Optional[float]") -> str:
-    """Format payback: None → '—', otherwise '{val:.1f} yr'."""
-    return "—" if val is None else f"{val:.1f} yr"
-
-
 def generate_config_ranking_report(
     ranked: "RankedSweep",
     panel: "Optional[SensitivityPanel]" = None,
@@ -339,6 +346,9 @@ def generate_config_ranking_report(
 
     Returns:
         A markdown-formatted string suitable for console output or file export.
+
+    Raises:
+        ValueError: When a feasible config's binding has no label, naming it.
     """
     # ---- Table 1: COST-RECOVERY RANK ----------------------------------------
     report = "## Cost-Recovery Rank\n\n"
@@ -369,7 +379,7 @@ def generate_config_ranking_report(
                 f"£{sol.outlay.min_gbp:.0f} / £{sol.outlay.mean_gbp:.0f} / "
                 f"£{sol.outlay.median_gbp:.0f} / £{sol.outlay.max_gbp:.0f}"
             )
-            binding_label = _BINDING_LABELS.get(cr.binding, cr.binding)
+            binding_label = _binding_label(cr.binding)
             report += (
                 f"| {label} "
                 f"| {cr.solved_own_use_rate_pence_per_kwh:.2f} p/kWh "
@@ -389,7 +399,7 @@ def generate_config_ranking_report(
         report += "|--------|---------|\n"
         for cp in ranked.infeasible:
             label = f"{cp.pv_kwp:.1f} kWp / {cp.battery_kwh:.1f} kWh / {cp.inverter_kw:.1f} kW"
-            report += f"| {label} | {_BINDING_LABELS['infeasible_above_retail']} |\n"
+            report += f"| {label} | {_binding_label('infeasible_above_retail')} |\n"
 
     # ---- Table 2: CONFIGURED-RATE TRADE-OFF ----------------------------------
     # Infeasible configs are omitted from Table 2 because RankedSweep retains them
