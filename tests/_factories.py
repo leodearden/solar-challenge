@@ -201,6 +201,7 @@ def make_config_result(
     min_dscr: float = 1.5,
     equity_irr: float = 0.08,
     payback_years: Optional[float] = 12.0,
+    baseline_own_use_rate_pence_per_kwh: float = 15.0,
     baseline_outlay_gbp: float = 450.0,
     baseline_surplus_per_home_gbp: float = 80.0,
 ) -> ConfigResult:
@@ -231,6 +232,7 @@ def make_config_result(
         min_dscr=min_dscr,
         equity_irr=equity_irr,
         payback_years=payback_years,
+        baseline_own_use_rate_pence_per_kwh=baseline_own_use_rate_pence_per_kwh,
         baseline_outlay_gbp=baseline_outlay_gbp,
         baseline_surplus_per_home_gbp=baseline_surplus_per_home_gbp,
     )
