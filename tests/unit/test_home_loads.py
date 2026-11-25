@@ -14,16 +14,23 @@ Tests cover:
   its column, from_dataframe reads it back, and each has an energy amount
 - TestAdditionalLoadsPickle: results keep their additional loads through pickle, as a
   fleet's worker returns them
+- TestSummaryLoadEnergy: SummaryStatistics.load_energy_kwh, {} by default, held by load
+  kind, each a finite energy of at least 0, agreeing with total_heat_pump_load_kwh, and
+  load_share, each load's share of demand
+- TestCalculateSummaryLoadEnergy: calculate_summary fills load_energy_kwh with each
+  load's energy, summing to demand's, and the heat-pump fields from it
 """
 
+import copy
 import datetime
+import math
 import pickle
 
 import pandas as pd
 import pytest
 
 from solar_challenge.demand import LoadKind
-from solar_challenge.home import SeriesRefused, SimulationResults
+from solar_challenge.home import SeriesRefused, SimulationResults, SummaryStatistics, calculate_summary
 from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 
 _WINDOW = SimulationWindow(datetime.date(2024, 3, 30), datetime.date(2024, 4, 1), ONE_MINUTE, "Europe/London")
@@ -200,3 +207,130 @@ class TestAdditionalLoadsPickle:
         assert list(unpickled.additional_loads) == [LoadKind.HEAT_PUMP, LoadKind.EV]
         for kind, load in results.additional_loads.items():
             pd.testing.assert_series_equal(unpickled.additional_loads[kind], load)
+
+
+_TOTAL_DEMAND_KWH = 10.0
+
+
+def _summary(**given: object) -> SummaryStatistics:
+    """A summary of _TOTAL_DEMAND_KWH of demand, all of it imported, with *given* in place of any of its arguments."""
+    totals = {
+        "total_generation_kwh": 0.0,
+        "total_demand_kwh": _TOTAL_DEMAND_KWH,
+        "total_self_consumption_kwh": 0.0,
+        "total_grid_import_kwh": _TOTAL_DEMAND_KWH,
+        "total_grid_export_kwh": 0.0,
+        "total_battery_charge_kwh": 0.0,
+        "total_battery_discharge_kwh": 0.0,
+        "peak_generation_kw": 0.0,
+        "peak_demand_kw": 1.0,
+        "self_consumption_ratio": 0.0,
+        "grid_dependency_ratio": 1.0,
+        "export_ratio": 0.0,
+        "window": _WINDOW,
+        "total_import_cost_gbp": 0.0,
+        "total_export_revenue_gbp": 0.0,
+        "net_cost_gbp": 0.0,
+    }
+    return SummaryStatistics(**(totals | given))
+
+
+class TestSummaryLoadEnergy:
+    def test_a_summary_built_without_it_has_no_load_energy(self) -> None:
+        assert _summary().load_energy_kwh == {}
+
+    def test_it_is_held_by_load_kind_in_load_kind_order_without_item_assignment(self) -> None:
+        energy = _summary(load_energy_kwh={"heat_pump": 2.0, "household": 6.0}).load_energy_kwh
+
+        assert list(energy) == [LoadKind.HOUSEHOLD, LoadKind.HEAT_PUMP]
+        assert all(type(kind) is LoadKind for kind in energy)
+        with pytest.raises(TypeError):
+            energy[LoadKind.EV] = 1.0
+
+    def test_a_key_naming_no_load_kind_is_refused_naming_it(self) -> None:
+        with pytest.raises(ValueError, match="boiler"):
+            _summary(load_energy_kwh={"boiler": 1.0})
+
+    @pytest.mark.parametrize("energy", [-0.1, math.nan, math.inf])
+    def test_an_energy_that_is_not_a_finite_number_of_at_least_0_is_refused_naming_the_kind_and_value(
+        self, energy: float
+    ) -> None:
+        with pytest.raises(ValueError) as refusal:
+            _summary(load_energy_kwh={"heat_pump": energy})
+
+        assert "heat_pump" in str(refusal.value)
+        assert str(energy) in str(refusal.value)
+
+    def test_a_heat_pump_total_that_differs_from_its_load_energy_is_refused_naming_both(self) -> None:
+        with pytest.raises(ValueError) as refusal:
+            _summary(total_heat_pump_load_kwh=3.0, load_energy_kwh={LoadKind.HEAT_PUMP: 2.0})
+
+        assert "3.0" in str(refusal.value)
+        assert "2.0" in str(refusal.value)
+
+    @pytest.mark.parametrize(
+        ("total", "energy"),
+        [(2.0, {LoadKind.HEAT_PUMP: 2.0}), (None, {LoadKind.HEAT_PUMP: 2.0}), (3.0, {})],
+        ids=["equal", "total-unset", "energy-unset"],
+    )
+    def test_a_heat_pump_total_that_agrees_with_its_load_energy_or_either_unset_constructs(
+        self, total: float | None, energy: dict[LoadKind, float]
+    ) -> None:
+        _summary(total_heat_pump_load_kwh=total, load_energy_kwh=energy)
+
+    def test_a_load_s_share_is_its_energy_over_demand_s_and_0_for_a_load_it_lacks(self) -> None:
+        summary = _summary(load_energy_kwh={LoadKind.HOUSEHOLD: 8.0, LoadKind.HEAT_PUMP: 2.0})
+
+        assert summary.load_share(LoadKind.HEAT_PUMP) == pytest.approx(2.0 / _TOTAL_DEMAND_KWH)
+        assert summary.load_share(LoadKind.EV) == 0.0
+
+    def test_a_load_s_share_of_no_demand_is_0(self) -> None:
+        summary = _summary(
+            total_demand_kwh=0.0, total_grid_import_kwh=0.0, load_energy_kwh={LoadKind.HOUSEHOLD: 0.0}
+        )
+
+        assert summary.load_share(LoadKind.HOUSEHOLD) == 0.0
+
+    def test_the_summary_pickles_deep_copies_and_hashes_as_an_equal_one(self) -> None:
+        summary = _summary(load_energy_kwh={LoadKind.HOUSEHOLD: 8.0, LoadKind.HEAT_PUMP: 2.0})
+
+        assert pickle.loads(pickle.dumps(summary)) == summary
+        assert copy.deepcopy(summary) == summary
+        assert hash(_summary(load_energy_kwh={"heat_pump": 2.0, "household": 8.0})) == hash(summary)
+
+
+class TestCalculateSummaryLoadEnergy:
+    def test_each_load_s_energy_is_its_kw_over_the_window_summing_to_demand_s(self) -> None:
+        results = _results_with_a_heat_pump_and_an_ev()
+
+        summary = calculate_summary(results)
+
+        energy = summary.load_energy_kwh
+        assert list(energy) == [LoadKind.HOUSEHOLD, LoadKind.HEAT_PUMP, LoadKind.EV]
+        assert sum(energy.values()) == pytest.approx(summary.total_demand_kwh, rel=1e-9)
+        for kind, load in results.loads.items():
+            assert energy[kind] == results.window.energy_kwh(load)
+            assert summary.load_share(kind) == pytest.approx(energy[kind] / summary.total_demand_kwh)
+
+    def test_a_plain_home_s_load_energy_is_its_household_s_alone_which_is_demand_s(self) -> None:
+        summary = calculate_summary(_results())
+
+        assert summary.load_energy_kwh == {LoadKind.HOUSEHOLD: pytest.approx(summary.total_demand_kwh)}
+
+    def test_the_heat_pump_fields_follow_its_load_energy(self) -> None:
+        results = _results_with_a_heat_pump_and_an_ev()
+
+        summary = calculate_summary(results)
+
+        assert summary.total_heat_pump_load_kwh == summary.load_energy_kwh[LoadKind.HEAT_PUMP]
+        assert summary.peak_heat_pump_load_kw == results.additional_loads[LoadKind.HEAT_PUMP].max()
+        assert summary.heat_pump_load_ratio == summary.load_share(LoadKind.HEAT_PUMP)
+
+    def test_a_home_without_a_heat_pump_has_no_heat_pump_fields(self) -> None:
+        summary = calculate_summary(_results(additional_loads={LoadKind.EV: _flat(_EV_KW)}))
+
+        assert (summary.total_heat_pump_load_kwh, summary.peak_heat_pump_load_kw, summary.heat_pump_load_ratio) == (
+            None,
+            None,
+            None,
+        )
