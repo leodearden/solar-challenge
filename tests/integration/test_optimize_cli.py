@@ -389,6 +389,9 @@ class TestGenerateConfigRankingReportTable1:
         )
         row = _config_row(report, "### Infeasible Configurations", self.INFEASIBLE)
         assert row["Config"] == self.INFEASIBLE, f"infeasible config's Config cell is not exactly its dims:\n{report}"
+        assert row["Binding"] == "✘ INFEASIBLE: required rate exceeds retail", (
+            f"infeasible config's Binding cell is not the infeasible label:\n{report}"
+        )
 
 
 # ---------------------------------------------------------------------------

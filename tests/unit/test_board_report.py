@@ -146,8 +146,10 @@ class TestABindingOutsideTheLabelTableIsRefused:
     """Both board reports refuse, naming it, a cost-recovery binding their label table does not hold, rather than rendering it as some other binding or as raw text."""
 
     def test_a_finance_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
+        solution = _solution_with_binding_other()
+
         with pytest.raises(ValueError, match="'other'"):
-            generate_finance_report(make_bill_distribution(), cost_recovery=_solution_with_binding_other())
+            generate_finance_report(make_bill_distribution(), cost_recovery=solution)
 
     def test_a_ranking_report_refuses_a_binding_outside_the_label_table_by_name(self) -> None:
         cr = replace(make_config_result(), solution=_solution_with_binding_other(), binding="other")
