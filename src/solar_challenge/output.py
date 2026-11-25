@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence, TypeVar, Uni
 
 import pandas as pd
 
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import (
     RunPricing,
     SimulationResults,
+    SummaryStatistics,
     calculate_summary,
     grid_dependency_ratio,
     load_ratio,
@@ -91,10 +93,15 @@ def generate_summary_report(
     Returns:
         Formatted markdown text report. When a forecast sized the run's grid
         charge, it opens, under its title, with a notice naming the forecast.
-        When a SEG rate priced the run's export, its Financial table names
-        that rate, after the Grid Export Revenue it earned.
+        Its Demand by load table, after the Energy Totals, gives each load's
+        energy, share of the demand and peak. For a run with an additional load
+        and rows in both winter and summer, a winter-against-summer table of
+        each additional load follows the Battery table. When a SEG rate priced
+        the run's export, its Financial table names that rate, after the Grid
+        Export Revenue it earned.
     """
     summary = calculate_summary(results)
+    loads = results.loads
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
     notice = grid_charge_forecast_notice(distinct_grid_charge_forecasts([summary.grid_charge_forecast]))
@@ -115,6 +122,7 @@ def generate_summary_report(
 | Grid Import | {summary.total_grid_import_kwh:.1f} |
 | Grid Export | {summary.total_grid_export_kwh:.1f} |
 
+{_demand_by_load_section(summary, loads)}
 ## Battery (kWh)
 | Metric | Value |
 |--------|-------|
@@ -122,58 +130,7 @@ def generate_summary_report(
 | Total Discharged | {summary.total_battery_discharge_kwh:.1f} |
 """
 
-    # Add heat pump section if heat pump metrics are present
-    if summary.total_heat_pump_load_kwh is not None:
-        report += f"""
-## Heat Pump Impact
-| Metric | Value |
-|--------|-------|
-| Total Heat Pump Load | {summary.total_heat_pump_load_kwh:.1f} kWh |
-| Peak Heat Pump Load | {summary.peak_heat_pump_load_kw:.2f} kW |
-| Heat Pump % of Total Demand | {summary.heat_pump_load_ratio:.1%} |
-"""
-
-        # Add seasonal breakdown if we have heat pump load data
-        if results.heat_pump_load is not None:
-            amounts = results.per_step_amounts()
-            winter_totals = _in_months(amounts, _WINTER_MONTHS).sum()
-            summer_totals = _in_months(amounts, _SUMMER_MONTHS).sum()
-            winter_hp_load = _in_months(results.heat_pump_load, _WINTER_MONTHS)
-            summer_hp_load = _in_months(results.heat_pump_load, _SUMMER_MONTHS)
-
-            winter_hp_kwh = float(winter_totals["heat_pump_load_kwh"])
-            summer_hp_kwh = float(summer_totals["heat_pump_load_kwh"])
-            winter_demand_kwh = float(winter_totals["demand_kwh"])
-            summer_demand_kwh = float(summer_totals["demand_kwh"])
-
-            winter_peak_hp_kw = float(winter_hp_load.max()) if len(winter_hp_load) > 0 else 0.0
-            summer_peak_hp_kw = float(summer_hp_load.max()) if len(summer_hp_load) > 0 else 0.0
-
-            winter_hp_ratio = load_ratio(load_kwh=winter_hp_kwh, demand_kwh=winter_demand_kwh)
-            summer_hp_ratio = load_ratio(load_kwh=summer_hp_kwh, demand_kwh=summer_demand_kwh)
-
-            # Calculate average daily values
-            cadence = results.window.cadence
-            winter_days = _days_lasted(len(winter_hp_load), cadence)
-            summer_days = _days_lasted(len(summer_hp_load), cadence)
-            winter_daily_avg = winter_hp_kwh / winter_days if winter_days > 0 else 0.0
-            summer_daily_avg = summer_hp_kwh / summer_days if summer_days > 0 else 0.0
-
-            report += f"""
-### Seasonal Heat Pump Analysis
-**Winter (Dec-Feb) vs Summer (Jun-Aug)**
-
-| Metric | Winter | Summer | Winter/Summer Ratio |
-|--------|--------|--------|---------------------|
-| Total Heat Pump Load | {winter_hp_kwh:.1f} kWh | {summer_hp_kwh:.1f} kWh | {(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x |
-| Peak Heat Pump Load | {winter_peak_hp_kw:.2f} kW | {summer_peak_hp_kw:.2f} kW | {(winter_peak_hp_kw / summer_peak_hp_kw if summer_peak_hp_kw > 0 else 0):.1f}x |
-| HP % of Demand | {winter_hp_ratio:.1%} | {summer_hp_ratio:.1%} | - |
-| Daily Average | {winter_daily_avg:.1f} kWh/day | {summer_daily_avg:.1f} kWh/day | {(winter_daily_avg / summer_daily_avg if summer_daily_avg > 0 else 0):.1f}x |
-
-**Key Insights:**
-- Heat pump demand is **{(winter_hp_kwh / summer_hp_kwh if summer_hp_kwh > 0 else 0):.1f}x higher** in winter than summer
-- Heat pump accounts for **{winter_hp_ratio:.1%}** of winter demand vs **{summer_hp_ratio:.1%}** in summer
-"""
+    report += _seasonal_load_section(results)
 
     report += f"""
 ## Peak Values (kW)
@@ -205,6 +162,86 @@ def generate_summary_report(
 """
 
     return report
+
+
+def _demand_by_load_section(summary: SummaryStatistics, loads: Mapping[LoadKind, pd.Series]) -> str:
+    """The Demand by load table: a row of each load's energy, share of the demand and peak, in LoadKind order."""
+    rows = "".join(
+        f"| {kind.label} | {summary.load_energy_kwh[kind]:.1f} | {summary.load_share(kind):.1%} | {float(load.max()):.2f} |\n"
+        for kind, load in loads.items()
+    )
+    return f"""## Demand by load
+| Load | Energy (kWh) | Share of Demand | Peak (kW) |
+|------|--------------|-----------------|-----------|
+{rows}"""
+
+
+@dataclass(frozen=True, kw_only=True)
+class _LoadSeason:
+    """One additional load over one season's rows: its energy, its peak, its share of the season's demand and its energy per day."""
+
+    energy_kwh: float
+    peak_kw: float
+    share_of_demand: float
+    daily_kwh: float
+
+    @classmethod
+    def of(cls, kind: LoadKind, load: pd.Series, season_amounts: pd.DataFrame, cadence: timedelta) -> "_LoadSeason":
+        """*kind*'s figures over the rows of *season_amounts*, per_step_amounts' rows of one season, each lasting *cadence*; *load* is its kW over the whole run."""
+        energy_kwh = float(season_amounts[kind.energy_column].sum())
+        return cls(
+            energy_kwh=energy_kwh,
+            peak_kw=float(load[season_amounts.index].max()),
+            share_of_demand=load_ratio(load_kwh=energy_kwh, demand_kwh=float(season_amounts["demand_kwh"].sum())),
+            daily_kwh=energy_kwh / _days_lasted(len(season_amounts), cadence),
+        )
+
+
+def _times(winter: float, summer: float) -> str:
+    """How many times *summer* *winter* is, or "-" when summer is not positive."""
+    return f"{winter / summer:.1f}x" if summer > 0 else "-"
+
+
+def _seasonal_load_table(kind: LoadKind, winter: _LoadSeason, summer: _LoadSeason) -> str:
+    """*kind*'s table of its winter and summer figures, with how many times summer's winter's are."""
+    return f"""
+### {kind.label}
+| Metric | Winter | Summer | Winter/Summer Ratio |
+|--------|--------|--------|---------------------|
+| Energy | {winter.energy_kwh:.1f} kWh | {summer.energy_kwh:.1f} kWh | {_times(winter.energy_kwh, summer.energy_kwh)} |
+| Peak | {winter.peak_kw:.2f} kW | {summer.peak_kw:.2f} kW | {_times(winter.peak_kw, summer.peak_kw)} |
+| Share of Demand | {winter.share_of_demand:.1%} | {summer.share_of_demand:.1%} | - |
+| Daily Average | {winter.daily_kwh:.1f} kWh/day | {summer.daily_kwh:.1f} kWh/day | {_times(winter.daily_kwh, summer.daily_kwh)} |
+"""
+
+
+def _seasonal_load_section(results: SimulationResults) -> str:
+    """The Seasonal demand by load section: each additional load's winter (Dec-Feb) and summer (Jun-Aug) table, in LoadKind order.
+
+    Empty for a run whose demand is the household's alone, or with no row in winter or none in
+    summer, since there is then no season to compare with the other.
+    """
+    if not results.additional_loads:
+        return ""
+    amounts = results.per_step_amounts()
+    winter_amounts = _in_months(amounts, _WINTER_MONTHS)
+    summer_amounts = _in_months(amounts, _SUMMER_MONTHS)
+    if winter_amounts.empty or summer_amounts.empty:
+        return ""
+    cadence = results.window.cadence
+    tables = "".join(
+        _seasonal_load_table(
+            kind,
+            winter=_LoadSeason.of(kind, load, winter_amounts, cadence),
+            summer=_LoadSeason.of(kind, load, summer_amounts, cadence),
+        )
+        for kind, load in results.additional_loads.items()
+    )
+    return f"""
+## Seasonal demand by load
+
+**Winter (Dec-Feb) vs Summer (Jun-Aug)**
+{tables}"""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -283,9 +320,9 @@ def aggregate_daily(results: SimulationResults) -> pd.DataFrame:
     Returns:
         DataFrame with a daily DatetimeIndex holding each day's energy totals in
         kWh, money totals in £ (sums of the per-minute £ amounts) and peak
-        generation and demand in kW. ``heat_pump_load_kwh``,
-        ``grid_charge_cost_gbp`` and ``grid_charge_kwh`` appear only when the
-        run has those series.
+        generation and demand in kW. Each additional load's energy column
+        (LoadKind.energy_column), ``grid_charge_cost_gbp`` and
+        ``grid_charge_kwh`` appear only when the run has those series.
     """
     return _aggregate_by_period(results, "D")
 
