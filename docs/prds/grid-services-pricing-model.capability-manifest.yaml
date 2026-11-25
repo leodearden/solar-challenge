@@ -172,11 +172,11 @@ tasks:
           paths: ["src/solar_challenge/gridservices.py"]
           expect: present
       - name: "breakdown-form-pinned"
-        binding: "grep: FROZEN_SURFACE pins GridServicesAtEvents' three-field form on main; the surface test requires the edit"
+        binding: "grep: FROZEN_SURFACE pins GridServicesAtEvents' three-field form on main; the surface test requires the edit. Task 1434 (41877966) dropped the four fields' () defaults on purpose, so the check pins the field without its default"
         verdict: PASS
         delivered_check:
           kind: grep
-          pattern: "per_window_avail_p50_kw: tuple\\[float, \\.\\.\\.\\] = \\(\\)"
+          pattern: "per_window_avail_p50_kw: tuple\\[float, \\.\\.\\.\\]"
           paths: ["tests/"]
           expect: present
       - name: "events-config-form-pinned"
