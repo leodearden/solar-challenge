@@ -14,7 +14,6 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import Optional
 
-import pandas as pd
 import pytest
 
 from solar_challenge.config import ScenarioConfig
@@ -40,6 +39,7 @@ from tests._finance_builders import (
     make_sim_results,
 )
 from tests._fleet_simulate_stand_in import answering_with
+from tests._recording_simulate import recording
 
 
 # ---------------------------------------------------------------------------
@@ -102,16 +102,6 @@ _CONST_FLEET_RESULTS: FleetResults = make_fleet_results(
 
 
 _paired_const_simulate: FleetSimulate = answering_with(_CONST_FLEET_RESULTS)
-
-
-def _recording(asked: list[FleetConfig]) -> FleetSimulate:
-    """_paired_const_simulate, appending each fleet it is asked to simulate to *asked*."""
-
-    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-        asked.append(fleet_config)
-        return _paired_const_simulate(fleet_config, start, end)
-
-    return simulate
 
 
 def _panel(
@@ -418,14 +408,14 @@ class TestBaseline:
     def test_the_panel_sweeps_each_value_once_and_never_its_baseline(self) -> None:
         base_configs = self._base_configs()
         one_sweep: list[FleetConfig] = []
-        baseline = run_sweep(base_configs, simulate=_recording(one_sweep))
+        baseline = run_sweep(base_configs, simulate=recording(one_sweep, _paired_const_simulate))
         panel_asked: list[FleetConfig] = []
 
         sensitivity_panel(
             base_configs,
             {KNOBS["battery_cost_per_kwh_gbp"]: [200.0, 400.0]},
             baseline=baseline,
-            simulate=_recording(panel_asked),
+            simulate=recording(panel_asked, _paired_const_simulate),
         )
 
         assert len(panel_asked) == 2 * len(one_sweep)
@@ -444,14 +434,14 @@ class TestBaseline:
         assert getattr(_interior_finance(), knob_name) == own_value
         base_configs = self._base_configs()
         one_sweep: list[FleetConfig] = []
-        baseline = run_sweep(base_configs, simulate=_recording(one_sweep))
+        baseline = run_sweep(base_configs, simulate=recording(one_sweep, _paired_const_simulate))
         panel_asked: list[FleetConfig] = []
 
         panel = sensitivity_panel(
             base_configs,
             {KNOBS[knob_name]: [own_value, other_value]},
             baseline=baseline,
-            simulate=_recording(panel_asked),
+            simulate=recording(panel_asked, _paired_const_simulate),
         )
 
         axis = panel.axes[0]
@@ -469,7 +459,7 @@ class TestBaseline:
                 base_configs,
                 {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
                 baseline=baseline,
-                simulate=_recording(panel_asked),
+                simulate=recording(panel_asked, _paired_const_simulate),
             )
 
         assert "pv_kwp=4.0" in str(refusal.value)
@@ -490,7 +480,7 @@ class TestBaseline:
                 base_configs,
                 {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
                 baseline=baseline,
-                simulate=_recording(panel_asked),
+                simulate=recording(panel_asked, _paired_const_simulate),
             )
 
         assert "50.0" in str(refusal.value)
@@ -513,7 +503,7 @@ class TestBaseline:
                 base_configs,
                 {KNOBS["battery_cost_per_kwh_gbp"]: [400.0]},
                 baseline=baseline,
-                simulate=_recording(panel_asked),
+                simulate=recording(panel_asked, _paired_const_simulate),
             )
 
         assert "50.0" in str(refusal.value)
@@ -531,7 +521,7 @@ class TestBaseline:
                 base_configs,
                 {KNOBS["battery_cost_per_kwh_gbp"]: [300.0, 300.0]},
                 baseline=baseline,
-                simulate=_recording(panel_asked),
+                simulate=recording(panel_asked, _paired_const_simulate),
             )
 
         assert "battery_cost_per_kwh_gbp" in str(refusal.value)

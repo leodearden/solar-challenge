@@ -47,6 +47,7 @@ from solar_challenge.timebase import ONE_MINUTE, SimulationWindow
 from tests._factories import make_config_result, make_cost_recovery_solution
 from tests._finance_builders import make_fleet_results, make_fleet_results_of, make_scenario, make_sim_results
 from tests._fleet_simulate_stand_in import answering_with
+from tests._recording_simulate import recording
 from tests._install_capex import fleet_wired_dc_kw, roof_battery_inverter_capex_gbp
 from tests._projection_fleet_names import PROJECTION_AGES_OVER_25_YEARS
 
@@ -808,14 +809,9 @@ class TestRunSweepGuards:
             pv_kwp=[5.0], battery_kwh=[6.0], inverter_kw=[3.6],
         )
         asked: list[FleetConfig] = []
-        answer = answering_with(_make_fleet_results(n_homes=n_homes))
-
-        def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
-            asked.append(fleet_config)
-            return answer(fleet_config, start, end)
 
         with pytest.raises(ValueError, match=r"15\.0.*27\.0"):
-            run_sweep(configs, simulate=simulate)
+            run_sweep(configs, simulate=recording(asked, answering_with(_make_fleet_results(n_homes=n_homes))))
         assert asked == []
 
 
