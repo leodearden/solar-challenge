@@ -917,14 +917,18 @@ class TestBatteryConfigAssignment:
                 "a read re-derived what the config assignment should have built before it returned"
             )
 
+        monkeypatch.setattr(SocEnvelope, "__post_init__", rederived)
         monkeypatch.setattr(SocEnvelope, "target_kwh", rederived)
         monkeypatch.setattr(BatteryConfig, "resolved_soh", property(rederived))
 
         assert battery.soh == 0.5
         assert battery.grid_charge_target_kwh == target_kwh == pytest.approx(2.5)
         assert battery.soc_envelope == envelope
-        assert battery.effective_capacity_kwh == pytest.approx(5.0)
-        assert battery.max_soc_kwh == pytest.approx(4.5)
+        assert battery.effective_capacity_kwh == envelope.effective_capacity_kwh == pytest.approx(5.0)
+        assert battery.min_soc_kwh == envelope.min_soc_kwh
+        assert battery.max_soc_kwh == envelope.max_soc_kwh == pytest.approx(4.5)
+        assert battery.usable_capacity_kwh == pytest.approx(envelope.max_soc_kwh - envelope.min_soc_kwh)
+        assert battery.soc_fraction == battery.soc_kwh / envelope.effective_capacity_kwh
 
 
 class TestBatteryPastAnAssignedSocLimit:
