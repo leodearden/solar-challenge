@@ -14,6 +14,7 @@ from typing import (
     Callable,
     Iterator,
     Mapping,
+    NamedTuple,
     Optional,
     TypeVar,
     Union,
@@ -300,6 +301,22 @@ class ProportionalDistribution:
         read_field(self, "offset", as_finite_float)
 
 
+class FleetFieldPath(NamedTuple):
+    """A field of a fleet's component, e.g. ('battery', 'capacity_kwh'): a key of its component's fleet rows."""
+
+    component: str
+    key: str
+
+    @property
+    def dotted(self) -> str:
+        """The field's path under a fleet_distribution block, e.g. 'battery.capacity_kwh'."""
+        return f"{self.component}.{self.key}"
+
+
+#: The fields a sweep multiplier may sit at, the fields expand_sweep_configs expands.
+SWEEP_PLACEMENTS: frozenset[FleetFieldPath] = frozenset({FleetFieldPath("battery", "capacity_kwh")})
+
+
 # Type alias for distribution specifications; a bare string is one of a CHOICE field's choices.
 DistributionSpec = Union[
     WeightedDiscreteDistribution,
@@ -378,7 +395,8 @@ class FleetDistributionConfig:
         key outside its table's fleet rows, or held in the wrong one of its draws and settings
         (F1); a reader-only key a component draws or sets beside a field it sets; a required key
         a component does not draw (F5); a spec its key's kind does not
-        draw, or one listing a value the kind does not admit (F2, F3); a proportional_to whose
+        draw, or one listing a value the kind does not admit (F2, F3); more than one sweep
+        multiplier, or one at a field outside SWEEP_PLACEMENTS (F7); a proportional_to whose
         source is not a number or count field drawn earlier for every home that draws it (F4);
         a shuffled pool whose counts do not total n_homes (F6); a fixed presence value its
         table's presence rule refuses; and a rounded count with no whole number from its min
@@ -395,6 +413,7 @@ class FleetDistributionConfig:
         _refuse_both_forms_of_a_reader_only_key(self)
         _refuse_required_keys_not_drawn(self)
         _refuse_specs_their_kinds_cannot_draw(self)
+        _refuse_sweeps_not_at_one_placement(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
         _refuse_proportional_sources_not_drawn_earlier(_fleet_components(self), _FLEET_DISTRIBUTION_PATH)
         _refuse_pools_not_sized_to_the_fleet(self)
         _refuse_fixed_presences_their_rules_refuse(self)
@@ -498,6 +517,45 @@ def _refuse_specs_their_kinds_cannot_draw(config: FleetDistributionConfig) -> No
     """Refuse *config* when a key is drawn from a spec its row's kind does not draw, or one listing a value the kind does not admit, as _refuse_a_spec_its_row_cannot_draw states."""
     for path, row, spec in _component_draws(config):
         _refuse_a_spec_its_row_cannot_draw(row, spec, child_path(_FLEET_DISTRIBUTION_PATH, path), written=spec)
+
+
+def _sweep_multipliers(
+    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]],
+) -> list[tuple[FleetFieldPath, SweepSpec]]:
+    """Each sweep multiplier the fleet whose *components*, by name, draw holds, with the field whose proportional_to holds it.
+
+    Components come in _DEFAULT_SHUFFLE_ORDER and each component's keys in its table's fleet
+    order, as _component_draws walks them.
+    """
+    sweeps: list[tuple[FleetFieldPath, SweepSpec]] = []
+    for name in _DEFAULT_SHUFFLE_ORDER:
+        block, component = components[name]
+        if component is None:
+            continue
+        for key in block.fleet:
+            spec = component.draws.get(key)
+            if isinstance(spec, ProportionalDistribution) and isinstance(spec.multiplier, SweepSpec):
+                sweeps.append((FleetFieldPath(name, key), spec.multiplier))
+    return sweeps
+
+
+def _refuse_sweeps_not_at_one_placement(
+    components: Mapping[str, tuple["ComponentBlock[Any]", Optional[ComponentDistribution]]], block_path: str
+) -> None:
+    """Refuse the fleet at *block_path* whose *components*, by name, hold more than one sweep multiplier, naming each one's field under *block_path*, or one at a field outside SWEEP_PLACEMENTS, naming that field and the placements (F7).
+
+    The count is refused first, so a fleet sweeps at most one field whatever SWEEP_PLACEMENTS holds.
+    """
+    sweeps = _sweep_multipliers(components)
+    if len(sweeps) > 1:
+        paths = ", ".join(child_path(block_path, placement.dotted) for placement, _ in sweeps)
+        raise refusal(block_path, f"holds {len(sweeps)} sweep multipliers, at {paths}; a fleet sweeps at most one")
+    for placement, _ in sweeps:
+        if placement not in SWEEP_PLACEMENTS:
+            placements = " or ".join(child_path(block_path, each.dotted) for each in sorted(SWEEP_PLACEMENTS))
+            raise refusal(
+                child_path(block_path, placement.dotted), f"a sweep multiplier, which a fleet holds only at {placements}"
+            )
 
 
 def _refuse_proportional_sources_not_drawn_earlier(
@@ -1085,9 +1143,9 @@ def parse_fleet_distribution_config(
 
     The block is refused first unless it is a mapping, then if it holds the retired
     dispatch_strategy key, naming the battery's in its place. The refusals of a key outside its
-    component's rows, a required key left out, a spec its key's kind does not draw and a
-    proportional_to source not drawn earlier for every home that draws the dependent name the
-    key under *block_path*.
+    component's rows, a required key left out, a spec its key's kind does not draw, a second
+    sweep multiplier or one outside SWEEP_PLACEMENTS (F7) and a proportional_to source not drawn
+    earlier for every home that draws the dependent name the key under *block_path*.
     """
     block = refuse_unrecognised_keys(
         block_path,
@@ -1105,9 +1163,9 @@ def parse_fleet_distribution_config(
         HEAT_PUMP_BLOCK, block.get("heat_pump"), block_path=child_path(block_path, "heat_pump")
     )
     ev = _parse_optional_component_distribution(EV_BLOCK, block.get("ev"), block_path=child_path(block_path, "ev"))
-    _refuse_proportional_sources_not_drawn_earlier(
-        _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev), block_path
-    )
+    components = _components_by_name(pv=pv, battery=battery, load=load, heat_pump=heat_pump, ev=ev)
+    _refuse_sweeps_not_at_one_placement(components, block_path)
+    _refuse_proportional_sources_not_drawn_earlier(components, block_path)
     return constructed(
         block_path,
         FleetDistributionConfig,
