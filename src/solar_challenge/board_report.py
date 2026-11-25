@@ -16,12 +16,18 @@ from solar_challenge.finance import (
     OwnUseBasis,
     own_use_basis,
 )
-from solar_challenge.gridservices import FlatGridServices, GridServicesAtEvents, GridServicesEventsConfig
+from solar_challenge.flex import FLEX_VALUE_BANDS, FlexibilityValueBand
+from solar_challenge.gridservices import (
+    DeliveryBaseline,
+    FlatGridServices,
+    GridServicesAtEvents,
+    GridServicesBand,
+    GridServicesEventsConfig,
+)
 from solar_challenge.output import grid_charge_forecast_notice
 from solar_challenge.timebase import SimulationWindow
 
 if TYPE_CHECKING:
-    from solar_challenge.flex import FlexibilityValueBand
     from solar_challenge.optimize import ConfigPoint, RankedSweep, SensitivityPanel
     from solar_challenge.projection import FleetProjection, ProjectEconomics
 
@@ -321,60 +327,162 @@ def _table(
     return "\n".join(lines) + "\n"
 
 
-def _flexibility_value_block(
-    flex_band: FlexibilityValueBand,
-    flex_band_name: str,
-    grid_services_at_events: Optional[GridServicesAtEvents],
+@dataclass(frozen=True)
+class FlexBlock:
+    """The finance report's flexibility-value block, for one grid-services uncertainty band."""
+
+    band: GridServicesBand
+    """The band whose consulting figures the block shows."""
+
+    @property
+    def consulting(self) -> FlexibilityValueBand:
+        """The band's consulting figures, from :data:`~solar_challenge.flex.FLEX_VALUE_BANDS`."""
+        return FLEX_VALUE_BANDS[self.band]
+
+
+def _model_line(pricing: FlatGridServices | GridServicesEventsConfig) -> str:
+    """*pricing*'s model as the board reads it: the events model with its band and delivery baseline, or the flat rate."""
+    if isinstance(pricing, FlatGridServices):
+        return f"flat, £{pricing.income_per_kw_per_year_gbp:.1f}/kW-yr"
+    band = GridServicesBand.parse(pricing.band, what="GridServicesEventsConfig.band")
+    baseline = DeliveryBaseline.parse(pricing.delivery_baseline, what="GridServicesEventsConfig.delivery_baseline")
+    return f"capacity at events, {band} band, {baseline} delivery baseline"
+
+
+def _refuse_projections_over_different_asset_lives(sections: Sequence[AssumptionSection]) -> int:
+    """The years every section's projection spans, which label the booked rows.
+
+    Raises:
+        ValueError: Naming each mode's years, when the projections span different asset lives.
+    """
+    years = {
+        own_use_basis(section.finance).name: len(section.projection.curve.points)
+        for section in sections
+        if section.projection is not None
+    }
+    if len(set(years.values())) != 1:
+        raise ValueError(
+            f"the booked grid-services rows are labelled from one asset life, so every section's projection "
+            f"spans the same years, got {years!r}"
+        )
+    (asset_life,) = set(years.values())
+    return asset_life
+
+
+def _booked_table(sections: Sequence[AssumptionSection], labels: Sequence[str]) -> str:
+    """The grid-services income each section's projection booked at year 1 and at its last year, one column per section."""
+    asset_life = _refuse_projections_over_different_asset_lives(sections)
+    rows: _Rows[FleetProjection] = (
+        ("Year 1", lambda projection: f"£{projection.grid_services_income_gbp[0][1]:,.0f}"),
+        (f"Year {asset_life}", lambda projection: f"£{projection.grid_services_income_gbp[-1][1]:,.0f}"),
+    )
+    projections = [section.projection for section in sections if section.projection is not None]
+    return _table("### Booked by the projection (£ a year)", "Year", labels, rows, projections)
+
+
+_FLEET_INCOME_ROWS: _Rows[GridServicesIncome] = (
+    ("Annual fleet income", lambda income: f"£{income.annual_income_gbp:,.0f}"),
+)
+"""This window's fleet income, under every pricing."""
+
+_AT_EVENTS_ROWS: _Rows[GridServicesAtEvents] = (
+    ("Per-event available capacity", lambda events: _one_window_figure(events.per_window_avail_kw, "kW")),
+    ("Capacity on 50% of event days", lambda events: _one_window_figure(events.per_window_avail_p50_kw, "kW")),
+    ("Capacity on 90% of event days", lambda events: _one_window_figure(events.per_window_avail_p90_kw, "kW")),
+    (
+        "Evening self-use displaced, per event",
+        lambda events: _one_window_figure(events.per_window_displaced_self_use_kwh_per_event, "kWh"),
+    ),
+    (
+        "Evening self-use displaced, value per year",
+        lambda events: f"£{sum(events.per_window_displaced_import_gbp_per_year):,.0f}",
+    ),
+)
+"""This window's capacity-at-events breakdown, after its fleet income."""
+
+
+def _window_table(grid_services: GridServicesIncome) -> str:
+    """This window's fleet income, then under events pricing its breakdown and the notes that read it."""
+    table = _table(
+        "### This window's fleet, the same under every assumption", "Metric", ["Value"], _FLEET_INCOME_ROWS, [grid_services]
+    )
+    events = grid_services.at_events
+    if events is None:
+        return table
+    breakdown = "".join(_markdown_row([label, cell(events)]) + "\n" for label, cell in _AT_EVENTS_ROWS)
+    notes = (
+        "\n*The income is gross of the evening self-use an event displaces, which householders then import; it "
+        "is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated "
+        "without one.*\n"
+    )
+    if len(events.per_window_avail_kw) > 1:
+        notes += "\n*— is one event window's figure, which does not sum over several windows.*\n"
+    return table + breakdown + notes
+
+
+def _grid_services_section(
+    grid_services: GridServicesIncome, sections: Sequence[AssumptionSection], labels: Sequence[str]
 ) -> str:
-    """The report's flexibility-value block for *flex_band*, named *flex_band_name*, with its capacity-at-events sub-section when *grid_services_at_events* is given."""
-    band_label = flex_band_name if flex_band_name else "—"
-    block = f"""
+    """The Grid Services Income section: the pricing's model, each section's booked income when they carry projections, and this window's fleet."""
+    parts = [f"## Grid Services Income\n\nModel: **{_model_line(grid_services.pricing)}**\n"]
+    if any(section.projection is not None for section in sections):
+        parts.append(_booked_table(sections, labels))
+    parts.append(_window_table(grid_services))
+    return "\n".join(parts)
+
+
+def _flexibility_value_block(flex: FlexBlock, grid_services: Optional[GridServicesIncome]) -> str:
+    """The flexibility-value block for *flex*'s band: its grid-services row the income *grid_services* books, or the band's consulting figure, not booked, with none."""
+    consulting = flex.consulting
+    if grid_services is None:
+        grid_services_row = _markdown_row(
+            [
+                "Grid services (consulting planning band, not booked: the scenario prices no grid services)",
+                f"£{consulting.grid_services_per_home_gbp:.0f}",
+                f"£{consulting.grid_services_per_kw_gbp:.1f}/kW",
+            ]
+        )
+        headline_gbp = consulting.total_gbp
+        footnote = f"""*Figures from consulting model §1.1/§1.4; band = {flex.band}.
+Time-shift basis: net import-cost reduction (off-peak charge cost captured in
+grid_import). Grid-services rate: £{consulting.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
+(docs/flexibility-buildability.md).*"""
+    else:
+        per_home = grid_services.per_battery_home_gbp
+        per_kw = grid_services.per_discharge_kw_gbp
+        grid_services_row = _markdown_row(
+            [
+                "Grid services (booked)",
+                "—" if per_home is None else f"£{per_home:.0f}",
+                "—" if per_kw is None else f"£{per_kw:.1f}/kW",
+            ]
+        )
+        headline_gbp = consulting.time_shift_gbp + (0.0 if per_home is None else per_home)
+        footnote = f"""*Time-shift from consulting model §1.1/§1.4; band = {flex.band}.
+Time-shift basis: net import-cost reduction (off-peak charge cost captured in
+grid_import). Grid services: what the scenario's pricing books on this window's
+fleet, per battery home and per kW of battery discharge (docs/flexibility-buildability.md).*"""
+    return f"""
 ## Flexibility Value (per battery home)
 
-Band: **{band_label}**
+Band: **{flex.band}**
 
 | Revenue Stream | Per Home / yr | Per kW / yr |
 |----------------|---------------|-------------|
-| Time-shift (arbitrage) | £{flex_band.time_shift_gbp:.0f} | — |
-| Grid services (firm flex) | £{flex_band.grid_services_per_home_gbp:.0f} | £{flex_band.grid_services_per_kw_gbp:.1f}/kW |
-| **Headline total** | **£{flex_band.total_gbp:.0f}** | — |
+| Time-shift (arbitrage) | £{consulting.time_shift_gbp:.0f} | — |
+{grid_services_row}
+| **Headline total** | **£{headline_gbp:.0f}** | — |
 
-*Figures from consulting model §1.1/§1.4; band = {band_label}.
-Time-shift basis: net import-cost reduction (off-peak charge cost captured in
-grid_import). Grid-services rate: £{flex_band.grid_services_per_kw_gbp:.1f}/kW-discharge/yr
-(PRD §6).*
+{footnote}
 """
-    if grid_services_at_events is None:
-        return block
-    events = grid_services_at_events
-    per_window_note = (
-        ""
-        if len(events.per_window_avail_kw) == 1
-        else "\n*— is one event window's figure, which does not sum over several windows.*\n"
-    )
-    return block + f"""
-**Grid services (capacity-at-events)**
-
-| Metric | Value |
-|--------|-------|
-| Annual fleet income | £{events.annual_income_gbp:,.0f} |
-| Per-event available capacity | {sum(events.per_window_avail_kw):.1f} kW |
-| Capacity on 50% of event days | {_one_window_figure(events.per_window_avail_p50_kw, "kW")} |
-| Capacity on 90% of event days | {_one_window_figure(events.per_window_avail_p90_kw, "kW")} |
-| Evening self-use displaced, per event | {_one_window_figure(events.per_window_displaced_self_use_kwh_per_event, "kWh")} |
-| Evening self-use displaced, value per year | £{sum(events.per_window_displaced_import_gbp_per_year):,.0f} |
-
-*The income is gross of the evening self-use an event displaces, which householders then import; it is not netted off. That import is valued at each home's simulated tariff, £0 for a home simulated without one.*
-{per_window_note}"""
 
 
 def generate_finance_report(
     sections: Mapping[OwnUseBasis, AssumptionSection],
     *,
     scenario_name: str = "",
-    flex_band: Optional[FlexibilityValueBand] = None,
-    flex_band_name: str = "",
-    grid_services_at_events: Optional[GridServicesAtEvents] = None,
+    grid_services: Optional[GridServicesIncome] = None,
+    flex: Optional[FlexBlock] = None,
 ) -> str:
     """The markdown finance report of *sections*: each bill, economics and cost-recovery table one value column per own-use basis.
 
@@ -388,10 +496,29 @@ def generate_finance_report(
     (standing charge, import cost, own-use payment, VAT, total outlay,
     self-consumption saving, baseline bill, saving, self-consumption
     fraction); the per-home bill distribution (min / mean / median / max);
-    when the sections carry economics, the project economics; when they carry
-    a cost-recovery solve, the cost-recovery analysis and the per-home outlay
-    at the solved rate; and, when *flex_band* is given, the flexibility value,
-    which no mode changes, so it renders once.
+    when the sections carry economics, the project economics; when
+    *grid_services* is given, the Grid Services Income section; when they
+    carry a cost-recovery solve, the cost-recovery analysis and the per-home
+    outlay at the solved rate; and, when *flex* is given, the flexibility
+    value, which no mode changes, so it renders once.
+
+    The Grid Services Income section names the pricing's model (the events
+    model with its band and delivery baseline, or the flat rate); when the
+    sections carry projections, the income each one booked at year 1 and at
+    its last year, one column per section; and this window's fleet, the same
+    under every assumption, in one table: its annual fleet income and, under
+    events pricing, the per-event available capacity, the capacity on 50% and
+    on 90% of event days and the evening self-use an event displaces, one
+    window's figures, shown for a single window and as — for several, that
+    self-use's value per year, summed over the windows, and a note that the
+    income is gross of it, valued at £0 for a home simulated without a tariff.
+
+    The flexibility-value block shows the band's consulting time-shift.  Its
+    grid-services row is *grid_services*' income per battery home and per kW
+    of battery discharge (— for a fleet with no battery home), its headline
+    the time-shift plus that income per home; with no *grid_services* it is
+    the band's consulting figure, labelled not booked, under the band's
+    consulting headline.
 
     When the bills' one window is not whole calendar years, the report opens,
     under its title, with one notice that its yearly figures are extrapolated
@@ -403,27 +530,10 @@ def generate_finance_report(
         sections: One AssumptionSection per own-use basis the report renders,
             keyed by the own_use_basis of its finance.
         scenario_name: Optional scenario label for the report title.
-        flex_band: Optional :class:`~solar_challenge.flex.FlexibilityValueBand`
-            from :func:`~solar_challenge.flex.resolve_flex_band`; when provided,
-            a ``## Flexibility Value (per battery home)`` block is appended
-            showing the per-battery-home time-shift saving and grid-services
-            figures for the named band; ``None`` (default) omits it.
-        flex_band_name: Optional human-readable label for the flexibility band
-            (e.g. ``"central"``); used in the report header.  Ignored when
-            ``flex_band`` is ``None``.
-        grid_services_at_events: Optional
-            :class:`~solar_challenge.gridservices.GridServicesAtEvents` from
-            :func:`~solar_challenge.gridservices.compute_grid_services_at_events`;
-            when provided (and ``flex_band`` is also set), renders a
-            "Grid services (capacity-at-events)" sub-section inside the
-            flexibility-value block showing the event-derived annual fleet
-            income and the per-event available capacity, each summed over the
-            event windows; the capacity on 50% and on 90% of event days and the
-            evening self-use an event displaces, one window's figures, shown
-            for a single window and as — for several; that self-use's value per
-            year, summed over the windows; and a note that the income is gross
-            of that self-use, valued at £0 for a home simulated without a
-            tariff.  ``None`` (default) omits it.
+        grid_services: What the scenario's grid-services pricing books on the
+            bill run's fleet; None (default) when it prices none, which omits
+            the Grid Services Income section.
+        flex: The flexibility-value block's band; None (default) omits it.
 
     Returns:
         A markdown-formatted finance report string.
@@ -434,7 +544,9 @@ def generate_finance_report(
             finance; R3, the sections carry different computations of
             projection, economics and cost_recovery; R4, their bills are
             annualised from different windows.  Also when a cost-recovery
-            binding has no label, naming it.
+            binding has no label, naming it; and, with *grid_services*, when
+            the sections' projections span different asset lives, naming each
+            mode's years.
     """
     _refuse_unrenderable_sections(sections)
     ordered = [sections[basis] for basis in OwnUseBasis if basis in sections]
@@ -459,6 +571,8 @@ def generate_finance_report(
     economics = [section.economics for section in ordered if section.economics is not None]
     if economics:
         blocks.append(_table("## Project Economics", "Item", labels, _ECONOMICS_ROWS, economics))
+    if grid_services is not None:
+        blocks.append(_grid_services_section(grid_services, ordered, labels))
     solutions = [section.cost_recovery for section in ordered if section.cost_recovery is not None]
     if solutions:
         blocks.append(_table("## Cost-Recovery Analysis", "Item", labels, _COST_RECOVERY_ROWS, solutions))
@@ -472,8 +586,8 @@ def generate_finance_report(
             )
         )
     report = f"{title}\n\n{notice}" + "\n".join(blocks)
-    if flex_band is not None:
-        report += _flexibility_value_block(flex_band, flex_band_name, grid_services_at_events)
+    if flex is not None:
+        report += _flexibility_value_block(flex, grid_services)
     return report
 
 
