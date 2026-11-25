@@ -7,7 +7,7 @@ Tests cover:
 - TestAdditionalLoadsAreRefusedUnlessTheyArePartsOfDemand: construction reads
   additional_loads' keys as load kinds, and refuses a household entry, a load off
   demand's rows, one holding no number or of a bool dtype, and additional loads that
-  exceed demand in a row
+  exceed demand in a row by more than 1e-9 kW; within it, the household's load is 0
 - TestHeatPumpLoadIsAdditionalLoadsHeatPump: heat_pump_load and
   additional_loads[HEAT_PUMP] are one series, and two different ones are refused
 - TestAdditionalLoadsInFramesAndAmounts: to_dataframe writes each additional load under
@@ -15,7 +15,8 @@ Tests cover:
 - TestAdditionalLoadsPickle: results keep their additional loads through pickle, as a
   fleet's worker returns them
 - TestSummaryLoadEnergy: SummaryStatistics.load_energy_kwh, {} by default, held by load
-  kind, each an energy of at least 0, an infinite one kept, agreeing with total_heat_pump_load_kwh, and
+  kind, each a real number of at least 0 and no boolean, an infinite one kept, agreeing with
+  total_heat_pump_load_kwh, and
   load_share, each load's share of demand
 - TestCalculateSummaryLoadEnergy: calculate_summary fills load_energy_kwh with each
   load's energy, summing to demand's, and the heat-pump fields from it
@@ -26,6 +27,7 @@ import datetime
 import math
 import pickle
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -131,6 +133,27 @@ class TestAdditionalLoadsAreRefusedUnlessTheyArePartsOfDemand:
 
         assert refusal.value.column == "household_load_kw"
         assert "2024-03-31 02:00:00+01:00" in str(refusal.value)
+
+    def test_additional_loads_above_demand_by_less_than_1e_9_kw_construct_with_a_household_load_of_0(
+        self,
+    ) -> None:
+        row = pd.Timestamp("2024-03-31 02:00", tz="Europe/London")
+        ev = _flat(_EV_KW)
+        ev[row] = _DEMAND_KW + 5e-10
+
+        results = _results(additional_loads={LoadKind.EV: ev})
+
+        assert results.loads[LoadKind.HOUSEHOLD][row] == 0.0
+        assert calculate_summary(results).load_energy_kwh[LoadKind.HOUSEHOLD] >= 0.0
+
+    def test_additional_loads_above_demand_by_more_than_1e_9_kw_are_refused_naming_the_household(self) -> None:
+        ev = _flat(_EV_KW)
+        ev[pd.Timestamp("2024-03-31 02:00", tz="Europe/London")] = _DEMAND_KW + 2e-9
+
+        with pytest.raises(SeriesRefused) as refusal:
+            _results(additional_loads={LoadKind.EV: ev})
+
+        assert refusal.value.column == "household_load_kw"
 
     def test_an_additional_load_holding_no_number_in_a_row_is_refused_naming_its_column(self) -> None:
         ev = _flat(_EV_KW)
@@ -251,15 +274,26 @@ class TestSummaryLoadEnergy:
         with pytest.raises(ValueError, match="boiler"):
             _summary(load_energy_kwh={"boiler": 1.0})
 
-    @pytest.mark.parametrize("energy", [-0.1, math.nan])
+    @pytest.mark.parametrize(
+        "energy",
+        [-0.1, math.nan, True, np.True_, "5", None],
+        ids=["below-0", "nan", "bool", "numpy-bool", "text", "none"],
+    )
     def test_an_energy_that_is_not_a_number_of_at_least_0_is_refused_naming_the_kind_and_value(
-        self, energy: float
+        self, energy: object
     ) -> None:
         with pytest.raises(ValueError) as refusal:
             _summary(load_energy_kwh={"heat_pump": energy})
 
         assert "heat_pump" in str(refusal.value)
         assert str(energy) in str(refusal.value)
+
+    @pytest.mark.parametrize("energy", [2, np.float64(2.0)], ids=["int", "numpy-float"])
+    def test_a_real_energy_is_held_as_a_float(self, energy: object) -> None:
+        held = _summary(load_energy_kwh={"heat_pump": energy}).load_energy_kwh[LoadKind.HEAT_PUMP]
+
+        assert held == 2.0
+        assert type(held) is float
 
     def test_an_infinite_energy_is_kept_as_the_summary_s_other_infinite_totals_are(self) -> None:
         assert _summary(load_energy_kwh={"heat_pump": math.inf}).load_energy_kwh == {LoadKind.HEAT_PUMP: math.inf}

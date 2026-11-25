@@ -2,6 +2,7 @@
 """Single home simulation combining PV, battery, and load."""
 
 import datetime
+import numbers
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields
@@ -11,6 +12,7 @@ import pandas as pd
 from pandas.api.types import is_float_dtype, is_integer_dtype
 
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.boolean_fields import is_boolean
 from solar_challenge.demand import DemandInputs, LoadKind, PerLoad, compose_demand
 from solar_challenge.dispatch import (
     DispatchStrategy,
@@ -532,7 +534,7 @@ class SummaryStatistics:
     load_energy_kwh: Mapping[LoadKind, float] = field(default_factory=lambda: PerLoad({}))
 
     def __post_init__(self) -> None:
-        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, a load energy keyed by no load kind or that is not a number of at least 0, and a total_heat_pump_load_kwh that differs from the heat pump's load energy; hold load_energy_kwh as a PerLoad of the floats read."""
+        """Refuse a window that is not a SimulationWindow, a total_grid_charge_kwh that is not a part of both the battery charge and the grid import, a total_battery_discharge_kwh above the self-consumption that counts it, a load energy keyed by no load kind or that is not a real number of at least 0 (a boolean is not one), and a total_heat_pump_load_kwh that differs from the heat pump's load energy; hold load_energy_kwh as a PerLoad of the floats read."""
         if not isinstance(self.window, SimulationWindow):
             raise ValueError(
                 "SummaryStatistics' window is the SimulationWindow its totals were computed over, which "
@@ -594,22 +596,22 @@ class SummaryStatistics:
         return _share(self.load_energy_kwh.get(kind, 0.0), self.total_demand_kwh)
 
 
-def _load_energy(kind: LoadKind, energy: float) -> float:
-    """*kind*'s load energy in kWh read as a float, refused unless it is at least 0.
+def _load_energy(kind: LoadKind, energy: object) -> float:
+    """*kind*'s load energy in kWh read as a float, refused unless it is a real number of at least 0 and no boolean.
 
     An infinite energy is kept, as SummaryStatistics keeps its other infinite totals, which the
     home's ledger refuses.
 
     Raises:
-        ValueError: Naming the kind and the value, for NaN or a value below 0.
+        ValueError: Naming the kind and the value, for a boolean, Python's or numpy's, a value
+            that is not a numbers.Real (text and None included), NaN or a value below 0.
     """
-    kwh = float(energy)
-    if not kwh >= 0.0:
+    if is_boolean(energy) or not isinstance(energy, numbers.Real) or not float(energy) >= 0.0:
         raise ValueError(
             f"SummaryStatistics' load_energy_kwh[{kind.value!r}] is a load's energy in kWh, so a number of "
             f"at least 0: got {energy!r}"
         )
-    return kwh
+    return float(energy)
 
 
 def self_consumption_ratio(*, self_consumption_kwh: float, generation_kwh: float) -> float:
