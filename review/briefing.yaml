@@ -400,11 +400,13 @@ conventions:
 
   - rule: >
       Every scenario command reads its file through config.load_scenario, and the dashboard's
-      fleet import and fleet form read their documents through config.parse_scenario. Each one
-      (home run, fleet run, finance run, optimize configs, validate config, the fleet import, the
-      fleet form) simulates the reader's simulated_homes() over its simulation_bounds(), its
-      --start and --end replacing only their own day, and refuses a document the reader refuses
-      (tests/integration/test_one_scenario_reader.py).
+      fleet import and fleet form read theirs through config.parse_scenario. Home run, fleet run,
+      finance run and the fleet form simulate the reader's simulated_homes() over its
+      simulation_bounds(). Optimize configs simulates those homes in every field its install
+      point and the projection's ages leave alone. Each command's --start and --end, and the
+      fleet form's start and end, replace only their own day. Home run, fleet run, finance run,
+      optimize configs, validate config and the fleet import refuse a document the reader
+      refuses, with the reader's message (tests/integration/test_one_scenario_reader.py).
     why: >
       Before the one reader, each command decided for itself which top-level blocks reached the
       homes and which window ran: fleet run dropped seg:, finance run ignored period:, home run
