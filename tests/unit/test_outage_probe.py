@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import socketserver
+import ssl
 import textwrap
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -28,10 +29,18 @@ from tests._scripts import load_script
 
 _THIS_MACHINE = "127.0.0.1"
 
+_LOOPBACK_TLS = Path(__file__).resolve().parents[1] / "fixtures" / "tls"
+_LOOPBACK_CERTIFICATE = _LOOPBACK_TLS / "loopback-cert.pem"
+"""A self-signed certificate for this machine's address, valid for a century, whose key is loopback-key.pem beside it. It guards nothing: a client that trusts it trusts only a stand-in on this machine."""
+_LOOPBACK_KEY = _LOOPBACK_TLS / "loopback-key.pem"
 
-def _origin_on(port: int) -> str:
-    """The origin of a server on *port* of this machine."""
-    return f"http://{_THIS_MACHINE}:{port}"
+_STAND_IN_PATIENCE_S = 10.0
+"""Seconds a TLS stand-in waits for the probe's connection before it gives up, so a probe that never connects fails its test instead of hanging it."""
+
+
+def _origin_on(port: int, scheme: str = "http") -> str:
+    """The origin of a server speaking *scheme* on *port* of this machine."""
+    return f"{scheme}://{_THIS_MACHINE}:{port}"
 
 
 def _pvgis_api_url_at(origin: str) -> str:
@@ -104,6 +113,32 @@ def _stand_in(
         finally:
             server.stalls_over.set()
             server.shutdown()
+            thread.join()
+
+
+@contextmanager
+def _tls_stand_in_whose_stream_turns_to_garbage_in_the_body() -> Iterator[tuple[str, threading.Event]]:
+    """Serve over TLS a client trusting _LOOPBACK_CERTIFICATE accepts one answer whose headers and first half of its body arrive intact and whose next TLS record is garbage; yield its origin and the event set once the garbage is sent, which a request that never got that far leaves unset."""
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(_LOOPBACK_CERTIFICATE, _LOOPBACK_KEY)
+    garbage_sent = threading.Event()
+
+    def answer(listener: socket.socket) -> None:
+        connection, _ = listener.accept()
+        with tls.wrap_socket(connection, server_side=True) as stream:
+            stream.recv(1 << 16)
+            stream.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nstan")
+            with socket.socket(fileno=os.dup(stream.fileno())) as beneath_the_tls:
+                beneath_the_tls.sendall(b"\x17\x03\x03\x00\x20" + bytes(32))
+            garbage_sent.set()
+
+    with socket.create_server((_THIS_MACHINE, 0)) as listener:
+        listener.settimeout(_STAND_IN_PATIENCE_S)
+        thread = threading.Thread(target=answer, args=(listener,))
+        thread.start()
+        try:
+            yield _origin_on(listener.getsockname()[1], "https"), garbage_sent
+        finally:
             thread.join()
 
 
@@ -186,6 +221,21 @@ def test_a_pvgis_answer_whose_body_stops_arriving_is_an_outage_within_the_timeou
         exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin), "--timeout", "0.2"])
 
     assert (exit_status, capsys.readouterr().out) == (os.EX_TEMPFAIL, "PVGIS: tmy: no answer within 0.2 s\n")
+
+
+def test_a_pvgis_body_that_fails_for_a_cause_other_than_a_stall_keeps_the_cause_requests_names(
+    probe: ModuleType, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a stall is renamed 'no answer within <timeout> s': a TLS stream that turns to garbage partway through the body is the connection failing, as a refused one is, so it keeps its own cause. The stand-in's event shows the failure fell in the body, not in the handshake that would name the same cause."""
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(_LOOPBACK_CERTIFICATE))
+    with _tls_stand_in_whose_stream_turns_to_garbage_in_the_body() as (origin, garbage_sent):
+        exit_status = probe.main(["pvgis", "--api-url", _pvgis_api_url_at(origin)])
+
+    assert (exit_status, capsys.readouterr().out, garbage_sent.is_set()) == (
+        os.EX_TEMPFAIL,
+        "PVGIS: tmy: SSLError\n",
+        True,
+    )
 
 
 def test_a_connection_this_machine_refuses_is_an_outage(probe: ModuleType, capsys: pytest.CaptureFixture[str]) -> None:
