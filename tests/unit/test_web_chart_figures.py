@@ -31,6 +31,7 @@ pytest.importorskip("flask")
 from flask import Flask, url_for
 
 from solar_challenge.battery import BatteryConfig
+from solar_challenge.demand import LoadKind
 from solar_challenge.home import SimulationResults
 from tests._chart_absences import SANKEY_REASON, monthly_reason, seasonal_reason
 from tests._dashboard_sources import dashboard_script_sources, dashboard_template_sources
@@ -135,7 +136,9 @@ def test_each_chart_on_the_home_results_page_is_drawn_from_the_figure_its_contai
     """A year-long run with a battery and a heat-pump load draws all nine charts."""
     year = make_sim_results()
     heat_pump = pd.Series(0.3, index=year.demand.index)
-    results = dataclasses.replace(year, demand=year.demand + heat_pump, heat_pump_load=heat_pump)
+    results = dataclasses.replace(
+        year, demand=year.demand + heat_pump, additional_loads={LoadKind.HEAT_PUMP: heat_pump}
+    )
 
     page = _home_results_page(app, results, BatteryConfig(capacity_kwh=5.0))
 
@@ -149,8 +152,8 @@ def test_each_chart_on_the_home_results_page_is_drawn_from_the_figure_its_contai
             "chart-financial",
             "chart-monthly",
             "chart-seasonal",
-            "chart-hp-load-share",
-            "chart-hp-load-profile",
+            "chart-demand-by-load",
+            "chart-load-profile-heat-pump",
         },
     )
 

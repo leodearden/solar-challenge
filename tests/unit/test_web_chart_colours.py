@@ -86,11 +86,6 @@ def _year() -> SimulationResults:
     return make_sim_results(self_kwh=2000.0, export_kwh=800.0, import_kwh=1200.0, discharge_kwh=100.0)
 
 
-def _year_with_heat_pump() -> SimulationResults:
-    year = _year()
-    return dataclasses.replace(year, heat_pump_load=pd.Series(0.3, index=year.demand.index))
-
-
 def _year_with_additional_loads() -> SimulationResults:
     """_year()'s run whose demand also holds a 0.3 kW heat pump and a 0.2 kW EV."""
     year = _year()
@@ -175,7 +170,6 @@ _FIGURES: dict[str, _FigureCase] = {
     "monthly_summary": _FigureCase(charts.monthly_summary, lambda build: (build(_year()),)),
     "financial_breakdown": _FigureCase(charts.financial_breakdown, lambda build: (build(_year(), make_home_config()),)),
     "seasonal_comparison": _FigureCase(charts.seasonal_comparison, lambda build: (build(_year()),)),
-    "heat_pump_analysis": _FigureCase(charts.heat_pump_analysis, lambda build: build(_year_with_heat_pump())),
     "load_panels": _FigureCase(charts.load_panels, lambda build: build(_year_with_additional_loads())),
     "comparison_bar_chart": _FigureCase(charts.comparison_bar_chart, lambda build: (build(_five_home_runs()),)),
     "comparison_radar": _FigureCase(
@@ -196,7 +190,7 @@ _FIGURES: dict[str, _FigureCase] = {
     "home_results_tabs": _FigureCase(
         charts.home_results_tabs,
         lambda build: _panels_of(
-            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_heat_pump(), _SUMMARY)
+            build(make_home_config(battery_config=_TEN_KWH_BATTERY), _year_with_additional_loads(), _SUMMARY)
         ),
     ),
     "fleet_results_tabs": _FigureCase(
