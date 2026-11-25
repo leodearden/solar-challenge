@@ -366,12 +366,13 @@ def _yaml_sweep(
     raw_config: Mapping[str, Any],
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
     """The name of the sweep, YAML_SWEEP_PARAMETER, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
-    sweep_spec = detect_fleet_sweep_spec(raw_config)
-    if sweep_spec is None:
+    found = detect_fleet_sweep_spec(raw_config)
+    if found is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
+    placement, sweep_spec = found
     return YAML_SWEEP_PARAMETER, sweep_spec, parse_sweep_scenarios(raw_config)
 
 

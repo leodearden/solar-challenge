@@ -34,6 +34,7 @@ from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig
 from solar_challenge.fleet_distribution import (
     FleetDistributionConfig,
+    FleetFieldPath,
     SweepSpec,
     detect_sweep_spec,
     expand_sweep_configs,
@@ -809,8 +810,8 @@ YAML_SWEEP_PARAMETER = "multiplier"
 """The name of the parameter a YAML-defined sweep sweeps: the battery.capacity_kwh multiplier its points are named after."""
 
 
-def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
-    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds.
+def detect_fleet_sweep_spec(document: object) -> Optional[tuple[FleetFieldPath, SweepSpec]]:
+    """Find the SweepSpec of the document's YAML-defined sweep, the sweep parse_sweep_fleet_configs builds, with the field it sits at.
 
     A document holding a fleet_distribution: block is read as parse_sweep_fleet_configs reads
     it up to its sweep, its keys and scenario-level blocks before the block, so a file is
@@ -820,8 +821,8 @@ def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
         document: The fleet file's document, refused unless it is a mapping
 
     Returns:
-        The SweepSpec detect_sweep_spec finds in its fleet_distribution: block, None when
-        it has no such block or the block no sweep
+        The (placement, SweepSpec) detect_sweep_spec finds in its fleet_distribution: block,
+        None when it has no such block or the block no sweep
 
     Raises:
         ConfigurationError: If the document is not a mapping, or as parse_sweep_fleet_configs

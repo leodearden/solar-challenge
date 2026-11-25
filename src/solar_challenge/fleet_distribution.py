@@ -1267,8 +1267,7 @@ def _proportional_value(
     Raises:
         ConfigurationError: If *drawn*, the home's draws so far by path, holds no value for the
             source, or holds a choice, naming *path*'s spec path under fleet_distribution and
-            the source; or if the multiplier is a SweepSpec, which expand_sweep_configs replaces
-            before any home is drawn, naming that spec path.
+            the source.
     """
     spec_path = child_path(_FLEET_DISTRIBUTION_PATH, path)
     if spec.source not in drawn:
@@ -1278,10 +1277,7 @@ def _proportional_value(
         return None
     if isinstance(source, str):
         raise refusal(spec_path, f"proportional_to {spec.source}, which drew {source!r}, not a number")
-    if isinstance(spec.multiplier, SweepSpec):
-        raise refusal(
-            spec_path, "proportional_to a sweep multiplier, which expand_sweep_configs replaces before any home is drawn"
-        )
+    assert not isinstance(spec.multiplier, SweepSpec), "generate_homes_from_distribution refuses a sweeping fleet at entry"
     return source * spec.multiplier + spec.offset
 
 
@@ -1551,7 +1547,9 @@ def generate_homes_from_distribution(
         List of HomeConfig objects
 
     Raises:
-        ConfigurationError: As the sampler refuses a draw, naming its setting (a normal or
+        ConfigurationError: If *config* still sweeps, naming the sweep's field, its number of
+            points and expand_sweep_configs, which gives each point's fleet; as the sampler
+            refuses a draw, naming its setting (a normal or
             uniform draw that is not a finite number, a count with no whole number from its
             spec's min to its max, a proportional_to's count that is an infinity or a
             NaN); if a required field draws null, naming its path and the
@@ -1568,74 +1566,65 @@ def generate_homes_from_distribution(
             that each required field is drawn and that each proportional_to's source is a
             number the home drew earlier.
     """
+    found = detect_sweep_spec(config)
+    if found is not None:
+        placement, sweep = found
+        raise refusal(
+            child_path(_FLEET_DISTRIBUTION_PATH, placement.dotted),
+            f"a sweep multiplier of {sweep.steps} points; "
+            "generate the homes of each point's fleet, which expand_sweep_configs gives",
+        )
     _refuse_pools_not_sized_to_the_fleet(config)
     sampler = _DistributionSampler(config)
     return [_generated_home(config, sampler, index, location, fleet_tariff) for index in range(config.n_homes)]
 
 
-def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
-    """Find SweepSpec in config (e.g., in battery.capacity_kwh.multiplier).
+def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[tuple[FleetFieldPath, SweepSpec]]:
+    """The sweep multiplier *config* holds, with the field whose proportional_to holds it, e.g. (('battery', 'capacity_kwh'), spec); None when it holds none.
 
-    Currently only checks battery.capacity_kwh for ProportionalDistribution
-    with a SweepSpec multiplier.
-
-    Args:
-        config: Fleet distribution configuration
-
-    Returns:
-        SweepSpec if found, None otherwise
+    FleetDistributionConfig refuses a fleet holding more than one, or one at a field outside
+    SWEEP_PLACEMENTS (F7), so this is the fleet's one sweep.
     """
-    if config.battery is not None:
-        cap_spec = config.battery.draws.get("capacity_kwh")
-        if isinstance(cap_spec, ProportionalDistribution):
-            if isinstance(cap_spec.multiplier, SweepSpec):
-                return cap_spec.multiplier
-    return None
+    sweeps = _sweep_multipliers(_fleet_components(config))
+    return sweeps[0] if sweeps else None
+
+
+def swept_parameter_path(placement: FleetFieldPath) -> str:
+    """The label of the axis a sweep at *placement* sweeps, by which its points are named: the path of the multiplier of the proportional_to there, e.g. 'battery.capacity_kwh.multiplier'."""
+    return child_path(placement.dotted, "multiplier")
 
 
 def _replace_sweep_with_value(
-    config: FleetDistributionConfig, value: float
+    config: FleetDistributionConfig, placement: FleetFieldPath, value: float
 ) -> FleetDistributionConfig:
-    """Create a copy of config with sweep multiplier replaced by a fixed value.
-
-    Args:
-        config: Original configuration with SweepSpec
-        value: Value to use instead of sweep
-
-    Returns:
-        New FleetDistributionConfig with fixed multiplier
-    """
-    if config.battery is None:
-        return config
-
-    cap_spec = config.battery.draws.get("capacity_kwh")
-    if not isinstance(cap_spec, ProportionalDistribution):
-        return config
-
-    swept_draws = {**config.battery.draws, "capacity_kwh": replace(cap_spec, multiplier=value)}
-    return replace(config, battery=replace(config.battery, draws=swept_draws))
+    """*config* with the sweep multiplier of the proportional_to at *placement* replaced by *value*, checked as construction checks a fleet."""
+    component = _fleet_components(config)[placement.component][1]
+    assert component is not None, f"detect_sweep_spec found the sweep at {placement.dotted}"
+    spec = component.draws[placement.key]
+    assert isinstance(spec, ProportionalDistribution), f"detect_sweep_spec found the sweep at {placement.dotted}"
+    point = replace(component, draws={**component.draws, placement.key: replace(spec, multiplier=value)})
+    return replace(config, **{placement.component: point})
 
 
 def expand_sweep_configs(
     config: FleetDistributionConfig,
 ) -> Iterator[tuple[float, FleetDistributionConfig]]:
-    """Expand a config with SweepSpec into individual configs.
-
-    Args:
-        config: Fleet distribution configuration (may contain SweepSpec)
+    """Each point of *config*'s sweep with the fleet that point gives: *config* with its sweep multiplier replaced by the point's value.
 
     Yields:
-        (sweep_value, config) pairs for each sweep point
+        (sweep value, the point's fleet) for each sweep point, in sweep order
 
     Raises:
-        ConfigurationError: If *config* holds no sweep, naming the fleet_distribution block
+        ConfigurationError: If *config* holds no sweep, naming the fleet_distribution block and
+            the fields of SWEEP_PLACEMENTS
     """
-    sweep = detect_sweep_spec(config)
-    if sweep is None:
+    found = detect_sweep_spec(config)
+    if found is None:
+        placements = " or ".join(placement.dotted for placement in sorted(SWEEP_PLACEMENTS))
         raise refusal(
             _FLEET_DISTRIBUTION_PATH,
-            "holds no sweep: give battery.capacity_kwh a proportional_to whose multiplier has type: sweep",
+            f"holds no sweep: give {placements} a proportional_to whose multiplier has type: sweep",
         )
-
+    placement, sweep = found
     for value in sweep.get_values():
-        yield value, _replace_sweep_with_value(config, value)
+        yield value, _replace_sweep_with_value(config, placement, value)
