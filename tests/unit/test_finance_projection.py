@@ -3,7 +3,8 @@
 """Unit tests for project_multi_year's curve shape, fleet energy aggregation,
 its refusal of a simulated age whose aggregates are not all finite, and its
 refusal of a call that passes no simulator; and for project_fleet, the
-projection of a resolved fleet with its age-0 summaries.
+projection of a resolved fleet with its age-0 summaries and the grid-services
+income it booked at each simulated age.
 
 The projection runs on an injected synthetic simulate, with no PVGIS or network.
 """
@@ -17,9 +18,11 @@ from typing import Callable
 import pandas as pd
 import pytest
 
+from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import ScenarioConfig
 from solar_challenge.finance import FinanceConfig
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
+from solar_challenge.gridservices import GridServicesEventsConfig
 from solar_challenge.home import calculate_summary
 from solar_challenge.projection import (
     FleetProjection,
@@ -365,3 +368,108 @@ class TestProjectFleet:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             projection.age0_summaries = ()
+
+
+def _spare_battery_simulate() -> tuple[FleetSimulate, dict[int, FleetResults]]:
+    """A simulate whose every battery holds 0.8 of its usable capacity all year, and each FleetResults it returned, by age.
+
+    The batteries never discharge, so each home's operational spare capacity at
+    events is (SOC - floor) / event hours, which falls with the battery's state
+    of health.  Each answer pairs the asked homes with their results, as
+    FleetRunner.simulate does.
+    """
+    answered: dict[int, FleetResults] = {}
+
+    def simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+        results = []
+        for home in fleet_config.homes:
+            sim = make_sim_results()
+            battery = home.battery_config
+            assert battery is not None
+            soc_kwh = 0.8 * battery.capacity_kwh * battery.resolved_soh
+            results.append(dataclasses.replace(sim, battery_soc=pd.Series(soc_kwh, index=sim.battery_soc.index)))
+        fleet_results = make_fleet_results_of(results, homes=fleet_config.homes)
+        answered[int(fleet_config.homes[0].pv_config.system_age_years)] = fleet_results
+        return fleet_results
+
+    return simulate, answered
+
+
+_EVENTS_PRICING = GridServicesEventsConfig()
+
+
+def _projection_priced_at_events() -> tuple[FleetProjection, dict[int, FleetResults]]:
+    """project_fleet of two 5 kWh battery homes over 25 years priced at events, and each FleetResults it simulated, by age."""
+    scenario, finance = make_scenario_and_finance(
+        n_homes=2, asset_life_years=25, battery_config=BatteryConfig(capacity_kwh=5.0)
+    )
+    finance = dataclasses.replace(
+        finance, grid_services_model="capacity_at_events", grid_services_events=_EVENTS_PRICING
+    )
+    simulate, answered = _spare_battery_simulate()
+    return project_fleet(scenario_fleet(scenario), finance, simulate=simulate), answered
+
+
+class TestFleetProjectionGridServicesIncome:
+    """FleetProjection.grid_services_income_gbp is the grid-services income the projection priced at each simulated age (B13)."""
+
+    def test_it_holds_one_entry_per_simulated_age_ascending_from_the_seeds(self) -> None:
+        projection, answered = _projection_priced_at_events()
+
+        ages = [age for age, _ in projection.grid_services_income_gbp]
+
+        assert ages == sorted(answered)
+        assert {0, 12, 24} <= set(ages)
+
+    def test_each_entry_is_the_pricing_of_that_ages_simulated_fleet(self) -> None:
+        projection, answered = _projection_priced_at_events()
+
+        for age, income in projection.grid_services_income_gbp:
+            assert income == _EVENTS_PRICING.annual_income_gbp(answered[age]), age
+        assert projection.grid_services_income_gbp[0] == (0, _EVENTS_PRICING.annual_income_gbp(answered[0]))
+
+    def test_the_income_falls_with_the_batteries_state_of_health(self) -> None:
+        projection, _ = _projection_priced_at_events()
+
+        (first_age, first_income), (last_age, last_income) = (
+            projection.grid_services_income_gbp[0],
+            projection.grid_services_income_gbp[-1],
+        )
+
+        assert (first_age, last_age) == (0, 24)
+        assert last_income < first_income
+
+    @pytest.mark.parametrize(
+        ("broken", "rule"),
+        [
+            pytest.param(lambda series: (), "must be non-empty", id="empty"),
+            pytest.param(lambda series: (*series[:2], *series[1:]), "strictly ascending", id="repeated-age"),
+            pytest.param(lambda series: (series[0], series[2], series[1], *series[3:]), "strictly ascending", id="unordered"),
+            pytest.param(lambda series: series[1:], "first age must be 0", id="first-not-0"),
+            pytest.param(lambda series: series[:-1], "last age must be 24", id="last-not-the-curves"),
+            pytest.param(
+                lambda series: tuple(entry for entry in series if entry[0] != 12), "every sampled age", id="missing-12"
+            ),
+            pytest.param(lambda series: _with_middle_income(series, -0.5), "finite and >= 0", id="negative"),
+            pytest.param(lambda series: _with_middle_income(series, math.nan), "finite and >= 0", id="nan"),
+            pytest.param(lambda series: _with_middle_income(series, math.inf), "finite and >= 0", id="infinite"),
+        ],
+    )
+    def test_a_projection_refuses_a_series_its_curve_cannot_label(
+        self, broken: Callable[[tuple[tuple[int, float], ...]], tuple[tuple[int, float], ...]], rule: str
+    ) -> None:
+        projection, _ = _projection_priced_at_events()
+        assert 12 in projection.curve.sampled_ages
+        series = broken(projection.grid_services_income_gbp)
+
+        with pytest.raises(ValueError) as refused:
+            dataclasses.replace(projection, grid_services_income_gbp=series)
+
+        assert rule in str(refused.value)
+        assert repr(series) in str(refused.value)
+
+
+def _with_middle_income(series: tuple[tuple[int, float], ...], income: float) -> tuple[tuple[int, float], ...]:
+    """*series* with its middle entry's income replaced by *income*."""
+    middle = len(series) // 2
+    return (*series[:middle], (series[middle][0], income), *series[middle + 1 :])
