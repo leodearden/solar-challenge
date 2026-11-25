@@ -55,7 +55,7 @@ from solar_challenge.finance import (
 from solar_challenge.fleet import FleetConfig, FleetResults, FleetSimulate
 from solar_challenge.gridservices import GridServicesModel
 from solar_challenge.home import HomeConfig, SummaryStatistics, calculate_summary
-from solar_challenge.pv import calculate_degradation_factor, wired_dc_capacity_kw
+from solar_challenge.pv import PVConfig, calculate_degradation_factor, wired_dc_capacity_kw
 from solar_challenge.timebase import SimulationWindow
 from solar_challenge.whole_numbers import whole_number
 
@@ -835,6 +835,27 @@ def _distinct_grid_services_warnings(simulated: Mapping[int, _SimulatedAge]) -> 
     return tuple(distinct.values())
 
 
+def _fleet_wired_dc_kw(homes: Sequence[HomeConfig]) -> float:
+    """Σ wired_dc_capacity_kw of *homes*' PV configs, each distinct config wired once.
+
+    A config create_pv_system refuses raises its own error, with a note naming
+    the first home whose config it is.
+    """
+    wired_kw_of: list[tuple[PVConfig, float]] = []
+    total_kw = 0.0
+    for index, home in enumerate(homes):
+        wired_kw = next((kw for config, kw in wired_kw_of if config == home.pv_config), None)
+        if wired_kw is None:
+            try:
+                wired_kw = wired_dc_capacity_kw(home.pv_config)
+            except ValueError as error:
+                error.add_note(f"wiring the PV of home {index} ({home.name!r})")
+                raise
+            wired_kw_of.append((home.pv_config, wired_kw))
+        total_kw += wired_kw
+    return total_kw
+
+
 def _project(
     fleet: ScenarioFleet,
     finance: FinanceConfig,
@@ -843,7 +864,7 @@ def _project(
 ) -> tuple[FleetProjection, tuple[Warning, ...]]:
     """Project *fleet* over *finance*'s asset life, with the warnings its caller is to be shown, in order."""
     refuse_analysis_only_forecasts(fleet.homes)
-    fleet_pv_dc_kw = sum(wired_dc_capacity_kw(home.pv_config) for home in fleet.homes)
+    fleet_pv_dc_kw = _fleet_wired_dc_kw(fleet.homes)
     simulate_at: _SimulateAt = functools.partial(
         _simulate_node, fleet, finance=finance, grid_services=grid_services_model_of(finance), simulate=simulate
     )
@@ -890,7 +911,8 @@ def project_fleet(
     The curve's ``fleet_pv_dc_kw`` is Σ :func:`~solar_challenge.pv.wired_dc_capacity_kw`
     of the fleet's homes, and a PV config
     :func:`~solar_challenge.pv.create_pv_system` refuses is refused before any
-    simulation.
+    simulation, its error carrying a note naming the first home whose config
+    it is.
 
     Args:
         fleet: The ScenarioFleet whose homes are simulated over its ``start``
@@ -1026,7 +1048,7 @@ def project_economics(
 
     # 2. Capex: the curve's PV DC, plus each home's roof, battery and inverter
     pv_capex_gbp = curve.fleet_pv_dc_kw * finance.pv_cost_per_kwp_gbp
-    installs_capex_gbp = 0.0
+    roof_battery_inverter_capex_gbp = 0.0
     for home in homes:
         batt_kwh = (
             home.battery_config.capacity_kwh
@@ -1034,12 +1056,12 @@ def project_economics(
             else 0.0
         )
         eff_inv_kw = home.pv_config.effective_inverter_capacity_kw
-        installs_capex_gbp += (
+        roof_battery_inverter_capex_gbp += (
             finance.roof_fit_cost_gbp
             + batt_kwh * finance.battery_cost_per_kwh_gbp
             + eff_inv_kw * finance.inverter_cost_per_kw_gbp
         )
-    total_capex_gbp = pv_capex_gbp + installs_capex_gbp
+    total_capex_gbp = pv_capex_gbp + roof_battery_inverter_capex_gbp
 
     # 3. Grant / equity / debt split
     financed = max(total_capex_gbp - finance.grant_gbp, 0.0)

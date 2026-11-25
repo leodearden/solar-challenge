@@ -23,8 +23,9 @@ from scipy.interpolate import CubicSpline, PchipInterpolator
 
 from solar_challenge.home import RunPricing
 from solar_challenge.projection import MultiYearCurve, YearPoint, project_multi_year, scenario_fleet
-from solar_challenge.pv import wired_dc_capacity_kw
+from solar_challenge.pv import PVConfig
 from tests._finance_builders import make_fleet_results, make_scenario_and_finance, make_scenario_of, make_sized_home
+from tests._install_capex import fleet_wired_dc_kw
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -274,7 +275,7 @@ class TestTheCurveCarriesThePvDcItsGenerationCameFrom:
     def test_the_curves_fleet_pv_dc_kw_is_the_dc_its_homes_wire(self) -> None:
         scenario = make_scenario_of([make_sized_home(pv_kwp=3.0), make_sized_home(pv_kwp=5.0)])
         _, finance = make_scenario_and_finance(asset_life_years=5)
-        wired = sum(wired_dc_capacity_kw(home.pv_config) for home in scenario_fleet(scenario).homes)
+        wired = fleet_wired_dc_kw(scenario_fleet(scenario).homes)
         assert wired != pytest.approx(8.0), (
             "the homes must wire a DC other than their 8 kWp nameplate, "
             "or this test cannot tell the two bases apart"
@@ -285,6 +286,28 @@ class TestTheCurveCarriesThePvDcItsGenerationCameFrom:
         )
 
         assert curve.fleet_pv_dc_kw == pytest.approx(wired)
+
+    def test_a_pv_config_create_pv_system_refuses_is_refused_before_any_simulation_naming_its_home(self) -> None:
+        """A module with an STC rating but neither PVWatts parameters nor a V_mp_ref, on no custom inverter, cannot be
+        wired: the projection raises that refusal, noting the home, and simulates nothing."""
+        unwirable = dataclasses.replace(
+            make_sized_home(pv_kwp=4.0),
+            name="unwirable",
+            pv_config=PVConfig(capacity_kw=4.0, custom_module_params={"STC": 400.0}),
+        )
+        scenario = make_scenario_of([make_sized_home(pv_kwp=3.0), unwirable])
+        _, finance = make_scenario_and_finance(asset_life_years=5)
+        simulated: list[FleetConfig] = []
+
+        def recording_simulate(fleet_config: FleetConfig, start: pd.Timestamp, end: pd.Timestamp) -> FleetResults:
+            simulated.append(fleet_config)
+            return make_fleet_results(homes=fleet_config.homes)
+
+        with pytest.raises(ValueError, match="nor a V_mp_ref") as exc_info:
+            project_multi_year(scenario, finance, error_target_pct=math.inf, simulate=recording_simulate)
+
+        assert exc_info.value.__notes__ == ["wiring the PV of home 1 ('unwirable')"]
+        assert simulated == []
 
 
 _PLATEAU_KWH = 10_000.0
