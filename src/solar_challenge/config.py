@@ -762,9 +762,14 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
     return home
 
 
-def _fleet_of(scenario: ScenarioConfig) -> FleetConfig:
-    """The fleet of *scenario*'s simulated homes, named by its name."""
-    return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name)
+def fleet_of(scenario: ScenarioConfig, *, name: Optional[str] = None) -> FleetConfig:
+    """The fleet *scenario* simulates: its simulated homes, named *name*, else by the scenario's name."""
+    return FleetConfig(homes=scenario.simulated_homes(), name=scenario.name if name is None else name)
+
+
+def sweep_point_fleet(param_name: str, value: float, scenario: ScenarioConfig) -> FleetConfig:
+    """The fleet of the sweep point at *value*: the fleet *scenario* simulates, named after the swept parameter *param_name* and the value."""
+    return fleet_of(scenario, name=f"{param_name}={value:.4f}")
 
 
 def parse_fleet_config(document: object) -> FleetConfig:
@@ -773,7 +778,7 @@ def parse_fleet_config(document: object) -> FleetConfig:
     Raises:
         ConfigurationError: as load_scenario refuses the same document.
     """
-    return _fleet_of(_one_scenario(document))
+    return fleet_of(_one_scenario(document))
 
 
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
@@ -782,7 +787,7 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     Raises:
         ConfigurationError: as load_scenario refuses the file.
     """
-    return _fleet_of(load_scenario(path))
+    return fleet_of(load_scenario(path))
 
 
 def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelBlocks, FleetDistributionConfig]:
@@ -798,6 +803,10 @@ def _read_fleet_distribution_scenario(document: object) -> tuple[_ScenarioLevelB
     require_held_keys("", scenario, ["fleet_distribution"])
     _refuse_unless_one_homes_source(scenario, block_path="")
     return blocks, parse_fleet_distribution_config(scenario["fleet_distribution"])
+
+
+YAML_SWEEP_PARAMETER = "multiplier"
+"""The name of the parameter a YAML-defined sweep sweeps: the battery.capacity_kwh multiplier its points are named after."""
 
 
 def detect_fleet_sweep_spec(document: object) -> Optional[SweepSpec]:
@@ -852,16 +861,16 @@ def parse_sweep_scenarios(document: object) -> list[tuple[float, ScenarioConfig]
 def parse_sweep_fleet_configs(document: object) -> list[tuple[float, FleetConfig]]:
     """The fleet each point of the document's YAML-defined sweep builds, with its sweep value.
 
-    Each fleet is the simulated homes of the point's scenario, as parse_sweep_scenarios builds it.
+    Each fleet is the sweep_point_fleet of the point's scenario, as parse_sweep_scenarios builds it.
 
     Returns:
-        (sweep value, FleetConfig named after it) for each sweep point, in sweep order
+        (sweep value, FleetConfig named after YAML_SWEEP_PARAMETER and it) for each sweep point, in sweep order
 
     Raises:
         ConfigurationError: as parse_sweep_scenarios refuses the document
     """
     return [
-        (value, FleetConfig(homes=scenario.simulated_homes(), name=f"multiplier={value:.4f}"))
+        (value, sweep_point_fleet(YAML_SWEEP_PARAMETER, value, scenario))
         for value, scenario in parse_sweep_scenarios(document)
     ]
 

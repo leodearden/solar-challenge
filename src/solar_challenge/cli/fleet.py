@@ -30,24 +30,27 @@ from solar_challenge.cli.utils import (
 )
 from solar_challenge.community import simulate_community
 from solar_challenge.config import (
+    YAML_SWEEP_PARAMETER,
     ScenarioConfig,
     detect_fleet_sweep_spec,
+    fleet_of,
     load_community_config,
     load_config,
     load_scenario,
     parse_scenario,
     parse_sweep_scenarios,
     substitute_config_variables,
+    sweep_point_fleet,
 )
 from solar_challenge.errors import ConfigurationError
 from solar_challenge.fleet import (
-    FleetConfig,
     FleetResults,
     HomesDone,
     calculate_fleet_summary,
 )
 from solar_challenge.fleet_distribution import SweepMode, SweepSpec
 from solar_challenge.output import compute_community_metrics, generate_community_report
+from solar_challenge.timebase import SimulationWindow
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -151,7 +154,7 @@ def run(
     cli = invocation(ctx)
     scenario = with_window_options(load_scenario(config), start=start, end=end)
     community_config = load_community_config(config)
-    fleet_config = FleetConfig(homes=scenario.simulated_homes(), name=scenario.name)
+    fleet_config = fleet_of(scenario)
     n_homes = len(fleet_config.homes)
 
     start_date, end_date = scenario.simulation_bounds()
@@ -295,13 +298,13 @@ def sweep(
         param_name, sweep_spec, sweep_points = _param_sweep(
             raw_config, param, min_val, max_val, steps, mode
         )
-    start_date, end_date = _sweep_bounds(sweep_points, start=start, end=end)
+    start_date, end_date = _sweep_bounds(param_name, sweep_points, start=start, end=end)
     print_info(
         cli,
         f"{source} sweep: {param_name} from {sweep_spec.min} to {sweep_spec.max} "
         f"({sweep_spec.steps} steps, {sweep_spec.mode})"
     )
-    fleets = [_point_fleet(param_name, value, scenario) for value, scenario in sweep_points]
+    fleets = [sweep_point_fleet(param_name, value, scenario) for value, scenario in sweep_points]
 
     # Create output directory if needed
     if output_dir is not None:
@@ -363,30 +366,47 @@ def _param_sweep(
 def _yaml_sweep(
     raw_config: Mapping[str, Any],
 ) -> tuple[str, SweepSpec, list[tuple[float, ScenarioConfig]]]:
-    """The name of the sweep, multiplier, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
+    """The name of the sweep, YAML_SWEEP_PARAMETER, the spec raw_config's YAML-defined sweep gives it, and each sweep value with the scenario that sweep builds for it."""
     sweep_spec = detect_fleet_sweep_spec(raw_config)
     if sweep_spec is None:
         raise ConfigurationError(
             "No sweep spec found in config. "
             "Use --param for CLI sweep or add type: sweep to multiplier."
         )
-    return "multiplier", sweep_spec, parse_sweep_scenarios(raw_config)
+    return YAML_SWEEP_PARAMETER, sweep_spec, parse_sweep_scenarios(raw_config)
 
 
 def _sweep_bounds(
-    points: list[tuple[float, ScenarioConfig]], *, start: Optional[datetime], end: Optional[datetime]
+    param_name: str,
+    points: list[tuple[float, ScenarioConfig]],
+    *,
+    start: Optional[datetime],
+    end: Optional[datetime],
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """The start and end every point of the sweep simulates over: its document's period, each flag replacing only its own day.
+    """The start and end every point of the sweep over param_name simulates over: its document's period, each flag replacing only its own day.
 
-    Every point holds the same period: block on its location's clock: no ${VAR} can stand for
-    a day or a timezone, and a YAML sweep reads the block once.
+    Raises:
+        ConfigurationError: naming each point whose window is not the first point's, and both
+            windows, since one window is all a sweep simulates over.
     """
-    return with_window_options(points[0][1], start=start, end=end).simulation_bounds()
+    (first_value, first), *rest = points
+    others = [
+        f"{param_name}={value:.4f} ({_window_text(scenario.window())})"
+        for value, scenario in rest
+        if scenario.window() != first.window()
+    ]
+    if others:
+        raise ConfigurationError(
+            f"every point of a sweep simulates over one window, the first point's, "
+            f"{param_name}={first_value:.4f} ({_window_text(first.window())}), "
+            f"but the points at {', '.join(others)} hold another"
+        )
+    return with_window_options(first, start=start, end=end).simulation_bounds()
 
 
-def _point_fleet(param_name: str, value: float, scenario: ScenarioConfig) -> FleetConfig:
-    """The fleet of the sweep point at value: its scenario's simulated homes, named after the swept parameter and the value."""
-    return FleetConfig(homes=scenario.simulated_homes(), name=f"{param_name}={value:.4f}")
+def _window_text(window: SimulationWindow) -> str:
+    """The days and clock of window, as a refusal names them."""
+    return f"{window.first_day} to {window.last_day} on {window.timezone}"
 
 
 def _homes_done_on(progress: Progress, task: TaskID) -> HomesDone:
